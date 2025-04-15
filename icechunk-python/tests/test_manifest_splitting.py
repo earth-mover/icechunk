@@ -212,15 +212,15 @@ def test_manifest_splitting_sparse_regions():
             {
                 ManifestSplitDimCondition.DimensionName("longitude"): 3,
                 ManifestSplitDimCondition.Axis(1): 2,
-                ManifestSplitDimCondition.Rest(): 1,
+                ManifestSplitDimCondition.Any(): 1,
             },
             (1, 2, 3),
         ),
         (
             {
                 ManifestSplitDimCondition.DimensionName("longitude"): 3,
-                ManifestSplitDimCondition.Rest(): 1,
-                # this next one gets overwritten by Rest
+                ManifestSplitDimCondition.Any(): 1,
+                # this next one gets overwritten by Any
                 ManifestSplitDimCondition.Axis(1): 2,
             },
             (1, 1, 3),
@@ -231,7 +231,7 @@ def test_manifest_splitting_sparse_regions():
                 ManifestSplitDimCondition.DimensionName("latitude"): 3,
                 # this next one gets overwritten by DimensionName above.
                 ManifestSplitDimCondition.Axis(1): 13,
-                ManifestSplitDimCondition.Rest(): 1,
+                ManifestSplitDimCondition.Any(): 1,
             },
             (1, 3, 3),
         ),

@@ -1367,7 +1367,7 @@ mod tests {
             ),
             (
                 ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-                vec![(ManifestSplitDimCondition::Rest, 9)],
+                vec![(ManifestSplitDimCondition::Any, 9)],
             ),
         ];
         let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
@@ -1396,7 +1396,7 @@ mod tests {
             vec![
                 (ManifestSplitDimCondition::DimensionName("t".to_string()), 12),
                 (ManifestSplitDimCondition::Axis(2), 2),
-                (ManifestSplitDimCondition::Rest, 9),
+                (ManifestSplitDimCondition::Any, 9),
             ],
         )];
         let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };

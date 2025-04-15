@@ -187,7 +187,7 @@ pub enum ManifestSplitDimCondition {
     DimensionName(String),
     // TODO: Since dimension name can be null,
     // i don't think we can have DimensionName(r"*") catch the "Any" case
-    Rest,
+    Any,
 }
 
 type DimConditions = Vec<(ManifestSplitDimCondition, u32)>;
@@ -200,7 +200,7 @@ pub struct ManifestSplittingConfig {
 
 impl Default for ManifestSplittingConfig {
     fn default() -> Self {
-        let inner = vec![(ManifestSplitDimCondition::Rest, u32::MAX)];
+        let inner = vec![(ManifestSplitDimCondition::Any, u32::MAX)];
         let new = vec![(
             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
             inner,
@@ -213,7 +213,7 @@ impl ManifestSplittingConfig {
     pub fn with_size(split_size: u32) -> Self {
         let split_sizes = vec![(
             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-            vec![(ManifestSplitDimCondition::Rest, split_size)],
+            vec![(ManifestSplitDimCondition::Any, split_size)],
         )];
         ManifestSplittingConfig { split_sizes: Some(split_sizes) }
     }

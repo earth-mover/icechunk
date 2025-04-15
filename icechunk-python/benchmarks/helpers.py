@@ -94,7 +94,7 @@ def get_splitting_config(*, split_size: int):
     return ManifestSplittingConfig.from_dict(
         {
             ManifestSplitCondition.path_matches(".*"): {
-                ManifestSplitDimCondition.Rest(): split_size
+                ManifestSplitDimCondition.Any(): split_size
             }
         }
     )

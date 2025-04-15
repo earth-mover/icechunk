@@ -1593,7 +1593,7 @@ impl ManifestSplitDimCondition {
                         .unwrap_or(false)
                 })
                 .unwrap_or(false),
-            ManifestSplitDimCondition::Rest => true,
+            ManifestSplitDimCondition::Any => true,
         }
     }
 }

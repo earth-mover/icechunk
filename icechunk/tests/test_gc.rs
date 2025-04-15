@@ -69,7 +69,7 @@ pub async fn do_test_gc(
     let manifest_split_size = 10;
     let split_sizes = Some(vec![(
         ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-        vec![(ManifestSplitDimCondition::Rest, manifest_split_size)],
+        vec![(ManifestSplitDimCondition::Any, manifest_split_size)],
     )]);
     let man_config = ManifestConfig {
         splitting: Some(ManifestSplittingConfig { split_sizes }),

@@ -14,5 +14,5 @@ manifest:
           - 1
         - - !DimensionName longitude
           - 1
-        - - Rest
+        - - Any
           - 3

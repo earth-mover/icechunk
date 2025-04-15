@@ -25,7 +25,7 @@ UPDATED_SPLITTING_CONFIG = ic.ManifestSplittingConfig.from_dict(
         ic.ManifestSplitCondition.name_matches("split_*"): {
             ic.ManifestSplitDimCondition.Axis(0): 1,
             ic.ManifestSplitDimCondition.DimensionName("longitude"): 1,
-            ic.ManifestSplitDimCondition.Rest(): 3,
+            ic.ManifestSplitDimCondition.Any(): 3,
         }
     }
 )
@@ -74,7 +74,7 @@ async def write_a_split_repo() -> None:
                 ic.ManifestSplitCondition.name_matches("split_*"): {
                     ic.ManifestSplitDimCondition.Axis(0): 1,
                     ic.ManifestSplitDimCondition.DimensionName("latitude"): 1,
-                    ic.ManifestSplitDimCondition.Rest(): 3,
+                    ic.ManifestSplitDimCondition.Any(): 3,
                 }
             }
         )

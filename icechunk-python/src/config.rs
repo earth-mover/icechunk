@@ -1062,7 +1062,7 @@ impl From<ManifestSplitCondition> for PyManifestSplitCondition {
 pub enum PyManifestSplitDimCondition {
     Axis(usize),
     DimensionName(String),
-    Rest(),
+    Any(),
 }
 
 #[pymethods]
@@ -1072,7 +1072,7 @@ impl PyManifestSplitDimCondition {
         match self {
             Axis(axis) => format!("Axis({})", axis),
             DimensionName(name) => format!(r#"DimensionName("{}")"#, name),
-            Rest() => "Rest".to_string(),
+            Any() => "Rest".to_string(),
         }
     }
 
@@ -1089,7 +1089,7 @@ impl From<&PyManifestSplitDimCondition> for ManifestSplitDimCondition {
         match value {
             Axis(axis) => ManifestSplitDimCondition::Axis(*axis),
             DimensionName(name) => ManifestSplitDimCondition::DimensionName(name.clone()),
-            Rest() => ManifestSplitDimCondition::Rest,
+            Any() => ManifestSplitDimCondition::Any,
         }
     }
 }
@@ -1099,7 +1099,7 @@ impl From<ManifestSplitDimCondition> for PyManifestSplitDimCondition {
         match value {
             Axis(a) => PyManifestSplitDimCondition::Axis(a),
             DimensionName(name) => PyManifestSplitDimCondition::DimensionName(name),
-            Rest => PyManifestSplitDimCondition::Rest(),
+            Any => PyManifestSplitDimCondition::Any(),
         }
     }
 }
