@@ -935,12 +935,12 @@ async fn exists(key: &str, session: &Session) -> StoreResult<bool> {
         Key::Chunk { node_path, coords } => {
             match session.get_chunk_ref(&node_path, &coords).await {
                 Ok(r) => Ok(r.is_some()),
-                Err(SessionError {
-                    // this chunk belongs to a shard that has not been written
-                    // or is invalid
-                    kind: SessionErrorKind::InvalidIndexForSplitManifests { .. },
-                    ..
-                }) => Ok(false),
+                // Err(SessionError {
+                //     // this chunk belongs to a shard that has not been written
+                //     // or is invalid
+                //     kind: SessionErrorKind::InvalidIndexForSplitManifests { .. },
+                //     ..
+                // }) => Ok(false),
                 Err(SessionError {
                     kind: SessionErrorKind::NodeNotFound { .. }, ..
                 }) => Ok(false),
