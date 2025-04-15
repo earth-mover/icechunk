@@ -739,6 +739,11 @@ impl Session {
         manifests: &[ManifestRef],
         coords: &ChunkIndices,
     ) -> SessionResult<Option<ChunkPayload>> {
+        if manifests.is_empty() {
+            // no chunks have been written, and the requested coords was not
+            // in the changeset, return None to Zarr.
+            return Ok(None)
+        }
         let splits = ManifestSplits::from_extents(
             manifests.iter().map(|m| m.extents.clone()).collect(),
         );
