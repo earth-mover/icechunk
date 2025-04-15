@@ -60,7 +60,7 @@ pub struct ManifestSplits(Vec<ManifestExtents>);
 impl ManifestSplits {
     /// Used at read-time
     pub fn from_extents(extents: Vec<ManifestExtents>) -> Self {
-        assert!(extents.len() > 0);
+        assert!(!extents.is_empty());
         Self(extents)
     }
 
