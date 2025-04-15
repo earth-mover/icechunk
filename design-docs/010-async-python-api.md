@@ -1,18 +1,18 @@
 # Async Python API
 
-The Icechunk rust API for `Repository` and `Session` are both async using `tokio`. Originally, the python API was also async before the transition to separate `Repository`,` Session`, and `Store` classes. 
+The Icechunk rust API for `Repository` and `Session` are both async using `tokio`. Originally, the python API was also async before the transition to separate `Repository`,` Session`, and `Store` classes.
 
-These changes were originally made to ease the typical python developer experience which may not be running from within an async context. However, Icechunk has many applications that may require an async runtime such as use within web servers. In these cases, blocking the main thread for 200 ms to perform IO is not acceptabl. 
+These changes were originally made to ease the typical python developer experience which may not be running from within an async context. However, Icechunk has many applications that may require an async runtime such as use within web servers. In these cases, blocking the main thread for 200 ms to perform IO is not acceptabl.
 
-This design document seeks to plan out the ability to perform async lifecycle functions from python, specifically in the `Repository` and `Session` interfaces. 
+This design document seeks to plan out the ability to perform async lifecycle functions from python, specifically in the `Repository` and `Session` interfaces.
 
 ## API Options
 
-There are a few different ways this interface can be achieved, we will iterate them here and add links to external references where appropriate. 
+There are a few different ways this interface can be achieved, we will iterate them here and add links to external references where appropriate.
 
 ### Separate Classes
 
-We will have a separate `asyn` module within the `icechunk` python module, leaving an API listing like this: 
+We will have a separate `asyn` module within the `icechunk` python module, leaving an API listing like this:
 
 ```
 icechunk
@@ -25,7 +25,7 @@ icechunk
 └── __init__.py
 ```
 
-Looking at the `async_repository.py` file, it would have the following structure: 
+Looking at the `async_repository.py` file, it would have the following structure:
 
 ```python
 class AsyncRepository:
@@ -40,7 +40,7 @@ class Repository:
 
 #### Alternative Implementation
 
-This approach leaves a few alternatives to maaximize reuse of code between the `Repository` and `AsyncRepository` classes. 
+This approach leaves a few alternatives to maaximize reuse of code between the `Repository` and `AsyncRepository` classes.
 
 ```python
 class AsyncRepository:
@@ -55,7 +55,7 @@ class Repository:
         return loop.run_until_complete(self._async_repo.fetch_config())
 ```
 
-We could do similar on the rust layer instead. looking like this. The performance and GIL impact of this apprach is unknown at this time:
+We could do similar on the rust layer instead. looking like this. The performance and GIL impact of this approach is unknown at this time:
 
 ```rust
 
@@ -90,7 +90,7 @@ impl PyRepository {
                 let res = pyo3_async_runtimes::tokio::into_future(coro)?.await?
                 Ok(res)
             })
-        })    
+        })
     }
 }
 
@@ -98,7 +98,7 @@ impl PyRepository {
 
 ### Classes with Async Methods
 
-We will add async methods to the existing classes, keeping the existing API structure. Taking the existing `Repository` class as an example, it would be extended to include the following: 
+We will add async methods to the existing classes, keeping the existing API structure. Taking the existing `Repository` class as an example, it would be extended to include the following:
 
 ```python
 class Repository:
