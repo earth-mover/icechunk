@@ -597,6 +597,7 @@ class StorageSettings:
         storage_class: str | None = None,
         metadata_storage_class: str | None = None,
         chunks_storage_class: str | None = None,
+        minimum_size_for_multipart_upload: int | None = None,
     ) -> None:
         """
         Create a new `StorageSettings` object
@@ -636,6 +637,10 @@ class StorageSettings:
             Store chunk objects using this object store storage class.
             Currently not supported in GCS.
             Defaults to storage_class.
+
+        minimum_size_for_multipart_upload: int | None
+            Use object store's multipart upload for objects larger than this size in bytes.
+            Default: 100 MB if None is passed.
         """
         ...
     @property
@@ -672,6 +677,11 @@ class StorageSettings:
     @property
     def chunks_storage_class(self) -> str | None:
         """Chunk objects in object store will use this storage class or self.storage_class if None"""
+        ...
+
+    @property
+    def minimum_size_for_multipart_upload(self) -> int | None:
+        """Use object store's multipart upload for objects larger than this size in bytes"""
         ...
 
 class RepositoryConfig:

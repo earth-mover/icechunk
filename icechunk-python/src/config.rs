@@ -722,6 +722,8 @@ pub struct PyStorageSettings {
     pub metadata_storage_class: Option<String>,
     #[pyo3(get, set)]
     pub chunks_storage_class: Option<String>,
+    #[pyo3(get, set)]
+    pub minimum_size_for_multipart_upload: Option<u64>,
 }
 
 impl From<storage::Settings> for PyStorageSettings {
@@ -738,6 +740,7 @@ impl From<storage::Settings> for PyStorageSettings {
             storage_class: value.storage_class,
             metadata_storage_class: value.metadata_storage_class,
             chunks_storage_class: value.chunks_storage_class,
+            minimum_size_for_multipart_upload: value.minimum_size_for_multipart_upload,
         })
     }
 }
@@ -752,6 +755,7 @@ impl From<&PyStorageSettings> for storage::Settings {
             storage_class: value.storage_class.clone(),
             metadata_storage_class: value.metadata_storage_class.clone(),
             chunks_storage_class: value.chunks_storage_class.clone(),
+            minimum_size_for_multipart_upload: value.minimum_size_for_multipart_upload,
         })
     }
 }
@@ -768,8 +772,9 @@ impl Eq for PyStorageSettings {}
 
 #[pymethods]
 impl PyStorageSettings {
-    #[pyo3(signature = ( concurrency=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None))]
+    #[pyo3(signature = ( concurrency=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None))]
     #[new]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         concurrency: Option<Py<PyStorageConcurrencySettings>>,
         unsafe_use_conditional_create: Option<bool>,
@@ -778,6 +783,7 @@ impl PyStorageSettings {
         storage_class: Option<String>,
         metadata_storage_class: Option<String>,
         chunks_storage_class: Option<String>,
+        minimum_size_for_multipart_upload: Option<u64>,
     ) -> Self {
         Self {
             concurrency,
@@ -787,6 +793,7 @@ impl PyStorageSettings {
             storage_class,
             metadata_storage_class,
             chunks_storage_class,
+            minimum_size_for_multipart_upload,
         }
     }
 
