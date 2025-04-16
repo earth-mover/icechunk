@@ -402,10 +402,9 @@ impl Repository {
         }
 
         let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
-        match storage
-            .update_config(&storage.default_settings(), bytes, previous_version)
-            .await?
-        {
+        let storage_settings =
+            config.storage().cloned().unwrap_or_else(|| storage.default_settings());
+        match storage.update_config(&storage_settings, bytes, previous_version).await? {
             UpdateConfigResult::Updated { new_version } => Ok(new_version),
             UpdateConfigResult::NotOnLatestVersion => {
                 Err(RepositoryErrorKind::ConfigWasUpdated.into())
