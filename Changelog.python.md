@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library 0.2.14
+
+### Fixes
+
+- Honor Storage settings during repository configuration update
+
 ## Python Icechunk Library 0.2.13
 
 ### Features
