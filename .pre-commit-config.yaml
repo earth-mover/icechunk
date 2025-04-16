@@ -34,6 +34,6 @@ repos:
         entry: just pre-commit
         language: system
         pass_filenames: false
-        files: "icechunk/"
+        files: "^(icechunk/|icechunk-python/src)/.*"
 
 exclude: 'tests/data/.*'

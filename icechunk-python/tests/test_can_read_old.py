@@ -20,11 +20,21 @@ from numpy.testing import assert_array_equal
 import icechunk as ic
 import zarr
 
+UPDATED_SPLITTING_CONFIG = ic.ManifestSplittingConfig.from_dict(
+    {
+        ic.ManifestSplitCondition.name_matches("split_*"): {
+            ic.ManifestSplitDimCondition.Axis(0): 1,
+            ic.ManifestSplitDimCondition.DimensionName("longitude"): 1,
+            ic.ManifestSplitDimCondition.Any(): 3,
+        }
+    }
+)
 
-def mk_repo(*, create: bool, config: ic.RepositoryConfig | None = None) -> ic.Repository:
+
+def mk_repo(
+    *, create: bool, store_path: str, config: ic.RepositoryConfig | None = None
+) -> ic.Repository:
     """Create a store that can access virtual chunks in localhost MinIO"""
-    store_path = "./tests/data/test-repo"
-
     if create and config is None:
         config = ic.RepositoryConfig.default()
         config.inline_chunk_threshold_bytes = 12
@@ -52,6 +62,107 @@ def mk_repo(*, create: bool, config: ic.RepositoryConfig | None = None) -> ic.Re
     return repo
 
 
+async def write_a_split_repo() -> None:
+    """Write the test repository with manifest splitting."""
+
+    store_path = "./tests/data/split-repo"
+    config = ic.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 12
+    config.manifest = ic.ManifestConfig(
+        splitting=ic.ManifestSplittingConfig.from_dict(
+            {
+                ic.ManifestSplitCondition.name_matches("split_*"): {
+                    ic.ManifestSplitDimCondition.Axis(0): 1,
+                    ic.ManifestSplitDimCondition.DimensionName("latitude"): 1,
+                    ic.ManifestSplitDimCondition.Any(): 3,
+                }
+            }
+        )
+    )
+
+    print(f"Writing repository to {store_path}")
+    repo = mk_repo(create=True, store_path=store_path, config=config)
+    session = repo.writable_session("main")
+    store = session.store
+
+    root = zarr.group(store=store)
+    group1 = root.create_group(
+        "group1", attributes={"this": "is a nice group", "icechunk": 1, "size": 42.0}
+    )
+
+    # these chunks will be materialized
+    big_chunks = group1.create_array(
+        "split",
+        shape=(10, 10),
+        chunks=(3, 3),
+        dimension_names=(None, "longitude"),
+        dtype="float32",
+        fill_value=float("nan"),
+        attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
+    )
+
+    # these chunks will be inline
+    small_chunks = group1.create_array(
+        "small_chunks",
+        shape=(5,),
+        chunks=(1,),
+        dtype="int8",
+        fill_value=8,
+        attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
+    )
+    session.commit("empty structure")
+
+    session = repo.writable_session("main")
+    big_chunks = zarr.open_array(session.store, path="/group1/split", mode="a")
+    small_chunks = zarr.open_array(session.store, path="/group1/small_chunks", mode="a")
+    big_chunks[:] = 120
+    small_chunks[:] = 0
+    session.commit("write data")
+
+    session = repo.writable_session("main")
+    big_chunks = zarr.open_array(session.store, path="group1/split", mode="a")
+    small_chunks = zarr.open_array(session.store, path="group1/small_chunks", mode="a")
+    big_chunks[:] = 12
+    small_chunks[:] = 1
+    session.commit("write data again")
+
+    ### new config
+    config = ic.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 12
+    config.manifest = ic.ManifestConfig(splitting=UPDATED_SPLITTING_CONFIG)
+    repo = mk_repo(create=False, store_path=store_path, config=config)
+    repo.save_config()
+    session = repo.writable_session("main")
+    big_chunks = zarr.open_array(session.store, path="group1/split", mode="a")
+    small_chunks = zarr.open_array(session.store, path="group1/small_chunks", mode="a")
+    big_chunks[:] = 14
+    small_chunks[:] = 3
+    session.commit("write data again with more splits")
+
+
+async def test_icechunk_can_read_old_repo_with_manifest_splitting():
+    repo = mk_repo(create=False, store_path="./tests/data/split-repo")
+    ancestry = list(repo.ancestry(branch="main"))[::-1]
+
+    init_snapshot = ancestry[1]
+    assert init_snapshot.message == "empty structure"
+    assert len(init_snapshot.manifests) == 0
+
+    snapshot = ancestry[2]
+    assert snapshot.message == "write data"
+    assert len(snapshot.manifests) == 9
+
+    snapshot = ancestry[3]
+    assert snapshot.message == "write data again"
+    assert len(snapshot.manifests) == 9
+
+    snapshot = ancestry[4]
+    assert snapshot.message == "write data again with more splits"
+    assert len(snapshot.manifests) == 17
+
+    assert repo.config.manifest.splitting == UPDATED_SPLITTING_CONFIG
+
+
 async def write_a_test_repo() -> None:
     """Write the test repository.
 
@@ -63,7 +174,7 @@ async def write_a_test_repo() -> None:
     """
 
     print("Writing repository to ./tests/data/test-repo")
-    repo = mk_repo(create=True)
+    repo = mk_repo(create=True, store_path="./tests/data/test-repo")
     session = repo.writable_session("main")
     store = session.store
 
@@ -169,7 +280,7 @@ async def test_icechunk_can_read_old_repo() -> None:
     # we import here so it works when the script is ran by pytest
     from tests.conftest import write_chunks_to_minio
 
-    repo = mk_repo(create=False)
+    repo = mk_repo(create=False, store_path="./tests/data/test-repo")
     main_snapshot = repo.lookup_branch("main")
 
     expected_main_history = [
@@ -282,4 +393,5 @@ if __name__ == "__main__":
 
     # we import here so it works when the script is ran by pytest
 
-    asyncio.run(write_a_test_repo())
+    # asyncio.run(write_a_test_repo())
+    asyncio.run(write_a_split_repo())

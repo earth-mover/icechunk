@@ -4,7 +4,7 @@ use crate::format::flatbuffers::generated;
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
-use itertools::Itertools;
+use itertools::{Itertools, multiunzip};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -37,8 +37,76 @@ impl ManifestExtents {
         Self(v)
     }
 
+    pub fn contains(&self, coord: &[u32]) -> bool {
+        self.iter().zip(coord.iter()).all(|(range, that)| range.contains(that))
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &Range<u32>> {
         self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManifestSplits(Vec<ManifestExtents>);
+
+impl ManifestSplits {
+    /// Used at read-time
+    pub fn from_extents(extents: Vec<ManifestExtents>) -> Self {
+        assert!(!extents.is_empty());
+        Self(extents)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    // Build up ManifestSplits from a iterable of shard edges or boundaries
+    // along each dimension.
+    /// # Examples
+    /// ```
+    /// use icechunk::format::manifest::{ManifestSplits, ManifestExtents};
+    /// let actual = ManifestSplits::from_edges(vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]);
+    /// let expected = ManifestSplits::from_extents(vec![
+    ///     ManifestExtents::new(&[0, 3], &[1, 4]),
+    ///     ManifestExtents::new(&[0, 4], &[1, 5]),
+    ///     ManifestExtents::new(&[1, 3], &[2, 4]),
+    ///     ManifestExtents::new(&[1, 4], &[2, 5]),
+    ///     ]
+    /// );
+    /// assert_eq!(actual, expected);
+    /// ```
+    pub fn from_edges(iter: impl IntoIterator<Item = Vec<u32>>) -> Self {
+        // let iter = vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]
+        let res = iter
+            .into_iter()
+            // vec![(0, 1), (1, 2)], vec![(3, 4), (4, 5)]
+            .map(|x| x.into_iter().tuple_windows())
+            // vec![((0, 1), (3, 4)), ((0, 1), (4, 5)),
+            //      ((1, 2), (3, 4)), ((1, 2), (4, 5))]
+            .multi_cartesian_product()
+            // vec![((0, 3), (1, 4)), ((0, 4), (1, 5)),
+            //      ((1, 3), (2, 4)), ((1, 4), (2, 5))]
+            .map(multiunzip)
+            .map(|(from, to): (Vec<u32>, Vec<u32>)| {
+                ManifestExtents::new(from.as_slice(), to.as_slice())
+            });
+        Self(res.collect())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ManifestExtents> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -215,7 +283,7 @@ impl Manifest {
         }
 
         if array_manifests.is_empty() {
-            // empty manifet
+            // empty manifest
             return Ok(None);
         }
 
