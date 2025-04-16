@@ -19,17 +19,18 @@ use icechunk::{
     session::get_chunk,
 };
 use pretty_assertions::assert_eq;
+use test_macros::tokio_test;
 
 mod common;
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_gc_in_minio() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
     let storage = common::make_minio_integration_storage(prefix)?;
     do_test_gc(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 pub async fn test_gc_in_aws() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
@@ -37,7 +38,7 @@ pub async fn test_gc_in_aws() -> Result<(), Box<dyn std::error::Error>> {
     do_test_gc(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 pub async fn test_gc_in_r2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
@@ -45,7 +46,7 @@ pub async fn test_gc_in_r2() -> Result<(), Box<dyn std::error::Error>> {
     do_test_gc(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 pub async fn test_gc_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
@@ -270,13 +271,13 @@ async fn make_design_doc_repo(
     Ok(expire_older_than)
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_expire_ref_in_memory() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     do_test_expire_ref(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 pub async fn test_expire_ref_in_aws() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_expire_ref_{}", Utc::now().timestamp_millis());
@@ -285,7 +286,7 @@ pub async fn test_expire_ref_in_aws() -> Result<(), Box<dyn std::error::Error>> 
     do_test_expire_ref(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 pub async fn test_expire_ref_in_r2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_expire_ref_{}", Utc::now().timestamp_millis());
@@ -294,7 +295,7 @@ pub async fn test_expire_ref_in_r2() -> Result<(), Box<dyn std::error::Error>> {
     do_test_expire_ref(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 pub async fn test_expire_ref_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_expire_ref_{}", Utc::now().timestamp_millis());
@@ -452,7 +453,7 @@ pub async fn do_test_expire_ref(
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_expire_ref_with_odd_timestamps()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
@@ -517,14 +518,14 @@ pub async fn test_expire_ref_with_odd_timestamps()
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_expire_and_garbage_collect_in_memory()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     do_test_expire_and_garbage_collect(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_expire_and_garbage_collect_in_minio()
 -> Result<(), Box<dyn std::error::Error>> {
     let prefix =
@@ -534,7 +535,7 @@ pub async fn test_expire_and_garbage_collect_in_minio()
     do_test_expire_and_garbage_collect(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 pub async fn test_expire_and_garbage_collect_in_aws()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -545,7 +546,7 @@ pub async fn test_expire_and_garbage_collect_in_aws()
     do_test_expire_and_garbage_collect(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 pub async fn test_expire_and_garbage_collect_in_r2()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -556,7 +557,7 @@ pub async fn test_expire_and_garbage_collect_in_r2()
     do_test_expire_and_garbage_collect(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 pub async fn test_expire_and_garbage_collect_in_tigris()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -678,7 +679,7 @@ pub async fn do_test_expire_and_garbage_collect(
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 /// In this test, we set up a repo as in the design document for expiration.
 ///
 /// We then, expire old snapshots and garbage collect. We verify we end up

@@ -1776,6 +1776,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
+    use test_macros::tokio_test;
     use test_strategy::proptest;
     use tokio::sync::Barrier;
 
@@ -1965,7 +1966,7 @@ mod tests {
         prop_assert_eq!(to, expected_to);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test]
     async fn test_repository_with_default_commit_metadata() -> Result<(), Box<dyn Error>>
     {
         let mut repo = create_memory_store_repository().await;
@@ -2011,7 +2012,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test]
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage_settings = storage.default_settings();
@@ -2229,7 +2230,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test]
     async fn test_repository_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
@@ -2544,7 +2545,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_basic_delete_and_flush() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
@@ -2563,7 +2564,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_basic_delete_after_flush() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
@@ -2579,7 +2580,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_commit_after_deleting_old_node() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
@@ -2597,7 +2598,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_delete_children() -> Result<(), Box<dyn Error>> {
         let def = Bytes::copy_from_slice(b"");
         let repository = create_memory_store_repository().await;
@@ -2625,7 +2626,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_delete_children_of_old_nodes() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
@@ -2643,7 +2644,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(None, storage, HashMap::new()).await?;
@@ -2712,7 +2713,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_manifests_shrink() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = Arc::new(ObjectStorage::new_in_memory().await?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
@@ -2921,7 +2922,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test(flavor = "multi_thread")]
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
         let storage = Arc::clone(repo.storage());
@@ -2996,7 +2997,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test]
     async fn test_no_double_commit() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
 
@@ -3060,7 +3061,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_setting_w_invalid_coords() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
@@ -3170,7 +3171,7 @@ mod tests {
         }
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: add array
@@ -3192,7 +3193,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: add array
@@ -3215,7 +3216,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: update array metadata
@@ -3237,7 +3238,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: delete array
@@ -3259,7 +3260,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: delete array
@@ -3282,7 +3283,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: delete array
@@ -3310,7 +3311,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: delete group
@@ -3333,7 +3334,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     async fn test_rebase_without_fast_forward() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
 
@@ -3394,7 +3395,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     async fn test_rebase_fast_forwarding_over_chunk_writes() -> Result<(), Box<dyn Error>>
     {
         let repo = create_memory_store_repository().await;
@@ -3610,7 +3611,7 @@ mod tests {
     //     panic!("Bad test, it should conflict")
     // }
 
-    #[tokio::test]
+    #[tokio_test]
     /// Test conflict resolution with rebase
     ///
     /// One session deletes an array, the other updates its metadata.
@@ -3638,7 +3639,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     /// Test conflict resolution with rebase
     ///
     /// Verify we can rebase over multiple commits if they are all fast-forwardable.
@@ -3688,7 +3689,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     /// Rebase over multiple commits with partial failure
     ///
     /// We verify that we can partially fast forward, stopping at the first unrecoverable commit
@@ -4030,7 +4031,7 @@ mod tests {
             .. Config::default()
         })]
 
-        #[test]
+        #[test_macros::test]
         fn run_repository_state_machine_test(
             // This is a macro's keyword - only `sequential` is currently supported.
             sequential

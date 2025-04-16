@@ -421,7 +421,7 @@ mod tests {
         },
     };
 
-    #[test]
+    #[test_macros::test]
     fn test_new_arrays_chunk_iterator() {
         let mut change_set = ChangeSet::default();
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());

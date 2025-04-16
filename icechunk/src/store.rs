@@ -1184,6 +1184,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+    use test_macros::tokio_test;
 
     async fn add_group(store: &Store, path: &str) -> StoreResult<()> {
         let bytes = Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#);
@@ -1227,7 +1228,7 @@ mod tests {
         Ok(res)
     }
 
-    #[test]
+    #[test_macros::test]
     fn test_parse_key() {
         assert!(matches!(
             Key::parse("zarr.json"),
@@ -1305,7 +1306,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[test_macros::test]
     fn test_format_key() {
         assert_eq!(
             Key::Metadata { node_path: Path::root() }.to_string(),
@@ -1360,7 +1361,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test_macros::test]
     fn test_metadata_serialization() {
         assert!(
             serde_json::from_str::<GroupMetadata>(
@@ -1400,7 +1401,7 @@ mod tests {
             );
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_metadata_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
@@ -1440,7 +1441,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_metadata_delete() -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
@@ -1479,7 +1480,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_chunk_set_and_get() -> Result<(), Box<dyn std::error::Error>> {
         // TODO: turn this test into pure Store operations once we support writes through Zarr
         let repo = create_memory_store_repository().await;

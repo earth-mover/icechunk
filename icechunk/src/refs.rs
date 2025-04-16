@@ -418,6 +418,7 @@ mod tests {
     use futures::Future;
     use pretty_assertions::assert_eq;
     use tempfile::{TempDir, tempdir};
+    use test_macros::tokio_test;
 
     use crate::storage::{new_in_memory_storage, new_local_filesystem_storage};
 
@@ -448,7 +449,7 @@ mod tests {
         ((mem_storage, res1), (local_storage, res2, dir))
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_refs() -> Result<(), Box<dyn std::error::Error>> {
         let ((_,res1),(_,res2,_)) = with_test_storages::<Result<(), Box<dyn std::error::Error>>, _, _>(|storage|  async move {
             let storage_settings =storage.default_settings();
@@ -560,7 +561,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_tag_delete() -> Result<(), Box<dyn std::error::Error>> {
         let ((_, res1), (_, res2, _)) = with_test_storages::<
             Result<(), Box<dyn std::error::Error>>,

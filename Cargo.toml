@@ -1,5 +1,5 @@
 [workspace]
-members = ["icechunk", "icechunk-python"]
+members = ["icechunk", "icechunk-python", "test_macros"]
 default-members = ["icechunk"]
 resolver = "2"
 
