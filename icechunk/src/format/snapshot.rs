@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    flatbuffers::generated,
-    manifest::{Manifest, ManifestExtents, ManifestRef},
     AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind,
     IcechunkResult, ManifestId, NodeId, Path, SnapshotId,
+    flatbuffers::generated,
+    manifest::{Manifest, ManifestExtents, ManifestRef},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

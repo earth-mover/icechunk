@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     format::{
+        ChunkIndices, NodeId, Path,
         manifest::{ChunkInfo, ChunkPayload},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
-        ChunkIndices, NodeId, Path,
     },
     session::SessionResult,
 };
@@ -415,9 +415,9 @@ mod tests {
     use crate::{
         change_set::ArrayData,
         format::{
+            ChunkIndices, NodeId,
             manifest::{ChunkInfo, ChunkPayload},
             snapshot::ArrayShape,
-            ChunkIndices, NodeId,
         },
     };
 
