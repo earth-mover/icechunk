@@ -20,6 +20,7 @@ use icechunk::{
         VersionInfo, new_in_memory_storage, new_s3_storage, s3::mk_client,
     },
 };
+use icechunk_macros::tokio_test;
 use object_store::azure::AzureConfigKey;
 use pretty_assertions::{assert_eq, assert_ne};
 use tempfile::tempdir;
@@ -144,7 +145,7 @@ where
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_snapshot_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
@@ -168,7 +169,7 @@ pub async fn test_snapshot_write_read() -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_manifest_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
@@ -200,7 +201,7 @@ pub async fn test_manifest_write_read() -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_chunk_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
@@ -216,7 +217,7 @@ pub async fn test_chunk_write_read() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
@@ -230,7 +231,7 @@ pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
@@ -247,7 +248,7 @@ pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
@@ -265,7 +266,7 @@ pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_branch_initialization() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
@@ -290,7 +291,7 @@ pub async fn test_branch_initialization() -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
@@ -316,7 +317,7 @@ pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_branch_update() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
@@ -361,7 +362,7 @@ pub async fn test_branch_update() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_ref_names() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
@@ -403,7 +404,7 @@ pub async fn test_ref_names() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 #[allow(clippy::panic)]
 pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
@@ -423,7 +424,7 @@ pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 #[allow(clippy::panic)]
 pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
@@ -447,7 +448,7 @@ pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_write_config_fails_on_bad_version_when_non_existing()
 -> Result<(), Box<dyn std::error::Error>> {
     // FIXME: this test fails in MiniIO but seems to work on S3
@@ -466,7 +467,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing()
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 #[allow(clippy::panic)]
 pub async fn test_write_config_fails_on_bad_version_when_existing()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -512,7 +513,7 @@ pub async fn test_write_config_fails_on_bad_version_when_existing()
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 #[allow(clippy::panic)]
 pub async fn test_write_config_can_overwrite_with_unsafe_config()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -564,7 +565,7 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 #[allow(clippy::unwrap_used)]
 pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
     if env::var("AWS_BUCKET").is_err() {

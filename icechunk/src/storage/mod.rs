@@ -888,10 +888,11 @@ mod tests {
     use std::{collections::HashSet, fs::File, io::Write, path::PathBuf};
 
     use super::*;
+    use icechunk_macros::tokio_test;
     use proptest::prelude::*;
     use tempfile::TempDir;
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_is_clean() {
         let repo_dir = TempDir::new().unwrap();
         let s = new_local_filesystem_storage(repo_dir.path()).await.unwrap();
@@ -911,7 +912,7 @@ mod tests {
         #![proptest_config(ProptestConfig {
             cases: 999, .. ProptestConfig::default()
         })]
-        #[test]
+        #[icechunk_macros::test]
         fn test_split_requests(offset in 0..1_000_000u64, size in 1..3_000_000_000u64, part_size in 1..16_000_000u64, max_parts in 1..100u16 ) {
             let res: Vec<_> = split_in_multiple_requests(&(offset..offset+size), part_size, max_parts).collect();
 
@@ -946,7 +947,7 @@ mod tests {
 
     }
 
-    #[test]
+    #[icechunk_macros::test]
     fn test_split_examples() {
         assert_eq!(
             split_in_multiple_requests(&(0..4), 4, 100,).collect::<Vec<_>>(),

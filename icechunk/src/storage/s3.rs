@@ -882,11 +882,13 @@ async fn get_object_range(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use icechunk_macros::tokio_test;
+
     use crate::config::{S3Credentials, S3Options, S3StaticCredentials};
 
     use super::*;
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_serialize_s3_storage() {
         let config = S3Options {
             region: Some("us-west-2".to_string()),
@@ -923,7 +925,7 @@ mod tests {
         assert_eq!(storage.config, deserialized.config);
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_s3_paths() {
         let storage = S3Storage::new(
             S3Options {

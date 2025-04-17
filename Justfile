@@ -5,6 +5,10 @@ alias pre := pre-commit
 test *args='':
   cargo test --all --all-targets {{args}}
 
+# run all tests with logs enabled
+test-logs level *args='':
+  RUST_LOG=icechunk={{level}} cargo test --all --all-targets {{args}} -- --nocapture
+
 # compile but don't run all tests
 compile-tests *args='':
   cargo test --no-run {{args}}

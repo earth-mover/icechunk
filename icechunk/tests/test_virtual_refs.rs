@@ -24,6 +24,7 @@ use icechunk::{
     store::{StoreError, StoreErrorKind},
     virtual_chunks::VirtualChunkContainer,
 };
+use icechunk_macros::tokio_test;
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
@@ -187,7 +188,7 @@ async fn write_chunks_to_minio(chunks: impl Iterator<Item = (String, Bytes)>) {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio_test]
 async fn test_repository_with_local_virtual_refs() -> Result<(), Box<dyn Error>> {
     let chunk_dir = TempDir::new()?;
     let chunk_1 = chunk_dir.path().join("chunk-1").to_str().unwrap().to_owned();
@@ -286,7 +287,7 @@ async fn test_repository_with_local_virtual_refs() -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio_test]
 async fn test_repository_with_minio_virtual_refs() -> Result<(), Box<dyn Error>> {
     let bytes1 = Bytes::copy_from_slice(b"first");
     let bytes2 = Bytes::copy_from_slice(b"second0000");
@@ -426,7 +427,7 @@ async fn test_repository_with_minio_virtual_refs() -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn test_zarr_store_virtual_refs_minio_set_and_get()
 -> Result<(), Box<dyn std::error::Error>> {
     let bytes1 = Bytes::copy_from_slice(b"first");
@@ -497,7 +498,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn test_zarr_store_virtual_refs_from_public_s3()
 -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = TempDir::new()?;
@@ -539,7 +540,7 @@ async fn test_zarr_store_virtual_refs_from_public_s3()
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn test_zarr_store_virtual_refs_from_public_gcs()
 -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = TempDir::new()?;
@@ -625,7 +626,7 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn test_zarr_store_with_multiple_virtual_chunk_containers()
 -> Result<(), Box<dyn std::error::Error>> {
     // we create a repository with 3 virtual chunk containers: one for minio chunks, one for
