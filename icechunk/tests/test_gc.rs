@@ -18,8 +18,8 @@ use icechunk::{
     repository::VersionInfo,
     session::get_chunk,
 };
+use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
-use test_macros::tokio_test;
 
 mod common;
 

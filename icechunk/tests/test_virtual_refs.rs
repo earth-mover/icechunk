@@ -24,6 +24,7 @@ use icechunk::{
     store::{StoreError, StoreErrorKind},
     virtual_chunks::VirtualChunkContainer,
 };
+use icechunk_macros::tokio_test;
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
@@ -32,7 +33,6 @@ use std::{
 };
 use std::{path::Path as StdPath, sync::Arc};
 use tempfile::TempDir;
-use test_macros::tokio_test;
 use tokio::sync::RwLock;
 
 use bytes::Bytes;

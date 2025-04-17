@@ -20,10 +20,10 @@ use icechunk::{
         VersionInfo, new_in_memory_storage, new_s3_storage, s3::mk_client,
     },
 };
+use icechunk_macros::tokio_test;
 use object_store::azure::AzureConfigKey;
 use pretty_assertions::{assert_eq, assert_ne};
 use tempfile::tempdir;
-use test_macros::tokio_test;
 use tokio::io::AsyncReadExt;
 
 mod common;

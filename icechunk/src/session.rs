@@ -1772,11 +1772,11 @@ mod tests {
     };
 
     use super::*;
+    use icechunk_macros::tokio_test;
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
-    use test_macros::tokio_test;
     use test_strategy::proptest;
     use tokio::sync::Barrier;
 
@@ -4031,7 +4031,7 @@ mod tests {
             .. Config::default()
         })]
 
-        #[test_macros::test]
+        #[icechunk_macros::test]
         fn run_repository_state_machine_test(
             // This is a macro's keyword - only `sequential` is currently supported.
             sequential

@@ -15,7 +15,7 @@ use icechunk::{
     new_in_memory_storage,
     ops::stats::repo_chunks_storage,
 };
-use test_macros::tokio_test;
+use icechunk_macros::tokio_test;
 
 mod common;
 

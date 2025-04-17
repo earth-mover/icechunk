@@ -91,7 +91,7 @@ mod tests {
 
     use super::*;
 
-    #[test_macros::test]
+    #[icechunk_macros::test]
     fn test_serialization() {
         let location = RepoLocation {
             bucket: "my-bucket".to_string(),

@@ -416,9 +416,9 @@ mod tests {
     use std::sync::Arc;
 
     use futures::Future;
+    use icechunk_macros::tokio_test;
     use pretty_assertions::assert_eq;
     use tempfile::{TempDir, tempdir};
-    use test_macros::tokio_test;
 
     use crate::storage::{new_in_memory_storage, new_local_filesystem_storage};
 

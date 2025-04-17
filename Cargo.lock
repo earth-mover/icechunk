@@ -1647,6 +1647,7 @@ dependencies = [
  "err-into",
  "flatbuffers",
  "futures",
+ "icechunk-macros",
  "itertools",
  "object_store",
  "pretty_assertions",
@@ -1665,7 +1666,6 @@ dependencies = [
  "tempfile",
  "test-log",
  "test-strategy",
- "test_macros",
  "thiserror 2.0.12",
  "tokio",
  "tokio-util",
@@ -1676,6 +1676,14 @@ dependencies = [
  "typetag",
  "url",
  "zstd",
+]
+
+[[package]]
+name = "icechunk-macros"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -3384,14 +3392,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "structmeta",
- "syn",
-]
-
-[[package]]
-name = "test_macros"
-version = "0.1.0"
-dependencies = [
- "quote",
  "syn",
 ]
 

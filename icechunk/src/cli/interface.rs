@@ -440,7 +440,7 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
 mod tests {
     use std::fs::read_dir;
 
-    use test_macros::tokio_test;
+    use icechunk_macros::tokio_test;
 
     use super::*;
 

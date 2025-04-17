@@ -1,8 +1,8 @@
 #![allow(clippy::unwrap_used)]
 use chrono::Utc;
+use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 use std::{collections::HashMap, ops::Range, sync::Arc};
-use test_macros::tokio_test;
 
 use bytes::Bytes;
 use icechunk::{

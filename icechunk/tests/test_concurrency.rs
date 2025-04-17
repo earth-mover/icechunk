@@ -7,6 +7,7 @@ use icechunk::{
     session::{Session, get_chunk},
     storage::new_in_memory_storage,
 };
+use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 use rand::{Rng, rng};
 use std::{
@@ -14,7 +15,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use test_macros::tokio_test;
 use tokio::{
     sync::{Barrier, RwLock},
     task::{self, JoinSet},

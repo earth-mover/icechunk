@@ -1021,8 +1021,8 @@ fn object_to_list_info(object: &ObjectMeta) -> Option<ListInfo<String>> {
 mod tests {
     use std::path::PathBuf;
 
+    use icechunk_macros::tokio_test;
     use tempfile::TempDir;
-    use test_macros::tokio_test;
 
     use crate::format::{ChunkId, ManifestId, SnapshotId};
 

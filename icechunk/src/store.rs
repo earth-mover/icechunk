@@ -1182,9 +1182,9 @@ mod tests {
     };
 
     use super::*;
+    use icechunk_macros::tokio_test;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
-    use test_macros::tokio_test;
 
     async fn add_group(store: &Store, path: &str) -> StoreResult<()> {
         let bytes = Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#);
@@ -1228,7 +1228,7 @@ mod tests {
         Ok(res)
     }
 
-    #[test_macros::test]
+    #[icechunk_macros::test]
     fn test_parse_key() {
         assert!(matches!(
             Key::parse("zarr.json"),
@@ -1306,7 +1306,7 @@ mod tests {
         ));
     }
 
-    #[test_macros::test]
+    #[icechunk_macros::test]
     fn test_format_key() {
         assert_eq!(
             Key::Metadata { node_path: Path::root() }.to_string(),
@@ -1361,7 +1361,7 @@ mod tests {
         );
     }
 
-    #[test_macros::test]
+    #[icechunk_macros::test]
     fn test_metadata_serialization() {
         assert!(
             serde_json::from_str::<GroupMetadata>(

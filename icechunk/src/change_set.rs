@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     format::{
-        ChunkIndices, NodeId, Path,
         manifest::{ChunkInfo, ChunkPayload},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
+        ChunkIndices, NodeId, Path,
     },
     session::SessionResult,
 };
@@ -415,13 +415,13 @@ mod tests {
     use crate::{
         change_set::ArrayData,
         format::{
-            ChunkIndices, NodeId,
             manifest::{ChunkInfo, ChunkPayload},
             snapshot::ArrayShape,
+            ChunkIndices, NodeId,
         },
     };
 
-    #[test_macros::test]
+    #[icechunk_macros::test]
     fn test_new_arrays_chunk_iterator() {
         let mut change_set = ChangeSet::default();
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());

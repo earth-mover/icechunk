@@ -702,8 +702,8 @@ impl Weighter<SnapshotId, Arc<TransactionLog>> for FileWeighter {
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod test {
 
+    use icechunk_macros::tokio_test;
     use itertools::{Itertools, assert_equal};
-    use test_macros::tokio_test;
 
     use super::*;
     use crate::{

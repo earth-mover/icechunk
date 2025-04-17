@@ -882,7 +882,7 @@ async fn get_object_range(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use test_macros::tokio_test;
+    use icechunk_macros::tokio_test;
 
     use crate::config::{S3Credentials, S3Options, S3StaticCredentials};
 
