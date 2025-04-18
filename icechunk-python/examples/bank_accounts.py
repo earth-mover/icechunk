@@ -138,15 +138,6 @@ def slow_transfer_task(repo: icechunk.Repository) -> WireResult:
     return res
 
 
-def rebase_loop(session: icechunk.Session, message: str) -> None:
-    while True:
-        try:
-            session.commit(message)
-            return
-        except icechunk.ConflictError:
-            session.rebase(icechunk.ConflictDetector())
-
-
 def rebase_transfer_task(repo: icechunk.Repository) -> WireResult:
     """Safe and fast approach to concurrent transfers.
 
@@ -169,7 +160,10 @@ def rebase_transfer_task(repo: icechunk.Repository) -> WireResult:
             return res
         if res == WireResult.DONE:
             try:
-                rebase_loop(session, f"wired ${amount}: {from_account} -> {to_account}")
+                session.commit(
+                    f"wired ${amount}: {from_account} -> {to_account}",
+                    rebase_with=icechunk.ConflictDetector(),
+                )
                 return WireResult.DONE
             except icechunk.RebaseFailedError:
                 pass

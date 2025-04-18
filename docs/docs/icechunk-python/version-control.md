@@ -72,7 +72,6 @@ print(session.commit(message="Update foo attribute on root group"))
 
 With a few snapshots committed, we can take a look at the ancestry of the `main` branch:
 
-
 ```python exec="on" session="version" source="material-block" result="code"
 for snapshot in repo.ancestry(branch="main"):
     print(snapshot)
@@ -88,7 +87,6 @@ gitGraph
     commit id: "{}" type: NORMAL
 """.format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
 ```
-
 
 ## Time Travel
 
@@ -192,7 +190,6 @@ For example to tag the second commit in `main`'s history:
 ```python exec="on" session="version" source="material-block"
 repo.create_tag("v1.0.0", snapshot_id=list(repo.ancestry(branch="main"))[1].id)
 ```
-
 
 Because tags are immutable, we need to use a readonly `Session` to access the data referenced by a tag.
 
@@ -353,6 +350,7 @@ session = repo.readonly_session(branch="main")
 ```
 
 Lastly, if you make changes to non-conflicting chunks or attributes, you can rebase without having to resolve any conflicts.
+This time we will show how to use rebase automatically during the `commit` call:
 
 ```python
 session1 = repo.writable_session("main")
@@ -365,16 +363,9 @@ root1["data"][3,:] = 3
 root2["data"][4,:] = 4
 
 session1.commit(message="Update fourth row of data array")
+session2.commit(message="Update fifth row of data array", rebase_with=icechunk.ConflictDetector())
+print("Rebase+commit succeeded")
 
-try:
-    session2.rebase(icechunk.ConflictDetector())
-    print("Rebase succeeded")
-except icechunk.RebaseFailedError as e:
-    print(e.conflicts)
-
-session2.commit(message="Update fifth row of data array")
-
-# Rebase succeeded
 ```
 
 And now we can see the data in the `data` array to confirm that the changes were committed correctly.
