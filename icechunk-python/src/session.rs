@@ -180,23 +180,35 @@ impl PySession {
         })
     }
 
-    #[pyo3(signature = (message, metadata=None))]
+    #[pyo3(signature = (message, metadata=None, rebase_with=None, rebase_tries=1_000))]
     pub fn commit(
         &self,
         py: Python<'_>,
         message: &str,
         metadata: Option<PySnapshotProperties>,
+        rebase_with: Option<PyConflictSolver>,
+        rebase_tries: Option<u16>,
     ) -> PyResult<String> {
+        let metadata = metadata.map(|m| m.into());
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
-                let snapshot_id = self
-                    .0
-                    .write()
-                    .await
-                    .commit(message, metadata.map(|m| m.into()))
-                    .await
-                    .map_err(PyIcechunkStoreError::SessionError)?;
+                let mut session = self.0.write().await;
+                let snapshot_id = if let Some(solver) = rebase_with {
+                    session
+                        .commit_rebasing(
+                            solver.as_ref(),
+                            rebase_tries.unwrap_or(1_000),
+                            message,
+                            metadata,
+                            |_| async {},
+                            |_| async {},
+                        )
+                        .await
+                } else {
+                    session.commit(message, metadata).await
+                }
+                .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())
             })
         })
