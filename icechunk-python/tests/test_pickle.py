@@ -6,6 +6,7 @@ import pytest
 
 import zarr
 from icechunk import (
+    IcechunkError,
     Repository,
     RepositoryConfig,
     S3StaticCredentials,
@@ -108,3 +109,10 @@ def test_pickle() -> None:
     session_loaded = pickle.loads(pickled_session)
     assert tmp_session.snapshot_id == session_loaded.snapshot_id
     assert tmp_session.branch == session_loaded.branch
+
+
+def test_pickle_error() -> None:
+    error = IcechunkError("test")
+    pickled = pickle.dumps(error)
+    roundtripped = pickle.loads(pickled)
+    assert error.message == roundtripped.message

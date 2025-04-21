@@ -9,9 +9,11 @@ use icechunk::{
 use miette::{Diagnostic, GraphicalReportHandler};
 use pyo3::{
     PyErr, create_exception,
-    exceptions::{PyKeyError, PyValueError},
+    exceptions::{PyException, PyKeyError, PyValueError},
     prelude::*,
+    types::PyBytes,
 };
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::conflicts::PyConflict;
@@ -113,11 +115,56 @@ impl From<PyIcechunkStoreError> for PyErr {
 
 pub(crate) type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;
 
-create_exception!(icechunk, IcechunkError, PyValueError);
+#[pyclass(extends=PyException, subclass, module = "icechunk")]
+#[derive(Serialize, Deserialize)]
+pub struct IcechunkError {
+    #[pyo3(get)]
+    message: String,
+}
 
-create_exception!(icechunk, PyConflictError, IcechunkError);
+impl IcechunkError {
+    fn new_err(message: String) -> PyErr {
+        PyErr::new::<IcechunkError, String>(message)
+    }
+}
+
+#[pymethods]
+impl IcechunkError {
+    #[new]
+    pub fn new(message: String) -> Self {
+        Self { message }
+    }
+
+    pub fn __setstate__<'py>(&mut self, state: &Bound<'py, PyBytes>) -> PyResult<()> {
+        *self = serde_json::from_slice(state.as_bytes())
+            .map_err(|e| PyIcechunkStoreError::UnkownError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn __getstate__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let state = serde_json::to_vec(&self)
+            .map_err(|e| PyIcechunkStoreError::UnkownError(e.to_string()))?;
+        let bytes = PyBytes::new(py, &state);
+        Ok(bytes)
+    }
+
+    pub fn __getnewargs__(&self) -> PyResult<(String,)> {
+        Ok((self.message.clone(),))
+    }
+}
+
+#[pyclass(extends=IcechunkError)]
+#[derive(Serialize, Deserialize)]
+pub struct PyConflictError(pub PyConflictErrorData);
+
+impl PyConflictError {
+    fn new_err(data: PyConflictErrorData) -> PyErr {
+        PyErr::new::<PyConflictError, PyConflictErrorData>(data)
+    }
+}
 
 #[pyclass(name = "ConflictErrorData")]
+#[derive(Serialize, Deserialize)]
 pub struct PyConflictErrorData {
     #[pyo3(get)]
     expected_parent: Option<String>,
