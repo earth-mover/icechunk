@@ -7,6 +7,8 @@ title: Sample Datasets
 
 ### Weatherbench2 ERA5
 
+A subset of the Weatherbench2 copy of the ERA5 reanalysis dataset.
+
 === "AWS"
 
     ```python
@@ -110,3 +112,27 @@ title: Sample Datasets
 <!-- ``` -->
 
 <!-- ![oisst](./assets/datasets/oisst.png) -->
+
+### GLAD Land Cover Land Use
+
+A copy of the GLAD Land Cover Land Use dataset distributed under a [Creative Commons Attribution 4.0 International License](http://creativecommons.org/licenses/by/4.0/).
+
+Source: https://storage.googleapis.com/earthenginepartners-hansen/GLCLU2000-2020/v2/download.html
+
+=== "AWS"
+
+    ```python
+    import icechunk as ic
+
+    storage = ic.s3_storage(
+        bucket="icechunk-public-data",
+        prefix=f"v1/glad",
+        region="us-east-1",
+        anonymous=True,
+    )
+    repo = ic.Repository.open(storage=storage)
+    session = repo.readonly_session("main")
+    ds = xr.open_dataset(
+        session.store, chunks=None, consolidated=False
+    )
+    ```
