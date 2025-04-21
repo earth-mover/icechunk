@@ -1260,8 +1260,13 @@ class S3Credentials:
         ----------
         pickled_function: bytes
             The pickled function to use to provide credentials.
+        current: S3StaticCredentials
+            The initial credentials. They will be returned the first time credentials
+            are requested and then deleted.
         """
-        def __init__(self, pickled_function: bytes) -> None: ...
+        def __init__(
+            self, pickled_function: bytes, current: S3StaticCredentials | None = None
+        ) -> None: ...
 
 AnyS3Credential = (
     S3Credentials.Static
@@ -1359,7 +1364,9 @@ class GcsCredentials:
 
         This is useful for credentials that have an expiration time, or are otherwise not known ahead of time.
         """
-        def __init__(self, pickled_function: bytes) -> None: ...
+        def __init__(
+            self, pickled_function: bytes, current: GcsBearerCredential | None = None
+        ) -> None: ...
 
 AnyGcsCredential = (
     GcsCredentials.FromEnv | GcsCredentials.Static | GcsCredentials.Refreshable

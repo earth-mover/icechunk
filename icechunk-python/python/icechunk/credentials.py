@@ -45,16 +45,23 @@ AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
 
 def s3_refreshable_credentials(
     get_credentials: Callable[[], S3StaticCredentials],
+    scatter_initial_credentials: bool = False,
 ) -> S3Credentials.Refreshable:
     """Create refreshable credentials for S3 and S3 compatible object stores.
-
 
     Parameters
     ----------
     get_credentials: Callable[[], S3StaticCredentials]
         Use this function to get and refresh the credentials. The function must be pickable.
+    scatter_initial_credentials: bool, optional
+        Immediately call and store the value returned by get_credentials. This is useful if the
+        repo or session will be pickled to generate many copies. Passing scatter_initial_credentials=True will
+        ensure all those copies don't need to call get_credentials immediately. After the initial
+        set of credentials has expired, the cached value is no longer used. Notice that credentials
+        obtained are stored, and they can be sent over the network if you pickle the session/repo.
     """
-    return S3Credentials.Refreshable(pickle.dumps(get_credentials))
+    current = get_credentials() if scatter_initial_credentials else None
+    return S3Credentials.Refreshable(pickle.dumps(get_credentials), current)
 
 
 def s3_static_credentials(
@@ -106,6 +113,7 @@ def s3_credentials(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    scatter_initial_credentials: bool = False,
 ) -> AnyS3Credential:
     """Create credentials for S3 and S3 compatible object stores.
 
@@ -127,6 +135,12 @@ def s3_credentials(
         Fetch credentials from the operative system environment
     get_credentials: Callable[[], S3StaticCredentials] | None
         Use this function to get and refresh object store credentials
+    scatter_initial_credentials: bool, optional
+        Immediately call and store the value returned by get_credentials. This is useful if the
+        repo or session will be pickled to generate many copies. Passing scatter_initial_credentials=True will
+        ensure all those copies don't need to call get_credentials immediately. After the initial
+        set of credentials has expired, the cached value is no longer used. Notice that credentials
+        obtained are stored, and they can be sent over the network if you pickle the session/repo.
     """
     if (
         (from_env is None or from_env)
@@ -159,7 +173,9 @@ def s3_credentials(
         and not from_env
         and not anonymous
     ):
-        return s3_refreshable_credentials(get_credentials)
+        return s3_refreshable_credentials(
+            get_credentials, scatter_initial_credentials=scatter_initial_credentials
+        )
 
     if (
         access_key_id
@@ -199,9 +215,24 @@ def gcs_static_credentials(
 
 def gcs_refreshable_credentials(
     get_credentials: Callable[[], GcsBearerCredential],
+    scatter_initial_credentials: bool = False,
 ) -> GcsCredentials.Refreshable:
-    """Create refreshable credentials for Google Cloud Storage object store."""
-    return GcsCredentials.Refreshable(pickle.dumps(get_credentials))
+    """Create refreshable credentials for Google Cloud Storage object store.
+
+    Parameters
+    ----------
+    get_credentials: Callable[[], S3StaticCredentials]
+        Use this function to get and refresh the credentials. The function must be pickable.
+    scatter_initial_credentials: bool, optional
+        Immediately call and store the value returned by get_credentials. This is useful if the
+        repo or session will be pickled to generate many copies. Passing scatter_initial_credentials=True will
+        ensure all those copies don't need to call get_credentials immediately. After the initial
+        set of credentials has expired, the cached value is no longer used. Notice that credentials
+        obtained are stored, and they can be sent over the network if you pickle the session/repo.
+    """
+
+    current = get_credentials() if scatter_initial_credentials else None
+    return GcsCredentials.Refreshable(pickle.dumps(get_credentials), current)
 
 
 def gcs_from_env_credentials() -> GcsCredentials.FromEnv:
@@ -217,6 +248,7 @@ def gcs_credentials(
     bearer_token: str | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], GcsBearerCredential] | None = None,
+    scatter_initial_credentials: bool = False,
 ) -> AnyGcsCredential:
     """Create credentials Google Cloud Storage object store.
 
@@ -246,7 +278,9 @@ def gcs_credentials(
         )
 
     if get_credentials is not None:
-        return gcs_refreshable_credentials(get_credentials)
+        return gcs_refreshable_credentials(
+            get_credentials, scatter_initial_credentials=scatter_initial_credentials
+        )
 
     raise ValueError("Conflicting arguments to gcs_credentials function")
 
