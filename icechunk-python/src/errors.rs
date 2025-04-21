@@ -8,15 +8,14 @@ use icechunk::{
 };
 use miette::{Diagnostic, GraphicalReportHandler};
 use pyo3::{
-    PyErr, create_exception,
+    PyErr,
     exceptions::{PyException, PyKeyError, PyValueError},
     prelude::*,
-    types::PyBytes,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::conflicts::PyConflict;
+use crate::{conflicts::PyConflict, impl_pickle};
 
 /// A simple wrapper around the StoreError to make it easier to convert to a PyErr
 ///
@@ -45,6 +44,8 @@ pub(crate) enum PyIcechunkStoreError {
     PyValueError(String),
     #[error(transparent)]
     PyError(#[from] PyErr),
+    #[error("{0}")]
+    PickleError(String),
     #[error("{0}")]
     UnkownError(String),
 }
@@ -134,24 +135,9 @@ impl IcechunkError {
     pub fn new(message: String) -> Self {
         Self { message }
     }
-
-    pub fn __setstate__<'py>(&mut self, state: &Bound<'py, PyBytes>) -> PyResult<()> {
-        *self = serde_json::from_slice(state.as_bytes())
-            .map_err(|e| PyIcechunkStoreError::UnkownError(e.to_string()))?;
-        Ok(())
-    }
-
-    pub fn __getstate__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        let state = serde_json::to_vec(&self)
-            .map_err(|e| PyIcechunkStoreError::UnkownError(e.to_string()))?;
-        let bytes = PyBytes::new(py, &state);
-        Ok(bytes)
-    }
-
-    pub fn __getnewargs__(&self) -> PyResult<(String,)> {
-        Ok((self.message.clone(),))
-    }
 }
+
+impl_pickle!(IcechunkError);
 
 #[pyclass(extends=IcechunkError)]
 #[derive(Serialize, Deserialize)]
@@ -162,6 +148,8 @@ impl PyConflictError {
         PyErr::new::<PyConflictError, PyConflictErrorData>(data)
     }
 }
+
+impl_pickle!(PyConflictError);
 
 #[pyclass(name = "ConflictErrorData")]
 #[derive(Serialize, Deserialize)]
@@ -190,10 +178,20 @@ impl PyConflictErrorData {
     }
 }
 
-create_exception!(icechunk, PyRebaseFailedError, IcechunkError);
+#[pyclass(extends=IcechunkError)]
+#[derive(Serialize, Deserialize)]
+pub struct PyRebaseFailedError(pub PyRebaseFailedData);
+
+impl PyRebaseFailedError {
+    fn new_err(data: PyRebaseFailedData) -> PyErr {
+        PyErr::new::<PyRebaseFailedError, PyRebaseFailedData>(data)
+    }
+}
+
+impl_pickle!(PyRebaseFailedError);
 
 #[pyclass(name = "RebaseFailedData")]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PyRebaseFailedData {
     #[pyo3(get)]
     snapshot: String,

@@ -2406,6 +2406,7 @@ dependencies = [
  "cfg-if",
  "chrono",
  "indoc",
+ "inventory",
  "libc",
  "memoffset",
  "once_cell",

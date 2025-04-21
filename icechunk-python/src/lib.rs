@@ -1,6 +1,7 @@
 mod config;
 mod conflicts;
 mod errors;
+mod pickle;
 mod repository;
 mod session;
 mod store;

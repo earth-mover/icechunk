@@ -6,9 +6,10 @@ use icechunk::conflicts::{
     detector::ConflictDetector,
 };
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 
 #[pyclass(name = "ConflictType", eq)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PyConflictType {
     NewNodeConflictsWithExistingNode = 1,
     NewNodeInInvalidGroup = 2,
@@ -62,7 +63,7 @@ impl PyConflictType {
 }
 
 #[pyclass(name = "Conflict")]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PyConflict {
     #[pyo3(get)]
     conflict_type: PyConflictType,

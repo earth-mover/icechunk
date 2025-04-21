@@ -28,6 +28,7 @@ pyo3 = { version = "0.24.1", features = [
   #  do we really need this one?
   #  "extension-module",
   "experimental-async",
+  "multiple-pymethods",
 ] }
 pyo3-async-runtimes = { version = "0.24", features = ["tokio-runtime"] }
 async-stream = "0.3.6"
