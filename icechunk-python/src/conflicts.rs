@@ -8,6 +8,8 @@ use icechunk::conflicts::{
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::impl_pickle;
+
 #[pyclass(name = "ConflictType", eq)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PyConflictType {
@@ -62,6 +64,8 @@ impl PyConflictType {
     }
 }
 
+impl_pickle!(PyConflictType);
+
 #[pyclass(name = "Conflict")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PyConflict {
@@ -83,6 +87,8 @@ impl PyConflict {
         format!("{}: {}", self.path, self.conflict_type)
     }
 }
+
+impl_pickle!(PyConflict);
 
 impl From<&Conflict> for PyConflict {
     fn from(conflict: &Conflict) -> Self {
@@ -148,7 +154,7 @@ impl From<&Conflict> for PyConflict {
 }
 
 #[pyclass(name = "VersionSelection", eq)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PyVersionSelection {
     Fail = 0,
     UseOurs = 1,
@@ -165,6 +171,8 @@ impl From<PyVersionSelection> for VersionSelection {
     }
 }
 
+impl_pickle!(PyVersionSelection);
+
 #[pyclass(subclass, name = "ConflictSolver")]
 #[derive(Clone)]
 pub struct PyConflictSolver(Arc<dyn ConflictSolver + Send + Sync>);
@@ -176,7 +184,7 @@ impl<'a> AsRef<dyn ConflictSolver + 'a> for PyConflictSolver {
 }
 
 #[pyclass(name = "BasicConflictSolver", extends=PyConflictSolver)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PyBasicConflictSolver;
 
 #[pymethods]
@@ -199,8 +207,10 @@ impl PyBasicConflictSolver {
     }
 }
 
+impl_pickle!(PyBasicConflictSolver);
+
 #[pyclass(name = "ConflictDetector", extends=PyConflictSolver)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PyConflictDetector;
 
 #[pymethods]
@@ -210,3 +220,5 @@ impl PyConflictDetector {
         (Self, PyConflictSolver(Arc::new(ConflictDetector)))
     }
 }
+
+impl_pickle!(PyConflictDetector);
