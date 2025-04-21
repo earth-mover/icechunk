@@ -8,7 +8,11 @@ macro_rules! impl_pickle {
                 state: &pyo3::Bound<'py, pyo3::types::PyBytes>,
             ) -> pyo3::PyResult<()> {
                 *self = serde_json::from_slice(state.as_bytes()).map_err(|e| {
-                    crate::errors::PyIcechunkStoreError::PickleError(e.to_string())
+                    crate::errors::PyIcechunkStoreError::PickleError(format!(
+                        "Failed to unpickle {}: {}",
+                        stringify!($struct_name),
+                        e.to_string()
+                    ))
                 })?;
                 Ok(())
             }
@@ -18,7 +22,11 @@ macro_rules! impl_pickle {
                 py: pyo3::Python<'py>,
             ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyBytes>> {
                 let state = serde_json::to_vec(&self).map_err(|e| {
-                    crate::errors::PyIcechunkStoreError::PickleError(e.to_string())
+                    crate::errors::PyIcechunkStoreError::PickleError(format!(
+                        "Failed to pickle {}: {}",
+                        stringify!($struct_name),
+                        e.to_string()
+                    ))
                 })?;
                 let bytes = pyo3::types::PyBytes::new(py, &state);
                 Ok(bytes)
