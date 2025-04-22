@@ -22,7 +22,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
-    errors::{PyIcechunkStoreError, PyIcechunkStoreResult}, impl_pickle, session::PySession, streams::PyAsyncGenerator
+    errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
+    impl_pickle,
+    session::PySession,
+    streams::PyAsyncGenerator,
 };
 
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;

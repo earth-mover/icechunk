@@ -33,8 +33,13 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     config::{
-        datetime_repr, format_option_to_string, PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings
-    }, errors::PyIcechunkStoreError, impl_pickle, session::PySession, streams::PyAsyncGenerator
+        PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings, datetime_repr,
+        format_option_to_string,
+    },
+    errors::PyIcechunkStoreError,
+    impl_pickle,
+    session::PySession,
+    streams::PyAsyncGenerator,
 };
 
 /// Wrapper needed to implement pyo3 conversion classes
