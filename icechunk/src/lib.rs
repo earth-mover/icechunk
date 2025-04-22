@@ -58,6 +58,8 @@ pub fn initialize_tracing() {
     // We have two Layers. One keeps track of the spans to feed the ICError instances.
     // The other is the one spitting logs to stdout. Filtering only applies to the second Layer.
 
+    let console_layer = console_subscriber::spawn();
+
     let stdout_layer = tracing_subscriber::fmt::layer()
         .pretty()
         .with_filter(EnvFilter::from_env("ICECHUNK_LOG"));
@@ -65,7 +67,7 @@ pub fn initialize_tracing() {
     let error_span_layer = ErrorLayer::default();
 
     if let Err(err) =
-        Registry::default().with(error_span_layer).with(stdout_layer).try_init()
+        Registry::default().with(error_span_layer).with(stdout_layer).with(console_layer).try_init()
     {
         println!("Warning: {}", err);
     }
