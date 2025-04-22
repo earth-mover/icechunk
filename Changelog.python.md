@@ -1,5 +1,17 @@
 # Changelog
 
+## Python Icechunk Library 0.2.15
+
+### Features
+
+- `Session.commit` can do `rebase` now, by passing a `rebase_with` argument.
+
+### Performance
+
+- `get_credentials` functions can now be instructed to scatter the first set of credentials
+  to all pickled copies of the repo or session. This speeds up short-lived distributed tasks,
+  that no longer need to execute the first call to `get_credentials`.
+
 ## Python Icechunk Library 0.2.14
 
 ### Fixes
