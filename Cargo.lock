@@ -1702,6 +1702,7 @@ dependencies = [
  "pyo3",
  "pyo3-async-runtimes",
  "rand 0.9.1",
+ "rmp-serde",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
