@@ -87,17 +87,17 @@ impl From<PyIcechunkStoreError> for PyErr {
             PyIcechunkStoreError::SessionError(SessionError {
                 kind: SessionErrorKind::Conflict { expected_parent, actual_parent },
                 ..
-            }) => PyConflictError::new_err(PyConflictErrorData {
-                expected_parent: expected_parent.map(|s| s.to_string()),
-                actual_parent: actual_parent.map(|s| s.to_string()),
-            }),
+            }) => PyConflictError::new_err(
+                expected_parent.map(|s| s.to_string()),
+                actual_parent.map(|s| s.to_string()),
+            ),
             PyIcechunkStoreError::SessionError(SessionError {
                 kind: SessionErrorKind::RebaseFailed { snapshot, conflicts },
                 ..
-            }) => PyRebaseFailedError::new_err(PyRebaseFailedData {
-                snapshot: snapshot.to_string(),
-                conflicts: conflicts.iter().map(PyConflict::from).collect(),
-            }),
+            }) => PyRebaseFailedError::new_err(
+                snapshot.to_string(),
+                conflicts.iter().map(PyConflict::from).collect(),
+            ),
             PyIcechunkStoreError::PyKeyError(e) => PyKeyError::new_err(e),
             PyIcechunkStoreError::PyValueError(e) => PyValueError::new_err(e),
             PyIcechunkStoreError::PyError(err) => err,
@@ -135,36 +135,46 @@ impl IcechunkError {
     pub fn new(message: String) -> Self {
         Self { message }
     }
+
+    fn __repr__(&self) -> String {
+        format!("IcechunkError(message={})", self.message)
+    }
+
+    fn __str__(&self) -> String {
+        self.message.clone()
+    }
 }
 
 impl_pickle!(IcechunkError);
 
-#[pyclass(extends=IcechunkError)]
+#[pyclass(extends=PyException, name = "ConflictError", module = "icechunk")]
 #[derive(Serialize, Deserialize)]
-pub struct PyConflictError(pub PyConflictErrorData);
-
-impl PyConflictError {
-    fn new_err(data: PyConflictErrorData) -> PyErr {
-        PyErr::new::<PyConflictError, PyConflictErrorData>(data)
-    }
-}
-
-impl_pickle!(PyConflictError);
-
-#[pyclass(name = "ConflictErrorData")]
-#[derive(Serialize, Deserialize)]
-pub struct PyConflictErrorData {
+pub struct PyConflictError {
     #[pyo3(get)]
     expected_parent: Option<String>,
     #[pyo3(get)]
     actual_parent: Option<String>,
 }
 
+impl PyConflictError {
+    fn new_err(expected_parent: Option<String>, actual_parent: Option<String>) -> PyErr {
+        PyErr::new::<PyConflictError, (Option<String>, Option<String>)>((
+            expected_parent,
+            actual_parent,
+        ))
+    }
+}
+
 #[pymethods]
-impl PyConflictErrorData {
+impl PyConflictError {
+    #[new]
+    pub fn new(expected_parent: Option<String>, actual_parent: Option<String>) -> Self {
+        Self { expected_parent, actual_parent }
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "ConflictErrorData(expected_parent={}, actual_parent={})",
+            "ConflictError(expected_parent={}, actual_parent={})",
             self.expected_parent.as_deref().unwrap_or("None"),
             self.actual_parent.as_deref().unwrap_or("None")
         )
@@ -178,32 +188,35 @@ impl PyConflictErrorData {
     }
 }
 
-#[pyclass(extends=IcechunkError)]
+impl_pickle!(PyConflictError);
+
+#[pyclass(extends=PyException, name = "RebaseFailedError", module = "icechunk")]
 #[derive(Serialize, Deserialize)]
-pub struct PyRebaseFailedError(pub PyRebaseFailedData);
-
-impl PyRebaseFailedError {
-    fn new_err(data: PyRebaseFailedData) -> PyErr {
-        PyErr::new::<PyRebaseFailedError, PyRebaseFailedData>(data)
-    }
-}
-
-impl_pickle!(PyRebaseFailedError);
-
-#[pyclass(name = "RebaseFailedData")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PyRebaseFailedData {
+pub struct PyRebaseFailedError {
     #[pyo3(get)]
     snapshot: String,
     #[pyo3(get)]
     conflicts: Vec<PyConflict>,
 }
 
+impl PyRebaseFailedError {
+    fn new_err(snapshot: String, conflicts: Vec<PyConflict>) -> PyErr {
+        PyErr::new::<PyRebaseFailedError, (String, Vec<PyConflict>)>((
+            snapshot, conflicts,
+        ))
+    }
+}
+
 #[pymethods]
-impl PyRebaseFailedData {
+impl PyRebaseFailedError {
+    #[new]
+    pub fn new(snapshot: String, conflicts: Vec<PyConflict>) -> Self {
+        Self { snapshot, conflicts }
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "RebaseFailedData(snapshot={}, conflicts={:?})",
+            "RebaseFailedError(snapshot={}, conflicts={:?})",
             self.snapshot, self.conflicts
         )
     }
@@ -216,3 +229,5 @@ impl PyRebaseFailedData {
         )
     }
 }
+
+impl_pickle!(PyRebaseFailedError);

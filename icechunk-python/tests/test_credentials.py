@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from icechunk import (
+    IcechunkError,
     Repository,
     S3Options,
     S3StaticCredentials,
@@ -51,12 +52,12 @@ def test_refreshable_credentials_grant_access(scatter_initial_credentials: bool)
 
     assert not Repository.exists(good_storage)
 
-    with pytest.raises(ValueError, match="InvalidAccessKeyId"):
+    with pytest.raises(IcechunkError, match="InvalidAccessKeyId"):
         assert not Repository.exists(bad_storage)
 
 
 def throws() -> S3StaticCredentials:
-    raise ValueError("bad creds")
+    raise IcechunkError("bad creds")
 
 
 def returns_something_else() -> int:
@@ -69,7 +70,7 @@ def returns_something_else() -> int:
 )
 def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> None:
     if scatter_initial_credentials:
-        with pytest.raises(ValueError, match="bad creds"):
+        with pytest.raises(IcechunkError, match="bad creds"):
             st = s3_storage(
                 region="us-east-1",
                 endpoint_url="http://localhost:9000",
@@ -90,7 +91,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
             scatter_initial_credentials=scatter_initial_credentials,
         )
 
-        with pytest.raises(ValueError, match="bad creds"):
+        with pytest.raises(IcechunkError, match="bad creds"):
             assert not Repository.exists(st)
 
     st = Storage.new_s3(
@@ -105,7 +106,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
         # we intentionally pass something that has the wrong type
         credentials=s3_refreshable_credentials(42),  # type: ignore [arg-type]
     )
-    with pytest.raises(ValueError, match="object is not callable"):
+    with pytest.raises(IcechunkError, match="object is not callable"):
         assert not Repository.exists(st)
 
     st = Storage.new_s3(
@@ -120,7 +121,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
         # we intentionally pass something that has the wrong type
         credentials=s3_refreshable_credentials(returns_something_else),  # type: ignore [arg-type]
     )
-    with pytest.raises(ValueError, match="cannot be converted"):
+    with pytest.raises(IcechunkError, match="cannot be converted"):
         assert not Repository.exists(st)
 
 
