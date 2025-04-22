@@ -18,12 +18,11 @@ use pyo3::{
     prelude::*,
     types::{PyTuple, PyType},
 };
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
-    errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
-    session::PySession,
-    streams::PyAsyncGenerator,
+    errors::{PyIcechunkStoreError, PyIcechunkStoreResult}, impl_pickle, session::PySession, streams::PyAsyncGenerator
 };
 
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
@@ -48,7 +47,7 @@ impl From<ChecksumArgument> for Checksum {
 }
 
 #[pyclass]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VirtualChunkSpec {
     #[pyo3(get)]
     index: Vec<u32>,
@@ -90,6 +89,8 @@ impl VirtualChunkSpec {
         Self { index, location, offset, length, etag_checksum, last_updated_at_checksum }
     }
 }
+
+impl_pickle!(VirtualChunkSpec);
 
 #[pyclass(name = "PyStore")]
 #[derive(Clone)]

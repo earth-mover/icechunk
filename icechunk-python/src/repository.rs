@@ -28,28 +28,25 @@ use pyo3::{
     prelude::*,
     types::{PyDict, PyNone, PyType},
 };
+use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     config::{
-        PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings, datetime_repr,
-        format_option_to_string,
-    },
-    errors::PyIcechunkStoreError,
-    session::PySession,
-    streams::PyAsyncGenerator,
+        datetime_repr, format_option_to_string, PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings
+    }, errors::PyIcechunkStoreError, impl_pickle, session::PySession, streams::PyAsyncGenerator
 };
 
 /// Wrapper needed to implement pyo3 conversion classes
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonValue(pub serde_json::Value);
 
 /// Wrapper needed to implement pyo3 conversion classes
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PySnapshotProperties(pub HashMap<String, JsonValue>);
 
 #[pyclass(name = "SnapshotInfo", eq)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PySnapshotInfo {
     #[pyo3(get)]
     id: String,
@@ -65,13 +62,17 @@ pub struct PySnapshotInfo {
     manifests: Vec<PyManifestFileInfo>,
 }
 
+impl_pickle!(PySnapshotInfo);
+
 #[pyclass(name = "ManifestFileInfo", eq)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PyManifestFileInfo {
     pub id: String,
     pub size_bytes: u64,
     pub num_chunk_refs: u32,
 }
+
+impl_pickle!(PyManifestFileInfo);
 
 impl<'py> FromPyObject<'py> for PySnapshotProperties {
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
@@ -221,7 +222,7 @@ impl PySnapshotInfo {
 }
 
 #[pyclass(name = "Diff", eq)]
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PyDiff {
     #[pyo3(get)]
     pub new_groups: BTreeSet<String>,
@@ -349,8 +350,10 @@ impl PyDiff {
     }
 }
 
+impl_pickle!(PyDiff);
+
 #[pyclass(name = "GCSummary", eq)]
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PyGCSummary {
     #[pyo3(get)]
     pub bytes_deleted: u64,
@@ -393,6 +396,8 @@ impl PyGCSummary {
         )
     }
 }
+
+impl_pickle!(PyGCSummary);
 
 #[pyclass]
 pub struct PyRepository(Arc<RwLock<Repository>>);
