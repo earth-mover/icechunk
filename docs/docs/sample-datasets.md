@@ -123,6 +123,7 @@ Source: https://storage.googleapis.com/earthenginepartners-hansen/GLCLU2000-2020
 
     ```python
     import icechunk as ic
+    import xarray as xr
 
     storage = ic.s3_storage(
         bucket="icechunk-public-data",
@@ -133,6 +134,6 @@ Source: https://storage.googleapis.com/earthenginepartners-hansen/GLCLU2000-2020
     repo = ic.Repository.open(storage=storage)
     session = repo.readonly_session("main")
     ds = xr.open_dataset(
-        session.store, chunks=None, consolidated=False
+        session.store, chunks=None, consolidated=False, engine="zarr"
     )
     ```
