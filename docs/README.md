@@ -17,8 +17,8 @@ This repository uses [Poetry](https://python-poetry.org/) to manage dependencies
 
 Alternatively you can run `poetry run mkdocs serve`
 
-!!! tip
-    You can use the optional `--dirty` flag to only rebuild changed files, although you may need to restart if you make changes to `mkdocs.yaml`.
+> [!TIP]
+> You can use the optional `--dirty` flag to only rebuild changed files, although you may need to restart if you make changes to `mkdocs.yaml`.
 
 ### Building
 
@@ -38,13 +38,13 @@ You can manually deploy by running the command `mkdocs gh-deploy --force` from t
 #### Symlinked Files
 
 Several directories and files are symlinked into the MkDocs' `/docs`[^1] directory in order to be made available to MkDocs. Avoid modifying them directly:
-    * `/docs/icechunk-python/examples/`
-    * `/docs/icechunk-python/notebooks/`
-    * `/docs/spec.md`
+- `/docs/icechunk-python/examples/`
+- `/docs/icechunk-python/notebooks/`
+- `/docs/spec.md`
 
 These are also ignored in `.gitignore`
 
-!!! tip
-    See [icechunk-docs/macros.py](./macros.py) for more info.
+> [!TIP]
+> See [icechunk-docs/macros.py](./macros.py) for more info.
 
 [^1]: Disambiguation: `icechunk/docs/docs`
