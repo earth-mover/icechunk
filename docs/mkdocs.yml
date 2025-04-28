@@ -196,6 +196,8 @@ nav:
     - Expiring Data: icechunk-python/expiration.md
     - Virtual Datasets: icechunk-python/virtual.md
     - API Reference: icechunk-python/reference.md
+    - Ingestion Workflows:
+      - Global Raster Data cube: icechunk-python/ingestion/glad-ingest.ipynb
     - Cheatsheets:
       - Icechunk for Git Users: icechunk-python/cheatsheets/git-users.md
 #    - Examples:
