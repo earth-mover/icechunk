@@ -250,7 +250,13 @@ class Session:
         """
         self._session.merge(other._session)
 
-    def commit(self, message: str, metadata: dict[str, Any] | None = None) -> str:
+    def commit(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        rebase_with: ConflictSolver | None = None,
+        rebase_tries: int = 1_000,
+    ) -> str:
         """
         Commit the changes in the session to the repository.
 
@@ -264,6 +270,10 @@ class Session:
             The message to write with the commit.
         metadata : dict[str, Any] | None, optional
             Additional metadata to store with the commit snapshot.
+        rebase_with : ConflictSolver | None, optional
+            If other session committed while the current session was writing, use Session.rebase with this solver.
+        rebase_tries : int, optional
+            If other session committed while the current session was writing, use Session.rebase up to this many times in a loop.
 
         Returns
         -------
@@ -276,9 +286,13 @@ class Session:
             If the session is out of date and a conflict occurs.
         """
         try:
-            return self._session.commit(message, metadata)
+            return self._session.commit(
+                message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
+            )
         except PyConflictError as e:
             raise ConflictError(e) from None
+        except PyRebaseFailedError as e:
+            raise RebaseFailedError(e) from None
 
     def rebase(self, solver: ConflictSolver) -> None:
         """

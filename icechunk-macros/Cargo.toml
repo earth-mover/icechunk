@@ -1,0 +1,24 @@
+[package]
+name = "icechunk-macros"
+description = "Support and helper macros for the Icechunk library"
+version = "0.1.0"
+readme = "../README.md"
+repository = "https://github.com/earth-mover/icechunk"
+homepage = "https://icechunk.io"
+license = "Apache-2.0"
+keywords = ["zarr", "xarray", "database"]
+categories = ["database", "science", "science::geo"]
+authors = ["Earthmover PBC"]
+edition = "2024"
+publish = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full"] }
+quote = "1.0"
+
+[lints]
+workspace = true
+
+
+[lib]
+proc-macro = true

@@ -702,6 +702,7 @@ impl Weighter<SnapshotId, Arc<TransactionLog>> for FileWeighter {
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod test {
 
+    use icechunk_macros::tokio_test;
     use itertools::{Itertools, assert_equal};
 
     use super::*;
@@ -713,7 +714,7 @@ mod test {
         storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
     };
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test]
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
@@ -786,7 +787,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test]
     async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
@@ -847,7 +848,7 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test]
     async fn test_dont_fetch_asset_twice() -> Result<(), Box<dyn std::error::Error>> {
         // Test that two concurrent requests for the same manifest doesn't generate two
         // object_store requests, one of them must wait

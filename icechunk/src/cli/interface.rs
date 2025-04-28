@@ -440,9 +440,11 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
 mod tests {
     use std::fs::read_dir;
 
+    use icechunk_macros::tokio_test;
+
     use super::*;
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_repo_create() {
         let temp = assert_fs::TempDir::new().unwrap();
         let path = temp.path().to_path_buf();
@@ -475,7 +477,7 @@ mod tests {
         assert!(snapshots_contents.next().is_some());
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_snapshot_list() {
         let temp = assert_fs::TempDir::new().unwrap();
         let path = temp.path().to_path_buf();
@@ -507,7 +509,7 @@ mod tests {
         assert!(output.contains("SnapshotInfo"));
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_config_list() {
         let temp = assert_fs::TempDir::new().unwrap();
         let path = temp.path().to_path_buf();

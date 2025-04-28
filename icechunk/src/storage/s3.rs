@@ -27,14 +27,14 @@ use aws_sdk_s3::{
     error::{BoxError, SdkError},
     operation::put_object::PutObjectError,
     primitives::ByteStream,
-    types::{Delete, Object, ObjectIdentifier},
+    types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
 };
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use futures::{
     StreamExt, TryStreamExt,
-    stream::{self, BoxStream},
+    stream::{self, BoxStream, FuturesOrdered},
 };
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncRead, sync::OnceCell};
@@ -44,7 +44,7 @@ use super::{
     CHUNK_PREFIX, CONFIG_PATH, DeleteObjectsResult, FetchConfigResult, GetRefResult,
     ListInfo, MANIFEST_PREFIX, REF_PREFIX, Reader, SNAPSHOT_PREFIX, Settings,
     StorageErrorKind, StorageResult, TRANSACTION_PREFIX, UpdateConfigResult, VersionInfo,
-    WriteRefResult,
+    WriteRefResult, split_in_multiple_equal_requests,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -273,7 +273,7 @@ impl S3Storage {
         Ok(Box::new(b.send().await?.body.into_async_read()))
     }
 
-    async fn put_object<
+    async fn put_object_single<
         I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     >(
         &self,
@@ -306,6 +306,135 @@ impl S3Storage {
 
         b.body(bytes.into()).send().await?;
         Ok(())
+    }
+
+    async fn put_object_multipart<
+        I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    >(
+        &self,
+        settings: &Settings,
+        key: &str,
+        content_type: Option<impl Into<String>>,
+        metadata: I,
+        storage_class: Option<&String>,
+        bytes: &Bytes,
+    ) -> StorageResult<()> {
+        let mut multi = self
+            .get_client()
+            .await
+            .create_multipart_upload()
+            // We would like this, but it fails in MinIO
+            //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
+            //.checksum_algorithm(aws_sdk_s3::types::ChecksumAlgorithm::Crc64Nvme)
+            .bucket(self.bucket.clone())
+            .key(key);
+
+        if settings.unsafe_use_metadata() {
+            if let Some(ct) = content_type {
+                multi = multi.content_type(ct)
+            };
+            for (k, v) in metadata {
+                multi = multi.metadata(k, v);
+            }
+        }
+
+        if let Some(klass) = storage_class {
+            let klass = klass.as_str().into();
+            multi = multi.storage_class(klass);
+        }
+
+        let create_res = multi.send().await?;
+        let upload_id =
+            create_res.upload_id().ok_or(StorageError::from(StorageErrorKind::Other(
+                "No upload_id in create multipart upload result".to_string(),
+            )))?;
+
+        // We need to ensure all requests are the same size except for the last one, which can be
+        // smaller. This is a requirement for R2 compatibility
+        let parts = split_in_multiple_equal_requests(
+            &(0..bytes.len() as u64),
+            settings.concurrency().ideal_concurrent_request_size().get(),
+            settings.concurrency().max_concurrent_requests_for_object().get(),
+        )
+        .collect::<Vec<_>>();
+
+        let results = parts
+            .into_iter()
+            .enumerate()
+            .map(|(part_idx, range)| async move {
+                let body = bytes.slice(range.start as usize..range.end as usize).into();
+                let idx = part_idx as i32 + 1;
+                self.get_client()
+                    .await
+                    .upload_part()
+                    .upload_id(upload_id)
+                    .bucket(self.bucket.clone())
+                    .key(key)
+                    .part_number(idx)
+                    .body(body)
+                    .send()
+                    .await
+                    .map(|res| (idx, res))
+            })
+            .collect::<FuturesOrdered<_>>();
+
+        let completed_parts = results
+            .map_ok(|(idx, res)| {
+                let etag = res.e_tag().unwrap_or("");
+                CompletedPart::builder().e_tag(etag).part_number(idx).build()
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let completed_parts =
+            CompletedMultipartUpload::builder().set_parts(Some(completed_parts)).build();
+
+        self.get_client()
+            .await
+            .complete_multipart_upload()
+            .bucket(self.bucket.clone())
+            .key(key)
+            .upload_id(upload_id)
+            //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
+            .multipart_upload(completed_parts)
+            .send()
+            .await?;
+
+        Ok(())
+    }
+
+    async fn put_object<
+        I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    >(
+        &self,
+        settings: &Settings,
+        key: &str,
+        content_type: Option<impl Into<String>>,
+        metadata: I,
+        storage_class: Option<&String>,
+        bytes: &Bytes,
+    ) -> StorageResult<()> {
+        if bytes.len() >= settings.minimum_size_for_multipart_upload() as usize {
+            self.put_object_multipart(
+                settings,
+                key,
+                content_type,
+                metadata,
+                storage_class,
+                bytes,
+            )
+            .await
+        } else {
+            self.put_object_single(
+                settings,
+                key,
+                content_type,
+                metadata,
+                storage_class,
+                bytes.clone(),
+            )
+            .await
+        }
     }
 
     fn get_ref_name<'a>(&self, key: Option<&'a str>) -> Option<&'a str> {
@@ -512,7 +641,7 @@ impl Storage for S3Storage {
             None::<String>,
             metadata,
             settings.metadata_storage_class(),
-            bytes,
+            &bytes,
         )
         .await
     }
@@ -532,7 +661,7 @@ impl Storage for S3Storage {
             None::<String>,
             metadata.into_iter(),
             settings.metadata_storage_class(),
-            bytes,
+            &bytes,
         )
         .await
     }
@@ -552,7 +681,7 @@ impl Storage for S3Storage {
             None::<String>,
             metadata.into_iter(),
             settings.metadata_storage_class(),
-            bytes,
+            &bytes,
         )
         .await
     }
@@ -565,7 +694,6 @@ impl Storage for S3Storage {
         bytes: bytes::Bytes,
     ) -> Result<(), StorageError> {
         let key = self.get_chunk_path(&id)?;
-        //FIXME: use multipart upload
         let metadata: [(String, String); 0] = [];
         self.put_object(
             settings,
@@ -573,7 +701,7 @@ impl Storage for S3Storage {
             None::<String>,
             metadata,
             settings.chunks_storage_class(),
-            bytes,
+            &bytes,
         )
         .await
     }
@@ -787,7 +915,7 @@ impl Storage for S3Storage {
             .get_client()
             .await
             .head_object()
-            .bucket(self.bucket.as_str())
+            .bucket(self.bucket.clone())
             .key(key)
             .send()
             .await?;
@@ -812,7 +940,7 @@ impl Storage for S3Storage {
             .get_client()
             .await
             .get_object()
-            .bucket(self.bucket.as_str())
+            .bucket(self.bucket.clone())
             .key(key)
             .range(range_to_header(range));
         Ok(Box::new(b.send().await?.body.collect().await?))
@@ -882,11 +1010,13 @@ async fn get_object_range(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use icechunk_macros::tokio_test;
+
     use crate::config::{S3Credentials, S3Options, S3StaticCredentials};
 
     use super::*;
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_serialize_s3_storage() {
         let config = S3Options {
             region: Some("us-west-2".to_string()),
@@ -923,7 +1053,7 @@ mod tests {
         assert_eq!(storage.config, deserialized.config);
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_s3_paths() {
         let storage = S3Storage::new(
             S3Options {

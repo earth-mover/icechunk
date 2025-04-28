@@ -3,9 +3,11 @@ use aws_sdk_s3::{
     config::http::HttpResponse,
     error::SdkError,
     operation::{
+        complete_multipart_upload::CompleteMultipartUploadError,
+        create_multipart_upload::CreateMultipartUploadError,
         delete_objects::DeleteObjectsError, get_object::GetObjectError,
         head_object::HeadObjectError, list_objects_v2::ListObjectsV2Error,
-        put_object::PutObjectError,
+        put_object::PutObjectError, upload_part::UploadPartError,
     },
     primitives::ByteStreamError,
 };
@@ -62,6 +64,16 @@ pub enum StorageErrorKind {
     S3GetObjectError(#[from] SdkError<GetObjectError, HttpResponse>),
     #[error("error writing object to object store {0}")]
     S3PutObjectError(#[from] SdkError<PutObjectError, HttpResponse>),
+    #[error("error creating multipart upload {0}")]
+    S3CreateMultipartUploadError(
+        #[from] SdkError<CreateMultipartUploadError, HttpResponse>,
+    ),
+    #[error("error uploading multipart part {0}")]
+    S3UploadPartError(#[from] SdkError<UploadPartError, HttpResponse>),
+    #[error("error completing multipart upload {0}")]
+    S3CompleteMultipartUploadError(
+        #[from] SdkError<CompleteMultipartUploadError, HttpResponse>,
+    ),
     #[error("error getting object metadata from object store {0}")]
     S3HeadObjectError(#[from] SdkError<HeadObjectError, HttpResponse>),
     #[error("error listing objects in object store {0}")]
@@ -186,6 +198,8 @@ pub struct Settings {
     pub metadata_storage_class: Option<String>,
     #[serde(default)]
     pub chunks_storage_class: Option<String>,
+    #[serde(default)]
+    pub minimum_size_for_multipart_upload: Option<u64>,
 }
 
 static DEFAULT_CONCURRENCY: OnceLock<ConcurrencySettings> = OnceLock::new();
@@ -215,6 +229,11 @@ impl Settings {
 
     pub fn chunks_storage_class(&self) -> Option<&String> {
         self.chunks_storage_class.as_ref().or(self.storage_class.as_ref())
+    }
+
+    pub fn minimum_size_for_multipart_upload(&self) -> u64 {
+        // per AWS  recommendation: 100 MB
+        self.minimum_size_for_multipart_upload.unwrap_or(100 * 1024 * 1024)
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -274,6 +293,15 @@ impl Settings {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            minimum_size_for_multipart_upload: match (
+                &self.minimum_size_for_multipart_upload,
+                other.minimum_size_for_multipart_upload,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
                 (Some(_), Some(theirs)) => Some(theirs),
             },
         }
@@ -703,6 +731,38 @@ pub fn split_in_multiple_requests(
     .map(|(_, range)| range)
 }
 
+/// Split an object request into multiple byte range requests ensuring only the last request is
+/// smaller
+///
+/// Returns tuples of Range for each request.
+///
+/// It tries to generate ceil(size/ideal_req_size) requests, but never exceeds max_requests.
+///
+/// ideal_req_size and max_requests must be > 0
+pub fn split_in_multiple_equal_requests(
+    range: &Range<u64>,
+    ideal_req_size: u64,
+    max_requests: u16,
+) -> impl Iterator<Item = Range<u64>> + use<> {
+    let size = max(0, range.end - range.start);
+    // we do a ceiling division, rounding always up
+    let num_parts = size.div_ceil(ideal_req_size);
+    // no more than max_parts, so we limit
+    let num_parts = max(1, min(num_parts, max_requests as u64));
+
+    let big_parts = num_parts - 1;
+    let big_parts_size = size / max(1, big_parts);
+    let small_part_size = size - big_parts_size * big_parts;
+
+    iter::successors(Some((1, range.start..range.start)), move |(index, prev_range)| {
+        let size = if *index <= big_parts { big_parts_size } else { small_part_size };
+        Some((index + 1, prev_range.end..prev_range.end + size))
+    })
+    .dropping(1)
+    .take(num_parts as usize)
+    .map(|(_, range)| range)
+}
+
 pub fn new_s3_storage(
     config: S3Options,
     bucket: String,
@@ -888,10 +948,11 @@ mod tests {
     use std::{collections::HashSet, fs::File, io::Write, path::PathBuf};
 
     use super::*;
+    use icechunk_macros::tokio_test;
     use proptest::prelude::*;
     use tempfile::TempDir;
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_is_clean() {
         let repo_dir = TempDir::new().unwrap();
         let s = new_local_filesystem_storage(repo_dir.path()).await.unwrap();
@@ -911,7 +972,46 @@ mod tests {
         #![proptest_config(ProptestConfig {
             cases: 999, .. ProptestConfig::default()
         })]
-        #[test]
+
+        #[icechunk_macros::test]
+        fn test_split_equal_requests(offset in 0..1_000_000u64, size in 1..3_000_000_000u64, part_size in 1..16_000_000u64, max_parts in 1..100u16 ) {
+            let res: Vec<_> = split_in_multiple_equal_requests(&(offset..offset+size), part_size, max_parts).collect();
+            // there is always at least 1 request
+            prop_assert!(!res.is_empty());
+
+            // it does as many requests as possible
+            prop_assert!(res.len() as u64 >= min(max_parts as u64, size / part_size));
+
+            // there are never more than max_parts requests
+            prop_assert!(res.len() <= max_parts as usize);
+
+            // the request sizes add up to total size
+            prop_assert_eq!(res.iter().map(|range| range.end - range.start).sum::<u64>(), size);
+
+            let sizes: Vec<_> = res.iter().map(|range| (range.end - range.start)).collect();
+            if sizes.len() > 1 {
+                // all but last request have the same size
+                assert_eq!(sizes.iter().rev().skip(1).unique().count(), 1);
+
+                // last element is smaller or equal
+                assert!(sizes.last().unwrap() <= sizes.first().unwrap());
+            }
+
+            // we split as much as possible
+            assert!(res.len() >= min((size / part_size) as usize, max_parts as usize) );
+
+            // there are no holes in the requests, nor bytes that are requested more than once
+            let mut iter = res.iter();
+            iter.next();
+            prop_assert!(res.iter().zip(iter).all(|(r1,r2)| r1.end == r2.start));
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 999, .. ProptestConfig::default()
+        })]
+        #[icechunk_macros::test]
         fn test_split_requests(offset in 0..1_000_000u64, size in 1..3_000_000_000u64, part_size in 1..16_000_000u64, max_parts in 1..100u16 ) {
             let res: Vec<_> = split_in_multiple_requests(&(offset..offset+size), part_size, max_parts).collect();
 
@@ -946,7 +1046,7 @@ mod tests {
 
     }
 
-    #[test]
+    #[icechunk_macros::test]
     fn test_split_examples() {
         assert_eq!(
             split_in_multiple_requests(&(0..4), 4, 100,).collect::<Vec<_>>(),

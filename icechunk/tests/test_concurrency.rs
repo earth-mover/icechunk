@@ -7,6 +7,7 @@ use icechunk::{
     session::{Session, get_chunk},
     storage::new_in_memory_storage,
 };
+use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 use rand::{Rng, rng};
 use std::{
@@ -26,13 +27,13 @@ mod common;
 
 const N: usize = 20;
 
-#[tokio::test]
+#[tokio_test]
 async fn test_concurrency_in_memory() -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     do_test_concurrency(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 async fn test_concurrency_in_r2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_concurrency_{}", Utc::now().timestamp_millis());
@@ -41,7 +42,7 @@ async fn test_concurrency_in_r2() -> Result<(), Box<dyn std::error::Error>> {
     do_test_concurrency(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 async fn test_concurrency_in_aws() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_concurrency_{}", Utc::now().timestamp_millis());
@@ -50,7 +51,7 @@ async fn test_concurrency_in_aws() -> Result<(), Box<dyn std::error::Error>> {
     do_test_concurrency(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 async fn test_concurrency_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_concurrency_{}", Utc::now().timestamp_millis());

@@ -597,6 +597,7 @@ class StorageSettings:
         storage_class: str | None = None,
         metadata_storage_class: str | None = None,
         chunks_storage_class: str | None = None,
+        minimum_size_for_multipart_upload: int | None = None,
     ) -> None:
         """
         Create a new `StorageSettings` object
@@ -636,6 +637,10 @@ class StorageSettings:
             Store chunk objects using this object store storage class.
             Currently not supported in GCS.
             Defaults to storage_class.
+
+        minimum_size_for_multipart_upload: int | None
+            Use object store's multipart upload for objects larger than this size in bytes.
+            Default: 100 MB if None is passed.
         """
         ...
     @property
@@ -672,6 +677,11 @@ class StorageSettings:
     @property
     def chunks_storage_class(self) -> str | None:
         """Chunk objects in object store will use this storage class or self.storage_class if None"""
+        ...
+
+    @property
+    def minimum_size_for_multipart_upload(self) -> int | None:
+        """Use object store's multipart upload for objects larger than this size in bytes"""
         ...
 
 class RepositoryConfig:
@@ -1066,7 +1076,13 @@ class PySession:
     @property
     def store(self) -> PyStore: ...
     def merge(self, other: PySession) -> None: ...
-    def commit(self, message: str, metadata: dict[str, Any] | None = None) -> str: ...
+    def commit(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        rebase_with: ConflictSolver | None = None,
+        rebase_tries: int = 1_000,
+    ) -> str: ...
     def rebase(self, solver: ConflictSolver) -> None: ...
 
 class PyStore:
@@ -1254,8 +1270,13 @@ class S3Credentials:
         ----------
         pickled_function: bytes
             The pickled function to use to provide credentials.
+        current: S3StaticCredentials
+            The initial credentials. They will be returned the first time credentials
+            are requested and then deleted.
         """
-        def __init__(self, pickled_function: bytes) -> None: ...
+        def __init__(
+            self, pickled_function: bytes, current: S3StaticCredentials | None = None
+        ) -> None: ...
 
 AnyS3Credential = (
     S3Credentials.Static
@@ -1353,7 +1374,9 @@ class GcsCredentials:
 
         This is useful for credentials that have an expiration time, or are otherwise not known ahead of time.
         """
-        def __init__(self, pickled_function: bytes) -> None: ...
+        def __init__(
+            self, pickled_function: bytes, current: GcsBearerCredential | None = None
+        ) -> None: ...
 
 AnyGcsCredential = (
     GcsCredentials.FromEnv | GcsCredentials.Static | GcsCredentials.Refreshable

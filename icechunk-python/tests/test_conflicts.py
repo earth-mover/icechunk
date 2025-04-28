@@ -83,8 +83,7 @@ def test_rebase_no_conflicts(repo: icechunk.Repository) -> None:
     array_b = cast(zarr.Array, root_b["foo/bar/some-array"])
     array_b.attrs["repo"] = 2
 
-    session_b.rebase(icechunk.ConflictDetector())
-    session_b.commit("update array")
+    session_b.commit("update array", rebase_with=icechunk.ConflictDetector())
 
     session_c = repo.readonly_session(branch="main")
     store_c = session_c.store
@@ -94,13 +93,7 @@ def test_rebase_no_conflicts(repo: icechunk.Repository) -> None:
     assert array_c.attrs["repo"] == 2
 
 
-@pytest.mark.parametrize(
-    "on_chunk_conflict",
-    [icechunk.VersionSelection.UseOurs, icechunk.VersionSelection.UseTheirs],
-)
-def test_rebase_fails_on_user_atts_double_edit(
-    repo: icechunk.Repository, on_chunk_conflict: icechunk.VersionSelection
-) -> None:
+def test_rebase_fails_on_user_atts_double_edit(repo: icechunk.Repository) -> None:
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
     store_a = session_a.store
@@ -120,7 +113,7 @@ def test_rebase_fails_on_user_atts_double_edit(
 
     # Make sure it fails if the resolver is not set
     with pytest.raises(icechunk.RebaseFailedError):
-        session_b.rebase(icechunk.BasicConflictSolver())
+        session_b.commit("update array", rebase_with=icechunk.BasicConflictSolver())
 
 
 @pytest.mark.parametrize(
@@ -150,10 +143,11 @@ def test_rebase_chunks_with_ours(
     # Make sure it fails if the resolver is not set
     with pytest.raises(icechunk.RebaseFailedError):
         try:
-            session_b.rebase(
-                icechunk.BasicConflictSolver(
+            session_b.commit(
+                "update first column of array",
+                rebase_with=icechunk.BasicConflictSolver(
                     on_chunk_conflict=icechunk.VersionSelection.Fail
-                )
+                ),
             )
         except icechunk.RebaseFailedError as e:
             assert e.conflicts[0].path == "/foo/bar/some-array"
@@ -184,8 +178,7 @@ def test_rebase_chunks_with_ours(
         on_chunk_conflict=on_chunk_conflict,
     )
 
-    session_b.rebase(solver)
-    session_b.commit("after conflict")
+    session_b.commit("after conflict", rebase_with=solver)
 
     session_c = repo.readonly_session(branch="main")
     store_c = session_c.store
