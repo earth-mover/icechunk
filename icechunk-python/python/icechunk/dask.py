@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import Any, TypeAlias
 
+import numpy as np
 from packaging.version import Version
 
 import dask
@@ -68,6 +69,9 @@ def store_dask(
         lock=False,
         **store_kwargs,
     )
+    if len(sources) == 1 and isinstance(stored_arrays, da.Array):
+        stored_arrays = [stored_arrays]
+
     # Now we tree-reduce all changesets
     # reduce the individual arrays since concatenation isn't always trivial due
     # to different shapes
@@ -81,6 +85,7 @@ def store_dask(
             concatenate=False,
             keepdims=False,
             dtype=object,
+            meta=np.array([object()], dtype=object),
             **store_kwargs,
         )
         for arr in stored_arrays
