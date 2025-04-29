@@ -119,9 +119,9 @@ where
     f("in_memory", s2).await?;
     println!("Using local filesystem storage");
     f("local_filesystem", s5).await?;
-    println!("Using s3 native storage");
+    println!("Using s3 native storage on MinIO");
     f("s3_native", s1).await?;
-    println!("Using s3 object_store storage");
+    println!("Using s3 object_store storage on MinIO");
     f("s3_object_store", s3).await?;
     println!("Using azure_blob storage");
     f("azure_blob", s4).await?;
@@ -451,7 +451,7 @@ pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::E
 #[tokio_test]
 pub async fn test_write_config_fails_on_bad_version_when_non_existing()
 -> Result<(), Box<dyn std::error::Error>> {
-    // FIXME: this test fails in MiniIO but seems to work on S3
+    // FIXME: this test fails in MinIO but seems to work on S3
     #[allow(clippy::unwrap_used)]
     let storage = new_in_memory_storage().await.unwrap();
     let storage_settings = storage.default_settings();
@@ -671,5 +671,27 @@ pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
         vec!["STANDARD_IA", "STANDARD_IA", "STANDARD"]
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+pub async fn test_write_object_larger_than_multipart_threshold()
+-> Result<(), Box<dyn std::error::Error>> {
+    with_storage(|_, storage| async move {
+        let custom_settings = storage::Settings {
+            minimum_size_for_multipart_upload: Some(100),
+            ..storage.default_settings()
+        };
+
+        let id = ChunkId::random();
+        let bytes = Bytes::copy_from_slice(&[0; 1024]);
+
+        storage.write_chunk(&custom_settings, id.clone(), bytes.clone()).await?;
+        let fetched = storage.fetch_chunk(&custom_settings, &id, &(0..1024)).await?;
+        assert_eq!(fetched, bytes);
+
+        Ok(())
+    })
+    .await?;
     Ok(())
 }
