@@ -333,7 +333,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.model[path] = value
         else:
             # not at branch head, modifications not possible.
-            with pytest.raises(ValueError, match="read-only store"):
+            with pytest.raises(IcechunkError, match="read-only store"):
                 self.sync_store.set(path, value)
 
     @rule(message=st.text(max_size=MAX_TEXT_SIZE), target=commits)
@@ -354,7 +354,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def checkout_commit(self, ref: str) -> None:
         if ref not in self.model.commits:
             note(f"Checking out commit {ref}, expecting error")
-            with pytest.raises(ValueError):
+            with pytest.raises(IcechunkError):
                 self.repo.readonly_session(snapshot_id=ref)
         else:
             note(f"Checking out commit {ref}")
@@ -377,7 +377,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.model.checkout_tag(ref)
         else:
             note("Expecting error.")
-            with pytest.raises(ValueError):
+            with pytest.raises(IcechunkError):
                 self.repo.readonly_session(tag=ref)
 
     @rule(ref=branches)
@@ -389,7 +389,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             assert not self.session.read_only
             self.model.checkout_branch(ref)
         else:
-            with pytest.raises(ValueError):
+            with pytest.raises(IcechunkError):
                 note(f"Expecting error when checking out branch {ref!r}")
                 self.repo.writable_session(ref)
 
@@ -403,7 +403,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.model.create_branch(name, commit)
         else:
             note("Expecting error.")
-            with pytest.raises(ValueError):
+            with pytest.raises(IcechunkError):
                 self.repo.create_branch(name, commit)
         # returning this `name` to the Bundle is OK even if the branch was not created
         # This will test out checking out and deleting a branch that does not exist.
@@ -420,7 +420,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             or commit_id not in self.model.commits
         ):
             note("Expecting error.")
-            with pytest.raises(ValueError):
+            with pytest.raises(IcechunkError):
                 self.repo.create_tag(name, commit_id)
         else:
             self.repo.create_tag(name, commit_id)
@@ -445,7 +445,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def reset_branch(self, branch: str, commit: str) -> None:
         if branch not in self.model.branches or commit not in self.model.commits:
             note(f"resetting branch {branch}, expecting error.")
-            with pytest.raises(ValueError):
+            with pytest.raises(IcechunkError):
                 self.repo.reset_branch(branch, commit)
         else:
             note(

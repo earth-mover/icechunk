@@ -19,7 +19,7 @@ def test_error_message_when_snapshot_deleted(tmpdir: Path):
     repo = ic.Repository.open(storage=storage)
     # we check error includes the spans for ancestry and fetch_snapshot
     with pytest.raises(
-        ValueError, match=re.compile("fetch_snapshot.*ancestry", re.DOTALL)
+        ic.IcechunkError, match=re.compile("fetch_snapshot.*ancestry", re.DOTALL)
     ):
         repo.ancestry(branch="main")
 
@@ -50,5 +50,7 @@ def test_error_message_when_manifest_file_altered(tmpdir: Path):
     array = group["array"]
 
     ## we check error includes the spans for ancestry and fetch_snapshot
-    with pytest.raises(ValueError, match=re.compile("fetch_manifest.*get", re.DOTALL)):
+    with pytest.raises(
+        ic.IcechunkError, match=re.compile("fetch_manifest.*get", re.DOTALL)
+    ):
         array[0]

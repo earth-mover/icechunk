@@ -1596,11 +1596,9 @@ class IcechunkError(Exception):
 
     ...
 
-class ConflictErrorData:
-    """Data class for conflict errors. This describes the snapshot conflict detected when committing a session
+class ConflictError(Exception):
+    """An error that occurs when a conflict is detected"""
 
-    If this error is raised, it means the branch was modified and committed by another session after the session was created.
-    """
     @property
     def expected_parent(self) -> str:
         """The expected parent snapshot ID.
@@ -1619,11 +1617,6 @@ class ConflictErrorData:
         the session was created.
         """
         ...
-
-class PyConflictError(IcechunkError):
-    """An error that occurs when a conflict is detected"""
-
-    args: tuple[ConflictErrorData]
     ...
 
 __version__: str
@@ -1695,8 +1688,8 @@ class Conflict:
         """
         ...
 
-class RebaseFailedData:
-    """Data class for rebase failed errors. This describes the error that occurred when rebasing a session"""
+class RebaseFailedError(IcechunkError):
+    """An error that occurs when a rebase operation fails"""
 
     @property
     def snapshot(self) -> str:
@@ -1710,12 +1703,6 @@ class RebaseFailedData:
         Returns:
             list[Conflict]: The conflicts that occurred during the rebase operation
         """
-        ...
-
-class PyRebaseFailedError(IcechunkError):
-    """An error that occurs when a rebase operation fails"""
-
-    args: tuple[RebaseFailedData]
     ...
 
 def initialize_logs() -> None:
