@@ -33,15 +33,15 @@ Let's break down what "transactional storage engine for Zarr" actually means:
   Zarr defines the metadata for describing arrays (shape, dtype, etc.) and the way these arrays are chunked, compressed, and converted to raw bytes for storage. Zarr can store its data in any key-value store.
   There are many different implementations of Zarr in different languages. _Right now, Icechunk only supports
   [Zarr Python](https://zarr.readthedocs.io/en/stable/)._
-  If you're interested in implementing Icehcunk support, please [open an issue](https://github.com/earth-mover/icechunk/issues) so we can help you.
+  If you're interested in implementing Icechunk support, please [open an issue](https://github.com/earth-mover/icechunk/issues) so we can help you.
 - **Storage engine** - Icechunk exposes a key-value interface to Zarr and manages all of the actual I/O for getting, setting, and updating both metadata and chunk data in cloud object storage.
   Zarr libraries don't have to know exactly how icechunk works under the hood in order to use it.
 - **Transactional** - The key improvement that Icechunk brings on top of regular Zarr is to provide consistent serializable isolation between transactions.
-  This means that Icechunk data are safe to read and write in parallel from multiple uncoordinated processes.
+  This means that Icechunk data is safe to read and write in parallel from multiple uncoordinated processes.
   This allows Zarr to be used more like a database.
 
 The core entity in Icechunk is a repository or **repo**.
-A repo is defined as a Zarr hierarchy containing one or more Arrays and Groups, and a repo functions as
+A repo is defined as a Zarr hierarchy containing one or more Arrays and Groups, and a repo functions as a
 self-contained _Zarr Store_.
 The most common scenario is for an Icechunk repo to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
 However, formally a repo can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
@@ -116,7 +116,7 @@ You can then update these virtual datasets incrementally (overwrite chunks, chan
 ## How Does It Work?
 
 **!!! Note:**
-    For more detailed explanation, have a look at the [Icechunk spec](./docs/docs/spec.md).
+    For a more detailed explanation, have a look at the [Icechunk spec](./docs/docs/spec.md).
 
 Zarr itself works by storing both metadata and chunk data into a abstract store according to a specified system of "keys".
 For example, a 2D Zarr array called `myarray`, within a group called `mygroup`, would generate the following keys:
