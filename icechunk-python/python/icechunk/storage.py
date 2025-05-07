@@ -43,7 +43,13 @@ def local_filesystem_storage(path: str) -> Storage:
 def http_store(
     opts: dict[str, str] | None = None,
 ) -> ObjectStoreConfig.Http:
-    """Build an ObjectStoreConfig instance for HTTP object stores."""
+    """Build an ObjectStoreConfig instance for HTTP object stores.
+
+    Parameters
+    ----------
+    opts: dict[str, str] | None
+        A dictionary of options for the HTTP object store. See https://docs.rs/object_store/latest/object_store/client/enum.ClientConfigKey.html#variants for a list of possible keys in snake case format.
+    """
     return ObjectStoreConfig.Http(opts)
 
 
@@ -342,7 +348,13 @@ def r2_storage(
 def gcs_store(
     opts: dict[str, str] | None = None,
 ) -> ObjectStoreConfig.Gcs:
-    """Build an ObjectStoreConfig instance for Google Cloud Storage object stores."""
+    """Build an ObjectStoreConfig instance for Google Cloud Storage object stores.
+
+    Parameters
+    ----------
+    opts: dict[str, str] | None
+        A dictionary of options for the Google Cloud Storage object store. See https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants for a list of possible configuration keys.
+    """
     return ObjectStoreConfig.Gcs(opts)
 
 
