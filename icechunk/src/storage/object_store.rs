@@ -1021,13 +1021,14 @@ fn object_to_list_info(object: &ObjectMeta) -> Option<ListInfo<String>> {
 mod tests {
     use std::path::PathBuf;
 
+    use icechunk_macros::tokio_test;
     use tempfile::TempDir;
 
     use crate::format::{ChunkId, ManifestId, SnapshotId};
 
     use super::ObjectStorage;
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_serialize_object_store() {
         let tmp_dir = TempDir::new().unwrap();
         let store = ObjectStorage::new_local_filesystem(tmp_dir.path()).await.unwrap();
@@ -1055,7 +1056,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_canonicalize_path() {
         // Absolute path
         let tmp_dir = TempDir::new().unwrap();
@@ -1075,7 +1076,7 @@ mod tests {
         assert!(store.is_ok());
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_object_store_paths() {
         let store = ObjectStorage::new_local_filesystem(PathBuf::from(".").as_path())
             .await

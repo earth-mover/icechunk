@@ -310,7 +310,7 @@ async def test_icechunk_can_read_old_repo() -> None:
         1:
     ]
 
-    with pytest.raises(ValueError, match="ref not found"):
+    with pytest.raises(ic.IcechunkError, match="ref not found"):
         repo.readonly_session(tag="deleted")
 
     session = repo.writable_session("my-branch")

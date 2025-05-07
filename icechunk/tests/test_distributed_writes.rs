@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 use chrono::Utc;
+use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
@@ -78,7 +79,7 @@ async fn verify(ds: Session) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn test_distributed_writes_in_minio() -> Result<(), Box<dyn std::error::Error>> {
     do_test_distributed_writes(|prefix| async {
         common::make_minio_integration_storage(prefix)
@@ -86,7 +87,7 @@ async fn test_distributed_writes_in_minio() -> Result<(), Box<dyn std::error::Er
     .await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 async fn test_distributed_writes_in_aws() -> Result<(), Box<dyn std::error::Error>> {
     do_test_distributed_writes(|prefix| async {
@@ -95,7 +96,7 @@ async fn test_distributed_writes_in_aws() -> Result<(), Box<dyn std::error::Erro
     .await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 async fn test_distributed_writes_in_r2() -> Result<(), Box<dyn std::error::Error>> {
     do_test_distributed_writes(|prefix| async {
@@ -104,7 +105,7 @@ async fn test_distributed_writes_in_r2() -> Result<(), Box<dyn std::error::Error
     .await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 async fn test_distributed_writes_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
     do_test_distributed_writes(|prefix| async {

@@ -927,6 +927,38 @@ impl Session {
         Ok(id)
     }
 
+    pub async fn commit_rebasing<F1, F2, Fut1, Fut2>(
+        &mut self,
+        solver: &dyn ConflictSolver,
+        rebase_attempts: u16,
+        message: &str,
+        properties: Option<SnapshotProperties>,
+        // We would prefer to make this argument optional, but passing None
+        // for this argument is so hard. Callers should just pass noop closure like
+        // |_| async {},
+        before_rebase: F1,
+        after_rebase: F2,
+    ) -> SessionResult<SnapshotId>
+    where
+        F1: Fn(u16) -> Fut1,
+        F2: Fn(u16) -> Fut2,
+        Fut1: Future<Output = ()>,
+        Fut2: Future<Output = ()>,
+    {
+        for attempt in 0..rebase_attempts {
+            match self.commit(message, properties.clone()).await {
+                Ok(snap) => return Ok(snap),
+                Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) => {
+                    before_rebase(attempt + 1).await;
+                    self.rebase(solver).await?;
+                    after_rebase(attempt + 1).await;
+                }
+                Err(other_err) => return Err(other_err),
+            }
+        }
+        self.commit(message, properties).await
+    }
+
     /// Detect and optionally fix conflicts between the current [`ChangeSet`] (or session) and
     /// the tip of the branch.
     ///
@@ -1897,7 +1929,11 @@ async fn fetch_manifest(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::{collections::HashMap, error::Error};
+    use std::{
+        collections::HashMap,
+        error::Error,
+        sync::atomic::{AtomicU16, Ordering},
+    };
 
     use crate::{
         ObjectStorage, Repository,
@@ -1913,6 +1949,7 @@ mod tests {
     };
 
     use super::*;
+    use icechunk_macros::tokio_test;
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
@@ -2092,7 +2129,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test]
     async fn test_repository_with_default_commit_metadata() -> Result<(), Box<dyn Error>>
     {
         let mut repo = create_memory_store_repository().await;
@@ -2138,7 +2175,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test]
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage_settings = storage.default_settings();
@@ -2356,7 +2393,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test]
     async fn test_repository_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
@@ -2671,7 +2708,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_basic_delete_and_flush() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
@@ -2690,7 +2727,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_basic_delete_after_flush() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
@@ -2706,7 +2743,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_commit_after_deleting_old_node() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
@@ -2724,7 +2761,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_delete_children() -> Result<(), Box<dyn Error>> {
         let def = Bytes::copy_from_slice(b"");
         let repository = create_memory_store_repository().await;
@@ -2752,7 +2789,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_delete_children_of_old_nodes() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut ds = repository.writable_session("main").await?;
@@ -2770,7 +2807,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(None, storage, HashMap::new()).await?;
@@ -2839,7 +2876,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_manifests_shrink() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = Arc::new(ObjectStorage::new_in_memory().await?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
@@ -3048,7 +3085,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test(flavor = "multi_thread")]
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
         let storage = Arc::clone(repo.storage());
@@ -3123,7 +3160,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio_test]
     async fn test_no_double_commit() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
 
@@ -3187,7 +3224,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_setting_w_invalid_coords() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
@@ -3297,7 +3334,7 @@ mod tests {
         }
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: add array
@@ -3319,7 +3356,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: add array
@@ -3342,7 +3379,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: update array metadata
@@ -3364,7 +3401,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: delete array
@@ -3386,7 +3423,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: delete array
@@ -3409,7 +3446,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: delete array
@@ -3437,7 +3474,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: delete group
@@ -3460,7 +3497,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     async fn test_rebase_without_fast_forward() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
 
@@ -3521,7 +3558,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test()]
+    #[tokio_test]
     async fn test_rebase_fast_forwarding_over_chunk_writes() -> Result<(), Box<dyn Error>>
     {
         let repo = create_memory_store_repository().await;
@@ -3737,7 +3774,7 @@ mod tests {
     //     panic!("Bad test, it should conflict")
     // }
 
-    #[tokio::test]
+    #[tokio_test]
     /// Test conflict resolution with rebase
     ///
     /// One session deletes an array, the other updates its metadata.
@@ -3765,7 +3802,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     /// Test conflict resolution with rebase
     ///
     /// Verify we can rebase over multiple commits if they are all fast-forwardable.
@@ -3815,7 +3852,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     /// Rebase over multiple commits with partial failure
     ///
     /// We verify that we can partially fast forward, stopping at the first unrecoverable commit
@@ -3875,6 +3912,122 @@ mod tests {
         // so now the parent is the first commit
         assert_eq!(ds2.snapshot_id(), &non_conflicting_snap);
 
+        Ok(())
+    }
+
+    #[tokio_test]
+    /// Tests `commit_rebasing` retries the proper number of times when there are conflicts
+    async fn test_commit_rebasing_attempts() -> Result<(), Box<dyn Error>> {
+        let repo = Arc::new(create_memory_store_repository().await);
+        let mut session = repo.writable_session("main").await?;
+        session
+            .add_array("/array".try_into().unwrap(), basic_shape(), None, Bytes::new())
+            .await?;
+        session.commit("create array", None).await?;
+
+        // This is the main session we'll be trying to commit (and rebase)
+        let mut session = repo.writable_session("main").await?;
+        let path: Path = "/array".try_into().unwrap();
+        session
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("repo 1".into())),
+            )
+            .await?;
+
+        // we create an initial conflict for commit
+        let mut session2 = repo.writable_session("main").await.unwrap();
+        let path: Path = "/array".try_into().unwrap();
+        session2
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![2]),
+                Some(ChunkPayload::Inline("repo 1".into())),
+            )
+            .await
+            .unwrap();
+        session2.commit("conflicting", None).await.unwrap();
+
+        let repo_ref = &repo;
+        let attempts = AtomicU16::new(0);
+        let attempts_ref = &attempts;
+
+        // after each rebase attempt we'll run this closure that creates a new conflict
+        // the result should be that it can never commit, failing after the indicated number of
+        // attempts
+        let conflicting = |attempt| async move {
+            attempts_ref.fetch_add(1, Ordering::SeqCst); //*attempts_ref = *attempts_ref + 1;;
+            assert_eq!(attempt, attempts_ref.load(Ordering::SeqCst));
+
+            let repo_c = Arc::clone(repo_ref);
+            let mut s = repo_c.writable_session("main").await.unwrap();
+            s.set_chunk_ref(
+                "/array".try_into().unwrap(),
+                ChunkIndices(vec![2]),
+                Some(ChunkPayload::Inline("repo 1".into())),
+            )
+            .await
+            .unwrap();
+            s.commit("conflicting", None).await.unwrap();
+        };
+
+        let res = session
+            .commit_rebasing(
+                &ConflictDetector,
+                3,
+                "updated non-conflict chunk",
+                None,
+                |_| async {},
+                conflicting,
+            )
+            .await;
+
+        // It has to give up eventually
+        assert!(matches!(
+            res,
+            Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. })
+        ));
+
+        // It has to rebase 3 times
+        assert_eq!(attempts.into_inner(), 3);
+
+        let attempts = AtomicU16::new(0);
+        let attempts_ref = &attempts;
+
+        // now we'll create a new conflict twice, and finally do nothing so the commit can succeed
+        let conflicting_twice = |attempt| async move {
+            attempts_ref.fetch_add(1, Ordering::SeqCst); //*attempts_ref = *attempts_ref + 1;;
+            assert_eq!(attempt, attempts_ref.load(Ordering::SeqCst));
+            if attempt <= 2 {
+                let repo_c = Arc::clone(repo_ref);
+
+                let mut s = repo_c.writable_session("main").await.unwrap();
+                s.set_chunk_ref(
+                    "/array".try_into().unwrap(),
+                    ChunkIndices(vec![2]),
+                    Some(ChunkPayload::Inline("repo 1".into())),
+                )
+                .await
+                .unwrap();
+                s.commit("conflicting", None).await.unwrap();
+            }
+        };
+
+        let res = session
+            .commit_rebasing(
+                &ConflictDetector,
+                42,
+                "updated non-conflict chunk",
+                None,
+                |_| async {},
+                conflicting_twice,
+            )
+            .await;
+
+        // The commit has to work after 3 rebase attempts
+        assert!(res.is_ok());
+        assert_eq!(attempts.into_inner(), 3);
         Ok(())
     }
 
@@ -4157,7 +4310,7 @@ mod tests {
             .. Config::default()
         })]
 
-        #[test]
+        #[icechunk_macros::test]
         fn run_repository_state_machine_test(
             // This is a macro's keyword - only `sequential` is currently supported.
             sequential

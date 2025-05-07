@@ -11,7 +11,7 @@ from icechunk._icechunk_python import (
     CompressionConfig,
     Conflict,
     ConflictDetector,
-    ConflictErrorData,
+    ConflictError,
     ConflictSolver,
     ConflictType,
     Credentials,
@@ -29,7 +29,7 @@ from icechunk._icechunk_python import (
     ManifestSplitDimCondition,
     ManifestSplittingConfig,
     ObjectStoreConfig,
-    RebaseFailedData,
+    RebaseFailedError,
     RepositoryConfig,
     S3Credentials,
     S3Options,
@@ -67,7 +67,7 @@ from icechunk.credentials import (
     s3_static_credentials,
 )
 from icechunk.repository import Repository
-from icechunk.session import ConflictError, RebaseFailedError, Session
+from icechunk.session import Session
 from icechunk.storage import (
     AnyObjectStoreConfig,
     azure_storage,
@@ -98,7 +98,6 @@ __all__ = [
     "Conflict",
     "ConflictDetector",
     "ConflictError",
-    "ConflictErrorData",
     "ConflictSolver",
     "ConflictType",
     "Credentials",
@@ -117,7 +116,6 @@ __all__ = [
     "ManifestSplitDimCondition",
     "ManifestSplittingConfig",
     "ObjectStoreConfig",
-    "RebaseFailedData",
     "RebaseFailedError",
     "Repository",
     "RepositoryConfig",

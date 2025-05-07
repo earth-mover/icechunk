@@ -683,7 +683,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::iter::{self};
 
-    #[test]
+    #[icechunk_macros::test]
     fn test_get_node() -> Result<(), Box<dyn std::error::Error>> {
         let shape1 = ArrayShape::new(vec![(10u64, 3), (20, 2), (30, 1)]).unwrap();
         let dim_names1 = Some(vec!["x".into(), "y".into(), "t".into()]);
@@ -864,7 +864,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[icechunk_macros::test]
     fn test_valid_chunk_coord() {
         let shape1 =
             ArrayShape::new(vec![(10_000, 1_000), (10_001, 1_000), (9_999, 1_000)])

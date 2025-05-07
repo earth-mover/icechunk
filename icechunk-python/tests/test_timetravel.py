@@ -185,7 +185,7 @@ Arrays deleted:
 """
     )
 
-    with pytest.raises(ValueError, match="doesn't include"):
+    with pytest.raises(ic.IcechunkError, match="doesn't include"):
         # if we call diff in the wrong order it fails with a message
         repo.diff(from_tag="v1.0", to_snapshot_id=parents[-1].id)
 
@@ -258,10 +258,10 @@ async def test_tag_delete() -> None:
     repo.create_tag("tag", snap)
     repo.delete_tag("tag")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ic.IcechunkError):
         repo.delete_tag("tag")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ic.IcechunkError):
         repo.create_tag("tag", snap)
 
 
@@ -373,7 +373,7 @@ def test_branch_expiration() -> None:
     repo.garbage_collect(repo.lookup_snapshot(b).written_at + timedelta(seconds=1))
     # make sure snapshot cannot be opened anymore
     for snap in (a, b):
-        with pytest.raises(ValueError):
+        with pytest.raises(ic.IcechunkError):
             repo.readonly_session(snapshot_id=snap)
 
     # should succeed

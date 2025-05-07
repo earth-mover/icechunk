@@ -49,6 +49,7 @@ def s3_store(
     force_path_style: bool = False,
 ) -> ObjectStoreConfig.S3Compatible | ObjectStoreConfig.S3:
     """Build an ObjectStoreConfig instance for S3 or S3 compatible object stores."""
+
     options = S3Options(
         region=region,
         endpoint_url=endpoint_url,
@@ -76,6 +77,7 @@ def s3_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    scatter_initial_credentials: bool = False,
     force_path_style: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
@@ -106,6 +108,12 @@ def s3_storage(
         Fetch credentials from the operative system environment
     get_credentials: Callable[[], S3StaticCredentials] | None
         Use this function to get and refresh object store credentials
+    scatter_initial_credentials: bool, optional
+        Immediately call and store the value returned by get_credentials. This is useful if the
+        repo or session will be pickled to generate many copies. Passing scatter_initial_credentials=True will
+        ensure all those copies don't need to call get_credentials immediately. After the initial
+        set of credentials has expired, the cached value is no longer used. Notice that credentials
+        obtained are stored, and they can be sent over the network if you pickle the session/repo.
     force_path_style: bool
         Whether to force using path-style addressing for buckets
     """
@@ -118,6 +126,7 @@ def s3_storage(
         anonymous=anonymous,
         from_env=from_env,
         get_credentials=get_credentials,
+        scatter_initial_credentials=scatter_initial_credentials,
     )
     options = S3Options(
         region=region,
@@ -186,6 +195,7 @@ def tigris_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    scatter_initial_credentials: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -219,6 +229,12 @@ def tigris_storage(
         Fetch credentials from the operative system environment
     get_credentials: Callable[[], S3StaticCredentials] | None
         Use this function to get and refresh object store credentials
+    scatter_initial_credentials: bool, optional
+        Immediately call and store the value returned by get_credentials. This is useful if the
+        repo or session will be pickled to generate many copies. Passing scatter_initial_credentials=True will
+        ensure all those copies don't need to call get_credentials immediately. After the initial
+        set of credentials has expired, the cached value is no longer used. Notice that credentials
+        obtained are stored, and they can be sent over the network if you pickle the session/repo.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -228,6 +244,7 @@ def tigris_storage(
         anonymous=anonymous,
         from_env=from_env,
         get_credentials=get_credentials,
+        scatter_initial_credentials=scatter_initial_credentials,
     )
     options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
     return Storage.new_tigris(
@@ -254,6 +271,7 @@ def r2_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    scatter_initial_credentials: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -287,6 +305,12 @@ def r2_storage(
         Fetch credentials from the operative system environment
     get_credentials: Callable[[], S3StaticCredentials] | None
         Use this function to get and refresh object store credentials
+    scatter_initial_credentials: bool, optional
+        Immediately call and store the value returned by get_credentials. This is useful if the
+        repo or session will be pickled to generate many copies. Passing scatter_initial_credentials=True will
+        ensure all those copies don't need to call get_credentials immediately. After the initial
+        set of credentials has expired, the cached value is no longer used. Notice that credentials
+        obtained are stored, and they can be sent over the network if you pickle the session/repo.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -296,6 +320,7 @@ def r2_storage(
         anonymous=anonymous,
         from_env=from_env,
         get_credentials=get_credentials,
+        scatter_initial_credentials=scatter_initial_credentials,
     )
     options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
     return Storage.new_r2(
@@ -318,6 +343,7 @@ def gcs_storage(
     from_env: bool | None = None,
     config: dict[str, str] | None = None,
     get_credentials: Callable[[], GcsBearerCredential] | None = None,
+    scatter_initial_credentials: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in Google Cloud Storage object store.
 
@@ -333,6 +359,12 @@ def gcs_storage(
         The bearer token to use for the object store
     get_credentials: Callable[[], GcsBearerCredential] | None
         Use this function to get and refresh object store credentials
+    scatter_initial_credentials: bool, optional
+        Immediately call and store the value returned by get_credentials. This is useful if the
+        repo or session will be pickled to generate many copies. Passing scatter_initial_credentials=True will
+        ensure all those copies don't need to call get_credentials immediately. After the initial
+        set of credentials has expired, the cached value is no longer used. Notice that credentials
+        obtained are stored, and they can be sent over the network if you pickle the session/repo.
     """
     credentials = gcs_credentials(
         service_account_file=service_account_file,
@@ -341,6 +373,7 @@ def gcs_storage(
         bearer_token=bearer_token,
         from_env=from_env,
         get_credentials=get_credentials,
+        scatter_initial_credentials=scatter_initial_credentials,
     )
     return Storage.new_gcs(
         bucket=bucket,

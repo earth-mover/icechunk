@@ -15,17 +15,18 @@ use icechunk::{
     new_in_memory_storage,
     ops::stats::repo_chunks_storage,
 };
+use icechunk_macros::tokio_test;
 
 mod common;
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_repo_chunks_storage_in_memory() -> Result<(), Box<dyn std::error::Error>>
 {
     let storage = new_in_memory_storage().await?;
     do_test_repo_chunks_storage(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 pub async fn test_repo_chunks_storage_in_minio() -> Result<(), Box<dyn std::error::Error>>
 {
     let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
@@ -33,7 +34,7 @@ pub async fn test_repo_chunks_storage_in_minio() -> Result<(), Box<dyn std::erro
     do_test_repo_chunks_storage(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 pub async fn test_repo_chunks_storage_in_aws() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
@@ -41,7 +42,7 @@ pub async fn test_repo_chunks_storage_in_aws() -> Result<(), Box<dyn std::error:
     do_test_repo_chunks_storage(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 pub async fn test_repo_chunks_storage_in_tigris() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -50,7 +51,7 @@ pub async fn test_repo_chunks_storage_in_tigris() -> Result<(), Box<dyn std::err
     do_test_repo_chunks_storage(storage).await
 }
 
-#[tokio::test]
+#[tokio_test]
 #[ignore = "needs credentials from env"]
 pub async fn test_repo_chunks_storage_in_r2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());

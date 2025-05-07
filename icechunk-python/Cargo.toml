@@ -1,10 +1,10 @@
 [package]
 name = "icechunk-python"
-version = "0.2.13"
+version = "0.2.15"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
-homepage = "https://github.com/earth-mover/icechunk"
+homepage = "https://icechunk.io"
 license = "Apache-2.0"
 keywords = ["zarr", "xarray", "database"]
 categories = ["database", "science", "science::geo"]
@@ -21,13 +21,14 @@ crate-type = ["cdylib"]
 bytes = "1.10.1"
 chrono = { version = "0.4.40" }
 futures = "0.3.31"
-icechunk = { path = "../icechunk", version = "0.2.12", features = ["logs"] }
+icechunk = { path = "../icechunk", version = "0.2.14", features = ["logs"] }
 itertools = "0.14.0"
-pyo3 = { version = "0.24.1", features = [
+pyo3 = { version = "0.24.2", features = [
   "chrono",
   #  do we really need this one?
   #  "extension-module",
   "experimental-async",
+  "multiple-pymethods",
 ] }
 pyo3-async-runtimes = { version = "0.24", features = ["tokio-runtime"] }
 async-stream = "0.3.6"
@@ -37,8 +38,10 @@ serde_json = "1.0.140"
 async-trait = "0.1.88"
 typetag = "0.2.20"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
-miette = { version = "7.5.0", features = ["fancy"] }
+miette = { version = "7.6.0", features = ["fancy"] }
 clap = { version = "4.5", features = ["derive"], optional = true }
+rand = "0.9.0"
+rmp-serde = "1.3.0"
 
 [features]
 cli = ["clap", "icechunk/cli"]

@@ -6,7 +6,7 @@ from typing import Any, TypeVar
 
 import pytest
 
-from icechunk import IcechunkStore, local_filesystem_storage
+from icechunk import IcechunkError, IcechunkStore, local_filesystem_storage
 from icechunk.repository import Repository
 from zarr.abc.store import OffsetByteRequest, RangeByteRequest, Store, SuffixByteRequest
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
@@ -118,11 +118,11 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert store.read_only
 
         # set
-        with pytest.raises(ValueError):
+        with pytest.raises(IcechunkError):
             await store.set("foo", self.buffer_cls.from_bytes(b"bar"))
 
         # delete
-        with pytest.raises(ValueError):
+        with pytest.raises(IcechunkError):
             await store.delete("foo")
 
     @pytest.mark.skip(
@@ -250,12 +250,12 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     async def test_exists(self, store: IcechunkStore) -> None:
         # Icechunk store does not support arbitrary keys
-        with pytest.raises(ValueError):
+        with pytest.raises(IcechunkError):
             await store.exists("foo")
         assert not await store.exists("foo/zarr.json")
 
         # Icechunk store does not support arbitrary data either
-        with pytest.raises(ValueError):
+        with pytest.raises(IcechunkError):
             await store.set("foo", self.buffer_cls.from_bytes(b"bar"))
 
         await store.set(
@@ -513,5 +513,6 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert result == sum(len(v) for v in values) + len(ARRAY_METADATA)
 
     async def test_getsize_raises(self, store: IcechunkStore) -> None:
-        with pytest.raises(ValueError):
+        # TODO: This maybe should be a FileNotFoundError instead of an IcechunkError
+        with pytest.raises(IcechunkError):
             await store.getsize("not-a-real-key")

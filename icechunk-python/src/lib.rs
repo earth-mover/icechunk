@@ -1,6 +1,7 @@
 mod config;
 mod conflicts;
 mod errors;
+mod pickle;
 mod repository;
 mod session;
 mod store;
@@ -15,7 +16,6 @@ use config::{
     PyManifestPreloadCondition, PyManifestPreloadConfig, PyObjectStoreConfig,
     PyRepositoryConfig, PyS3Credentials, PyS3Options, PyS3StaticCredentials, PyStorage,
     PyStorageConcurrencySettings, PyStorageSettings, PyVirtualChunkContainer,
-    PythonCredentialsFetcher,
 };
 use config::{
     PyManifestSplitCondition, PyManifestSplitDimCondition, PyManifestSplittingConfig,
@@ -24,10 +24,7 @@ use conflicts::{
     PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
     PyConflictType, PyVersionSelection,
 };
-use errors::{
-    IcechunkError, PyConflictError, PyConflictErrorData, PyRebaseFailedData,
-    PyRebaseFailedError,
-};
+use errors::{IcechunkError, PyConflictError, PyRebaseFailedError};
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
@@ -102,7 +99,6 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyConflictDetector>()?;
     m.add_class::<PyVersionSelection>()?;
     m.add_class::<PyS3StaticCredentials>()?;
-    m.add_class::<PythonCredentialsFetcher>()?;
     m.add_class::<PyS3Credentials>()?;
     m.add_class::<PyGcsCredentials>()?;
     m.add_class::<PyGcsBearerCredential>()?;
@@ -134,12 +130,10 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Exceptions
     m.add("IcechunkError", py.get_type::<IcechunkError>())?;
-    m.add("PyConflictError", py.get_type::<PyConflictError>())?;
-    m.add_class::<PyConflictErrorData>()?;
-    m.add("PyRebaseFailedError", py.get_type::<PyRebaseFailedError>())?;
+    m.add("ConflictError", py.get_type::<PyConflictError>())?;
+    m.add("RebaseFailedError", py.get_type::<PyRebaseFailedError>())?;
     m.add_class::<PyConflictType>()?;
     m.add_class::<PyConflict>()?;
-    m.add_class::<PyRebaseFailedData>()?;
 
     Ok(())
 }

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Datelike, Timelike, Utc};
+use chrono::{DateTime, Datelike, TimeDelta, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use std::{
@@ -25,7 +25,7 @@ use icechunk::{
     virtual_chunks::VirtualChunkContainer,
 };
 use pyo3::{
-    Bound, Py, PyErr, PyResult, Python, pyclass, pymethods,
+    Bound, FromPyObject, Py, PyErr, PyResult, Python, pyclass, pymethods,
     types::{PyAnyMethods, PyModule, PyType},
 };
 
@@ -134,36 +134,57 @@ pub(crate) fn datetime_repr(d: &DateTime<Utc>) -> String {
     )
 }
 
-#[pyclass(eq)]
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PythonCredentialsFetcher {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PythonCredentialsFetcher<CredType> {
     pub pickled_function: Vec<u8>,
+    pub current: Option<CredType>,
 }
 
-#[pymethods]
-impl PythonCredentialsFetcher {
-    #[new]
-    pub fn new(pickled_function: Vec<u8>) -> Self {
-        PythonCredentialsFetcher { pickled_function }
+impl<CredType> PythonCredentialsFetcher<CredType> {
+    fn new(pickled_function: Vec<u8>) -> Self {
+        PythonCredentialsFetcher { pickled_function, current: None }
     }
 
-    pub fn __repr__(&self) -> String {
-        format!(
-            r#"PythonCredentialsFetcher(pickled_function=bytes.fromhex("{:02X?}"))"#,
-            self.pickled_function
-        )
+    fn new_with_current<C>(pickled_function: Vec<u8>, current: C) -> Self
+    where
+        C: Into<CredType>,
+    {
+        PythonCredentialsFetcher { pickled_function, current: Some(current.into()) }
     }
 }
+
+fn call_pickled<PyCred>(
+    py: Python<'_>,
+    pickled_function: Vec<u8>,
+) -> Result<PyCred, PyErr>
+where
+    PyCred: for<'a> FromPyObject<'a>,
+{
+    let pickle_module = PyModule::import(py, "pickle")?;
+    let loads_function = pickle_module.getattr("loads")?;
+    let fetcher = loads_function.call1((pickled_function,))?;
+    let creds: PyCred = fetcher.call0()?.extract()?;
+    Ok(creds)
+}
+
 #[async_trait]
 #[typetag::serde]
-impl S3CredentialsFetcher for PythonCredentialsFetcher {
+impl S3CredentialsFetcher for PythonCredentialsFetcher<S3StaticCredentials> {
     async fn get(&self) -> Result<S3StaticCredentials, String> {
         Python::with_gil(|py| {
-            let pickle_module = PyModule::import(py, "pickle")?;
-            let loads_function = pickle_module.getattr("loads")?;
-            let fetcher = loads_function.call1((self.pickled_function.clone(),))?;
-            let creds: PyS3StaticCredentials = fetcher.call0()?.extract()?;
-            Ok(creds.into())
+            if let Some(static_creds) = self.current.as_ref() {
+                // avoid herding by adding some randomness
+                let delta = TimeDelta::seconds(rand::random_range(5..180));
+                let expiration = static_creds
+                    .expires_after
+                    .map(|exp| exp - delta)
+                    .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC);
+                if Utc::now() < expiration {
+                    return Ok(static_creds.clone());
+                }
+            }
+            call_pickled::<PyS3StaticCredentials>(py, self.pickled_function.clone())
+                .map(|c| c.into())
         })
         .map_err(|e: PyErr| e.to_string())
     }
@@ -171,14 +192,22 @@ impl S3CredentialsFetcher for PythonCredentialsFetcher {
 
 #[async_trait]
 #[typetag::serde]
-impl GcsCredentialsFetcher for PythonCredentialsFetcher {
+impl GcsCredentialsFetcher for PythonCredentialsFetcher<GcsBearerCredential> {
     async fn get(&self) -> Result<GcsBearerCredential, String> {
         Python::with_gil(|py| {
-            let pickle_module = PyModule::import(py, "pickle")?;
-            let loads_function = pickle_module.getattr("loads")?;
-            let fetcher = loads_function.call1((self.pickled_function.clone(),))?;
-            let creds: PyGcsBearerCredential = fetcher.call0()?.extract()?;
-            Ok(creds.into())
+            if let Some(static_creds) = self.current.as_ref() {
+                // avoid herding by adding some randomness
+                let delta = TimeDelta::seconds(rand::random_range(5..180));
+                let expiration = static_creds
+                    .expires_after
+                    .map(|exp| exp - delta)
+                    .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC);
+                if Utc::now() < expiration {
+                    return Ok(static_creds.clone());
+                }
+            }
+            call_pickled::<PyGcsBearerCredential>(py, self.pickled_function.clone())
+                .map(|c| c.into())
         })
         .map_err(|e: PyErr| e.to_string())
     }
@@ -190,7 +219,7 @@ pub enum PyS3Credentials {
     FromEnv(),
     Anonymous(),
     Static(PyS3StaticCredentials),
-    Refreshable(Vec<u8>),
+    Refreshable { pickled_function: Vec<u8>, current: Option<PyS3StaticCredentials> },
 }
 
 impl From<PyS3Credentials> for S3Credentials {
@@ -199,10 +228,14 @@ impl From<PyS3Credentials> for S3Credentials {
             PyS3Credentials::FromEnv() => S3Credentials::FromEnv,
             PyS3Credentials::Anonymous() => S3Credentials::Anonymous,
             PyS3Credentials::Static(creds) => S3Credentials::Static(creds.into()),
-            PyS3Credentials::Refreshable(pickled_function) => {
-                S3Credentials::Refreshable(Arc::new(PythonCredentialsFetcher {
-                    pickled_function,
-                }))
+            PyS3Credentials::Refreshable { pickled_function, current } => {
+                let fetcher = if let Some(current) = current {
+                    PythonCredentialsFetcher::new_with_current(pickled_function, current)
+                } else {
+                    PythonCredentialsFetcher::new(pickled_function)
+                };
+
+                S3Credentials::Refreshable(Arc::new(fetcher))
             }
         }
     }
@@ -272,7 +305,7 @@ impl From<GcsBearerCredential> for PyGcsBearerCredential {
 pub enum PyGcsCredentials {
     FromEnv(),
     Static(PyGcsStaticCredentials),
-    Refreshable(Vec<u8>),
+    Refreshable { pickled_function: Vec<u8>, current: Option<PyGcsBearerCredential> },
 }
 
 impl From<PyGcsCredentials> for GcsCredentials {
@@ -280,10 +313,14 @@ impl From<PyGcsCredentials> for GcsCredentials {
         match value {
             PyGcsCredentials::FromEnv() => GcsCredentials::FromEnv,
             PyGcsCredentials::Static(creds) => GcsCredentials::Static(creds.into()),
-            PyGcsCredentials::Refreshable(pickled_function) => {
-                GcsCredentials::Refreshable(Arc::new(PythonCredentialsFetcher {
-                    pickled_function,
-                }))
+            PyGcsCredentials::Refreshable { pickled_function, current } => {
+                let fetcher = if let Some(current) = current {
+                    PythonCredentialsFetcher::new_with_current(pickled_function, current)
+                } else {
+                    PythonCredentialsFetcher::new(pickled_function)
+                };
+
+                GcsCredentials::Refreshable(Arc::new(fetcher))
             }
         }
     }
@@ -725,6 +762,8 @@ pub struct PyStorageSettings {
     pub metadata_storage_class: Option<String>,
     #[pyo3(get, set)]
     pub chunks_storage_class: Option<String>,
+    #[pyo3(get, set)]
+    pub minimum_size_for_multipart_upload: Option<u64>,
 }
 
 impl From<storage::Settings> for PyStorageSettings {
@@ -741,6 +780,7 @@ impl From<storage::Settings> for PyStorageSettings {
             storage_class: value.storage_class,
             metadata_storage_class: value.metadata_storage_class,
             chunks_storage_class: value.chunks_storage_class,
+            minimum_size_for_multipart_upload: value.minimum_size_for_multipart_upload,
         })
     }
 }
@@ -755,6 +795,7 @@ impl From<&PyStorageSettings> for storage::Settings {
             storage_class: value.storage_class.clone(),
             metadata_storage_class: value.metadata_storage_class.clone(),
             chunks_storage_class: value.chunks_storage_class.clone(),
+            minimum_size_for_multipart_upload: value.minimum_size_for_multipart_upload,
         })
     }
 }
@@ -771,8 +812,9 @@ impl Eq for PyStorageSettings {}
 
 #[pymethods]
 impl PyStorageSettings {
-    #[pyo3(signature = ( concurrency=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None))]
+    #[pyo3(signature = ( concurrency=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None))]
     #[new]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         concurrency: Option<Py<PyStorageConcurrencySettings>>,
         unsafe_use_conditional_create: Option<bool>,
@@ -781,6 +823,7 @@ impl PyStorageSettings {
         storage_class: Option<String>,
         metadata_storage_class: Option<String>,
         chunks_storage_class: Option<String>,
+        minimum_size_for_multipart_upload: Option<u64>,
     ) -> Self {
         Self {
             concurrency,
@@ -790,6 +833,7 @@ impl PyStorageSettings {
             storage_class,
             metadata_storage_class,
             chunks_storage_class,
+            minimum_size_for_multipart_upload,
         }
     }
 
