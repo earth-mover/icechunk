@@ -455,8 +455,9 @@ pub enum PyObjectStoreConfig {
     S3Compatible(PyS3Options),
     S3(PyS3Options),
     Gcs(Option<HashMap<String, String>>),
-    Azure(HashMap<String, String>),
+    Azure(Option<HashMap<String, String>>),
     Tigris(PyS3Options),
+    Http(Option<HashMap<String, String>>),
 }
 
 impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
@@ -473,8 +474,13 @@ impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
             PyObjectStoreConfig::Gcs(opts) => {
                 ObjectStoreConfig::Gcs(opts.clone().unwrap_or_default())
             }
-            PyObjectStoreConfig::Azure(opts) => ObjectStoreConfig::Azure(opts.clone()),
+            PyObjectStoreConfig::Azure(opts) => {
+                ObjectStoreConfig::Azure(opts.clone().unwrap_or_default())
+            }
             PyObjectStoreConfig::Tigris(opts) => ObjectStoreConfig::Tigris(opts.into()),
+            PyObjectStoreConfig::Http(opts) => {
+                ObjectStoreConfig::Http(opts.clone().unwrap_or_default())
+            }
         }
     }
 }
@@ -491,8 +497,9 @@ impl From<ObjectStoreConfig> for PyObjectStoreConfig {
             }
             ObjectStoreConfig::S3(opts) => PyObjectStoreConfig::S3(opts.into()),
             ObjectStoreConfig::Gcs(opts) => PyObjectStoreConfig::Gcs(Some(opts)),
-            ObjectStoreConfig::Azure(opts) => PyObjectStoreConfig::Azure(opts),
+            ObjectStoreConfig::Azure(opts) => PyObjectStoreConfig::Azure(Some(opts)),
             ObjectStoreConfig::Tigris(opts) => PyObjectStoreConfig::Tigris(opts.into()),
+            ObjectStoreConfig::Http(opts) => PyObjectStoreConfig::Http(Some(opts)),
         }
     }
 }

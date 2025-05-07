@@ -3,6 +3,7 @@ use std::{
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::PathBuf,
+    str::FromStr,
     sync::Arc,
 };
 
@@ -355,10 +356,21 @@ impl VirtualChunkResolver {
                     .await?,
                 ))
             }
-            ObjectStoreConfig::Http(opts) => Ok(Arc::new(
-                ObjectStoreFetcher::new_http(chunk_location.to_string().as_str(), opts)
-                    .await?,
-            )),
+            ObjectStoreConfig::Http(opts) => {
+                let hostname = if let Some(host) = chunk_location.host_str() {
+                    host.to_string()
+                } else {
+                    Err(VirtualReferenceErrorKind::CannotParseBucketName(
+                        "No hostname found for HTTP store".to_string(),
+                    ))?
+                };
+
+                let root_url = format!("{}://{}", chunk_location.scheme(), hostname);
+                Ok(Arc::new(
+                    ObjectStoreFetcher::new_http(&root_url, opts)
+                        .await?,
+                ))
+            },
             ObjectStoreConfig::Azure { .. } => {
                 unimplemented!("support for virtual chunks on azure")
             }
@@ -370,7 +382,7 @@ impl VirtualChunkResolver {
 }
 
 fn is_fetcher_bucket_constrained(store: &ObjectStoreConfig) -> bool {
-    matches!(store, ObjectStoreConfig::Gcs(_))
+    matches!(store, ObjectStoreConfig::Gcs(_) | ObjectStoreConfig::Http(_))
 }
 
 fn fetcher_cache_key(
@@ -379,7 +391,7 @@ fn fetcher_cache_key(
 ) -> Result<(String, Option<String>), VirtualReferenceError> {
     if is_fetcher_bucket_constrained(&cont.store) {
         if let Some(host) = location.host_str() {
-            Ok((cont.name.clone(), Some(host.to_string())))
+            Ok((cont.name.clone(), Some(format!("{}://{}", location.scheme(), host))))
         } else {
             Err(VirtualReferenceErrorKind::CannotParseBucketName(
                 "No bucket name found".to_string(),
@@ -536,10 +548,14 @@ impl ObjectStoreFetcher {
 
     pub async fn new_http(
         url: &str,
-        opts: &HashMap<ClientConfigKey, String>,
+        opts: &HashMap<String, String>,
     ) -> Result<Self, VirtualReferenceError> {
+        let config = opts
+            .iter()
+            .map(|(k, v)| (ClientConfigKey::from_str(k).unwrap(), v.clone()))
+            .collect();
         let backend =
-            HttpObjectStoreBackend { url: url.to_string(), config: Some(opts.clone()) };
+            HttpObjectStoreBackend { url: url.to_string(), config: Some(config) };
         let client = backend
             .mk_object_store()
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))?;
@@ -550,8 +566,12 @@ impl ObjectStoreFetcher {
         bucket: String,
         prefix: Option<String>,
         credentials: Option<GcsCredentials>,
-        config: HashMap<GoogleConfigKey, String>,
+        config: HashMap<String, String>,
     ) -> Result<Self, VirtualReferenceError> {
+        let config = config
+            .into_iter()
+            .map(|(k, v)| (GoogleConfigKey::from_str(&k).unwrap(), v))
+            .collect();
         let backend =
             GcsObjectStoreBackend { bucket, prefix, credentials, config: Some(config) };
         let client = backend

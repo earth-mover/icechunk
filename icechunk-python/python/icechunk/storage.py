@@ -40,6 +40,13 @@ def local_filesystem_storage(path: str) -> Storage:
     return Storage.new_local_filesystem(path)
 
 
+def http_store(
+    opts: dict[str, str] | None = None,
+) -> ObjectStoreConfig.Http:
+    """Build an ObjectStoreConfig instance for HTTP object stores."""
+    return ObjectStoreConfig.Http(opts)
+
+
 def s3_store(
     region: str | None = None,
     endpoint_url: str | None = None,
@@ -330,6 +337,13 @@ def r2_storage(
         account_id=account_id,
         credentials=credentials,
     )
+
+
+def gcs_store(
+    opts: dict[str, str] | None = None,
+) -> ObjectStoreConfig.Gcs:
+    """Build an ObjectStoreConfig instance for Google Cloud Storage object stores."""
+    return ObjectStoreConfig.Gcs(opts)
 
 
 def gcs_storage(
