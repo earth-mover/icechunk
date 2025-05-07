@@ -1,6 +1,4 @@
-use std::{
-    collections::BTreeMap, convert::Infallible, num::NonZeroU64, ops::Index, sync::Arc,
-};
+use std::{collections::BTreeMap, convert::Infallible, num::NonZeroU64, sync::Arc};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -97,15 +95,6 @@ impl ArrayShape {
                 ((dim_shape.dim_length - 1) / dim_shape.chunk_length) as u32
             }
         })
-    }
-}
-
-// Implement indexing for immutable access
-impl Index<usize> for ArrayShape {
-    type Output = DimensionShape;
-
-    fn index(&self, index: usize) -> &DimensionShape {
-        &self.0[index]
     }
 }
 
