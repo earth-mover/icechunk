@@ -366,11 +366,8 @@ impl VirtualChunkResolver {
                 };
 
                 let root_url = format!("{}://{}", chunk_location.scheme(), hostname);
-                Ok(Arc::new(
-                    ObjectStoreFetcher::new_http(&root_url, opts)
-                        .await?,
-                ))
-            },
+                Ok(Arc::new(ObjectStoreFetcher::new_http(&root_url, opts).await?))
+            }
             ObjectStoreConfig::Azure { .. } => {
                 unimplemented!("support for virtual chunks on azure")
             }
@@ -552,7 +549,9 @@ impl ObjectStoreFetcher {
     ) -> Result<Self, VirtualReferenceError> {
         let config = opts
             .iter()
-            .map(|(k, v)| (ClientConfigKey::from_str(k).unwrap(), v.clone()))
+            .filter_map(|(k, v)| {
+                ClientConfigKey::from_str(k).ok().map(|key| (key, v.clone()))
+            })
             .collect();
         let backend =
             HttpObjectStoreBackend { url: url.to_string(), config: Some(config) };
@@ -570,7 +569,9 @@ impl ObjectStoreFetcher {
     ) -> Result<Self, VirtualReferenceError> {
         let config = config
             .into_iter()
-            .map(|(k, v)| (GoogleConfigKey::from_str(&k).unwrap(), v))
+            .filter_map(|(k, v)| {
+                GoogleConfigKey::from_str(&k).ok().map(|key| (key, v.clone()))
+            })
             .collect();
         let backend =
             GcsObjectStoreBackend { bucket, prefix, credentials, config: Some(config) };

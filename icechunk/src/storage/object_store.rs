@@ -14,7 +14,16 @@ use futures::{
     stream::{self, BoxStream},
 };
 use object_store::{
-    aws::AmazonS3Builder, azure::{AzureConfigKey, MicrosoftAzureBuilder}, gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey}, http::HttpBuilder, local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, Attribute, AttributeValue, Attributes, ClientConfigKey, CredentialProvider, GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload, StaticCredentialProvider, UpdateVersion
+    Attribute, AttributeValue, Attributes, ClientConfigKey, CredentialProvider,
+    GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload,
+    StaticCredentialProvider, UpdateVersion,
+    aws::AmazonS3Builder,
+    azure::{AzureConfigKey, MicrosoftAzureBuilder},
+    gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey},
+    http::HttpBuilder,
+    local::LocalFileSystem,
+    memory::InMemory,
+    path::Path as ObjectPath,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -735,7 +744,14 @@ impl fmt::Display for HttpObjectStoreBackend {
             f,
             "HttpObjectStoreBackend(url={}, config={})",
             self.url,
-            self.config.as_ref().map(|c| c.iter().map(|(k, v)| format!("{:?}={}", k, v)).collect::<Vec<_>>().join(", ")).unwrap_or("None".to_string())
+            self.config
+                .as_ref()
+                .map(|c| c
+                    .iter()
+                    .map(|(k, v)| format!("{:?}={}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", "))
+                .unwrap_or("None".to_string())
         )
     }
 }
