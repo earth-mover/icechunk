@@ -33,7 +33,7 @@ use crate::{
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
             ManifestSplits, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
-            VirtualReferenceErrorKind,
+            VirtualReferenceErrorKind, uniform_manifest_split_edges,
         },
         snapshot::{
             ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
@@ -1685,13 +1685,10 @@ impl ManifestSplittingConfig {
                             } in dim_specs.iter()
                             {
                                 if dim_condition.matches(axis, dimname.clone().into()) {
-                                    edges[axis] = (0..=num_chunks[axis])
-                                        .step_by(*split_size as usize)
-                                        .chain(
-                                            (num_chunks[axis] % split_size != 0)
-                                                .then(|| num_chunks[axis]),
-                                        )
-                                        .collect();
+                                    edges[axis] = uniform_manifest_split_edges(
+                                        num_chunks[axis],
+                                        split_size,
+                                    );
                                     already_matched.insert(axis);
                                     break;
                                 };

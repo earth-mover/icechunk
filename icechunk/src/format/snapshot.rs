@@ -44,6 +44,10 @@ impl ArrayShape {
         self.0.is_empty()
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &DimensionShape> {
+        self.0.iter()
+    }
+
     pub fn num_chunks(&self) -> impl Iterator<Item = u32> {
         self.max_chunk_indices_permitted().map(|x| x + 1)
     }

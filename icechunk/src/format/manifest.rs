@@ -110,6 +110,13 @@ impl ManifestSplits {
     }
 }
 
+/// Helper function for constructing uniformly spaced manifest split edges
+pub fn uniform_manifest_split_edges(num_chunks: u32, split_size: &u32) -> Vec<u32> {
+    (0u32..=num_chunks)
+        .step_by(*split_size as usize)
+        .chain((num_chunks % split_size != 0).then_some(num_chunks))
+        .collect()
+}
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum VirtualReferenceErrorKind {
@@ -516,3 +523,48 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     max_apparent_size: 1 << 31, // taken from the default
     ignore_missing_null_terminator: true,
 };
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::strategies::{ShapeDim, shapes_and_dims};
+    use icechunk_macros;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[icechunk_macros::test]
+        fn test_manifest_split_from_edges(shape_dim in shapes_and_dims(Some(5))) {
+            // Note: using the shape, chunks strategy to generate chunk_shape, split_shape
+            let ShapeDim { shape, .. } = shape_dim;
+
+            let num_chunks = shape.iter().map(|x| x.array_length()).collect::<Vec<_>>();
+            let split_shape = shape.iter().map(|x| x.chunk_length()).collect::<Vec<_>>();
+
+            let ndim = shape.len();
+            let edges: Vec<Vec<u32>> =
+                (0usize..ndim).map(|axis| {
+                    uniform_manifest_split_edges(num_chunks[axis] as u32, &(split_shape[axis] as u32))
+                }
+                ).collect();
+
+            let splits = ManifestSplits::from_edges(edges.into_iter());
+            for edge in splits.iter() {
+                // must be ndim ranges
+                prop_assert_eq!(edge.len(), ndim);
+                for range in edge.iter() {
+                    prop_assert!(range.end > range.start);
+                }
+            }
+
+            // when using from_edges, extents must not exactly overlap
+            for edges in splits.iter().combinations(2) {
+                let is_equal = std::iter::zip(edges[0].iter(), edges[1].iter())
+                    .all(|(range1, range2)| {
+                        (range1.start == range2.start) && (range1.end == range2.end)
+                    });
+                prop_assert!(!is_equal);
+            }
+        }
+    }
+}
