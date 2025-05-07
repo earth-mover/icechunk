@@ -137,6 +137,7 @@ pub enum ManifestSplitCondition {
     And(Vec<ManifestSplitCondition>),
     PathMatches { regex: String },
     NameMatches { regex: String },
+    AnyArray,
 }
 
 //```yaml
@@ -162,6 +163,7 @@ impl ManifestSplitCondition {
     pub fn matches(&self, path: &Path) -> bool {
         use ManifestSplitCondition::*;
         match self {
+            AnyArray => true,
             Or(vec) => vec.iter().any(|c| c.matches(path)),
             And(vec) => vec.iter().all(|c| c.matches(path)),
             // TODO: precompile the regex

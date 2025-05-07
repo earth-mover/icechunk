@@ -239,7 +239,7 @@ def test_manifest_splitting_sparse_regions():
 )
 def test_manifest_splitting_complex_config(config, expected_split_sizes):
     sconfig = ic.ManifestSplittingConfig.from_dict(
-        {ManifestSplitCondition.name_matches("temperature"): config}
+        {ManifestSplitCondition.AnyArray(): config}
     )
     config = ic.RepositoryConfig(
         inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)

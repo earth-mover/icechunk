@@ -1023,6 +1023,7 @@ pub enum PyManifestSplitCondition {
     And(Vec<PyManifestSplitCondition>),
     PathMatches { regex: String },
     NameMatches { regex: String },
+    AnyArray(),
 }
 
 #[pymethods]
@@ -1067,6 +1068,7 @@ impl PyManifestSplitCondition {
             }
             PathMatches { regex } => format!("PathMatches('{}')", regex),
             NameMatches { regex } => format!("NameMatches('{}')", regex),
+            AnyArray() => "AnyArray".to_string(),
         }
     }
 
@@ -1085,6 +1087,7 @@ impl From<&PyManifestSplitCondition> for ManifestSplitCondition {
             And(vec) => Self::And(vec.iter().map(|c| c.into()).collect()),
             PathMatches { regex } => Self::PathMatches { regex: regex.clone() },
             NameMatches { regex } => Self::NameMatches { regex: regex.clone() },
+            AnyArray() => Self::AnyArray,
         }
     }
 }
@@ -1093,6 +1096,7 @@ impl From<ManifestSplitCondition> for PyManifestSplitCondition {
     fn from(value: ManifestSplitCondition) -> Self {
         use ManifestSplitCondition::*;
         match value {
+            AnyArray => Self::AnyArray(),
             Or(vec) => Self::Or(vec.into_iter().map(|c| c.into()).collect()),
             And(vec) => Self::And(vec.into_iter().map(|c| c.into()).collect()),
             PathMatches { regex } => Self::PathMatches { regex },

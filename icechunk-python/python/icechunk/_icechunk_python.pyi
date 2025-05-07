@@ -515,6 +515,11 @@ class ManifestSplitCondition:
         """
         ...
 
+    @staticmethod
+    def AnyArray() -> ManifestSplitCondition:
+        """Create a splitting condition that matches any array."""
+        ...
+
 class ManifestSplitDimCondition:
     """Conditions for specifying dimensions along which to shard manifests."""
     class Axis:
