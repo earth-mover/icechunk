@@ -9,6 +9,7 @@ use std::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 pub use object_store::gcp::GcpCredential;
+use object_store::{azure::AzureConfigKey, gcp::GoogleConfigKey, ClientConfigKey};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -50,10 +51,11 @@ impl fmt::Display for S3Options {
 pub enum ObjectStoreConfig {
     InMemory,
     LocalFileSystem(PathBuf),
+    Http(HashMap<ClientConfigKey, String>),
     S3Compatible(S3Options),
     S3(S3Options),
-    Gcs(HashMap<String, String>),
-    Azure(HashMap<String, String>),
+    Gcs(HashMap<GoogleConfigKey, String>),
+    Azure(HashMap<AzureConfigKey, String>),
     Tigris(S3Options),
 }
 

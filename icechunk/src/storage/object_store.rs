@@ -14,15 +14,7 @@ use futures::{
     stream::{self, BoxStream},
 };
 use object_store::{
-    Attribute, AttributeValue, Attributes, CredentialProvider, GetOptions, ObjectMeta,
-    ObjectStore, PutMode, PutOptions, PutPayload, StaticCredentialProvider,
-    UpdateVersion,
-    aws::AmazonS3Builder,
-    azure::{AzureConfigKey, MicrosoftAzureBuilder},
-    gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey},
-    local::LocalFileSystem,
-    memory::InMemory,
-    path::Path as ObjectPath,
+    aws::AmazonS3Builder, azure::{AzureConfigKey, MicrosoftAzureBuilder}, gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey}, http::HttpBuilder, local::LocalFileSystem, memory::InMemory, path::Path as ObjectPath, Attribute, AttributeValue, Attributes, ClientConfigKey, CredentialProvider, GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload, StaticCredentialProvider, UpdateVersion
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -728,6 +720,51 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
             unsafe_use_metadata: Some(false),
             ..Default::default()
         }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HttpObjectStoreBackend {
+    pub url: String,
+    pub config: Option<HashMap<ClientConfigKey, String>>,
+}
+
+impl fmt::Display for HttpObjectStoreBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "HttpObjectStoreBackend(url={}, config={})",
+            self.url,
+            self.config.as_ref().map(|c| c.iter().map(|(k, v)| format!("{:?}={}", k, v)).collect::<Vec<_>>().join(", ")).unwrap_or("None".to_string())
+        )
+    }
+}
+
+#[typetag::serde(name = "http_object_store_provider")]
+impl ObjectStoreBackend for HttpObjectStoreBackend {
+    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
+        let builder = HttpBuilder::new().with_url(&self.url);
+
+        // Add options
+        let builder = self
+            .config
+            .as_ref()
+            .unwrap_or(&HashMap::new())
+            .iter()
+            .fold(builder, |builder, (key, value)| builder.with_config(*key, value));
+
+        let store =
+            builder.build().map_err(|e| StorageErrorKind::Other(e.to_string()))?;
+
+        Ok(Arc::new(store))
+    }
+
+    fn prefix(&self) -> String {
+        "".to_string()
+    }
+
+    fn default_settings(&self) -> Settings {
+        Default::default()
     }
 }
 
