@@ -214,21 +214,33 @@ async def test_write_minio_virtual_refs() -> None:
     _snapshot_id = session.commit("Add virtual refs")
 
 
-async def test_from_s3_public_virtual_refs(tmpdir: Path) -> None:
+@pytest.mark.parametrize(
+    "container_type,url_prefix,store_config",
+    [
+        (
+            "s3",
+            "s3://earthmover-sample-data",
+            ObjectStoreConfig.S3(S3Options(region="us-east-1", anonymous=True)),
+        ),
+        (
+            "http",
+            "https://earthmover-sample-data.s3.amazonaws.com",
+            http_store(),
+        ),
+    ],
+)
+async def test_public_virtual_refs(
+    tmpdir: Path,
+    container_type: str,
+    url_prefix: str,
+    store_config: ObjectStoreConfig.S3 | ObjectStoreConfig.Http,
+) -> None:
     config = RepositoryConfig.default()
-    store_config = ObjectStoreConfig.S3(
-        S3Options(
-            region="us-east-1",
-            anonymous=True,
-        )
-    )
-    container = VirtualChunkContainer(
-        "sample-data", "s3://earthmover-sample-data", store_config
-    )
+    container = VirtualChunkContainer("sample-data", url_prefix, store_config)
     config.set_virtual_chunk_container(container)
 
     repo = Repository.open_or_create(
-        storage=local_filesystem_storage(f"{tmpdir}/virtual"),
+        storage=local_filesystem_storage(f"{tmpdir}/virtual-{container_type}"),
         config=config,
     )
     session = repo.writable_session("main")
@@ -239,122 +251,10 @@ async def test_from_s3_public_virtual_refs(tmpdir: Path) -> None:
         name="year", shape=((72,)), chunks=((72,)), dtype="float32", compressors=None
     )
 
+    file_path = f"{url_prefix}/netcdf/oscar_vel2018.nc"
     store.set_virtual_ref(
         "year/c/0",
-        "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc",
-        offset=22306,
-        length=288,
-    )
-
-    nodes = [n async for n in store.list()]
-    assert "year/c/0" in nodes
-
-    year_values = year[:]
-    assert len(year_values) == 72
-    actual_values = np.array(
-        [
-            2018.0,
-            2018.0139,
-            2018.0278,
-            2018.0416,
-            2018.0555,
-            2018.0695,
-            2018.0834,
-            2018.0972,
-            2018.1111,
-            2018.125,
-            2018.1389,
-            2018.1528,
-            2018.1666,
-            2018.1805,
-            2018.1945,
-            2018.2084,
-            2018.2222,
-            2018.2361,
-            2018.25,
-            2018.2639,
-            2018.2778,
-            2018.2916,
-            2018.3055,
-            2018.3195,
-            2018.3334,
-            2018.3472,
-            2018.3611,
-            2018.375,
-            2018.3889,
-            2018.4028,
-            2018.4166,
-            2018.4305,
-            2018.4445,
-            2018.4584,
-            2018.4722,
-            2018.4861,
-            2018.5,
-            2018.5139,
-            2018.5278,
-            2018.5416,
-            2018.5555,
-            2018.5695,
-            2018.5834,
-            2018.5972,
-            2018.6111,
-            2018.625,
-            2018.6389,
-            2018.6528,
-            2018.6666,
-            2018.6805,
-            2018.6945,
-            2018.7084,
-            2018.7222,
-            2018.7361,
-            2018.75,
-            2018.7639,
-            2018.7778,
-            2018.7916,
-            2018.8055,
-            2018.8195,
-            2018.8334,
-            2018.8472,
-            2018.8611,
-            2018.875,
-            2018.8889,
-            2018.9028,
-            2018.9166,
-            2018.9305,
-            2018.9445,
-            2018.9584,
-            2018.9722,
-            2018.9861,
-        ],
-        dtype="float32",
-    )
-    assert np.allclose(year_values, actual_values)
-
-
-async def test_from_http_public_virtual_refs(tmpdir: Path) -> None:
-    config = RepositoryConfig.default()
-    container = VirtualChunkContainer(
-        "sample-data",
-        "https://earthmover-sample-data.s3.amazonaws.com",
-        http_store(),
-    )
-    config.set_virtual_chunk_container(container)
-
-    repo = Repository.open_or_create(
-        storage=local_filesystem_storage(f"{tmpdir}/virtual"),
-        config=config,
-    )
-    session = repo.writable_session("main")
-    store = session.store
-
-    root = zarr.Group.from_store(store=store, zarr_format=3)
-    year = root.require_array(
-        name="year", shape=((72,)), chunks=((72,)), dtype="float32", compressors=None
-    )
-
-    store.set_virtual_ref(
-        "year/c/0",
-        "https://earthmover-sample-data.s3.amazonaws.com/netcdf/oscar_vel2018.nc",
+        file_path,
         offset=22306,
         length=288,
     )
