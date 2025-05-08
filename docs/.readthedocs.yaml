@@ -6,8 +6,6 @@ build:
     python: "mambaforge-latest"
 
   jobs:
-     pre_create_environment:
-       - conda update --yes --quiet --name=base --channel=defaults conda
      install:
       - which mamba
       - cd icechunk-python && maturin build && pip install ../target/wheels/*.whl && cd ../docs

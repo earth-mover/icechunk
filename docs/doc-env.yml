@@ -11,9 +11,9 @@ dependencies:
   - xarray
   - pooch
   - scipy
-  - dask
+  - dask<2025.04
   - cftime
-  - distributed
+  - distributed<2025.04
   - cairo
   - rust
   - maturin
