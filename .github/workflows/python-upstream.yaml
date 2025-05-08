@@ -128,7 +128,7 @@ jobs:
           && github.repository_owner == 'earth-mover'
         uses: xarray-contrib/issue-from-pytest-log@v1
         with:
-          log-path: output-pytest-log.jsonl
+          log-path: icechunk-python/output-pytest-log.jsonl
 
 
   xarray-backends:
