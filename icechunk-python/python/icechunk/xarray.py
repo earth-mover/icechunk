@@ -177,7 +177,6 @@ class _XarrayDatasetWriter:
         stored_arrays = self.writer.sync(
             compute=False, chunkmanager_store_kwargs=chunkmanager_store_kwargs
         )  # type: ignore[no-untyped-call]
-
         self.store.session.merge(
             session_merge_reduction(stored_arrays, split_every=split_every)
         )

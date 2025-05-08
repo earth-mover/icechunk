@@ -102,7 +102,7 @@ def store_dask(
 
 
 def session_merge_reduction(
-    arrays: list[Array], *, split_every: int | None, **store_kwargs
+    arrays: list[Array], *, split_every: int | None, **store_kwargs: Any
 ) -> Session:
     # Now we tree-reduce all changesets
     # reduce the individual arrays since concatenation isn't always trivial due
