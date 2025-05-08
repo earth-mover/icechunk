@@ -88,7 +88,7 @@ We have a virtual dataset with 31 timestamps! One hint that this worked correctl
 import icechunk
 
 storage = icechunk.local_filesystem_storage(
-    prefix='oisst',
+    path='oisst',
 )
 
 config = icechunk.RepositoryConfig.default()

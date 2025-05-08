@@ -9,7 +9,7 @@ import pytest
 import zarr
 import zarr.api
 import zarr.api.asynchronous
-from icechunk import IcechunkStore
+from icechunk import IcechunkError, IcechunkStore
 from tests.conftest import parse_repo
 from zarr import Array, AsyncGroup, Group
 from zarr.api.asynchronous import create_array
@@ -125,7 +125,7 @@ def test_group_members(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     # This is not supported by Icechunk, so we expect an error
     # zarr-python: add an extra object to the domain of the group.
     # the list of children should ignore this object.
-    with pytest.raises(ValueError):
+    with pytest.raises(IcechunkError):
         sync(
             store.set(
                 f"{path}/extra_object-1",
@@ -137,7 +137,7 @@ def test_group_members(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     # zarr-python: add an extra object under a directory-like prefix in the domain of the group.
     # this creates a directory with a random key in it
     # this should not show up as a member
-    with pytest.raises(ValueError):
+    with pytest.raises(IcechunkError):
         sync(
             store.set(
                 f"{path}/extra_directory/extra_object-2",
