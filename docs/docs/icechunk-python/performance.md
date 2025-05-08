@@ -41,6 +41,20 @@ Options for specifying the arrays whose manifest you want to split are:
 3. [`ManifestSplitCondition.And`](./reference.md#icechunk.ManifestSplitCondition.And) to combine (1), (2), and (4) together; and
 4. [`ManifestSplitCondition.Or`](./reference.md#icechunk.ManifestSplitCondition.Or) to combine (1), (2), and (3) together.
 
+
+`And` and `Or` may be used to combine multiple path and/or name matches. For example,
+```python exec="on" session="perf" source="material-block"
+array_condition = ManifestSplitCondition.or_conditions(
+    [
+        ManifestSplitCondition.name_matches("temperature"),
+        ManifestSplitCondition.name_matches("salinity"),
+    ]
+)
+sconfig = ManifestSplittingConfig.from_dict(
+    {array_condition: {ManifestSplitDimCondition.DimensionName("longitude"): 3}}
+)
+```
+
 Options for specifying how to split along a specific axis or dimension are:
 1. [`ManifestSplitDimCondition.Axis`](./reference.md#icechunk.ManifestSplitDimCondition.Axis) takes an integer axis;
 2. [`ManifestSplitDimCondition.DimensionName`](./reference.md#icechunk.ManifestSplitDimCondition.DimensionName) takes a regular expression used to match the dimension names of the array;

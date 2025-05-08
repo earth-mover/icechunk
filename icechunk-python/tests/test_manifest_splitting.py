@@ -19,12 +19,14 @@ DIMS = ("time", "latitude", "longitude")
 
 
 def test_manifest_splitting_appends():
+    array_condition = ManifestSplitCondition.or_conditions(
+        [
+            ManifestSplitCondition.name_matches("temperature"),
+            ManifestSplitCondition.name_matches("salinity"),
+        ]
+    )
     sconfig = ic.ManifestSplittingConfig.from_dict(
-        {
-            ManifestSplitCondition.name_matches("temperature"): {
-                ManifestSplitDimCondition.DimensionName("longitude"): 3
-            }
-        }
+        {array_condition: {ManifestSplitDimCondition.DimensionName("longitude"): 3}}
     )
     config = ic.RepositoryConfig(
         inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)
@@ -36,19 +38,28 @@ def test_manifest_splitting_appends():
         assert repo.config.manifest.splitting is not None
 
         ds = xr.Dataset(
-            {"temperature": (DIMS, np.arange(math.prod(SHAPE)).reshape(SHAPE))}
+            {
+                "temperature": (DIMS, np.arange(math.prod(SHAPE)).reshape(SHAPE)),
+                "salinity": (DIMS, np.arange(math.prod(SHAPE)).reshape(SHAPE)),
+            }
         )
         session = repo.writable_session("main")
         with zarr.config.set({"array.write_empty_chunks": True}):
             to_icechunk(
-                ds, session, encoding={"temperature": {"chunks": CHUNKS}}, mode="w"
+                ds,
+                session,
+                encoding={
+                    "temperature": {"chunks": CHUNKS},
+                    "salinity": {"chunks": CHUNKS},
+                },
+                mode="w",
             )
         session.commit("initialize")
         roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
         xr.testing.assert_identical(roundtripped, ds)
 
-        nchunks = math.prod(SHAPE)
-        nmanifests = 6
+        nchunks = math.prod(SHAPE) * 2
+        nmanifests = 6 * 2
         assert len(os.listdir(f"{tmpdir}/chunks")) == nchunks
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
@@ -62,8 +73,8 @@ def test_manifest_splitting_appends():
         session.commit("appended")
         roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
         xr.testing.assert_identical(roundtripped, xr.concat([ds, ds], dim="time"))
-        nchunks += math.prod(SHAPE)
-        nmanifests += 6
+        nchunks += math.prod(SHAPE) * 2
+        nmanifests += 6 * 2
 
         assert len(os.listdir(f"{tmpdir}/chunks")) == nchunks
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
@@ -72,7 +83,10 @@ def test_manifest_splitting_appends():
         ### append along longitude - splitting specified
         NEWSHAPE = (2 * SHAPE[0], *SHAPE[1:-1], 2)
         newds = xr.Dataset(
-            {"temperature": (DIMS, np.arange(math.prod(NEWSHAPE)).reshape(NEWSHAPE))}
+            {
+                "temperature": (DIMS, np.arange(math.prod(NEWSHAPE)).reshape(NEWSHAPE)),
+                "salinity": (DIMS, np.arange(math.prod(NEWSHAPE)).reshape(NEWSHAPE)),
+            }
         )
         repo = ic.Repository.open(storage)
         assert repo.config.manifest.splitting is not None
@@ -85,10 +99,10 @@ def test_manifest_splitting_appends():
             roundtripped,
             xr.concat([xr.concat([ds, ds], dim="time"), newds], dim="longitude"),
         )
-        nchunks += math.prod(NEWSHAPE)
+        nchunks += math.prod(NEWSHAPE) * 2
         # the lon size goes from 17 -> 19 so one extra manifest,
         # compared to previous writes
-        nmanifests += 7
+        nmanifests += 7 * 2
 
         assert len(os.listdir(f"{tmpdir}/chunks")) == nchunks
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
