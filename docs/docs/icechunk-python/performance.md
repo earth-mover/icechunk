@@ -40,10 +40,10 @@ repo = ic.Repository.open(..., config=repo_config)
 This particular example splits manifests so that each manifest contains `365 * 24` chunks along the time dimension, and every chunk along every other dimension in a single file.
 
 Options for specifying the arrays whose manifest you want to split are:
-1. [`ManifestSplitCondition.NameMatches`](./reference.md#icechunk.ManifestSplitCondition.NameMatches) takes a regular expression used to match an array's name;
-2. [`ManifestSplitCondition.PathMatches`](./reference.md#icechunk.ManifestSplitCondition.PathMatches) takes a regular expression used to match an array's path;
-3. [`ManifestSplitCondition.And`](./reference.md#icechunk.ManifestSplitCondition.And) to combine (1), (2), and (4) together; and
-4. [`ManifestSplitCondition.Or`](./reference.md#icechunk.ManifestSplitCondition.Or) to combine (1), (2), and (3) together.
+1. [`ManifestSplitCondition.name_matches`](./reference.md#icechunk.ManifestSplitCondition.name_matches) takes a regular expression used to match an array's name;
+2. [`ManifestSplitCondition.path_matches`](./reference.md#icechunk.ManifestSplitCondition.path_matches) takes a regular expression used to match an array's path;
+3. [`ManifestSplitCondition.and_conditions`](./reference.md#icechunk.ManifestSplitCondition.and_conditions) to combine (1), (2), and (4) together; and
+4. [`ManifestSplitCondition.or_conditions`](./reference.md#icechunk.ManifestSplitCondition.or_conditions) to combine (1), (2), and (3) together.
 
 
 `And` and `Or` may be used to combine multiple path and/or name matches. For example,
