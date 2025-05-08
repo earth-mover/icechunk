@@ -6,11 +6,9 @@ from typing import Any, Literal, overload
 import numpy as np
 from packaging.version import Version
 
-import dask.array as da
 import xarray as xr
 import zarr
 from icechunk import IcechunkStore, Session
-from icechunk.distributed import extract_session, merge_sessions
 from icechunk.vendor.xarray import _choose_default_mode
 from xarray import DataArray, Dataset
 from xarray.backends.common import ArrayWriter
@@ -162,6 +160,10 @@ class _XarrayDatasetWriter:
         """
         Write lazy arrays (e.g. dask) to store.
         """
+
+        import dask.array as da
+        from icechunk.dask import extract_session, merge_sessions
+
         if not self._initialized:
             raise ValueError("Please call `write_metadata` first.")
 
