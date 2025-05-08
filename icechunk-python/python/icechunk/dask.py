@@ -1,5 +1,6 @@
-from collections.abc import Mapping
-from typing import Any, TypeAlias
+import functools
+from collections.abc import Callable, Mapping
+from typing import Any, ParamSpec, TypeAlias, TypeVar
 
 import numpy as np
 from packaging.version import Version
@@ -13,6 +14,30 @@ from icechunk import Session
 from icechunk.distributed import extract_session, merge_sessions
 
 SimpleGraph: TypeAlias = Mapping[tuple[str, int], tuple[Any, ...]]
+
+
+# We wrap `extract_session` and `merge_sessions` to explicitly handle the `meta` computation.
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def computing_meta(func: Callable[P, R]) -> Callable[P, Any]:
+    """
+    A decorator to handle the dask-specific `computing_meta` flag.
+
+    If `computing_meta` is True in the keyword arguments, the decorated
+    function will return a placeholder meta object (np.array([object()], dtype=object)).
+    Otherwise, it will execute the original function.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+        if kwargs.get("computing_meta", False):
+            return np.array([object()], dtype=object)
+        return func(*args, **kwargs)
+
+    return wrapper
 
 
 def _assert_correct_dask_version() -> None:
@@ -79,8 +104,8 @@ def store_dask(
         da.reduction(  # type: ignore[no-untyped-call]
             arr,
             name="ice-changeset",
-            chunk=extract_session,
-            aggregate=merge_sessions,
+            chunk=computing_meta(extract_session),
+            aggregate=computing_meta(merge_sessions),
             split_every=split_every,
             concatenate=False,
             keepdims=False,
