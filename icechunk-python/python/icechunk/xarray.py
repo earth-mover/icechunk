@@ -160,9 +160,7 @@ class _XarrayDatasetWriter:
         """
         Write lazy arrays (e.g. dask) to store.
         """
-
-        import dask.array as da
-        from icechunk.dask import extract_session, merge_sessions
+        from icechunk.dask import session_merge_reduction
 
         if not self._initialized:
             raise ValueError("Please call `write_metadata` first.")
@@ -180,22 +178,9 @@ class _XarrayDatasetWriter:
             compute=False, chunkmanager_store_kwargs=chunkmanager_store_kwargs
         )  # type: ignore[no-untyped-call]
 
-        # Now we tree-reduce all changesets
-        merged_sessions = [
-            da.reduction(  # type: ignore[no-untyped-call]
-                arr,
-                name="ice-changeset",
-                chunk=extract_session,
-                aggregate=merge_sessions,
-                split_every=split_every,
-                concatenate=False,
-                dtype=object,
-            )
-            for arr in stored_arrays
-        ]
-        computed = da.compute(*merged_sessions)  # type: ignore[no-untyped-call]
-        merged_session = merge_sessions(*computed)
-        self.store.session.merge(merged_session)
+        self.store.session.merge(
+            session_merge_reduction(stored_arrays, split_every=split_every)
+        )
 
 
 def to_icechunk(

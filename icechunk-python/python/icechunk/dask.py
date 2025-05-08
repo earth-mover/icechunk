@@ -96,7 +96,14 @@ def store_dask(
     )
     if len(sources) == 1 and isinstance(stored_arrays, da.Array):
         stored_arrays = [stored_arrays]
+    session.merge(
+        session_merge_reduction(stored_arrays, split_every=split_every, **store_kwargs)
+    )
 
+
+def session_merge_reduction(
+    arrays: list[Array], *, split_every: int | None, **store_kwargs
+) -> Session:
     # Now we tree-reduce all changesets
     # reduce the individual arrays since concatenation isn't always trivial due
     # to different shapes
@@ -113,9 +120,9 @@ def store_dask(
             meta=np.array([object()], dtype=object),
             **store_kwargs,
         )
-        for arr in stored_arrays
+        for arr in arrays
     ]
     merged_session = merge_sessions(
         *da.compute(*merged_sessions)  # type: ignore[no-untyped-call]
     )
-    session.merge(merged_session)
+    return merged_session
