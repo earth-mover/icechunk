@@ -6,6 +6,7 @@
 
 ## Preloading manifests
 
+Coming Soon.
 
 ## Splitting manifests
 
@@ -17,10 +18,12 @@ In some cases, this can result in a slow time-to-first-byte.
 
 To avoid that, Icechunk lets you split the manifest files by specifying a ``ManifestSplittingConfig``.
 
-```python
+```python exec="on" session="perf" source="material-block"
+from icechunk import ManifestSplitCondition, ManifestSplittingConfig, ManifestSplitDimCondition
+
 split_config = ic.ManifestSplittingConfig.from_dict(
     {
-        ic.ManifestSplitCondition.NameMatches(".*"): {
+        ic.ManifestSplitCondition.AnyArray(): {
             ic.ManifestSplitDimCondition.DimensionName("time"): 365 * 24
         }
     }
@@ -45,7 +48,9 @@ Options for specifying how to split along a specific axis or dimension are:
 
 
 For example, for an array with dimensions `time, latitude, longitude`, the following config
-```python
+```python exec="on" session="perf" source="material-block"
+from icechunk import ManifestSplitDimCondition
+
 {
     ManifestSplitDimCondition.DimensionName("longitude"): 3,
     ManifestSplitDimCondition.Axis(1): 2,
