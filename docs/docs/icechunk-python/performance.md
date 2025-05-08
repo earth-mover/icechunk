@@ -30,8 +30,11 @@ split_config = ManifestSplittingConfig.from_dict(
     }
 )
 repo_config = ic.RepositoryConfig(manifest=ic.ManifestConfig(splitting=split_config))
+```
 
-repo = ic.Repository.open(storage=storage, config=repo_config)
+Then pass the config to `Repository.open` or `Repository.create`
+```python
+repo = ic.Repository.open(..., config=repo_config)
 ```
 
 This particular example splits manifests so that each manifest contains `365 * 24` chunks along the time dimension, and every chunk along every other dimension in a single file.
