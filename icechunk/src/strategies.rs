@@ -122,5 +122,4 @@ prop_compose! {
     pub fn chunk_indices(dim: usize, values_in: Range<u32>)(v in proptest::collection::vec(values_in, dim..(dim+1))) -> ChunkIndices {
         ChunkIndices(v)
     }
-
 }

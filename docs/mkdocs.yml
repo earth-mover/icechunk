@@ -188,6 +188,7 @@ nav:
     - Quickstart: icechunk-python/quickstart.md
     - Configuration: icechunk-python/configuration.md
     - Storage: icechunk-python/storage.md
+    - Performance: icechunk-python/performance.md
     - FAQ: icechunk-python/faq.md
     - Xarray: icechunk-python/xarray.md
     - Parallel Writes: icechunk-python/parallel.md

@@ -2,7 +2,8 @@
 use bytes::Bytes;
 use chrono::Utc;
 use icechunk::{
-    Repository, Storage,
+    Repository, RepositoryConfig, Storage,
+    config::{ManifestConfig, ManifestSplittingConfig},
     format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
     session::{Session, get_chunk},
     storage::new_in_memory_storage,
@@ -69,10 +70,19 @@ async fn test_concurrency_in_tigris() -> Result<(), Box<dyn std::error::Error>> 
 async fn do_test_concurrency(
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let repo = Repository::create(None, storage, HashMap::new()).await?;
+    let shape = ArrayShape::new(vec![(N as u64, 1), (N as u64, 1)]).unwrap();
+
+    let config = RepositoryConfig {
+        manifest: Some(ManifestConfig {
+            splitting: Some(ManifestSplittingConfig::with_size(2)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let repo = Repository::create(Some(config), storage, HashMap::new()).await?;
+
     let mut ds = repo.writable_session("main").await?;
 
-    let shape = ArrayShape::new(vec![(N as u64, 1), (N as u64, 1)]).unwrap();
     let dimension_names = Some(vec!["x".into(), "y".into()]);
     let user_data = Bytes::new();
     let new_array_path: Path = "/array".try_into().unwrap();

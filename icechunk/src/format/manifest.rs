@@ -4,7 +4,7 @@ use crate::format::flatbuffers::generated;
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
-use itertools::Itertools;
+use itertools::{Itertools, multiunzip};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -37,11 +37,86 @@ impl ManifestExtents {
         Self(v)
     }
 
+    pub fn contains(&self, coord: &[u32]) -> bool {
+        self.iter().zip(coord.iter()).all(|(range, that)| range.contains(that))
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &Range<u32>> {
         self.0.iter()
     }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManifestSplits(Vec<ManifestExtents>);
+
+impl ManifestSplits {
+    /// Used at read-time
+    pub fn from_extents(extents: Vec<ManifestExtents>) -> Self {
+        assert!(!extents.is_empty());
+        Self(extents)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    // Build up ManifestSplits from a iterable of shard edges or boundaries
+    // along each dimension.
+    /// # Examples
+    /// ```
+    /// use icechunk::format::manifest::{ManifestSplits, ManifestExtents};
+    /// let actual = ManifestSplits::from_edges(vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]);
+    /// let expected = ManifestSplits::from_extents(vec![
+    ///     ManifestExtents::new(&[0, 3], &[1, 4]),
+    ///     ManifestExtents::new(&[0, 4], &[1, 5]),
+    ///     ManifestExtents::new(&[1, 3], &[2, 4]),
+    ///     ManifestExtents::new(&[1, 4], &[2, 5]),
+    ///     ]
+    /// );
+    /// assert_eq!(actual, expected);
+    /// ```
+    pub fn from_edges(iter: impl IntoIterator<Item = Vec<u32>>) -> Self {
+        // let iter = vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]
+        let res = iter
+            .into_iter()
+            // vec![(0, 1), (1, 2)], vec![(3, 4), (4, 5)]
+            .map(|x| x.into_iter().tuple_windows())
+            // vec![((0, 1), (3, 4)), ((0, 1), (4, 5)),
+            //      ((1, 2), (3, 4)), ((1, 2), (4, 5))]
+            .multi_cartesian_product()
+            // vec![((0, 3), (1, 4)), ((0, 4), (1, 5)),
+            //      ((1, 3), (2, 4)), ((1, 4), (2, 5))]
+            .map(multiunzip)
+            .map(|(from, to): (Vec<u32>, Vec<u32>)| {
+                ManifestExtents::new(from.as_slice(), to.as_slice())
+            });
+        Self(res.collect())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ManifestExtents> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// Helper function for constructing uniformly spaced manifest split edges
+pub fn uniform_manifest_split_edges(num_chunks: u32, split_size: &u32) -> Vec<u32> {
+    (0u32..=num_chunks)
+        .step_by(*split_size as usize)
+        .chain((num_chunks % split_size != 0).then_some(num_chunks))
+        .collect()
+}
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum VirtualReferenceErrorKind {
@@ -215,7 +290,7 @@ impl Manifest {
         }
 
         if array_manifests.is_empty() {
-            // empty manifet
+            // empty manifest
             return Ok(None);
         }
 
@@ -448,3 +523,48 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     max_apparent_size: 1 << 31, // taken from the default
     ignore_missing_null_terminator: true,
 };
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::strategies::{ShapeDim, shapes_and_dims};
+    use icechunk_macros;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[icechunk_macros::test]
+        fn test_manifest_split_from_edges(shape_dim in shapes_and_dims(Some(5))) {
+            // Note: using the shape, chunks strategy to generate chunk_shape, split_shape
+            let ShapeDim { shape, .. } = shape_dim;
+
+            let num_chunks = shape.iter().map(|x| x.array_length()).collect::<Vec<_>>();
+            let split_shape = shape.iter().map(|x| x.chunk_length()).collect::<Vec<_>>();
+
+            let ndim = shape.len();
+            let edges: Vec<Vec<u32>> =
+                (0usize..ndim).map(|axis| {
+                    uniform_manifest_split_edges(num_chunks[axis] as u32, &(split_shape[axis] as u32))
+                }
+                ).collect();
+
+            let splits = ManifestSplits::from_edges(edges.into_iter());
+            for edge in splits.iter() {
+                // must be ndim ranges
+                prop_assert_eq!(edge.len(), ndim);
+                for range in edge.iter() {
+                    prop_assert!(range.end > range.start);
+                }
+            }
+
+            // when using from_edges, extents must not exactly overlap
+            for edges in splits.iter().combinations(2) {
+                let is_equal = std::iter::zip(edges[0].iter(), edges[1].iter())
+                    .all(|(range1, range2)| {
+                        (range1.start == range2.start) && (range1.end == range2.end)
+                    });
+                prop_assert!(!is_equal);
+            }
+        }
+    }
+}

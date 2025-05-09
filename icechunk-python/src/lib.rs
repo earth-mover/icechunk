@@ -17,6 +17,9 @@ use config::{
     PyRepositoryConfig, PyS3Credentials, PyS3Options, PyS3StaticCredentials, PyStorage,
     PyStorageConcurrencySettings, PyStorageSettings, PyVirtualChunkContainer,
 };
+use config::{
+    PyManifestSplitCondition, PyManifestSplitDimCondition, PyManifestSplittingConfig,
+};
 use conflicts::{
     PyBasicConflictSolver, PyConflict, PyConflictDetector, PyConflictSolver,
     PyConflictType, PyVersionSelection,
@@ -114,6 +117,9 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyManifestPreloadConfig>()?;
     m.add_class::<PyManifestPreloadCondition>()?;
     m.add_class::<PyManifestConfig>()?;
+    m.add_class::<PyManifestSplitDimCondition>()?;
+    m.add_class::<PyManifestSplitCondition>()?;
+    m.add_class::<PyManifestSplittingConfig>()?;
     m.add_class::<PyStorageSettings>()?;
     m.add_class::<PyGCSummary>()?;
     m.add_class::<PyDiff>()?;
