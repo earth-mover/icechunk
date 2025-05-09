@@ -124,7 +124,6 @@ jobs:
         if: |
           failure()
           && steps.status.outcome == 'failure'
-          && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
         uses: xarray-contrib/issue-from-pytest-log@v1
         with:
@@ -208,7 +207,6 @@ jobs:
         if: |
           failure()
           && steps.status.outcome == 'failure'
-          && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
         uses: xarray-contrib/issue-from-pytest-log@v1
         with:
