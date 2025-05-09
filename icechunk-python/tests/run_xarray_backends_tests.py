@@ -1,3 +1,5 @@
+# Deepak runs this with
+# pip install ../../xarray && ICECHUNK_XARRAY_BACKENDS_TESTS=1 pytest -s --pdb -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
 import contextlib
 import os
 import tempfile
