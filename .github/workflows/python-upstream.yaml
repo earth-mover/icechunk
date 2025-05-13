@@ -16,6 +16,7 @@ concurrency:
 
 permissions:
   contents: read
+  issues: write
 
 defaults:
   run:
@@ -109,7 +110,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pytest -n 4 --report-log output-pytest-log.json
+          pytest -n 4 --report-log output-pytest-log.jsonl
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
@@ -128,7 +129,7 @@ jobs:
           && github.repository_owner == 'earth-mover'
         uses: xarray-contrib/issue-from-pytest-log@v1
         with:
-          log-path: output-pytest-log.jsonl
+          log-path: icechunk-python/output-pytest-log.jsonl
 
 
   xarray-backends:
@@ -202,7 +203,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
+          pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 
       - name: Generate and publish the report
         if: |
@@ -212,5 +213,5 @@ jobs:
           && github.repository_owner == 'earth-mover'
         uses: xarray-contrib/issue-from-pytest-log@v1
         with:
-          log-path: output-pytest-log.jsonl
+          log-path: icechunk/icechunk-python/output-pytest-log.jsonl
           issue-title: "Nightly Xarray backends tests failed"

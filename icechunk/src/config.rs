@@ -9,9 +9,11 @@ use std::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 pub use object_store::gcp::GcpCredential;
+use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    format::Path,
     storage,
     virtual_chunks::{ContainerName, VirtualChunkContainer, mk_default_containers},
 };
@@ -129,6 +131,106 @@ impl CachingConfig {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Serialize, Hash, Deserialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum ManifestSplitCondition {
+    Or(Vec<ManifestSplitCondition>),
+    And(Vec<ManifestSplitCondition>),
+    PathMatches { regex: String },
+    NameMatches { regex: String },
+    AnyArray,
+}
+
+//```yaml
+//rules:
+//  - path: ./2m_temperature  # regex, 3D variable: (null, latitude, longitude)
+//    manifest-split-sizes:
+//      - 0: 120
+//  - path: ./temperature  # 4D variable: (time, level, latitude, longitude)
+//    manifest-split-sizes:
+//      - "level": 1  # alternatively 0: 1
+//      - "time": 12  #           and 1: 12
+//  - path: ./temperature
+//    manifest-split-sizes:
+//      - "level": 1
+//      - "time": 8760  # ~1 year
+//      - "latitude": null  # for unspecified, default is null, which means never split.
+//  - path: ./*   # the default rules
+//    manifest-split-sizes: null  # no splitting, just a single manifest per array
+//```
+
+impl ManifestSplitCondition {
+    // from_yaml?
+    pub fn matches(&self, path: &Path) -> bool {
+        use ManifestSplitCondition::*;
+        match self {
+            AnyArray => true,
+            Or(vec) => vec.iter().any(|c| c.matches(path)),
+            And(vec) => vec.iter().all(|c| c.matches(path)),
+            // TODO: precompile the regex
+            PathMatches { regex } => Regex::new(regex)
+                .map(|regex| regex.is_match(path.to_string().as_bytes()))
+                .unwrap_or(false),
+            // TODO: precompile the regex
+            NameMatches { regex } => Regex::new(regex)
+                .map(|regex| {
+                    path.name()
+                        .map(|name| regex.is_match(name.as_bytes()))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false),
+        }
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub enum ManifestSplitDimCondition {
+    Axis(usize),
+    DimensionName(String),
+    // TODO: Since dimension name can be null,
+    // i don't think we can have DimensionName(r"*") catch the "Any" case
+    Any,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct ManifestSplitDim {
+    pub condition: ManifestSplitDimCondition,
+    pub num_chunks: u32,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct ManifestSplittingConfig {
+    // need to preserve insertion order of conditions, so hashmap doesn't work
+    pub split_sizes: Option<Vec<(ManifestSplitCondition, Vec<ManifestSplitDim>)>>,
+}
+
+impl Default for ManifestSplittingConfig {
+    fn default() -> Self {
+        let inner = vec![ManifestSplitDim {
+            condition: ManifestSplitDimCondition::Any,
+            num_chunks: u32::MAX,
+        }];
+        let new = vec![(
+            ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+            inner,
+        )];
+        Self { split_sizes: Some(new) }
+    }
+}
+
+impl ManifestSplittingConfig {
+    pub fn with_size(split_size: u32) -> Self {
+        let split_sizes = vec![(
+            ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+            vec![ManifestSplitDim {
+                condition: ManifestSplitDimCondition::Any,
+                num_chunks: split_size,
+            }],
+        )];
+        ManifestSplittingConfig { split_sizes: Some(split_sizes) }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifestPreloadCondition {
@@ -207,19 +309,42 @@ static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ManifestConfig {
     pub preload: Option<ManifestPreloadConfig>,
+    pub splitting: Option<ManifestSplittingConfig>,
 }
 
 static DEFAULT_MANIFEST_PRELOAD_CONFIG: OnceLock<ManifestPreloadConfig> = OnceLock::new();
+static DEFAULT_MANIFEST_SPLITTING_CONFIG: OnceLock<ManifestSplittingConfig> =
+    OnceLock::new();
 
 impl ManifestConfig {
     pub fn merge(&self, other: Self) -> Self {
-        Self { preload: other.preload.or(self.preload.clone()) }
+        Self {
+            preload: other.preload.or(self.preload.clone()),
+            splitting: other.splitting.or(self.splitting.clone()),
+        }
     }
 
     pub fn preload(&self) -> &ManifestPreloadConfig {
         self.preload.as_ref().unwrap_or_else(|| {
             DEFAULT_MANIFEST_PRELOAD_CONFIG.get_or_init(ManifestPreloadConfig::default)
         })
+    }
+
+    pub fn splitting(&self) -> &ManifestSplittingConfig {
+        self.splitting.as_ref().unwrap_or_else(|| {
+            DEFAULT_MANIFEST_SPLITTING_CONFIG
+                .get_or_init(ManifestSplittingConfig::default)
+        })
+    }
+    // for testing only, create a config with no preloading and no splitting
+    pub fn empty() -> Self {
+        ManifestConfig {
+            preload: Some(ManifestPreloadConfig {
+                max_total_refs: None,
+                preload_if: None,
+            }),
+            splitting: None,
+        }
     }
 }
 

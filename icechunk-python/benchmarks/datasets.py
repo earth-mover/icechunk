@@ -1,4 +1,5 @@
 import datetime
+import random
 import time
 import warnings
 from collections.abc import Callable
@@ -9,11 +10,19 @@ from typing import Any, Literal, Self, TypeAlias
 import fsspec
 import numpy as np
 import platformdirs
+import pytest
 
 import icechunk as ic
+import icechunk.xarray
 import xarray as xr
 import zarr
-from benchmarks.helpers import get_coiled_kwargs, rdms, setup_logger
+from benchmarks.helpers import (
+    get_coiled_kwargs,
+    get_splitting_config,
+    rdms,
+    repo_config_with,
+    setup_logger,
+)
 
 rng = np.random.default_rng(seed=123)
 
@@ -180,7 +189,9 @@ class Dataset:
             self._storage = self.storage_config.create()
         return self._storage
 
-    def create(self, clear: bool = False) -> ic.Repository:
+    def create(
+        self, clear: bool = False, config: ic.RepositoryConfig | None = None
+    ) -> ic.Repository:
         if clear:
             clear_uri = self.storage_config.clear_uri()
             if clear_uri is None:
@@ -199,7 +210,7 @@ class Dataset:
                 except FileNotFoundError:
                     pass
         logger.info(repr(self.storage))
-        return ic.Repository.create(self.storage)
+        return ic.Repository.create(self.storage, config=config)
 
     @property
     def store(self) -> ic.IcechunkStore:
@@ -220,8 +231,10 @@ class BenchmarkWriteDataset(Dataset):
 class BenchmarkReadDataset(Dataset):
     # data variable to load in `time_xarray_read_chunks`
     load_variables: list[str] | None = None
-    # Passed to .isel for `time_xarray_read_chunks`
+    # Passed to .isel for `time_xarray_read_chunks`, reads a single chunk
     chunk_selector: dict[str, Any] | None = None
+    # Passed to .isel for `time_xarray_read_chunks`, reads a large fraction of the data
+    full_load_selector: dict[str, Any] | None = None
     # name of (coordinate) variable used for testing "time to first byte"
     first_byte_variable: str | None
     # function used to construct the dataset prior to read benchmarks
@@ -229,10 +242,10 @@ class BenchmarkReadDataset(Dataset):
     # whether to skip this one on local runs
     skip_local: bool = False
 
-    def create(self, clear: bool = True):
+    def create(self, clear: bool = True, config: ic.RepositoryConfig | None = None):
         if clear is not True:
             raise ValueError("clear *must* be true for benchmark datasets.")
-        return super().create(clear=True)
+        return super().create(clear=True, config=config)
 
     def setup(self, force: bool = False) -> None:
         """
@@ -243,15 +256,15 @@ class BenchmarkReadDataset(Dataset):
             raise NotImplementedError("setupfn has not been provided.")
 
         if force:
-            print("forced re-creating")
+            logger.info("forced re-creating")
             self.setupfn(self)
             return
 
         try:
             _ = self.store
         except ic.IcechunkError as e:
-            print("Read of existing store failed. Re-creating")
-            print(e)
+            logger.info("Read of existing store failed. Re-creating")
+            logger.info(e)
             self.setupfn(self)
 
 
@@ -378,6 +391,31 @@ def setup_era5(*args, **kwargs):
     return setup_for_benchmarks(*args, **kwargs, arrays_to_write=[])
 
 
+def setup_split_manifest_refs(dataset: Dataset, *, split_size: int | None):
+    shape = (500_000 * 1000,)
+    chunks = (1000,)
+
+    if split_size is not None:
+        try:
+            splitting = get_splitting_config(split_size=split_size)
+        except ImportError:
+            logger.info("splitting not supported")
+            pytest.skip("splitting not supported on this version")
+    else:
+        splitting = None
+    config = repo_config_with(splitting=splitting)
+    assert config is not None
+    if hasattr(config.manifest, "splitting"):
+        assert config.manifest.splitting == splitting
+    repo = dataset.create(config=config)
+    logger.info(repo.config)
+    session = repo.writable_session(branch="main")
+    ds = xr.Dataset({"array": ("x", np.ones(shape=shape))})
+    with zarr.config.set({"async.concurrency": 64}):
+        ic.xarray.to_icechunk(ds, session, encoding={"array": {"chunks": chunks}})
+    session.commit("wrote data")
+
+
 ERA5_ARCO_INGEST = IngestDataset(
     name="ERA5-ARCO",
     prefix="era5_arco",
@@ -448,6 +486,26 @@ GB_8MB_CHUNKS = BenchmarkReadDataset(
     setupfn=partial(setup_synthetic_gb_dataset, chunk_shape=(4, 512, 512)),
 )
 
+random_selector = sorted(random.choices(range(500_000 * 1000), k=50_000))
+
+# large manifest sharded, unsharded
+LARGE_MANIFEST_UNSHARDED = BenchmarkReadDataset(
+    storage_config=StorageConfig(prefix="large_manifest_no_split"),
+    chunk_selector={"x": 1},
+    full_load_selector={"x": random_selector},
+    load_variables=["array"],
+    first_byte_variable=None,
+    setupfn=partial(setup_split_manifest_refs, split_size=None),
+)
+LARGE_MANIFEST_SHARDED = BenchmarkReadDataset(
+    storage_config=StorageConfig(prefix="large_manifest_split"),
+    chunk_selector={"x": 1},
+    full_load_selector={"x": random_selector},
+    load_variables=["array"],
+    first_byte_variable=None,
+    setupfn=partial(setup_split_manifest_refs, split_size=100_000),
+)
+
 # TODO
 GPM_IMERG_VIRTUAL = BenchmarkReadDataset(
     storage_config=StorageConfig(
@@ -475,5 +533,11 @@ SIMPLE_1D = BenchmarkWriteDataset(
     storage_config=StorageConfig(prefix="simple_1d_writes"),
     num_arrays=1,
     shape=(2000 * 1000,),
+    chunks=(1000,),
+)
+LARGE_1D = BenchmarkWriteDataset(
+    storage_config=StorageConfig(prefix="large_1d_writes"),
+    num_arrays=1,
+    shape=(500_000 * 1000,),
     chunks=(1000,),
 )

@@ -1,14 +1,13 @@
+import copy
 from typing import cast
 
 import pytest
 
 from benchmarks import helpers
 from benchmarks.datasets import (
-    ERA5,
-    ERA5_ARCO,
-    ERA5_SINGLE,
-    GB_8MB_CHUNKS,
-    GB_128MB_CHUNKS,
+    LARGE_1D,
+    LARGE_MANIFEST_SHARDED,
+    LARGE_MANIFEST_UNSHARDED,
     PANCAKE_WRITES,
     SIMPLE_1D,
     TEST_BUCKETS,
@@ -18,15 +17,22 @@ from benchmarks.datasets import (
 )
 from icechunk import Repository, local_filesystem_storage
 
+try:
+    from icechunk import ManifestSplittingConfig  # noqa: F401
+
+    no_splitting = False
+except ImportError:
+    no_splitting = True
+
 
 def request_to_dataset(request, moar_prefix: str = "") -> Dataset:
     extra_prefix = request.config.getoption("--icechunk-prefix") + moar_prefix
     where = request.config.getoption("--where")
-    ds = request.param
+    ds = copy.deepcopy(request.param)
     if where == "local" and ds.skip_local:
         pytest.skip()
-    # for some reason, this gets run multiple times so we apply the prefix repeatedly
-    # if we don't catch that :(
+    # this gets run multiple times because the fixture scope is 'function'
+    # so we need this `force_idempotent` ugliness
     ds.storage_config = ds.storage_config.with_overwrite(
         **TEST_BUCKETS[where]
     ).with_extra(prefix=extra_prefix, force_idempotent=True)
@@ -50,13 +56,26 @@ def simple_write_dataset(request) -> BenchmarkWriteDataset:
     return cast(BenchmarkWriteDataset, ds)
 
 
+@pytest.fixture(params=[pytest.param(LARGE_1D, id="large-1d")])
+def large_write_dataset(request) -> BenchmarkWriteDataset:
+    moar_prefix = helpers.rdms()
+    ds = request_to_dataset(request, moar_prefix=moar_prefix)
+    return cast(BenchmarkWriteDataset, ds)
+
+
 @pytest.fixture(
     params=[
-        pytest.param(GB_8MB_CHUNKS, id="gb-8mb"),
-        pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
-        pytest.param(ERA5_SINGLE, id="era5-single"),
-        pytest.param(ERA5, id="era5-weatherbench"),
-        pytest.param(ERA5_ARCO, id="era5-arco"),
+        # pytest.param(GB_8MB_CHUNKS, id="gb-8mb"),
+        # pytest.param(GB_128MB_CHUNKS, id="gb-128mb"),
+        # pytest.param(ERA5_SINGLE, id="era5-single"),
+        # pytest.param(ERA5, id="era5-weatherbench"),
+        # pytest.param(ERA5_ARCO, id="era5-arco"),
+        pytest.param(LARGE_MANIFEST_UNSHARDED, id="large-manifest-no-split"),
+        pytest.param(
+            LARGE_MANIFEST_SHARDED,
+            id="large-manifest-split",
+            marks=pytest.mark.skipif(no_splitting, reason="no splitting"),
+        ),
     ],
 )
 def synth_dataset(request) -> BenchmarkReadDataset:

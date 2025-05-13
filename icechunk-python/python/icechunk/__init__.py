@@ -1,5 +1,7 @@
 # module
 
+from typing import TypeAlias
+
 from icechunk._icechunk_python import (
     AzureCredentials,
     AzureStaticCredentials,
@@ -23,6 +25,9 @@ from icechunk._icechunk_python import (
     ManifestFileInfo,
     ManifestPreloadCondition,
     ManifestPreloadConfig,
+    ManifestSplitCondition,
+    ManifestSplitDimCondition,
+    ManifestSplittingConfig,
     ObjectStoreConfig,
     RebaseFailedError,
     RepositoryConfig,
@@ -109,6 +114,9 @@ __all__ = [
     "ManifestFileInfo",
     "ManifestPreloadCondition",
     "ManifestPreloadConfig",
+    "ManifestSplitCondition",
+    "ManifestSplitDimCondition",
+    "ManifestSplittingConfig",
     "ObjectStoreConfig",
     "RebaseFailedError",
     "Repository",
@@ -167,5 +175,22 @@ def print_debug_info() -> None:
         except ModuleNotFoundError:
             continue
 
+
+# This monkey patch is a bit annoying. Python dicts preserve insertion order
+# But this gets mapped to a Rust HashMap which does *not* preserve order
+# So on the python side, we can accept a dict as a nicer API, and immediately
+# convert it to tuples that preserve order, and pass those to Rust
+
+SplitSizesDict: TypeAlias = dict[
+    ManifestSplitCondition, dict[ManifestSplitDimCondition, int]
+]
+
+
+def from_dict(split_sizes: SplitSizesDict) -> ManifestSplittingConfig:
+    unwrapped = tuple((k, tuple(v.items())) for k, v in split_sizes.items())
+    return ManifestSplittingConfig(unwrapped)
+
+
+ManifestSplittingConfig.from_dict = from_dict  # type: ignore[attr-defined]
 
 initialize_logs()

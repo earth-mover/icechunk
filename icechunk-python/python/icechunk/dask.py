@@ -1,6 +1,8 @@
-from collections.abc import Mapping
-from typing import Any, TypeAlias
+import functools
+from collections.abc import Callable, Mapping
+from typing import Any, ParamSpec, TypeAlias, TypeVar
 
+import numpy as np
 from packaging.version import Version
 
 import dask
@@ -12,6 +14,30 @@ from icechunk import Session
 from icechunk.distributed import extract_session, merge_sessions
 
 SimpleGraph: TypeAlias = Mapping[tuple[str, int], tuple[Any, ...]]
+
+
+# We wrap `extract_session` and `merge_sessions` to explicitly handle the `meta` computation.
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def computing_meta(func: Callable[P, R]) -> Callable[P, Any]:
+    """
+    A decorator to handle the dask-specific `computing_meta` flag.
+
+    If `computing_meta` is True in the keyword arguments, the decorated
+    function will return a placeholder meta object (np.array([object()], dtype=object)).
+    Otherwise, it will execute the original function.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+        if kwargs.get("computing_meta", False):
+            return np.array([object()], dtype=object)
+        return func(*args, **kwargs)
+
+    return wrapper
 
 
 def _assert_correct_dask_version() -> None:
@@ -68,6 +94,16 @@ def store_dask(
         lock=False,
         **store_kwargs,
     )
+    session.merge(
+        session_merge_reduction(stored_arrays, split_every=split_every, **store_kwargs)
+    )
+
+
+def session_merge_reduction(
+    arrays: Array | list[Array], *, split_every: int | None, **store_kwargs: Any
+) -> Session:
+    if isinstance(arrays, da.Array):
+        arrays = [arrays]
     # Now we tree-reduce all changesets
     # reduce the individual arrays since concatenation isn't always trivial due
     # to different shapes
@@ -75,17 +111,18 @@ def store_dask(
         da.reduction(  # type: ignore[no-untyped-call]
             arr,
             name="ice-changeset",
-            chunk=extract_session,
-            aggregate=merge_sessions,
+            chunk=computing_meta(extract_session),
+            aggregate=computing_meta(merge_sessions),
             split_every=split_every,
             concatenate=False,
             keepdims=False,
             dtype=object,
+            meta=np.array([object()], dtype=object),
             **store_kwargs,
         )
-        for arr in stored_arrays
+        for arr in arrays
     ]
     merged_session = merge_sessions(
         *da.compute(*merged_sessions)  # type: ignore[no-untyped-call]
     )
-    session.merge(merged_session)
+    return merged_session
