@@ -145,7 +145,6 @@ impl ConflictSolver for ConflictDetector {
                     None
                 } else {
                     let conflicting: HashSet<_> = changes
-                        .keys()
                         .filter(|coord| previous_changes.contains(coord))
                         .cloned()
                         .collect();
