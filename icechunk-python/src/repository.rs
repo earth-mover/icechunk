@@ -1060,7 +1060,7 @@ fn args_to_version_info(
     let n = [&branch, &tag, &snapshot].iter().filter(|r| !r.is_none()).count();
     if n > 1 {
         return Err(PyValueError::new_err(
-            "Must provide one of branch_name, tag_name, or snapshot_id",
+            "Must provide one of branch, tag, or snapshot_id",
         ));
     }
 
@@ -1088,7 +1088,7 @@ fn args_to_version_info(
         Ok(VersionInfo::SnapshotId(snapshot_id))
     } else {
         return Err(PyValueError::new_err(
-            "Must provide either branch_name, tag_name, or snapshot_id",
+            "Must provide one of branch, tag, or snapshot_id",
         ));
     }
 }
