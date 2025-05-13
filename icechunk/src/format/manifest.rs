@@ -1,10 +1,16 @@
-use std::{borrow::Cow, convert::Infallible, ops::Range, sync::Arc};
+use std::{
+    borrow::Cow,
+    cmp::{max, min},
+    convert::Infallible,
+    ops::Range,
+    sync::Arc,
+};
 
 use crate::format::flatbuffers::generated;
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
-use itertools::{Itertools, multiunzip};
+use itertools::{Itertools, any, multiunzip};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -18,14 +24,8 @@ use super::{
     ChunkId, ChunkIndices, ChunkLength, ChunkOffset, IcechunkResult, ManifestId, NodeId,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestExtents(Vec<Range<u32>>);
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManifestRef {
-    pub object_id: ManifestId,
-    pub extents: ManifestExtents,
-}
 
 impl ManifestExtents {
     pub fn new(from: &[u32], to: &[u32]) -> Self {
@@ -35,6 +35,10 @@ impl ManifestExtents {
             .map(|(a, b)| Range { start: *a, end: *b })
             .collect();
         Self(v)
+    }
+
+    pub fn from_ranges_iter(ranges: impl IntoIterator<Item = Range<u32>>) -> Self {
+        Self(ranges.into_iter().collect())
     }
 
     pub fn contains(&self, coord: &[u32]) -> bool {
@@ -52,10 +56,32 @@ impl ManifestExtents {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub fn intersection(&self, other: &Self) -> Option<Self> {
+        debug_assert_eq!(self.len(), other.len());
+        let ranges = std::iter::zip(self.iter(), other.iter())
+            .map(|(a, b)| max(a.start, b.start)..min(a.end, b.end))
+            .collect::<Vec<_>>();
+        if any(ranges.iter(), |r| r.end < r.start) { None } else { Some(Self(ranges)) }
+    }
+
+    pub fn union(&self, other: &Self) -> Self {
+        debug_assert_eq!(self.len(), other.len());
+        Self::from_ranges_iter(
+            std::iter::zip(self.iter(), other.iter())
+                .map(|(a, b)| min(a.start, b.start)..max(a.end, b.end)),
+        )
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestSplits(Vec<ManifestExtents>);
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestRef {
+    pub object_id: ManifestId,
+    pub extents: ManifestExtents,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestSplits(pub Vec<ManifestExtents>);
 
 impl ManifestSplits {
     /// Used at read-time

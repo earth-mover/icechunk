@@ -1380,24 +1380,15 @@ mod tests {
             ),
         ];
         let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
-        let repo = create_repo_with_split_manifest_config(
-            &temp_path,
-            &shape,
-            &dimension_names,
-            &split_config,
-            None,
-        )
-        .await?;
 
-        let session = repo.writable_session("main").await?;
-        let actual =
-            split_config.get_split_sizes(&session.get_node(&temp_path).await?)?;
         let expected = ManifestSplits::from_edges(vec![
             vec![0, 12, 24, 25],
             vec![0, 9, 10],
             vec![0, 2, 3],
             vec![0, 4],
         ]);
+
+        let actual = split_config.get_split_sizes(&temp_path, &shape, &dimension_names);
         assert_eq!(actual, expected);
 
         let split_sizes = vec![(
@@ -1418,18 +1409,7 @@ mod tests {
             ],
         )];
         let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
-        let repo = create_repo_with_split_manifest_config(
-            &temp_path,
-            &shape,
-            &dimension_names,
-            &split_config,
-            None,
-        )
-        .await?;
-
-        let session = repo.writable_session("main").await?;
-        let actual =
-            split_config.get_split_sizes(&session.get_node(&temp_path).await?)?;
+        let actual = split_config.get_split_sizes(&temp_path, &shape, &dimension_names);
         assert_eq!(actual, expected);
 
         Ok(())
