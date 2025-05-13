@@ -18,7 +18,7 @@ use super::{
     ChunkId, ChunkIndices, ChunkLength, ChunkOffset, IcechunkResult, ManifestId, NodeId,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestExtents(Vec<Range<u32>>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,8 +54,8 @@ impl ManifestExtents {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestSplits(Vec<ManifestExtents>);
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestSplits(pub Vec<ManifestExtents>);
 
 impl ManifestSplits {
     /// Used at read-time
