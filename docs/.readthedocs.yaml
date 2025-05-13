@@ -8,8 +8,8 @@ build:
   jobs:
      install:
       - which mamba
-
       - cd icechunk-python && maturin build && pip install "$(ls ../target/wheels/*.whl | head -n 1)[docs]" && cd ../docs
+      - mamba list
       # - cd icechunk-python && maturin develop && cd ../docs
 
 
