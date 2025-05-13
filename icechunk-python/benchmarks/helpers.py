@@ -2,6 +2,8 @@ import logging
 import os
 import subprocess
 
+import icechunk as ic
+
 
 def setup_logger():
     logger = logging.getLogger("icechunk-bench")
@@ -68,3 +70,31 @@ def rdms() -> str:
     import string
 
     return "".join(random.sample(string.ascii_lowercase, k=8))
+
+
+def repo_config_with(
+    *, inline_chunk_threshold_bytes: int | None = None, preload=None, splitting=None
+) -> ic.RepositoryConfig:
+    config = ic.RepositoryConfig.default()
+    if inline_chunk_threshold_bytes is not None:
+        config.inline_chunk_threshold_bytes = inline_chunk_threshold_bytes
+    if splitting is not None:
+        config.manifest = ic.ManifestConfig(preload=preload, splitting=splitting)
+    return config
+
+
+def get_splitting_config(*, split_size: int):
+    # helper to allow benchmarking versions before manifest splitting was introduced
+    from icechunk import (
+        ManifestSplitCondition,
+        ManifestSplitDimCondition,
+        ManifestSplittingConfig,
+    )
+
+    return ManifestSplittingConfig.from_dict(
+        {
+            ManifestSplitCondition.path_matches(".*"): {
+                ManifestSplitDimCondition.Any(): split_size
+            }
+        }
+    )

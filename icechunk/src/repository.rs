@@ -147,6 +147,7 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> RepositoryResult<Self> {
+        debug!("Creating Repository");
         if !storage.can_write() {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot create repository".to_string(),
@@ -228,6 +229,7 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
         virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
     ) -> RepositoryResult<Self> {
+        debug!("Opening Repository");
         let storage_c = Arc::clone(&storage);
         let handle1 = tokio::spawn(
             async move { Self::fetch_config(storage_c.as_ref()).await }.in_current_span(),
@@ -939,14 +941,36 @@ mod tests {
     use crate::{
         Repository, Storage,
         config::{
-            CachingConfig, ManifestConfig, ManifestPreloadConfig, RepositoryConfig,
+            CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestSplitCondition,
+            ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
+            RepositoryConfig,
         },
-        format::{ChunkIndices, manifest::ChunkPayload, snapshot::ArrayShape},
+        format::{
+            ByteRange, ChunkIndices,
+            manifest::{ChunkPayload, ManifestSplits},
+            snapshot::{ArrayShape, DimensionName},
+        },
         new_local_filesystem_storage,
+        session::get_chunk,
         storage::new_in_memory_storage,
     };
 
     use super::*;
+
+    async fn assert_manifest_count(
+        storage: &Arc<dyn Storage + Send + Sync>,
+        total_manifests: usize,
+    ) {
+        assert_eq!(
+            storage
+                .list_manifests(&storage.default_settings())
+                .await
+                .unwrap()
+                .count()
+                .await,
+            total_manifests
+        );
+    }
 
     #[tokio::test]
     async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
@@ -1126,6 +1150,391 @@ mod tests {
         ));
     }
 
+    async fn create_repo_with_split_manifest_config(
+        path: &Path,
+        shape: &ArrayShape,
+        dimension_names: &Option<Vec<DimensionName>>,
+        split_config: &ManifestSplittingConfig,
+        storage: Option<Arc<dyn Storage + Send + Sync>>,
+    ) -> Result<Repository, Box<dyn Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> =
+            storage.unwrap_or(new_in_memory_storage().await?);
+        let storage = Arc::clone(&backend);
+
+        let man_config = ManifestConfig {
+            preload: Some(ManifestPreloadConfig {
+                max_total_refs: None,
+                preload_if: None,
+            }),
+            splitting: Some(split_config.clone()),
+        };
+        let config = RepositoryConfig {
+            manifest: Some(man_config),
+            ..RepositoryConfig::default()
+        };
+        let repository =
+            Repository::create(Some(config), storage, HashMap::new()).await?;
+
+        let mut session = repository.writable_session("main").await?;
+
+        let def = Bytes::from_static(br#"{"this":"array"}"#);
+        session.add_group(Path::root(), def.clone()).await?;
+        session
+            .add_array(path.clone(), shape.clone(), dimension_names.clone(), def.clone())
+            .await?;
+        session.commit("initialized", None).await?;
+
+        Ok(repository)
+    }
+
+    #[tokio::test]
+    async fn tests_manifest_splitting_simple() -> Result<(), Box<dyn Error>> {
+        let dim_size = 25u32;
+        let chunk_size = 1u32;
+        let split_size = 3u32;
+
+        let shape =
+            ArrayShape::new(vec![(dim_size.into(), chunk_size.into()), (2, 1), (1, 1)])
+                .unwrap();
+        let dimension_names = Some(vec!["t".into()]);
+        let temp_path: Path = "/temperature".try_into().unwrap();
+        let split_config = ManifestSplittingConfig::with_size(split_size);
+
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
+        let storage: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let repository = create_repo_with_split_manifest_config(
+            &temp_path,
+            &shape,
+            &dimension_names,
+            &split_config,
+            Some(Arc::clone(&storage)),
+        )
+        .await?;
+
+        let mut total_manifests = 0;
+        assert_manifest_count(&backend, total_manifests).await;
+
+        logging.clear();
+        let ops = logging.fetch_operations();
+        assert!(ops.is_empty());
+        let mut session = repository.writable_session("main").await?;
+
+        // only add refs that will be packed in the first split.
+        for i in 0..2 {
+            session
+                .set_chunk_ref(
+                    temp_path.clone(),
+                    ChunkIndices(vec![i, 0, 0]),
+                    Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                )
+                .await?
+        }
+        session.commit("first split", None).await?;
+        total_manifests += 1;
+        assert_manifest_count(&storage, total_manifests).await;
+
+        // now only last split
+        let last_chunk = dim_size - 1;
+        let mut session = repository.writable_session("main").await?;
+        session
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(vec![last_chunk, 0, 0]),
+                Some(ChunkPayload::Inline(format!("{0}", last_chunk).into())),
+            )
+            .await?;
+        session.commit("last split", None).await?;
+        total_manifests += 2; // FIXME: this should be +1 once writes are optimized
+        assert_manifest_count(&storage, total_manifests).await;
+
+        // check that reads are optimized; we should only fetch the last split for this query
+        let logging2 = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
+        let storage2: Arc<dyn Storage + Send + Sync> = logging2.clone();
+        let config = RepositoryConfig {
+            manifest: Some(ManifestConfig::empty()),
+            ..RepositoryConfig::default()
+        };
+        let read_repo = Repository::open(Some(config), storage2, HashMap::new()).await?;
+        let session = read_repo
+            .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+            .await?;
+        get_chunk(
+            session
+                .get_chunk_reader(
+                    &temp_path,
+                    &ChunkIndices(vec![last_chunk, 0, 0]),
+                    &ByteRange::ALL,
+                )
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let ops = logging2.fetch_operations();
+        assert_eq!(
+            ops.iter().filter(|(op, _)| op == "fetch_manifest_splitting").count(),
+            1
+        );
+
+        // fetching a chunk that wasn't written shouldn't fetch any more manifests
+        logging2.clear();
+        get_chunk(
+            session
+                .get_chunk_reader(
+                    &temp_path,
+                    &ChunkIndices(vec![split_size + 1, 0, 0]),
+                    &ByteRange::ALL,
+                )
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let ops = logging2.fetch_operations();
+        assert_eq!(
+            ops.iter().filter(|(op, _)| op == "fetch_manifest_splitting").count(),
+            0
+        );
+
+        // write one ref per split
+        let mut session = repository.writable_session("main").await?;
+        for i in (0..dim_size).step_by(split_size as usize) {
+            total_manifests += 1;
+            session
+                .set_chunk_ref(
+                    temp_path.clone(),
+                    ChunkIndices(vec![i, 0, 0]),
+                    Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                )
+                .await?
+        }
+        session.commit("wrote all splits", None).await?;
+        assert_manifest_count(&storage, total_manifests).await;
+
+        let mut session = repository.writable_session("main").await?;
+        for i in 0..dim_size {
+            session
+                .set_chunk_ref(
+                    temp_path.clone(),
+                    ChunkIndices(vec![i, 0, 0]),
+                    Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                )
+                .await?
+        }
+        // We are counting total manifests in the `assert_manifest_count` helper function
+        // So we keep a running count of the total and update that at each step.
+        total_manifests += dim_size.div_ceil(split_size) as usize;
+        session.commit("full overwrite", None).await?;
+        assert_manifest_count(&storage, total_manifests).await;
+
+        // test reads
+        for i in 0..dim_size {
+            let val = get_chunk(
+                session
+                    .get_chunk_reader(
+                        &temp_path,
+                        &ChunkIndices(vec![i, 0, 0]),
+                        &ByteRange::ALL,
+                    )
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_manifest_splitting_complex_config() -> Result<(), Box<dyn Error>> {
+        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
+        let temp_path: Path = "/temperature".try_into().unwrap();
+
+        let split_sizes = vec![
+            (
+                ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::DimensionName("t".to_string()),
+                    num_chunks: 12,
+                }],
+            ),
+            (
+                ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::Axis(2),
+                    num_chunks: 2,
+                }],
+            ),
+            (
+                ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::Any,
+                    num_chunks: 9,
+                }],
+            ),
+        ];
+        let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
+        let repo = create_repo_with_split_manifest_config(
+            &temp_path,
+            &shape,
+            &dimension_names,
+            &split_config,
+            None,
+        )
+        .await?;
+
+        let session = repo.writable_session("main").await?;
+        let actual =
+            split_config.get_split_sizes(&session.get_node(&temp_path).await?)?;
+        let expected = ManifestSplits::from_edges(vec![
+            vec![0, 12, 24, 25],
+            vec![0, 9, 10],
+            vec![0, 2, 3],
+            vec![0, 4],
+        ]);
+        assert_eq!(actual, expected);
+
+        let split_sizes = vec![(
+            ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+            vec![
+                ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::DimensionName("t".to_string()),
+                    num_chunks: 12,
+                },
+                ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::Axis(2),
+                    num_chunks: 2,
+                },
+                ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::Any,
+                    num_chunks: 9,
+                },
+            ],
+        )];
+        let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
+        let repo = create_repo_with_split_manifest_config(
+            &temp_path,
+            &shape,
+            &dimension_names,
+            &split_config,
+            None,
+        )
+        .await?;
+
+        let session = repo.writable_session("main").await?;
+        let actual =
+            split_config.get_split_sizes(&session.get_node(&temp_path).await?)?;
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_manifest_splitting_complex_writes() -> Result<(), Box<dyn Error>> {
+        let t_split_size = 12u32;
+        let y_split_size = 2u32;
+
+        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
+        let temp_path: Path = "/temperature".try_into().unwrap();
+
+        let split_sizes = vec![
+            (
+                ManifestSplitCondition::AnyArray,
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::DimensionName("t".to_string()),
+                    num_chunks: t_split_size,
+                }],
+            ),
+            (
+                ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::Axis(2),
+                    num_chunks: y_split_size,
+                }],
+            ),
+            (
+                ManifestSplitCondition::NameMatches { regex: r".*".to_string() },
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::Any,
+                    num_chunks: 9,
+                }],
+            ),
+        ];
+
+        let expected_split_sizes = [t_split_size, 9, y_split_size, 9];
+
+        let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let repository = create_repo_with_split_manifest_config(
+            &temp_path,
+            &shape,
+            &dimension_names,
+            &split_config,
+            Some(logging_c),
+        )
+        .await?;
+
+        let mut total_manifests = 0;
+        assert_manifest_count(&backend, total_manifests).await;
+
+        logging.clear();
+        let ops = logging.fetch_operations();
+        assert!(ops.is_empty());
+
+        let mut add = 0;
+        for ax in 0..shape.len() {
+            let mut session = repository.writable_session("main").await?;
+            let axis_size = shape.get(ax).unwrap().array_length();
+            for i in 0..axis_size {
+                let mut index = vec![0u32, 0, 0, 0];
+                index[ax] = i as u32;
+                session
+                    .set_chunk_ref(
+                        temp_path.clone(),
+                        ChunkIndices(index),
+                        Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                    )
+                    .await?
+            }
+
+            add += (axis_size as u32).div_ceil(expected_split_sizes[ax]) as usize
+                - 1 * ((ax > 0) as usize);
+            dbg!(&ax, &add);
+            total_manifests += add;
+            session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
+            assert_manifest_count(&backend, total_manifests).await;
+
+            for i in 0..shape.get(ax).unwrap().array_length() {
+                let mut index = vec![0u32, 0, 0, 0];
+                index[ax] = i as u32;
+                let val = get_chunk(
+                    session
+                        .get_chunk_reader(
+                            &temp_path,
+                            &ChunkIndices(index),
+                            &ByteRange::ALL,
+                        )
+                        .await
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
+            }
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     /// Writes four arrays to a repo arrays, checks preloading of the manifests
     ///
@@ -1241,6 +1650,7 @@ mod tests {
                 max_total_refs: Some(2),
                 preload_if: None,
             }),
+            ..ManifestConfig::default()
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),

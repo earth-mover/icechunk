@@ -37,6 +37,25 @@ impl DimensionShape {
 pub struct ArrayShape(Vec<DimensionShape>);
 
 impl ArrayShape {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn get(&self, ax: usize) -> Option<DimensionShape> {
+        if ax > self.len() - 1 { None } else { Some(self.0[ax].clone()) }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &DimensionShape> {
+        self.0.iter()
+    }
+
+    pub fn num_chunks(&self) -> impl Iterator<Item = u32> {
+        self.max_chunk_indices_permitted().map(|x| x + 1)
+    }
+
     pub fn new<I>(it: I) -> Option<Self>
     where
         I: IntoIterator<Item = (u64, u64)>,
@@ -98,6 +117,15 @@ impl From<Option<&str>> for DimensionName {
         match value {
             Some(s) => s.into(),
             None => DimensionName::NotSpecified,
+        }
+    }
+}
+
+impl From<DimensionName> for Option<String> {
+    fn from(value: DimensionName) -> Option<String> {
+        match value {
+            DimensionName::NotSpecified => None,
+            DimensionName::Name(name) => Some(name),
         }
     }
 }

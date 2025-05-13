@@ -50,6 +50,38 @@ benchmark = [
   "tqdm",
   "humanize",
   "platformdirs",
+  "ipdb",
+]
+docs = [
+  "scipy",
+  "cftime",
+  "pooch",
+  "dask>=2024.11.0,<2025.04.0",
+  "distributed>=2024.11.0,<2025.04.0",
+  "xarray>=2025.01.2",
+  "myst_nb",
+  "pydata_sphinx_theme",
+  "mkdocs-awesome-pages-plugin",
+  "mkdocs-mermaid2-plugin",
+  "markdown-exec",
+  "mkdocs-breadcrumbs-plugin",
+  "mkdocs-minify-plugin",
+  "mkdocs-open-in-new-tab",
+  "mkdocs",
+  "mkdocs-material[imaging]",
+  "mkdocstrings[python]",
+  "mkdocs-jupyter",
+  "mkdocs-git-revision-date-localized-plugin",
+  "mkdocs-git-committers-plugin-2",
+  "mkdocs-macros-plugin",
+  "mkdocs-include-markdown-plugin",
+  "mkdocs-redirects",
+  "mkdocs-git-authors-plugin",
+  "sphinx",
+  "sphinx_copybutton",
+  "sphinx_design",
+  "sphinx_togglebutton",
+  "sphinx-autodoc-typehints"
 ]
 
 [dependency-groups]

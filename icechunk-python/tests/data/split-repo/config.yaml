@@ -1,0 +1,18 @@
+inline_chunk_threshold_bytes: 12
+get_partial_values_concurrency: null
+compression: null
+caching: null
+storage: null
+virtual_chunk_containers: null
+manifest:
+  preload: null
+  splitting:
+    split_sizes:
+    - - !name_matches
+        regex: split_*
+      - - condition: !Axis 0
+          num_chunks: 1
+        - condition: !DimensionName longitude
+          num_chunks: 1
+        - condition: Any
+          num_chunks: 3
