@@ -12,9 +12,9 @@ Coming Soon.
 
 Icechunk stores chunk references in a chunk manifest file stored in `manifests/`.
 For very large arrays (millions of chunks), these files can get quite large.
-By default, Icechunk stores all chunk references in a single manifest file.
+By default, Icechunk stores all chunk references in a single manifest file per array.
 Requesting even a single chunk requires downloading the entire manifest.
-In some cases, this can result in a slow time-to-first-byte.
+In some cases, this can result in a slow time-to-first-byte or large memory usage.
 
 To avoid that, Icechunk lets you split the manifest files by specifying a ``ManifestSplittingConfig``.
 
