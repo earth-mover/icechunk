@@ -1435,91 +1435,105 @@ mod tests {
         Ok(())
     }
 
-    // #[tokio::test]
-    // async fn test_manifest_splitting_complex_writes() -> Result<(), Box<dyn Error>> {
-    //     let dim_size = 25u32;
-    //     let t_split_size = 12u32;
-    //     let y_split_size = 2u32;
+    #[tokio::test]
+    async fn test_manifest_splitting_complex_writes() -> Result<(), Box<dyn Error>> {
+        let t_split_size = 12u32;
+        let y_split_size = 2u32;
 
-    //     let shape =
-    //         ArrayShape::new(vec![(dim_size.into(), 1), (10, 1), (3, 1), (4, 1)]).unwrap();
-    //     let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
-    //     let temp_path: Path = "/temperature".try_into().unwrap();
+        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
+        let temp_path: Path = "/temperature".try_into().unwrap();
 
-    //     let expected_split_sizes = [t_split_size, 9, y_split_size, 9];
+        let split_sizes = vec![
+            (
+                ManifestSplitCondition::AnyArray,
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::DimensionName("t".to_string()),
+                    num_chunks: t_split_size,
+                }],
+            ),
+            (
+                ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::Axis(2),
+                    num_chunks: y_split_size,
+                }],
+            ),
+            (
+                ManifestSplitCondition::NameMatches { regex: r".*".to_string() },
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::Any,
+                    num_chunks: 9,
+                }],
+            ),
+        ];
 
-    //     let split_sizes = vec![
-    //         (
-    //             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-    //             vec![(ManifestSplitDimCondition::DimensionName("t".to_string()), t_split_size)],
-    //         ),
-    //         (
-    //             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-    //             vec![(ManifestSplitDimCondition::Axis(2), y_split_size)],
-    //         ),
-    //         (
-    //             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-    //             vec![(ManifestSplitDimCondition::Any, 9)],
-    //         ),
-    //     ];
-    //     let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
-    //     let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    //     let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-    //     let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
-    //     let repository = create_repo_with_split_config(
-    //         &temp_path,
-    //         &shape,
-    //         &dimension_names,
-    //         &split_config,
-    //         Some(logging_c),
-    //     )
-    //     .await?;
+        let expected_split_sizes = [t_split_size, 9, y_split_size, 9];
 
-    //     let mut total_manifests = 0;
-    //     assert_manifest_count(&backend, total_manifests).await;
+        let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let repository = create_repo_with_split_manifest_config(
+            &temp_path,
+            &shape,
+            &dimension_names,
+            &split_config,
+            Some(logging_c),
+        )
+        .await?;
 
-    //     logging.clear();
-    //     let ops = logging.fetch_operations();
-    //     assert!(ops.is_empty());
+        let mut total_manifests = 0;
+        assert_manifest_count(&backend, total_manifests).await;
 
-    //     for ax in 0..shape.len() {
-    //         let mut session = repository.writable_session("main").await?;
-    //         for i in 0..shape[ax].array_length() {
-    //             let mut index = vec![0u32, 0, 0, 0];
-    //             index[ax] = i as u32;
-    //             session
-    //                 .set_chunk_ref(
-    //                     temp_path.clone(),
-    //                     ChunkIndices(index),
-    //                     Some(ChunkPayload::Inline(format!("{0}", i).into())),
-    //                 )
-    //                 .await?
-    //         }
-    //         total_manifests += dim_size.div_ceil(expected_split_sizes[ax]) as usize;
-    //         session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
-    //         assert_manifest_count(&backend, total_manifests).await;
+        logging.clear();
+        let ops = logging.fetch_operations();
+        assert!(ops.is_empty());
 
-    //         for i in 0..shape[ax].array_length() {
-    //             let mut index = vec![0u32, 0, 0, 0];
-    //             index[ax] = i as u32;
-    //             let val = get_chunk(
-    //                 session
-    //                     .get_chunk_reader(
-    //                         &temp_path,
-    //                         &ChunkIndices(index),
-    //                         &ByteRange::ALL,
-    //                     )
-    //                     .await
-    //                     .unwrap(),
-    //             )
-    //             .await
-    //             .unwrap()
-    //             .unwrap();
-    //             assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
-    //         }
-    //     }
-    //     Ok(())
-    // }
+        let mut add = 0;
+        for ax in 0..shape.len() {
+            let mut session = repository.writable_session("main").await?;
+            let axis_size = shape.get(ax).unwrap().array_length();
+            for i in 0..axis_size {
+                let mut index = vec![0u32, 0, 0, 0];
+                index[ax] = i as u32;
+                session
+                    .set_chunk_ref(
+                        temp_path.clone(),
+                        ChunkIndices(index),
+                        Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                    )
+                    .await?
+            }
+
+            add += (axis_size as u32).div_ceil(expected_split_sizes[ax]) as usize
+                - 1 * ((ax > 0) as usize);
+            dbg!(&ax, &add);
+            total_manifests += add;
+            session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
+            assert_manifest_count(&backend, total_manifests).await;
+
+            for i in 0..shape.get(ax).unwrap().array_length() {
+                let mut index = vec![0u32, 0, 0, 0];
+                index[ax] = i as u32;
+                let val = get_chunk(
+                    session
+                        .get_chunk_reader(
+                            &temp_path,
+                            &ChunkIndices(index),
+                            &ByteRange::ALL,
+                        )
+                        .await
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
+            }
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     /// Writes four arrays to a repo arrays, checks preloading of the manifests

@@ -44,6 +44,10 @@ impl ArrayShape {
         self.0.is_empty()
     }
 
+    pub fn get(&self, ax: usize) -> Option<DimensionShape> {
+        if ax > self.len() - 1 { None } else { Some(self.0[ax].clone()) }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &DimensionShape> {
         self.0.iter()
     }
