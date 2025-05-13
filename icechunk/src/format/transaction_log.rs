@@ -47,7 +47,6 @@ impl TransactionLog {
                 let node_id = generated::ObjectId8::new(&node_id.0);
                 let node_id = Some(&node_id);
                 let chunks = chunks
-                    .keys()
                     .map(|indices| {
                         let coords = Some(builder.create_vector(indices.0.as_slice()));
                         generated::ChunkIndices::create(
