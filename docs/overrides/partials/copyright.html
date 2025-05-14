@@ -1,6 +1,8 @@
 <div class="md-copyright">
-    <div class="md-copyright__highlight">
-        Copyright &copy; {{ build_date_utc.strftime('%Y') }} <a href="https://earthmover.io" target="_blank">Earthmover PBC</a>
+    <div class="md-copyright__highlight" style="display: flex; align-items: center; gap: 0.5rem; flex-direction: column;">
+        <div>Read our <a href="https://earthmover.io/blog?fwp_blog_tags=icechunk" target="_blank">blog</a>.</div>
+        <div>Subscribe to our <a href="https://share.hsforms.com/1DpkQITuIQFqOjwAm9ZF2RQdl5u6" target="_blank">newsletter</a>.</div>
+        <div>Copyright &copy; {{ build_date_utc.strftime('%Y') }} <a href="https://earthmover.io" target="_blank">Earthmover PBC</a>.</div>
     </div>
     {% if not config.extra.generator == false %}
       Made with
