@@ -45,13 +45,16 @@ class ObjectStoreConfig:
         def __init__(self, options: S3Options) -> None: ...
 
     class Gcs:
-        def __init__(self) -> None: ...
+        def __init__(self, opts: dict[str, str] | None = None) -> None: ...
 
     class Azure:
-        def __init__(self) -> None: ...
+        def __init__(self, opts: dict[str, str] | None = None) -> None: ...
 
     class Tigris:
-        def __init__(self) -> None: ...
+        def __init__(self, opts: S3Options) -> None: ...
+
+    class Http:
+        def __init__(self, opts: dict[str, str] | None = None) -> None: ...
 
 AnyObjectStoreConfig = (
     ObjectStoreConfig.InMemory
@@ -61,6 +64,7 @@ AnyObjectStoreConfig = (
     | ObjectStoreConfig.Gcs
     | ObjectStoreConfig.Azure
     | ObjectStoreConfig.Tigris
+    | ObjectStoreConfig.Http
 )
 
 class VirtualChunkContainer:
