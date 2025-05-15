@@ -11,6 +11,10 @@ The reason is that unlike Zarr, Icechunk is a "stateful" store. The Session obje
 bundled together in a commit. Thus `Session.commit` must be executed on a Session object that knows about all writes,
 including those executed remotely in a multi-processing or any other remote execution context.
 
+!!! info
+
+    Learn about Icechunk consistency with a clichéd but instructive example [in this blog post](https://earthmover.io/blog/learning-about-icechunk-consistency)
+
 ## Example
 
 Here is how you can execute such writes with Icechunk, illustrate with a `ThreadPoolExecutor`.

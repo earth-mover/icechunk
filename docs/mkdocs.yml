@@ -76,8 +76,8 @@ extra:
       link: https://crates.io/crates/icechunk
     - icon: fontawesome/brands/slack
       link: https://join.slack.com/t/earthmover-community/shared_invite/zt-2cwje92ir-xU3CfdG8BI~4CJOJy~sceQ
-    - icon: fontawesome/brands/x-twitter
-      link: https://x.com/earthmoverhq
+    - icon: fontawesome/brands/bluesky
+      link: https://bsky.app/profile/earthmover.io
   generator: false
   status:
     new: Recently Added
