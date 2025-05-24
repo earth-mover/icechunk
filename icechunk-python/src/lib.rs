@@ -26,6 +26,7 @@ use conflicts::{
     PyConflictType, PyVersionSelection,
 };
 use errors::{IcechunkError, PyConflictError, PyRebaseFailedError};
+use icechunk::TelemetryConfig;
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
 use pyo3::types::PyMapping;
@@ -82,8 +83,18 @@ fn log_filters_from_env(py: Python) -> PyResult<Option<String>> {
 #[pyfunction]
 fn initialize_logs(py: Python) -> PyResult<()> {
     if env::var("ICECHUNK_NO_LOGS").is_err() {
+<<<<<<< HEAD
         let log_filter_directive = log_filters_from_env(py)?;
         initialize_tracing(log_filter_directive.as_deref())
+=======
+        let logs_config = Default::default();
+        let telemetry = env::var("ICECHUNK_TELEMETRY_ENDPOINT")
+            .map(|endpoint| TelemetryConfig { endpoint, ..Default::default() })
+            .ok();
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            initialize_tracing(Some(&logs_config), telemetry.as_ref()).await;
+        });
+>>>>>>> 00235b9 (Add telemetry)
     }
     Ok(())
 }

@@ -67,6 +67,14 @@ dirs = { version = "6.0.0", optional = true }
 assert_fs = { version = "1.1.3", optional = true }
 flatbuffers = "25.2.10"
 
+opentelemetry = { version = "0.30.0", optional = true }
+opentelemetry_sdk = { version = "0.30.0", optional = true }
+tracing-opentelemetry = { version = "0.31.0", optional = true }
+opentelemetry-otlp = { version = "0.30.0", features = [
+  "grpc-tonic",
+  "tonic",
+], optional = true }
+
 [dev-dependencies]
 icechunk-macros = { path = "../icechunk-macros", version = "0.1.0" }
 pretty_assertions = "1.4.1"
@@ -82,7 +90,13 @@ test-log = { version = "0.2.18", default-features = false, features = [
 workspace = true
 
 [features]
-logs = ["dep:tracing-subscriber"]
+logs = [
+  "dep:tracing-subscriber",
+  "dep:opentelemetry",
+  "dep:opentelemetry_sdk",
+  "dep:opentelemetry-otlp",
+  "dep:tracing-opentelemetry",
+]
 cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs", "dep:assert_fs"]
 
 [[bin]]
