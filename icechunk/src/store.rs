@@ -96,6 +96,10 @@ pub enum StoreErrorKind {
         "invalid chunk location, no matching virtual chunk container: `{chunk_location}`"
     )]
     InvalidVirtualChunkContainer { chunk_location: String },
+    #[error(
+        "Icechunk has its own metadata consolidation mechanism. Please disable Zarr's metadata consolidation for writing data on Icechunk. If you are using Xarray, you can pass `consolidated=False` to `Dataset.to_zarr`, or simply use `Icechunk.to_icechunk` which disables consolidation."
+    )]
+    ConsolidatedMetadataNotAllowed,
     #[error("{0}")]
     Other(String),
     #[error("unknown store error")]
@@ -306,8 +310,16 @@ impl Store {
                         .await
                 } else {
                     match serde_json::from_slice::<GroupMetadata>(value.as_ref()) {
-                        Ok(_) => {
-                            self.set_group_meta(node_path, value, locked_session).await
+                        Ok(meta) => {
+                            if meta.consolidated_metadata.is_some() {
+                                tracing::error!(
+                                    "Icechunk has its own metadata consolidation mechanism. Please disable Zarr's metadata consolidation for writing data on Icechunk. If you are using Xarray, you can pass `consolidated=False` to `Dataset.to_zarr`, or simply use `Icechunk.to_icechunk` which disables consolidation."
+                                );
+                                Err(StoreErrorKind::ConsolidatedMetadataNotAllowed.into())
+                            } else {
+                                self.set_group_meta(node_path, value, locked_session)
+                                    .await
+                            }
                         }
                         Err(err) => Err(StoreErrorKind::BadMetadata(err).into()),
                     }
@@ -1086,6 +1098,7 @@ impl ArrayMetadata {
 struct GroupMetadata {
     #[serde(deserialize_with = "validate_group_node_type")]
     node_type: String,
+    consolidated_metadata: Option<serde_json::Value>,
 }
 
 fn validate_group_node_type<'de, D>(d: D) -> Result<String, D::Error>
@@ -1368,6 +1381,20 @@ mod tests {
                 r#"{"zarr_format":3, "node_type":"group"}"#
             )
             .is_ok()
+        );
+        assert!(
+            serde_json::from_str::<GroupMetadata>(
+                r#"{"zarr_format":3, "node_type":"group", "consolidated_metadata":null}"#
+            )
+            .unwrap()
+            .consolidated_metadata
+            .is_none()
+        );
+        assert!(
+            serde_json::from_str::<GroupMetadata>(
+                r#"{"zarr_format":3, "node_type":"group", "consolidated_metadata":{"foo": "bar"}}"#
+            )
+            .unwrap().consolidated_metadata.is_some()
         );
         assert!(
             serde_json::from_str::<GroupMetadata>(

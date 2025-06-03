@@ -23,7 +23,8 @@ from xarray.tests.test_backends import (
 )
 from xarray.tests.test_backends import (
     ZarrBase,
-    default_zarr_format,  # noqa: F401; needed otherwise not discovered
+    # needed otherwise not discovered
+    default_zarr_format,  # noqa: F401, RUF100
 )
 
 
@@ -32,7 +33,7 @@ from xarray.tests.test_backends import (
     reason="skipping Xarray backends tests",
 )
 class IcechunkStoreBase(ZarrBase):
-    @pytest.mark.parametrize("consolidated", [False, True, None])
+    @pytest.mark.parametrize("consolidated", [False])
     @pytest.mark.parametrize("compute", [False, True])
     @pytest.mark.parametrize("use_dask", [False, True])
     @pytest.mark.parametrize("write_empty", [False, True, None])
