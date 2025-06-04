@@ -933,9 +933,7 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
                 builder.with_credentials(Arc::new(credential_provider))
             }
             Some(GcsCredentials::Anonymous) => builder.with_skip_signature(true),
-            None | Some(GcsCredentials::FromEnv) => {
-                GoogleCloudStorageBuilder::from_env()
-            }
+            None | Some(GcsCredentials::FromEnv) => GoogleCloudStorageBuilder::from_env(),
         };
 
         let builder = builder.with_bucket_name(&self.bucket);
