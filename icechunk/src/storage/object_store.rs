@@ -932,7 +932,8 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
                     GcsRefreshableCredentialProvider::new(Arc::clone(fetcher));
                 builder.with_credentials(Arc::new(credential_provider))
             }
-            None | Some(GcsCredentials::FromEnv) | Some(GcsCredentials::Anonymous) => {
+            Some(GcsCredentials::Anonymous) => builder.with_skip_signature(true),
+            None | Some(GcsCredentials::FromEnv) => {
                 GoogleCloudStorageBuilder::from_env()
             }
         };
