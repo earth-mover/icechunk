@@ -312,7 +312,8 @@ class IcechunkStore(Store, SyncMixin):
         """
         # NOTE: pyo3 does not implicit conversion from an Iterable to a rust iterable. So we convert it
         # to a list here first. Possible opportunity for optimization.
-        return await self._store.set_partial_values(list(key_start_values))
+        # NOTE: currently we only implement the case where the values are bytes
+        return await self._store.set_partial_values(list(key_start_values))  # type: ignore[arg-type]
 
     @property
     def supports_listing(self) -> bool:
