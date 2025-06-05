@@ -1,6 +1,6 @@
 [package]
 name = "icechunk"
-version = "0.2.14"
+version = "0.2.15"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
