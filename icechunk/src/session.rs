@@ -897,7 +897,7 @@ impl Session {
         let res = try_stream! {
             let new_chunks = stream::iter(
                 self.change_set
-                    .new_array_chunk_iterator(&node.id, array_path)
+                    .new_array_chunk_iterator(&node.id, array_path, None)
                     .map(|chunk_info| Ok::<ChunkIndices, SessionError>(chunk_info.coord)),
             );
 
@@ -1661,6 +1661,7 @@ impl<'a> FlushProcess<'a> {
     async fn write_manifest_for_new_node(
         &mut self,
         node_id: &NodeId,
+        node_path: &Path,
     ) -> SessionResult<()> {
         let splits = self.splits.get(node_id).expect(&format!(
             "getting split for node {} unexpectedly failed",
@@ -1675,7 +1676,11 @@ impl<'a> FlushProcess<'a> {
             if self.change_set.array_manifest(node_id, extent).is_some() {
                 let chunks = stream::iter(
                     self.change_set
-                        .new_array_manifest_chunks_iterator(node_id, extent)
+                        .new_array_chunk_iterator(
+                            node_id,
+                            node_path,
+                            Some(extent.clone()),
+                        )
                         .map(Ok),
                 );
                 self.write_manifest_from_iterator(chunks)
@@ -1918,7 +1923,7 @@ async fn flush(
 
     for (node_path, node_id) in flush_data.change_set.new_arrays() {
         trace!(path=%node_path, "New node, writing a manifest");
-        flush_data.write_manifest_for_new_node(node_id).await?;
+        flush_data.write_manifest_for_new_node(node_id, node_path).await?;
     }
 
     trace!("Building new snapshot");
