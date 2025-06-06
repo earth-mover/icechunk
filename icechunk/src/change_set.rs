@@ -69,7 +69,7 @@ impl ChangeSet {
     }
 
     pub fn arrays_with_chunk_changes(&self) -> impl Iterator<Item = &NodeId> {
-        self.set_chunks.iter().map(|(node, _)| node)
+        self.set_chunks.keys()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -167,6 +167,7 @@ impl ChangeSet {
         data: Option<ChunkPayload>,
         splits: &ManifestSplits,
     ) {
+        #[allow(clippy::expect_used)]
         let (_, extent) = splits.which_extent_and_index(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
@@ -195,10 +196,9 @@ impl ChangeSet {
         coords: &ChunkIndices,
     ) -> Option<&Option<ChunkPayload>> {
         if let Some(node_chunks) = self.set_chunks.get(node_id) {
-            which_extent_and_index(node_chunks.keys(), coords)
-                .ok()
-                .map(|(_, extent)| node_chunks.get(&extent).and_then(|s| s.get(coords)))
-                .flatten()
+            which_extent_and_index(node_chunks.keys(), coords).ok().and_then(
+                |(_, extent)| node_chunks.get(&extent).and_then(|s| s.get(coords)),
+            )
         } else {
             None
         }
