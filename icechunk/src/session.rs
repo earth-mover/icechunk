@@ -1605,7 +1605,6 @@ impl<'a> FlushProcess<'a> {
         &mut self,
         node: &NodeSnapshot,
         extent: &ManifestExtents,
-        actual_extents: ManifestExtents,
     ) -> SessionResult<Option<ManifestRef>> {
         let asset_manager = Arc::clone(&self.asset_manager);
         let updated_chunks = updated_node_chunks_iterator(
@@ -1617,14 +1616,17 @@ impl<'a> FlushProcess<'a> {
         )
         .await
         .map_ok(|(_path, chunk_info)| chunk_info);
-        self.write_manifest_from_iterator(updated_chunks, actual_extents).await
+        self.write_manifest_from_iterator(updated_chunks).await
     }
 
     async fn write_manifest_from_iterator(
         &mut self,
         chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
-        actual_extents: ManifestExtents,
     ) -> SessionResult<Option<ManifestRef>> {
+        let mut from = vec![];
+        let mut to = vec![];
+        let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
+
         if let Some(new_manifest) = Manifest::from_stream(chunks).await.unwrap() {
             let new_manifest = Arc::new(new_manifest);
             let new_manifest_size =
@@ -1636,7 +1638,7 @@ impl<'a> FlushProcess<'a> {
 
             let new_ref = ManifestRef {
                 object_id: new_manifest.id().clone(),
-                extents: actual_extents,
+                extents: ManifestExtents::new(&from, &to),
             };
             Ok(Some(new_ref))
         } else {
@@ -1673,14 +1675,13 @@ impl<'a> FlushProcess<'a> {
 
         // TODO: this could be try_fold with the refs HashMap as state
         for extent in splits.iter() {
-            if let Some(manifest) = self.change_set.array_manifest(node_id, extent) {
-                let cs_extents = manifest.extents();
+            if self.change_set.array_manifest(node_id, extent).is_some() {
                 let chunks = stream::iter(
                     self.change_set
                         .new_array_manifest_chunks_iterator(node_id, extent)
                         .map(Ok),
                 );
-                self.write_manifest_from_iterator(chunks, cs_extents)
+                self.write_manifest_from_iterator(chunks)
                     .await?
                     .map(|new_ref| refs.insert(extent.clone(), new_ref));
             }
@@ -1716,28 +1717,17 @@ impl<'a> FlushProcess<'a> {
 
         // TODO: this should be try_fold with the refs HashMap as state
         for extent in splits.iter() {
-            let on_disk_bbox = on_disk_extents
-                .iter()
-                .filter_map(|e| e.intersection(extent))
-                .reduce(|a, b| a.union(&b));
-
             if modified_splits.contains(extent) {
                 // this split was modified in this session, rewrite it completely
-                let cs_extents = self
-                    .change_set
-                    .array_manifest(&node.id, extent)
-                    .expect("logic bug. there should be a manifest for this extent ")
-                    .extents();
-                let actual_extents =
-                    // if there are splits on disk that overlap, then we take that Extents
-                    // and union it with the Extents of the chunks the changeset
-                    on_disk_bbox.map(|x| cs_extents.union(&x))
-                    // if no overlap, then just use the changeset Extents
-                    .unwrap_or(cs_extents);
-                self.write_manifest_for_updated_chunks(&node, extent, actual_extents)
+                self.write_manifest_for_updated_chunks(&node, extent)
                     .await?
                     .map(|new_ref| refs.insert(extent.clone(), new_ref));
             } else {
+                let on_disk_bbox = on_disk_extents
+                    .iter()
+                    .filter_map(|e| e.intersection(extent))
+                    .reduce(|a, b| a.union(&b));
+
                 // split was unmodified in this session. Let's look at the current manifests
                 // and see what we need to do with them
                 for old_ref in manifests.iter() {
@@ -1753,13 +1743,9 @@ impl<'a> FlushProcess<'a> {
                             // the splits have changed, but no refs in this split have been written in this session
                             // same as `if` block above
                             debug_assert!(on_disk_bbox.is_some());
-                            self.write_manifest_for_updated_chunks(
-                                &node,
-                                extent,
-                                on_disk_bbox.clone().expect("logic bug in writing manifests from disk for partially overlapping split"),
-                            )
-                            .await?
-                            .map(|new_ref| refs.insert(extent.clone(), new_ref));
+                            self.write_manifest_for_updated_chunks(&node, extent)
+                                .await?
+                                .map(|new_ref| refs.insert(extent.clone(), new_ref));
                         }
                         Overlap::None => {
                             // Nothing to do
@@ -2105,6 +2091,63 @@ async fn fetch_manifest(
     Ok(asset_manager.fetch_manifest(manifest_id, manifest_info.size_bytes).await?)
 }
 
+/// Map the iterator to accumulate the extents of the chunks traversed
+///
+/// As we are processing chunks to create a manifest, we need to keep track
+/// of the extents of the manifests. This means, for each coordinate, we need
+/// to record its minimum and maximum values.
+///
+/// This very ugly code does that, without having to traverse the iterator twice.
+/// It adapts the stream using [`StreamExt::map_ok`] and keeps a running min/max
+/// for each coordinate.
+///
+/// When the iterator is fully traversed, the min and max values will be
+/// available in `from` and `to` arguments.
+///
+/// Yes, this is horrible.
+fn aggregate_extents<'a, T: std::fmt::Debug, E>(
+    from: &'a mut Vec<u32>,
+    to: &'a mut Vec<u32>,
+    it: impl Stream<Item = Result<T, E>> + 'a,
+    extract_index: impl for<'b> Fn(&'b T) -> &'b ChunkIndices + 'a,
+) -> impl Stream<Item = Result<T, E>> + 'a {
+    // we initialize the destination with an empty array, because we don't know
+    // the dimensions of the array yet. On the first element we will re-initialize
+    *from = Vec::new();
+    *to = Vec::new();
+    it.map_ok(move |t| {
+        // these are the coordinates for the chunk
+        let idx = extract_index(&t);
+
+        // we need to initialize the mins/maxes the first time
+        // we initialize with the value of the first element
+        // this obviously doesn't work for empty streams
+        // but we never generate manifests for them
+        if from.is_empty() {
+            *from = idx.0.clone();
+            // important to remember that `to` is not inclusive, so we need +1
+            *to = idx.0.iter().map(|n| n + 1).collect();
+        } else {
+            // We need to iterate over coordinates, and update the
+            // minimum and maximum for each if needed
+            for (coord_idx, value) in idx.0.iter().enumerate() {
+                if let Some(from_current) = from.get_mut(coord_idx) {
+                    if value < from_current {
+                        *from_current = *value
+                    }
+                }
+                if let Some(to_current) = to.get_mut(coord_idx) {
+                    let range_value = value + 1;
+                    if range_value > *to_current {
+                        *to_current = range_value
+                    }
+                }
+            }
+        }
+        t
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -2125,8 +2168,8 @@ mod tests {
         repository::VersionInfo,
         storage::new_in_memory_storage,
         strategies::{
-            ShapeDim, empty_writable_session, manifest_extents, node_paths,
-            shapes_and_dims,
+            ShapeDim, chunk_indices, empty_writable_session, manifest_extents,
+            node_paths, shapes_and_dims,
         },
     };
 
@@ -2416,7 +2459,6 @@ mod tests {
         assert_eq!(e1.intersection(&e2), None);
         assert_eq!(e1.union(&e2), union);
 
-
         let e1 = ManifestExtents::new(
             vec![0u32, 1, 2].as_slice(),
             vec![2u32, 4, 6].as_slice(),
@@ -2429,12 +2471,47 @@ mod tests {
         assert_eq!(overlaps(&e2, &e1), Overlap::None);
 
         // this should create non-overlapping extents
-        let splits = ManifestSplits::from_edges(vec![vec![0, 10, 20], vec![0, 1, 2], vec![0, 21, 22]]);
+        let splits = ManifestSplits::from_edges(vec![
+            vec![0, 10, 20],
+            vec![0, 1, 2],
+            vec![0, 21, 22],
+        ]);
         for vec in splits.iter().combinations(2) {
             assert_eq!(overlaps(vec[0], vec[1]), Overlap::None)
         }
 
         Ok(())
+    }
+    #[proptest(async = "tokio")]
+    async fn test_aggregate_extents(
+        #[strategy(proptest::collection::vec(chunk_indices(3, 0..1_000_000), 1..50))]
+        indices: Vec<ChunkIndices>,
+    ) {
+        let mut from = vec![];
+        let mut to = vec![];
+
+        let expected_from = vec![
+            indices.iter().map(|i| i.0[0]).min().unwrap(),
+            indices.iter().map(|i| i.0[1]).min().unwrap(),
+            indices.iter().map(|i| i.0[2]).min().unwrap(),
+        ];
+        let expected_to = vec![
+            indices.iter().map(|i| i.0[0]).max().unwrap() + 1,
+            indices.iter().map(|i| i.0[1]).max().unwrap() + 1,
+            indices.iter().map(|i| i.0[2]).max().unwrap() + 1,
+        ];
+
+        let _ = aggregate_extents(
+            &mut from,
+            &mut to,
+            stream::iter(indices.into_iter().map(Ok::<ChunkIndices, Infallible>)),
+            |idx| idx,
+        )
+        .count()
+        .await;
+
+        prop_assert_eq!(from, expected_from);
+        prop_assert_eq!(to, expected_to);
     }
 
     #[tokio::test]

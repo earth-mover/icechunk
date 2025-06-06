@@ -1488,7 +1488,6 @@ mod tests {
 
             add += (axis_size as u32).div_ceil(expected_split_sizes[ax]) as usize
                 - 1 * ((ax > 0) as usize);
-            dbg!(&ax, &add);
             total_manifests += add;
             session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
             assert_manifest_count(&backend, total_manifests).await;
