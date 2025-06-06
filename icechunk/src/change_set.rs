@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     iter,
-    mem::take,
 };
 
 use bytes::Bytes;
@@ -11,10 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     format::{
         ChunkIndices, NodeId, Path,
-        manifest::{ChunkInfo, ChunkPayload},
+        manifest::{ChunkInfo, ChunkPayload, ManifestExtents, ManifestSplits},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
     },
-    session::SessionResult,
+    session::{SessionResult, which_extent_and_index},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,15 +23,14 @@ pub struct ArrayData {
     pub user_data: Bytes,
 }
 
+type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ChangeSet {
     new_groups: HashMap<Path, (NodeId, Bytes)>,
     new_arrays: HashMap<Path, (NodeId, ArrayData)>,
     updated_arrays: HashMap<NodeId, ArrayData>,
     updated_groups: HashMap<NodeId, Bytes>,
-    // It's important we keep these sorted, we use this fact in TransactionLog creation
-    // TODO: could track ManifestExtents
-    set_chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, Option<ChunkPayload>>>,
+    set_chunks: BTreeMap<NodeId, HashMap<ManifestExtents, SplitManifest>>,
     deleted_groups: HashSet<(Path, NodeId)>,
     deleted_arrays: HashSet<(Path, NodeId)>,
 }
@@ -60,9 +58,10 @@ impl ChangeSet {
 
     pub fn chunk_changes(
         &self,
-    ) -> impl Iterator<Item = (&NodeId, &BTreeMap<ChunkIndices, Option<ChunkPayload>>)>
-    {
-        self.set_chunks.iter()
+    ) -> impl Iterator<Item = (&NodeId, impl Iterator<Item = &ChunkIndices>)> {
+        self.set_chunks.iter().map(|(node_id, split_map)| {
+            (node_id, split_map.values().flat_map(|x| x.keys()))
+        })
     }
 
     pub fn has_chunk_changes(&self, node: &NodeId) -> bool {
@@ -70,7 +69,7 @@ impl ChangeSet {
     }
 
     pub fn arrays_with_chunk_changes(&self) -> impl Iterator<Item = &NodeId> {
-        self.chunk_changes().map(|(node, _)| node)
+        self.set_chunks.keys()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -166,15 +165,29 @@ impl ChangeSet {
         node_id: NodeId,
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
+        splits: &ManifestSplits,
     ) {
+        #[allow(clippy::expect_used)]
+        let (_, extent) = splits.which_extent_and_index(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
         self.set_chunks
-            .entry(node_id)
+            .entry(node_id.clone())
             .and_modify(|h| {
-                h.insert(coord.clone(), data.clone());
+                h.entry(extent.clone()).or_default().insert(coord.clone(), data.clone());
             })
-            .or_insert(BTreeMap::from([(coord, data)]));
+            .or_insert_with(|| {
+                let mut h = HashMap::<
+                    ManifestExtents,
+                    BTreeMap<ChunkIndices, Option<ChunkPayload>>,
+                >::with_capacity(splits.len());
+                h.entry(extent.clone())
+                    // TODO: this is duplicative. I can't use `or_default` because it's
+                    // nice to create the HashMap using `with_capacity`
+                    .or_default()
+                    .insert(coord, data);
+                h
+            });
     }
 
     pub fn get_chunk_ref(
@@ -182,7 +195,13 @@ impl ChangeSet {
         node_id: &NodeId,
         coords: &ChunkIndices,
     ) -> Option<&Option<ChunkPayload>> {
-        self.set_chunks.get(node_id).and_then(|h| h.get(coords))
+        if let Some(node_chunks) = self.set_chunks.get(node_id) {
+            which_extent_and_index(node_chunks.keys(), coords).ok().and_then(
+                |(_, extent)| node_chunks.get(&extent).and_then(|s| s.get(coords)),
+            )
+        } else {
+            None
+        }
     }
 
     /// Drop the updated chunk references for the node.
@@ -193,7 +212,9 @@ impl ChangeSet {
         predicate: impl Fn(&ChunkIndices) -> bool,
     ) {
         if let Some(changes) = self.set_chunks.get_mut(node_id) {
-            changes.retain(|coord, _| !predicate(coord));
+            for split in changes.values_mut() {
+                split.retain(|coord, _| !predicate(coord));
+            }
         }
     }
 
@@ -201,7 +222,55 @@ impl ChangeSet {
         &self,
         node_id: &NodeId,
         node_path: &Path,
+        extent: Option<ManifestExtents>,
     ) -> impl Iterator<Item = (&ChunkIndices, &Option<ChunkPayload>)> + use<'_> {
+        if self.is_deleted(node_path, node_id) {
+            return Either::Left(iter::empty());
+        }
+        match self.set_chunks.get(node_id) {
+            None => Either::Left(iter::empty()),
+            Some(h) => Either::Right(
+                h.iter()
+                    // FIXME: review this
+                    .filter(move |(manifest_extent, _)| {
+                        extent.is_none() || Some(*manifest_extent) == extent.as_ref()
+                    })
+                    .flat_map(|(_, manifest)| manifest.iter()),
+            ),
+        }
+    }
+
+    pub fn new_arrays_chunk_iterator(
+        &self,
+    ) -> impl Iterator<Item = (Path, ChunkInfo)> + use<'_> {
+        self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
+            self.new_array_chunk_iterator(node_id, path, None)
+                .map(|ci| (path.clone(), ci))
+        })
+    }
+
+    pub fn new_array_chunk_iterator<'a>(
+        &'a self,
+        node_id: &'a NodeId,
+        node_path: &Path,
+        extent: Option<ManifestExtents>,
+    ) -> impl Iterator<Item = ChunkInfo> + use<'a> {
+        self.array_chunks_iterator(node_id, node_path, extent).filter_map(
+            move |(coords, payload)| {
+                payload.as_ref().map(|p| ChunkInfo {
+                    node: node_id.clone(),
+                    coord: coords.clone(),
+                    payload: p.clone(),
+                })
+            },
+        )
+    }
+
+    pub fn array_manifests_iterator(
+        &self,
+        node_id: &NodeId,
+        node_path: &Path,
+    ) -> impl Iterator<Item = (&ManifestExtents, &SplitManifest)> + use<'_> {
         if self.is_deleted(node_path, node_id) {
             return Either::Left(iter::empty());
         }
@@ -211,28 +280,12 @@ impl ChangeSet {
         }
     }
 
-    pub fn new_arrays_chunk_iterator(
+    pub fn array_manifest(
         &self,
-    ) -> impl Iterator<Item = (Path, ChunkInfo)> + use<'_> {
-        self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
-            self.new_array_chunk_iterator(node_id, path).map(|ci| (path.clone(), ci))
-        })
-    }
-
-    pub fn new_array_chunk_iterator<'a>(
-        &'a self,
-        node_id: &'a NodeId,
-        node_path: &Path,
-    ) -> impl Iterator<Item = ChunkInfo> + use<'a> {
-        self.array_chunks_iterator(node_id, node_path).filter_map(
-            move |(coords, payload)| {
-                payload.as_ref().map(|p| ChunkInfo {
-                    node: node_id.clone(),
-                    coord: coords.clone(),
-                    payload: p.clone(),
-                })
-            },
-        )
+        node_id: &NodeId,
+        extent: &ManifestExtents,
+    ) -> Option<&SplitManifest> {
+        self.set_chunks.get(node_id).and_then(|x| x.get(extent))
     }
 
     pub fn new_nodes(&self) -> impl Iterator<Item = (&Path, &NodeId)> {
@@ -247,26 +300,24 @@ impl ChangeSet {
         self.new_arrays.iter().map(|(path, (node_id, _))| (path, node_id))
     }
 
-    pub fn take_chunks(
-        &mut self,
-    ) -> BTreeMap<NodeId, BTreeMap<ChunkIndices, Option<ChunkPayload>>> {
-        take(&mut self.set_chunks)
-    }
+    // pub fn take_chunks(
+    //     &mut self,
+    // ) -> BTreeMap<NodeId, BTreeMap<ChunkIndices, Option<ChunkPayload>>> {
+    //     take(&mut self.set_chunks)
+    // }
 
-    pub fn set_chunks(
-        &mut self,
-        chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, Option<ChunkPayload>>>,
-    ) {
-        self.set_chunks = chunks
-    }
+    // pub fn set_chunks(
+    //     &mut self,
+    //     chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, Option<ChunkPayload>>>,
+    // ) {
+    //     self.set_chunks = chunks
+    // }
 
     /// Merge this ChangeSet with `other`.
     ///
     /// Results of the merge are applied to `self`. Changes present in `other` take precedence over
     /// `self` changes.
     pub fn merge(&mut self, other: ChangeSet) {
-        // FIXME: this should detect conflict, for example, if different writers added on the same
-        // path, different objects, or if the same path is added and deleted, etc.
         // TODO: optimize
         self.new_groups.extend(other.new_groups);
         self.new_arrays.extend(other.new_arrays);
@@ -417,7 +468,7 @@ mod tests {
         change_set::ArrayData,
         format::{
             ChunkIndices, NodeId,
-            manifest::{ChunkInfo, ChunkPayload},
+            manifest::{ChunkInfo, ChunkPayload, ManifestSplits},
             snapshot::ArrayShape,
         },
     };
@@ -449,28 +500,39 @@ mod tests {
         );
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
-        change_set.set_chunk_ref(node_id1.clone(), ChunkIndices(vec![0, 1]), None);
+        let splits = ManifestSplits::from_edges(vec![vec![0, 10], vec![0, 10]]);
+
+        change_set.set_chunk_ref(
+            node_id1.clone(),
+            ChunkIndices(vec![0, 1]),
+            None,
+            &splits,
+        );
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         change_set.set_chunk_ref(
             node_id1.clone(),
             ChunkIndices(vec![1, 0]),
             Some(ChunkPayload::Inline("bar1".into())),
+            &splits,
         );
         change_set.set_chunk_ref(
             node_id1.clone(),
             ChunkIndices(vec![1, 1]),
             Some(ChunkPayload::Inline("bar2".into())),
+            &splits,
         );
         change_set.set_chunk_ref(
             node_id2.clone(),
             ChunkIndices(vec![0]),
             Some(ChunkPayload::Inline("baz1".into())),
+            &splits,
         );
         change_set.set_chunk_ref(
             node_id2.clone(),
             ChunkIndices(vec![1]),
             Some(ChunkPayload::Inline("baz2".into())),
+            &splits,
         );
 
         {
