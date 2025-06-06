@@ -171,7 +171,7 @@ impl ChangeSet {
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
         self.set_chunks
-            .entry(node_id)
+            .entry(node_id.clone())
             .and_modify(|h| {
                 h.entry(extent.clone()).or_default().insert(coord.clone(), data.clone());
             })
@@ -335,9 +335,6 @@ impl ChangeSet {
     /// Results of the merge are applied to `self`. Changes present in `other` take precedence over
     /// `self` changes.
     pub fn merge(&mut self, other: ChangeSet) {
-        // FIXME: what do I do with splitting and splits here.
-        // FIXME: this should detect conflict, for example, if different writers added on the same
-        // path, different objects, or if the same path is added and deleted, etc.
         // TODO: optimize
         self.new_groups.extend(other.new_groups);
         self.new_arrays.extend(other.new_arrays);
@@ -345,7 +342,6 @@ impl ChangeSet {
         self.updated_arrays.extend(other.updated_arrays);
         self.deleted_groups.extend(other.deleted_groups);
         self.deleted_arrays.extend(other.deleted_arrays);
-        // FIXME: handle splits
 
         for (node, other_chunks) in other.set_chunks.into_iter() {
             match self.set_chunks.remove(&node) {

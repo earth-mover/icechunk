@@ -465,7 +465,10 @@ impl Session {
         user_data: Bytes,
     ) -> SessionResult<()> {
         self.get_array(path).await.map(|node| {
-            self.cache_splits(&node.id, path, &shape, &dimension_names);
+            // Q: What happens if we set a chunk, then change a dimension name, so
+            //   that the split changes.
+            // A: We ignore it. splits are set once for a node in a session, and are never changed.
+            // self.cache_splits(&node.id, path, &shape, &dimension_names);
             self.change_set.update_array(
                 &node.id,
                 path,
@@ -538,9 +541,6 @@ impl Session {
         dimension_names: &Option<Vec<DimensionName>>,
     ) {
         let splitting = self.config.manifest().splitting();
-        // Q: What happens if we set a chunk, then change a dimension name, so
-        //   that the split changes.
-        // A: We ignore it. splits are set once for a node in a session, and are never changed.
         let splits = splitting.get_split_sizes(path, shape, dimension_names);
         self.splits.insert(node_id.clone(), splits);
     }
@@ -974,7 +974,6 @@ impl Session {
                     branch_name,
                     &self.snapshot_id,
                     &self.change_set,
-                    &self.config,
                     message,
                     Some(properties),
                     &self.splits,
@@ -998,7 +997,6 @@ impl Session {
                         branch_name,
                         &self.snapshot_id,
                         &self.change_set,
-                        &self.config,
                         message,
                         Some(properties),
                         &self.splits,
@@ -1291,6 +1289,7 @@ async fn verified_node_chunk_iterator<'a>(
             let new_chunks = change_set
                 .array_chunks_iterator(&node.id, &node.path, extent.clone())
                 .filter_map(move |(idx, payload)| {
+                    dbg!("iterating through ", &idx, &payload);
                     payload.as_ref().map(|payload| {
                         Ok(ChunkInfo {
                             node: node_id_c.clone(),
@@ -1576,7 +1575,6 @@ struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
     parent_id: &'a SnapshotId,
-    config: &'a RepositoryConfig,
     splits: &'a HashMap<NodeId, ManifestSplits>,
     manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
     manifest_files: HashSet<ManifestFileInfo>,
@@ -1587,14 +1585,12 @@ impl<'a> FlushProcess<'a> {
         asset_manager: Arc<AssetManager>,
         change_set: &'a ChangeSet,
         parent_id: &'a SnapshotId,
-        config: &'a RepositoryConfig,
         splits: &'a HashMap<NodeId, ManifestSplits>,
     ) -> Self {
         Self {
             asset_manager,
             change_set,
             parent_id,
-            config,
             splits,
             manifest_refs: Default::default(),
             manifest_files: Default::default(),
@@ -1636,6 +1632,7 @@ impl<'a> FlushProcess<'a> {
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
             self.manifest_files.insert(file_info);
 
+            dbg!(&from, &to);
             let new_ref = ManifestRef {
                 object_id: new_manifest.id().clone(),
                 extents: ManifestExtents::new(&from, &to),
@@ -1695,10 +1692,13 @@ impl<'a> FlushProcess<'a> {
     async fn write_manifest_for_existing_node(
         &mut self,
         node: &NodeSnapshot,
-        splits: ManifestSplits,
         manifests: Vec<ManifestRef>,
     ) -> SessionResult<()> {
-        // populate with existing refs, if they are compatiblae
+        let splits = self
+            .splits
+            .get(&node.id)
+            .expect(&format!("splits should exist for this node {}", node.id.clone()));
+        // populate with existing refs, if they are compatible
         let mut refs =
             HashMap::<ManifestExtents, ManifestRef>::with_capacity(splits.len());
 
@@ -1877,7 +1877,6 @@ async fn flush(
 
     let old_snapshot =
         flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await?;
-    let splitting_config = flush_data.config.manifest().splitting();
 
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
@@ -1903,17 +1902,8 @@ async fn flush(
                 &node.path,
             )
             .await?;
-            if let NodeData::Array { shape, dimension_names, manifests } =
-                new_node.node_data
-            {
-                let splits = splitting_config.get_split_sizes(
-                    &new_node.path,
-                    &shape,
-                    &dimension_names,
-                );
-                flush_data
-                    .write_manifest_for_existing_node(&node, splits, manifests)
-                    .await?;
+            if let NodeData::Array { manifests, .. } = new_node.node_data {
+                flush_data.write_manifest_for_existing_node(&node, manifests).await?;
             }
         } else {
             trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
@@ -2041,7 +2031,6 @@ async fn do_commit(
     branch_name: &str,
     snapshot_id: &SnapshotId,
     change_set: &ChangeSet,
-    config: &RepositoryConfig,
     message: &str,
     properties: Option<SnapshotProperties>,
     splits: &HashMap<NodeId, ManifestSplits>,
@@ -2049,8 +2038,7 @@ async fn do_commit(
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
-    let flush_data =
-        FlushProcess::new(asset_manager, change_set, snapshot_id, config, splits);
+    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id, splits);
     let new_snapshot = flush(flush_data, message, properties).await?;
 
     debug!(branch_name, new_snapshot_id=%new_snapshot, "Updating branch");
@@ -2118,6 +2106,8 @@ fn aggregate_extents<'a, T: std::fmt::Debug, E>(
     it.map_ok(move |t| {
         // these are the coordinates for the chunk
         let idx = extract_index(&t);
+
+        dbg!("processing index ", &idx);
 
         // we need to initialize the mins/maxes the first time
         // we initialize with the value of the first element
@@ -2978,6 +2968,8 @@ mod tests {
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
             Some(ChunkPayload::Inline("new chunk".into()))
         );
+
+        dbg!("deleting chunk");
 
         // we delete a chunk
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0, 0, 1]), None)
