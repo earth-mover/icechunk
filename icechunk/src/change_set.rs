@@ -244,7 +244,8 @@ impl ChangeSet {
         &self,
     ) -> impl Iterator<Item = (Path, ChunkInfo)> + use<'_> {
         self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
-            self.new_array_chunk_iterator(node_id, path).map(|ci| (path.clone(), ci))
+            self.new_array_chunk_iterator(node_id, path, None)
+                .map(|ci| (path.clone(), ci))
         })
     }
 
@@ -252,8 +253,9 @@ impl ChangeSet {
         &'a self,
         node_id: &'a NodeId,
         node_path: &Path,
+        extent: Option<ManifestExtents>,
     ) -> impl Iterator<Item = ChunkInfo> + use<'a> {
-        self.array_chunks_iterator(node_id, node_path, None).filter_map(
+        self.array_chunks_iterator(node_id, node_path, extent).filter_map(
             move |(coords, payload)| {
                 payload.as_ref().map(|p| ChunkInfo {
                     node: node_id.clone(),
@@ -284,25 +286,6 @@ impl ChangeSet {
         extent: &ManifestExtents,
     ) -> Option<&SplitManifest> {
         self.set_chunks.get(node_id).and_then(|x| x.get(extent))
-    }
-
-    /// Iterator over chunks for a new array for a given ManifestExtents
-    pub fn new_array_manifest_chunks_iterator<'a>(
-        &'a self,
-        node_id: &'a NodeId,
-        extent: &ManifestExtents,
-    ) -> impl Iterator<Item = ChunkInfo> + use<'a> {
-        if let Some(manifest) = self.array_manifest(node_id, extent) {
-            Either::Right(manifest.iter().filter_map(move |(coords, payload)| {
-                payload.as_ref().map(|p| ChunkInfo {
-                    node: node_id.clone(),
-                    coord: coords.clone(),
-                    payload: p.clone(),
-                })
-            }))
-        } else {
-            Either::Left(iter::empty())
-        }
     }
 
     pub fn new_nodes(&self) -> impl Iterator<Item = (&Path, &NodeId)> {
