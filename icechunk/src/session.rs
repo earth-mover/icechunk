@@ -1289,7 +1289,6 @@ async fn verified_node_chunk_iterator<'a>(
             let new_chunks = change_set
                 .array_chunks_iterator(&node.id, &node.path, extent.clone())
                 .filter_map(move |(idx, payload)| {
-                    dbg!("iterating through ", &idx, &payload);
                     payload.as_ref().map(|payload| {
                         Ok(ChunkInfo {
                             node: node_id_c.clone(),
@@ -1632,7 +1631,6 @@ impl<'a> FlushProcess<'a> {
                 ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
             self.manifest_files.insert(file_info);
 
-            dbg!(&from, &to);
             let new_ref = ManifestRef {
                 object_id: new_manifest.id().clone(),
                 extents: ManifestExtents::new(&from, &to),
@@ -2111,8 +2109,6 @@ fn aggregate_extents<'a, T: std::fmt::Debug, E>(
     it.map_ok(move |t| {
         // these are the coordinates for the chunk
         let idx = extract_index(&t);
-
-        dbg!("processing index ", &idx);
 
         // we need to initialize the mins/maxes the first time
         // we initialize with the value of the first element
@@ -2973,8 +2969,6 @@ mod tests {
             ds.get_chunk_ref(&new_array_path, &ChunkIndices(vec![0, 0, 1])).await?,
             Some(ChunkPayload::Inline("new chunk".into()))
         );
-
-        dbg!("deleting chunk");
 
         // we delete a chunk
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0, 0, 1]), None)
