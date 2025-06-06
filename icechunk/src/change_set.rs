@@ -23,64 +23,13 @@ pub struct ArrayData {
     pub user_data: Bytes,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SplitManifest {
-    from: Vec<u32>,
-    to: Vec<u32>,
-    // It's important we keep these sorted, we use this fact in TransactionLog creation
-    chunks: BTreeMap<ChunkIndices, Option<ChunkPayload>>,
-}
-
-impl SplitManifest {
-    pub fn update(&mut self, coord: ChunkIndices, data: Option<ChunkPayload>) {
-        if self.from.is_empty() {
-            debug_assert!(self.to.is_empty());
-            debug_assert!(self.chunks.is_empty());
-            // important to remember that `to` is not inclusive, so we need +1
-            let mut coord0 = coord.0.clone();
-            self.to.extend(coord0.iter().map(|n| *n + 1));
-            self.from.append(&mut coord0);
-        } else {
-            for (existing, coord0) in self.from.iter_mut().zip(coord.0.iter()) {
-                if coord0 < existing {
-                    *existing = *coord0
-                }
-            }
-            for (existing, coord0) in self.to.iter_mut().zip(coord.0.iter()) {
-                // important to remember that `to` is not inclusive, so we need +1
-                let range_value = coord0 + 1;
-                if range_value > *existing {
-                    *existing = range_value
-                }
-            }
-        }
-        self.chunks.insert(coord, data);
-    }
-
-    pub fn retain(&mut self, predicate: impl Fn(&ChunkIndices) -> bool) {
-        self.chunks.retain(|coord, _| {
-            if !predicate(coord) {
-                // FIXME: handle from, to updating
-                todo!();
-            } else {
-                false
-            }
-        })
-    }
-
-    pub fn extents(&self) -> ManifestExtents {
-        ManifestExtents::new(self.from.as_slice(), self.to.as_slice())
-    }
-}
-
+type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ChangeSet {
     new_groups: HashMap<Path, (NodeId, Bytes)>,
     new_arrays: HashMap<Path, (NodeId, ArrayData)>,
     updated_arrays: HashMap<NodeId, ArrayData>,
     updated_groups: HashMap<NodeId, Bytes>,
-    // FIXME: It's important we keep these sorted, we use this fact in TransactionLog creation
-    //        Change HashMap -> BTreeMap, need to check Ord on ManifestExtents
     set_chunks: BTreeMap<NodeId, HashMap<ManifestExtents, SplitManifest>>,
     deleted_groups: HashSet<(Path, NodeId)>,
     deleted_arrays: HashSet<(Path, NodeId)>,
@@ -111,7 +60,7 @@ impl ChangeSet {
         &self,
     ) -> impl Iterator<Item = (&NodeId, impl Iterator<Item = &ChunkIndices>)> {
         self.set_chunks.iter().map(|(node_id, split_map)| {
-            (node_id, split_map.values().flat_map(|x| x.chunks.keys()))
+            (node_id, split_map.values().flat_map(|x| x.keys()))
         })
     }
 
@@ -224,17 +173,18 @@ impl ChangeSet {
         self.set_chunks
             .entry(node_id)
             .and_modify(|h| {
-                h.entry(extent.clone()).or_default().update(coord.clone(), data.clone());
+                h.entry(extent.clone()).or_default().insert(coord.clone(), data.clone());
             })
             .or_insert_with(|| {
-                let mut h = HashMap::<ManifestExtents, SplitManifest>::with_capacity(
-                    splits.len(),
-                );
+                let mut h = HashMap::<
+                    ManifestExtents,
+                    BTreeMap<ChunkIndices, Option<ChunkPayload>>,
+                >::with_capacity(splits.len());
                 h.entry(extent.clone())
                     // TODO: this is duplicative. I can't use `or_default` because it's
                     // nice to create the HashMap using `with_capacity`
                     .or_default()
-                    .update(coord, data);
+                    .insert(coord, data);
                 h
             });
     }
@@ -247,9 +197,7 @@ impl ChangeSet {
         if let Some(node_chunks) = self.set_chunks.get(node_id) {
             which_extent_and_index(node_chunks.keys(), coords)
                 .ok()
-                .map(|(_, extent)| {
-                    node_chunks.get(&extent).and_then(|s| s.chunks.get(coords))
-                })
+                .map(|(_, extent)| node_chunks.get(&extent).and_then(|s| s.get(coords)))
                 .flatten()
         } else {
             None
@@ -261,11 +209,11 @@ impl ChangeSet {
     pub fn drop_chunk_changes(
         &mut self,
         node_id: &NodeId,
-        predicate: impl Fn(&ChunkIndices) -> bool + Copy,
+        predicate: impl Fn(&ChunkIndices) -> bool,
     ) {
         if let Some(changes) = self.set_chunks.get_mut(node_id) {
             for split in changes.values_mut() {
-                split.retain(predicate);
+                split.retain(|coord, _| !predicate(coord));
             }
         }
     }
@@ -287,7 +235,7 @@ impl ChangeSet {
                     .filter(move |(manifest_extent, _)| {
                         extent.is_none() || Some(*manifest_extent) == extent.as_ref()
                     })
-                    .flat_map(|(_, manifest)| manifest.chunks.iter()),
+                    .flat_map(|(_, manifest)| manifest.iter()),
             ),
         }
     }
@@ -345,7 +293,7 @@ impl ChangeSet {
         extent: &ManifestExtents,
     ) -> impl Iterator<Item = ChunkInfo> + use<'a> {
         if let Some(manifest) = self.array_manifest(node_id, extent) {
-            Either::Right(manifest.chunks.iter().filter_map(move |(coords, payload)| {
+            Either::Right(manifest.iter().filter_map(move |(coords, payload)| {
                 payload.as_ref().map(|p| ChunkInfo {
                     node: node_id.clone(),
                     coord: coords.clone(),
