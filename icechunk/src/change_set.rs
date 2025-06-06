@@ -8,13 +8,12 @@ use itertools::{Either, Itertools as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::ManifestSplittingConfig,
     format::{
         ChunkIndices, NodeId, Path,
         manifest::{ChunkInfo, ChunkPayload, ManifestExtents, ManifestSplits},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
     },
-    session::SessionResult,
+    session::{SessionResult, which_extent_and_index},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,15 +21,6 @@ pub struct ArrayData {
     pub shape: ArrayShape,
     pub dimension_names: Option<Vec<DimensionName>>,
     pub user_data: Bytes,
-}
-
-impl ManifestSplits {
-    pub fn which_extent(&self, coord: &ChunkIndices) -> SessionResult<&ManifestExtents> {
-        Ok(self.0.get(self.which(coord)?).expect(&format!(
-            "logic bug, could not find ManifestExtents for this coordinate: {:?}",
-            coord
-        )))
-    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -85,12 +75,6 @@ impl SplitManifest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ChangeSet {
-    // splitting configuration is recorded at the time the writable session is created
-    // we ignore any succeeding changes in repository config.
-    splitting: ManifestSplittingConfig,
-    // This is an optimization so that we needn't figure out the split sizes on every set.
-    // TODO: consider merging with `set_chunks` BTreeMap
-    splits: HashMap<NodeId, ManifestSplits>,
     new_groups: HashMap<Path, (NodeId, Bytes)>,
     new_arrays: HashMap<Path, (NodeId, ArrayData)>,
     updated_arrays: HashMap<NodeId, ArrayData>,
@@ -103,10 +87,6 @@ pub struct ChangeSet {
 }
 
 impl ChangeSet {
-    pub fn new(splitting: ManifestSplittingConfig) -> Self {
-        Self { splitting, ..Default::default() }
-    }
-
     pub fn deleted_arrays(&self) -> impl Iterator<Item = &(Path, NodeId)> {
         self.deleted_arrays.iter()
     }
@@ -125,10 +105,6 @@ impl ChangeSet {
 
     pub fn array_is_deleted(&self, path_and_id: &(Path, NodeId)) -> bool {
         self.deleted_arrays.contains(path_and_id)
-    }
-
-    pub fn splits(&self, id: &NodeId) -> Option<&ManifestSplits> {
-        self.splits.get(id)
     }
 
     pub fn chunk_changes(
@@ -174,39 +150,11 @@ impl ChangeSet {
         }
     }
 
-    fn maybe_update_cached_splits(
-        &mut self,
-        node_id: &NodeId,
-        path: &Path,
-        shape: &ArrayShape,
-        dimension_names: &Option<Vec<DimensionName>>,
-    ) {
-        if !self.splits.contains_key(node_id) {
-            // Q: What happens if we set a chunk, then change a dimension name, so
-            //   that the split changes.
-            // A: We ignore it. splits are set once for a node in a session, and are never changed.
-            let splits = self.splitting.get_split_sizes(path, shape, dimension_names);
-            self.splits.insert(node_id.clone(), splits);
-        }
-    }
-
     pub fn add_array(&mut self, path: Path, node_id: NodeId, array_data: ArrayData) {
-        self.maybe_update_cached_splits(
-            &node_id,
-            &path,
-            &array_data.shape,
-            &array_data.dimension_names,
-        );
         self.new_arrays.insert(path, (node_id, array_data));
     }
 
     pub fn update_array(&mut self, node_id: &NodeId, path: &Path, array_data: ArrayData) {
-        self.maybe_update_cached_splits(
-            &node_id,
-            &path,
-            &array_data.shape,
-            &array_data.dimension_names,
-        );
         match self.new_arrays.get(path) {
             Some((id, _)) => {
                 debug_assert!(!self.updated_arrays.contains_key(id));
@@ -241,7 +189,6 @@ impl ChangeSet {
 
         self.updated_arrays.remove(node_id);
         self.set_chunks.remove(node_id);
-        self.splits.remove(node_id);
         if !is_new_array {
             self.deleted_arrays.insert((path, node_id.clone()));
         }
@@ -269,13 +216,9 @@ impl ChangeSet {
         node_id: NodeId,
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
+        splits: &ManifestSplits,
     ) {
-        let cached_splits = self.splits.get(&node_id).expect(&format!(
-            "logic bug. change_set.splits should be populated for node {}",
-            node_id
-        ));
-
-        let extent = cached_splits.which_extent(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
+        let (_, extent) = splits.which_extent_and_index(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
         self.set_chunks
@@ -285,7 +228,7 @@ impl ChangeSet {
             })
             .or_insert_with(|| {
                 let mut h = HashMap::<ManifestExtents, SplitManifest>::with_capacity(
-                    cached_splits.len(),
+                    splits.len(),
                 );
                 h.entry(extent.clone())
                     // TODO: this is duplicative. I can't use `or_default` because it's
@@ -301,17 +244,16 @@ impl ChangeSet {
         node_id: &NodeId,
         coords: &ChunkIndices,
     ) -> Option<&Option<ChunkPayload>> {
-        self.splits
-            .get(node_id)
-            .and_then(|splits| {
-                splits.which_extent(coords).ok().map(|extent| {
-                    self.set_chunks
-                        .get(node_id)
-                        .and_then(|h| h.get(&extent))
-                        .and_then(|s| s.chunks.get(coords))
+        if let Some(node_chunks) = self.set_chunks.get(node_id) {
+            which_extent_and_index(node_chunks.keys(), coords)
+                .ok()
+                .map(|(_, extent)| {
+                    node_chunks.get(&extent).and_then(|s| s.chunks.get(coords))
                 })
-            })
-            .flatten()
+                .flatten()
+        } else {
+            None
+        }
     }
 
     /// Drop the updated chunk references for the node.
@@ -599,7 +541,7 @@ mod tests {
         change_set::ArrayData,
         format::{
             ChunkIndices, NodeId,
-            manifest::{ChunkInfo, ChunkPayload},
+            manifest::{ChunkInfo, ChunkPayload, ManifestSplits},
             snapshot::ArrayShape,
         },
     };
@@ -631,28 +573,39 @@ mod tests {
         );
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
-        change_set.set_chunk_ref(node_id1.clone(), ChunkIndices(vec![0, 1]), None);
+        let splits = ManifestSplits::from_edges(vec![vec![0, 10], vec![0, 10]]);
+
+        change_set.set_chunk_ref(
+            node_id1.clone(),
+            ChunkIndices(vec![0, 1]),
+            None,
+            &splits,
+        );
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         change_set.set_chunk_ref(
             node_id1.clone(),
             ChunkIndices(vec![1, 0]),
             Some(ChunkPayload::Inline("bar1".into())),
+            &splits,
         );
         change_set.set_chunk_ref(
             node_id1.clone(),
             ChunkIndices(vec![1, 1]),
             Some(ChunkPayload::Inline("bar2".into())),
+            &splits,
         );
         change_set.set_chunk_ref(
             node_id2.clone(),
             ChunkIndices(vec![0]),
             Some(ChunkPayload::Inline("baz1".into())),
+            &splits,
         );
         change_set.set_chunk_ref(
             node_id2.clone(),
             ChunkIndices(vec![1]),
             Some(ChunkPayload::Inline("baz2".into())),
+            &splits,
         );
 
         {
