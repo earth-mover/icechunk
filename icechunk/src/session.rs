@@ -229,11 +229,11 @@ pub fn overlaps(us: &ManifestExtents, them: &ManifestExtents) -> Overlap {
     }
 
     if overlaps.iter().all(|x| x == &Overlap::Complete) {
-        return Overlap::Complete;
+        Overlap::Complete
     } else if overlaps.iter().any(|x| x == &Overlap::None) {
-        return Overlap::None;
+        Overlap::None
     } else {
-        return Overlap::Partial;
+        Overlap::Partial
     }
 }
 
@@ -555,6 +555,7 @@ impl Session {
         if !self.splits.contains_key(node_id) {
             self.cache_splits(node_id, path, shape, dimension_names);
         }
+        #[allow(clippy::expect_used)]
         self.splits.get(node_id).expect("should not be possible.")
     }
 
@@ -1303,7 +1304,7 @@ async fn verified_node_chunk_iterator<'a>(
                     futures::stream::iter(manifests)
                         .filter(move |manifest_ref| {
                             futures::future::ready(extent.as_ref().is_none_or(|e| {
-                                overlaps(&manifest_ref.extents, &e) != Overlap::None
+                                overlaps(&manifest_ref.extents, e) != Overlap::None
                             }))
                         })
                         .then(move |manifest_ref| {
@@ -1622,7 +1623,11 @@ impl<'a> FlushProcess<'a> {
         let mut to = vec![];
         let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-        if let Some(new_manifest) = Manifest::from_stream(chunks).await.unwrap() {
+        #[allow(clippy::expect_used)]
+        if let Some(new_manifest) = Manifest::from_stream(chunks)
+            .await
+            .expect("failed to create manifest from chunk stream")
+        {
             let new_manifest = Arc::new(new_manifest);
             let new_manifest_size =
                 self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
@@ -1661,10 +1666,9 @@ impl<'a> FlushProcess<'a> {
         node_id: &NodeId,
         node_path: &Path,
     ) -> SessionResult<()> {
-        let splits = self.splits.get(node_id).expect(&format!(
-            "getting split for node {} unexpectedly failed",
-            node_id.clone()
-        ));
+        #[allow(clippy::expect_used)]
+        let splits =
+            self.splits.get(node_id).expect("getting split for node unexpectedly failed");
 
         let mut refs =
             HashMap::<ManifestExtents, ManifestRef>::with_capacity(splits.len());
@@ -1697,10 +1701,9 @@ impl<'a> FlushProcess<'a> {
         node: &NodeSnapshot,
         manifests: Vec<ManifestRef>,
     ) -> SessionResult<()> {
-        let splits = self
-            .splits
-            .get(&node.id)
-            .expect(&format!("splits should exist for this node {}", node.id.clone()));
+        #[allow(clippy::expect_used)]
+        let splits =
+            self.splits.get(&node.id).expect("splits should exist for this node.");
         // populate with existing refs, if they are compatible
         let mut refs =
             HashMap::<ManifestExtents, ManifestRef>::with_capacity(splits.len());
@@ -1722,7 +1725,7 @@ impl<'a> FlushProcess<'a> {
         for extent in splits.iter() {
             if modified_splits.contains(extent) {
                 // this split was modified in this session, rewrite it completely
-                self.write_manifest_for_updated_chunks(&node, extent)
+                self.write_manifest_for_updated_chunks(node, extent)
                     .await?
                     .map(|new_ref| refs.insert(extent.clone(), new_ref));
             } else {
@@ -1746,7 +1749,7 @@ impl<'a> FlushProcess<'a> {
                             // the splits have changed, but no refs in this split have been written in this session
                             // same as `if` block above
                             debug_assert!(on_disk_bbox.is_some());
-                            self.write_manifest_for_updated_chunks(&node, extent)
+                            self.write_manifest_for_updated_chunks(node, extent)
                                 .await?
                                 .map(|new_ref| refs.insert(extent.clone(), new_ref));
                         }
