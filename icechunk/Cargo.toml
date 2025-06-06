@@ -13,18 +13,26 @@ edition = "2024"
 publish = true
 
 [dependencies]
+tokio-util = { version = "0.7.15", features = ["compat", "io-util"] }
 async-trait = "0.1.88"
 bytes = { version = "1.10.1", features = ["serde"] }
 base64 = "0.22.1"
 futures = "0.3.31"
 itertools = "0.14.0"
-object_store = { version = "0.12.1", features = ["aws", "gcp", "azure"] }
+object_store = { version = "0.12.1", features = [
+  "aws",
+  "gcp",
+  "azure",
+], default-features = true }
 rand = "0.9.1"
 thiserror = "2.0.12"
 serde_json = "1.0.140"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_with = { version = "3.12.0", features = ["hex"] }
-tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.45.1", features = [
+  "rt-multi-thread",
+  "macros",
+], default-features = true }
 test-strategy = "0.4.1"
 proptest = "1.6.0"
 quick_cache = "0.6.14"
@@ -33,27 +41,32 @@ chrono = { version = "0.4.41", features = ["serde"] }
 async-recursion = "1.1.1"
 rmp-serde = "1.3.0"
 url = "2.5.4"
-async-stream = "0.3.6"
+async-stream = { version = "0.3.6", default-features = true }
 rmpv = { version = "1.3.0", features = ["serde", "with-serde"] }
-aws-sdk-s3 = "1.85.0"
-aws-config = "1.6.3"
-aws-credential-types = "1.2.2"
-aws-lc-rs = { version = "1.13.1" }
+# aws-sdk-s3 = { version = "1.78.0", default-features = true, features = [
+#   "rt-tokio",
+#   "sigv4a",
+#   #"rustls",
+#   "default-https-client",
+# ] }
+aws-sdk-s3 = "=1.78.0"
+aws-config = { version = "=1.5.18", default-features = true }
+aws-credential-types = { version = "1.2.3", default-features = true }
+#aws-lc-rs = { version = "1.13.1", features = ["bindgen"] }
 typed-path = "0.11.0"
 aws-smithy-types-convert = { version = "0.60.9", features = [
   "convert-chrono",
   "convert-streams",
-] }
+], default-features = true }
 typetag = "0.2.20"
 zstd = "0.13.3"
-tokio-util = { version = "0.7.15", features = ["compat", "io-util"] }
 serde_bytes = "0.11.17"
 regex = "1.11.1"
-tracing-error = "0.2.1"
+tracing-error = { version = "0.2.1", default-features = true }
 tracing-subscriber = { version = "0.3.19", features = [
   "env-filter",
-], optional = true }
-tracing = "0.1.41"
+], optional = true, default-features = true }
+tracing = { version = "0.1.41", default-features = true }
 err-into = "1.0.1"
 serde_yaml_ng = "0.10.0"
 clap = { version = "4.5", features = ["derive"], optional = true }
@@ -62,6 +75,31 @@ dialoguer = { version = "0.11.0", optional = true }
 dirs = { version = "6.0.0", optional = true }
 assert_fs = { version = "1.1.3", optional = true }
 flatbuffers = "25.2.10"
+
+#aws-smithy-runtime = { version = "1.8.3", default-features = false, features = [
+#"tls-rustls",
+#] }
+#aws-smithy-http-client = { version = "1.0.3", default-features = false, features = [
+#] }
+# 
+# hyper-rustls = { version = "0.27.6", default-features = false, features = [] }
+# 
+# reqwest = { version = "0.12.19", default-features = false, features = [] }
+# 
+# tokio-rustls = { version = "0.26.2", default-features = false, features = [] }
+# rustls-webpki = { version = "0.103.3", default-features = false, features = [] }
+
+#rustls = { version = "0.23.27", default-features = false, features = [
+#"logging",
+#"std",
+#"tls12",
+#"ring",
+#] }
+# [dependencies.rustls]
+# features = ["ring"]
+# 
+# version = "0.23.27"
+# default-features = false
 
 [dev-dependencies]
 icechunk-macros = { path = "../icechunk-macros", version = "0.1.0" }
@@ -85,3 +123,6 @@ cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs", "dep:assert_fs"]
 name = "icechunk"
 path = "src/bin/icechunk/main.rs"
 required-features = ["cli"]
+
+#[build-dependencies]
+#bindgen = "0.72.0"

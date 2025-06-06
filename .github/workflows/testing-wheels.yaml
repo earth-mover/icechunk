@@ -1,0 +1,177 @@
+name: Testing wheels
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: ./icechunk-python
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CI: 1
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
+  RUSTUP_MAX_RETRIES: 10
+  RUST_CHANNEL: '1.86.0'
+
+jobs:
+  linux:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-22.04
+            target: x86_64
+          - runner: ubuntu-22.04
+            target: x86
+          - runner: ubuntu-22.04
+            target: aarch64
+          - runner: ubuntu-22.04
+            target: armv7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+          manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.platform.target }}
+          path: icechunk-python/dist
+
+  musllinux:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-22.04
+            target: x86_64
+          - runner: ubuntu-22.04
+            target: x86
+          - runner: ubuntu-22.04
+            target: aarch64
+          - runner: ubuntu-22.04
+            target: armv7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+          manylinux: musllinux_1_2
+          docker-options: -e BINDGEN_EXTRA_CLANG_ARGS=-I"/usr/include/x86_64-linux-gnu"
+          #before-script-linux: |
+          #  cargo install --force --locked bindgen-cli
+         
+  windows:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: windows-latest
+            target: x64
+          - runner: windows-latest
+            target: x86
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+          architecture: ${{ matrix.platform.target }}
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+      # - name: Upload wheels
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: wheels-windows-${{ matrix.platform.target }}
+      #     path: icechunk-python/dist
+ 
+  macos:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: macos-13
+            target: x86_64
+          - runner: macos-14
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+      # - name: Upload wheels
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: wheels-macos-${{ matrix.platform.target }}
+      #     path: icechunk-python/dist
+#
+# sdist:
+#   runs-on: ubuntu-latest
+#   steps:
+#     - uses: actions/checkout@v4
+#     - name: Build sdist
+#       uses: PyO3/maturin-action@v1
+#       with:
+#         working-directory: icechunk-python
+#         command: sdist
+#         args: --out dist
+#     - name: Upload sdist
+#       uses: actions/upload-artifact@v4
+#       with:
+#         name: wheels-sdist
+#         path: icechunk-python/dist
+#
+# release:
+#   name: Release
+#   runs-on: ubuntu-latest
+#   permissions:
+#     id-token: write # IMPORTANT: this permission is mandatory for trusted publishing
+#   if: ${{ github.event_name == 'workflow_dispatch' }}
+#   needs: [linux, musllinux, windows, macos, sdist]
+#   steps:
+#     - uses: actions/download-artifact@v4
+#     - name: Publish to PyPI
+#       uses: PyO3/maturin-action@v1
+#       with:
+#         command: upload
+#         args: --non-interactive --skip-existing wheels-*/*
+
