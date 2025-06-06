@@ -52,6 +52,7 @@ impl fmt::Display for S3Options {
 pub enum ObjectStoreConfig {
     InMemory,
     LocalFileSystem(PathBuf),
+    Http(HashMap<String, String>),
     S3Compatible(S3Options),
     S3(S3Options),
     Gcs(HashMap<String, String>),
