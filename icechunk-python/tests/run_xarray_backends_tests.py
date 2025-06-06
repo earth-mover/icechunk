@@ -33,7 +33,7 @@ from xarray.tests.test_backends import (
     reason="skipping Xarray backends tests",
 )
 class IcechunkStoreBase(ZarrBase):
-    @pytest.mark.parametrize("consolidated", [False, True, None])
+    @pytest.mark.parametrize("consolidated", [False])
     @pytest.mark.parametrize("compute", [False, True])
     @pytest.mark.parametrize("use_dask", [False, True])
     @pytest.mark.parametrize("write_empty", [False, True, None])

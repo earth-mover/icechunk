@@ -1,7 +1,9 @@
 import json
 
 import numpy as np
+import pytest
 
+import icechunk
 import zarr
 from tests.conftest import parse_repo
 from zarr.core.buffer import default_buffer_prototype
@@ -67,3 +69,16 @@ async def test_support_dimension_names_null() -> None:
         (await store.get("0/zarr.json", prototype=default_buffer_prototype())).to_bytes()
     )
     assert "dimension_names" not in meta
+
+
+@pytest.mark.filterwarnings("ignore:Consolidated")  # bah, boto!
+async def test_disallow_consolidated_metadata() -> None:
+    repo = parse_repo("memory", "test")
+    session = repo.writable_session("main")
+    store = session.store
+
+    root = zarr.group(store=store)
+    g1 = root.create_group(name="foo")
+    g1.create_group(name="bar")
+    with pytest.raises(icechunk.IcechunkError, match="metadata consolidation"):
+        zarr.consolidate_metadata(store)
