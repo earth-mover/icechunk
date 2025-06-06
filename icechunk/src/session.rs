@@ -161,31 +161,45 @@ impl From<VirtualReferenceError> for SessionError {
 
 pub type SessionResult<T> = Result<T, SessionError>;
 
+// Returns the index of split_range that includes ChunkIndices
+// This can be used at write time to split manifests based on the config
+// and at read time to choose which manifest to query for chunk payload
+pub fn which_extent_and_index<'a>(
+    iter: impl Iterator<Item = &'a ManifestExtents>,
+    coord: &ChunkIndices,
+) -> SessionResult<(usize, ManifestExtents)> {
+    // split_range[i] must bound ChunkIndices
+    // 0 <= return value <= split_range.len()
+    // it is possible that split_range does not include a coord. say we have 2x2 split grid
+    // but only split (0,0) and split (1,1) are populated with data.
+    // A coord located in (1, 0) should return Err
+    // Since split_range need not form a regular grid, we must iterate through and find the first result.
+    // ManifestExtents in split_range MUST NOT overlap with each other. How do we ensure this?
+    // ndim must be the same
+    // debug_assert_eq!(coord.0.len(), split_range[0].len());
+    // FIXME: could optimize for unbounded single manifest
+    // Note: I don't think we can distinguish between out of bounds index for the array
+    //       and an index that is part of a split that hasn't been written yet.
+    iter.enumerate()
+        .find(|(_, e)| e.contains(coord.0.as_slice()))
+        .map(|(i, e)| (i, e.clone()))
+        .ok_or(
+            SessionErrorKind::InvalidIndexForSplitManifests { coords: coord.clone() }
+                .into(),
+        )
+}
+
 impl ManifestSplits {
-    // Returns the index of split_range that includes ChunkIndices
-    // This can be used at write time to split manifests based on the config
-    // and at read time to choose which manifest to query for chunk payload
-    pub fn which(&self, coord: &ChunkIndices) -> SessionResult<usize> {
-        // split_range[i] must bound ChunkIndices
-        // 0 <= return value <= split_range.len()
-        // it is possible that split_range does not include a coord. say we have 2x2 split grid
-        // but only split (0,0) and split (1,1) are populated with data.
-        // A coord located in (1, 0) should return Err
-        // Since split_range need not form a regular grid, we must iterate through and find the first result.
-        // ManifestExtents in split_range MUST NOT overlap with each other. How do we ensure this?
-        // ndim must be the same
-        // debug_assert_eq!(coord.0.len(), split_range[0].len());
-        // FIXME: could optimize for unbounded single manifest
-        // Note: I don't think we can distinguish between out of bounds index for the array
-        //       and an index that is part of a split that hasn't been written yet.
-        self.iter()
-            .enumerate()
-            .find(|(_, e)| e.contains(coord.0.as_slice()))
-            .map(|(i, _)| i)
-            .ok_or(
-                SessionErrorKind::InvalidIndexForSplitManifests { coords: coord.clone() }
-                    .into(),
-            )
+    pub fn which_extent_and_index(
+        &self,
+        coord: &ChunkIndices,
+    ) -> SessionResult<(usize, ManifestExtents)> {
+        which_extent_and_index(self.iter(), coord)
+    }
+
+    #[cfg(test)]
+    pub fn which_index(&self, coord: &ChunkIndices) -> SessionResult<usize> {
+        which_extent_and_index(self.iter(), coord).map(|(i, _)| i)
     }
 }
 
@@ -234,6 +248,8 @@ pub struct Session {
     snapshot_id: SnapshotId,
     change_set: ChangeSet,
     default_commit_metadata: SnapshotProperties,
+    // This is an optimization so that we needn't figure out the split sizes on every set.
+    splits: HashMap<NodeId, ManifestSplits>,
 }
 
 impl Session {
@@ -255,6 +271,7 @@ impl Session {
             snapshot_id,
             change_set: ChangeSet::default(),
             default_commit_metadata: SnapshotProperties::default(),
+            splits: Default::default(),
         }
     }
 
@@ -269,7 +286,6 @@ impl Session {
         snapshot_id: SnapshotId,
         default_commit_metadata: SnapshotProperties,
     ) -> Self {
-        let splitting = config.manifest().splitting().clone();
         Self {
             config,
             storage_settings: Arc::new(storage_settings),
@@ -278,8 +294,9 @@ impl Session {
             virtual_resolver,
             branch_name: Some(branch_name),
             snapshot_id,
-            change_set: ChangeSet::new(splitting),
+            change_set: Default::default(),
             default_commit_metadata,
+            splits: Default::default(),
         }
     }
 
@@ -419,6 +436,7 @@ impl Session {
         match self.get_node(&path).await {
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 let id = NodeId::random();
+                self.cache_splits(&id, &path, &shape, &dimension_names);
                 self.change_set.add_array(
                     path,
                     id,
@@ -447,6 +465,7 @@ impl Session {
         user_data: Bytes,
     ) -> SessionResult<()> {
         self.get_array(path).await.map(|node| {
+            self.cache_splits(&node.id, path, &shape, &dimension_names);
             self.change_set.update_array(
                 &node.id,
                 path,
@@ -511,6 +530,34 @@ impl Session {
         self.set_node_chunk_ref(node_snapshot, coord, data).await
     }
 
+    fn cache_splits(
+        &mut self,
+        node_id: &NodeId,
+        path: &Path,
+        shape: &ArrayShape,
+        dimension_names: &Option<Vec<DimensionName>>,
+    ) {
+        let splitting = self.config.manifest().splitting();
+        // Q: What happens if we set a chunk, then change a dimension name, so
+        //   that the split changes.
+        // A: We ignore it. splits are set once for a node in a session, and are never changed.
+        let splits = splitting.get_split_sizes(path, shape, dimension_names);
+        self.splits.insert(node_id.clone(), splits);
+    }
+
+    fn get_splits(
+        &mut self,
+        node_id: &NodeId,
+        path: &Path,
+        shape: &ArrayShape,
+        dimension_names: &Option<Vec<DimensionName>>,
+    ) -> &ManifestSplits {
+        if !self.splits.contains_key(node_id) {
+            self.cache_splits(node_id, path, shape, dimension_names);
+        }
+        self.splits.get(node_id).expect("should not be possible.")
+    }
+
     // Helper function that accepts a NodeSnapshot instead of a path,
     // this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
     #[instrument(skip(self))]
@@ -520,9 +567,14 @@ impl Session {
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
-        if let NodeData::Array { shape, .. } = node.node_data {
+        if let NodeData::Array { shape, dimension_names, .. } = node.node_data {
             if shape.valid_chunk_coord(&coord) {
-                self.change_set.set_chunk_ref(node.id, coord, data);
+                let splits = self
+                    .get_splits(&node.id, &node.path, &shape, &dimension_names)
+                    // FIXME: this clone is a workaround for two mutable borrows
+                    // on self.change_set
+                    .clone();
+                self.change_set.set_chunk_ref(node.id, coord, data, &splits);
                 Ok(())
             } else {
                 Err(SessionErrorKind::InvalidIndex {
@@ -784,7 +836,7 @@ impl Session {
         let splits = ManifestSplits::from_extents(
             manifests.iter().map(|m| m.extents.clone()).collect(),
         );
-        let index = match splits.which(coords) {
+        let (index, _) = match splits.which_extent_and_index(coords) {
             Ok(index) => index,
             // for an invalid coordinate, we bail.
             // This happens for two cases:
@@ -925,6 +977,7 @@ impl Session {
                     &self.config,
                     message,
                     Some(properties),
+                    &self.splits,
                 )
                 .await
             }
@@ -948,6 +1001,7 @@ impl Session {
                         &self.config,
                         message,
                         Some(properties),
+                        &self.splits,
                     )
                     .await
                 }
@@ -1523,6 +1577,7 @@ struct FlushProcess<'a> {
     change_set: &'a ChangeSet,
     parent_id: &'a SnapshotId,
     config: &'a RepositoryConfig,
+    splits: &'a HashMap<NodeId, ManifestSplits>,
     manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
     manifest_files: HashSet<ManifestFileInfo>,
 }
@@ -1533,12 +1588,14 @@ impl<'a> FlushProcess<'a> {
         change_set: &'a ChangeSet,
         parent_id: &'a SnapshotId,
         config: &'a RepositoryConfig,
+        splits: &'a HashMap<NodeId, ManifestSplits>,
     ) -> Self {
         Self {
             asset_manager,
             change_set,
             parent_id,
             config,
+            splits,
             manifest_refs: Default::default(),
             manifest_files: Default::default(),
         }
@@ -1605,28 +1662,28 @@ impl<'a> FlushProcess<'a> {
     async fn write_manifest_for_new_node(
         &mut self,
         node_id: &NodeId,
-        node_path: &Path,
     ) -> SessionResult<()> {
-        let splits = self.change_set.splits(node_id).expect(&format!("logic bug, array at {} was added in this changeset, splits should be populated.", node_path));
+        let splits = self.splits.get(node_id).expect(&format!(
+            "getting split for node {} unexpectedly failed",
+            node_id.clone()
+        ));
+
         let mut refs =
             HashMap::<ManifestExtents, ManifestRef>::with_capacity(splits.len());
 
         // TODO: this could be try_fold with the refs HashMap as state
         for extent in splits.iter() {
-            let cs_extents = self
-                .change_set
-                .array_manifest(node_id, extent)
-                .expect("logic bug. there should be a manifest for this extent ")
-                .extents();
-
-            let chunks = stream::iter(
-                self.change_set
-                    .new_array_manifest_chunks_iterator(node_id, extent)
-                    .map(Ok),
-            );
-            self.write_manifest_from_iterator(chunks, cs_extents)
-                .await?
-                .map(|new_ref| refs.insert(extent.clone(), new_ref));
+            if let Some(manifest) = self.change_set.array_manifest(node_id, extent) {
+                let cs_extents = manifest.extents();
+                let chunks = stream::iter(
+                    self.change_set
+                        .new_array_manifest_chunks_iterator(node_id, extent)
+                        .map(Ok),
+                );
+                self.write_manifest_from_iterator(chunks, cs_extents)
+                    .await?
+                    .map(|new_ref| refs.insert(extent.clone(), new_ref));
+            }
         }
         self.finalize_refs(node_id, refs)
     }
@@ -1885,7 +1942,7 @@ async fn flush(
 
     for (node_path, node_id) in flush_data.change_set.new_arrays() {
         trace!(path=%node_path, "New node, writing a manifest");
-        flush_data.write_manifest_for_new_node(node_id, node_path).await?;
+        flush_data.write_manifest_for_new_node(node_id).await?;
     }
 
     trace!("Building new snapshot");
@@ -2001,11 +2058,13 @@ async fn do_commit(
     config: &RepositoryConfig,
     message: &str,
     properties: Option<SnapshotProperties>,
+    splits: &HashMap<NodeId, ManifestSplits>,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
-    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id, config);
+    let flush_data =
+        FlushProcess::new(asset_manager, change_set, snapshot_id, config, splits);
     let new_snapshot = flush(flush_data, message, properties).await?;
 
     debug!(branch_name, new_snapshot_id=%new_snapshot, "Updating branch");
@@ -2382,16 +2441,16 @@ mod tests {
     async fn test_which_split() -> Result<(), Box<dyn Error>> {
         let splits = ManifestSplits::from_edges(vec![vec![0, 10, 20]]);
 
-        assert_eq!(splits.which(&ChunkIndices(vec![1])).unwrap(), 0);
-        assert_eq!(splits.which(&ChunkIndices(vec![11])).unwrap(), 1);
+        assert_eq!(splits.which_index(&ChunkIndices(vec![1])).unwrap(), 0);
+        assert_eq!(splits.which_index(&ChunkIndices(vec![11])).unwrap(), 1);
 
         let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
 
         let splits = ManifestSplits::from_edges(edges);
-        assert_eq!(splits.which(&ChunkIndices(vec![1, 1])).unwrap(), 0);
-        assert_eq!(splits.which(&ChunkIndices(vec![1, 10])).unwrap(), 1);
-        assert_eq!(splits.which(&ChunkIndices(vec![1, 11])).unwrap(), 1);
-        assert!(splits.which(&ChunkIndices(vec![21, 21])).is_err());
+        assert_eq!(splits.which_index(&ChunkIndices(vec![1, 1])).unwrap(), 0);
+        assert_eq!(splits.which_index(&ChunkIndices(vec![1, 10])).unwrap(), 1);
+        assert_eq!(splits.which_index(&ChunkIndices(vec![1, 11])).unwrap(), 1);
+        assert!(splits.which_index(&ChunkIndices(vec![21, 21])).is_err());
 
         Ok(())
     }
@@ -3180,8 +3239,10 @@ mod tests {
         ds.add_array(a2path.clone(), shape.clone(), dimension_names.clone(), def.clone())
             .await?;
 
+        dbg!("added arrays, now commit");
         let _ = ds.commit("first commit", None).await?;
 
+        dbg!("committed arrays");
         // there should be no manifests yet because we didn't add any chunks
         assert_eq!(
             0,
@@ -3206,6 +3267,7 @@ mod tests {
 
         let mut ds = repo.writable_session("main").await?;
 
+        dbg!("setting chunk ref");
         // add 3 chunks
         ds.set_chunk_ref(
             a1path.clone(),
