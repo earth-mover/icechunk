@@ -1700,6 +1700,7 @@ impl<'a> FlushProcess<'a> {
         &mut self,
         node: &NodeSnapshot,
         manifests: Vec<ManifestRef>,
+        old_snapshot: &Snapshot,
     ) -> SessionResult<()> {
         #[allow(clippy::expect_used)]
         let splits =
@@ -1744,6 +1745,11 @@ impl<'a> FlushProcess<'a> {
                             debug_assert!(on_disk_bbox.is_some());
                             // Just propagate this ref again, no rewriting necessary
                             refs.insert(extent.clone(), old_ref.clone());
+                            // OK to unwrap here since this manifest file must exist in the old snapshot
+                            #[allow(clippy::expect_used)]
+                            self.manifest_files.insert(
+                                old_snapshot.manifest_info(&old_ref.object_id).expect("logic bug. creating manifest file info for an existing manifest failed."),
+                            );
                         }
                         Overlap::Partial => {
                             // the splits have changed, but no refs in this split have been written in this session
@@ -1909,7 +1915,13 @@ async fn flush(
             )
             .await?;
             if let NodeData::Array { manifests, .. } = new_node.node_data {
-                flush_data.write_manifest_for_existing_node(&node, manifests).await?;
+                flush_data
+                    .write_manifest_for_existing_node(
+                        &node,
+                        manifests,
+                        old_snapshot.as_ref(),
+                    )
+                    .await?;
             }
         } else {
             trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
