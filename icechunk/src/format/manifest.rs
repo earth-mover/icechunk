@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     cmp::{max, min},
     convert::Infallible,
+    iter::zip,
     ops::Range,
     sync::Arc,
 };
@@ -59,16 +60,16 @@ impl ManifestExtents {
 
     pub fn intersection(&self, other: &Self) -> Option<Self> {
         debug_assert_eq!(self.len(), other.len());
-        let ranges = std::iter::zip(self.iter(), other.iter())
+        let ranges = zip(self.iter(), other.iter())
             .map(|(a, b)| max(a.start, b.start)..min(a.end, b.end))
             .collect::<Vec<_>>();
-        if any(ranges.iter(), |r| r.end < r.start) { None } else { Some(Self(ranges)) }
+        if any(ranges.iter(), |r| r.end <= r.start) { None } else { Some(Self(ranges)) }
     }
 
     pub fn union(&self, other: &Self) -> Self {
         debug_assert_eq!(self.len(), other.len());
         Self::from_ranges_iter(
-            std::iter::zip(self.iter(), other.iter())
+            zip(self.iter(), other.iter())
                 .map(|(a, b)| min(a.start, b.start)..max(a.end, b.end)),
         )
     }

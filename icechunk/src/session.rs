@@ -214,27 +214,17 @@ pub enum Overlap {
 pub fn overlaps(us: &ManifestExtents, them: &ManifestExtents) -> Overlap {
     debug_assert!(us.len() == them.len());
 
-    let mut overlaps = vec![];
+    let mut overlap = Overlap::Complete;
     for (a, b) in zip(us.iter(), them.iter()) {
         debug_assert!(a.start <= a.end, "Invalid range: {:?}", a.clone());
         debug_assert!(b.start <= b.end, "Invalid range: {:?}", b.clone());
-
-        if (a.start <= b.start) && (a.end >= b.end) {
-            overlaps.push(Overlap::Complete);
-        } else if (a.end <= b.start) || (a.start >= b.end) {
-            overlaps.push(Overlap::None);
-        } else {
-            overlaps.push(Overlap::Partial)
+        if (a.end <= b.start) || (a.start >= b.end) {
+            return Overlap::None;
+        } else if !((a.start <= b.start) && (a.end >= b.end)) {
+            overlap = Overlap::Partial
         }
     }
-
-    if overlaps.iter().all(|x| x == &Overlap::Complete) {
-        Overlap::Complete
-    } else if overlaps.iter().any(|x| x == &Overlap::None) {
-        Overlap::None
-    } else {
-        Overlap::Partial
-    }
+    overlap
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2475,6 +2465,40 @@ mod tests {
         );
         assert_eq!(overlaps(&e1, &e2), Overlap::None);
         assert_eq!(overlaps(&e2, &e1), Overlap::None);
+
+        // asymmetric case
+        let e1 = ManifestExtents::new(
+            vec![0u32, 1, 2].as_slice(),
+            vec![3u32, 4, 6].as_slice(),
+        );
+        let e2 = ManifestExtents::new(
+            vec![2u32, 1, 2].as_slice(),
+            vec![3u32, 4, 6].as_slice(),
+        );
+        let union = ManifestExtents::new(
+            vec![0u32, 1, 2].as_slice(),
+            vec![3u32, 4, 6].as_slice(),
+        );
+        let intersection = ManifestExtents::new(
+            vec![2u32, 1, 2].as_slice(),
+            vec![3u32, 4, 6].as_slice(),
+        );
+        assert_eq!(overlaps(&e1, &e2), Overlap::Complete);
+        assert_eq!(overlaps(&e2, &e1), Overlap::Partial);
+        assert_eq!(e1.union(&e2), union.clone());
+        assert_eq!(e2.union(&e1), union.clone());
+        assert_eq!(e1.intersection(&e2), Some(intersection));
+
+        // empty set
+        let e1 = ManifestExtents::new(
+            vec![0u32, 1, 2].as_slice(),
+            vec![3u32, 4, 6].as_slice(),
+        );
+        let e2 = ManifestExtents::new(
+            vec![2u32, 1, 2].as_slice(),
+            vec![2u32, 4, 6].as_slice(),
+        );
+        assert_eq!(e1.intersection(&e2), None);
 
         // this should create non-overlapping extents
         let splits = ManifestSplits::from_edges(vec![
