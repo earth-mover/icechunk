@@ -101,7 +101,7 @@ pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDi
 }
 
 pub fn manifest_extents(ndim: usize) -> impl Strategy<Value = ManifestExtents> {
-    (vec(0u32..1000u32, ndim), vec(0u32..1000u32, ndim)).prop_map(|(start, delta)| {
+    (vec(0u32..1000u32, ndim), vec(1u32..1000u32, ndim)).prop_map(|(start, delta)| {
         let stop = std::iter::zip(start.iter(), delta.iter())
             .map(|(s, d)| s + d)
             .collect::<Vec<_>>();

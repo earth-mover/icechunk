@@ -56,7 +56,7 @@ impl ChangeSet {
         self.deleted_arrays.contains(path_and_id)
     }
 
-    pub fn chunk_changes(
+    pub fn changed_chunks(
         &self,
     ) -> impl Iterator<Item = (&NodeId, impl Iterator<Item = &ChunkIndices>)> {
         self.set_chunks.iter().map(|(node_id, split_map)| {

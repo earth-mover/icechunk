@@ -42,7 +42,7 @@ impl TransactionLog {
 
         // these come sorted from the change set
         let updated_chunks = cs
-            .chunk_changes()
+            .changed_chunks()
             .map(|(node_id, chunks)| {
                 let node_id = generated::ObjectId8::new(&node_id.0);
                 let node_id = Some(&node_id);

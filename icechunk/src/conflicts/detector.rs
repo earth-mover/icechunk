@@ -138,7 +138,7 @@ impl ConflictSolver for ConflictDetector {
             });
 
         let chunks_double_updated =
-            current_changes.chunk_changes().filter_map(|(node_id, changes)| {
+            current_changes.changed_chunks().filter_map(|(node_id, changes)| {
                 let previous_changes: HashSet<_> =
                     previous_change.updated_chunks_for(node_id).collect();
                 if previous_changes.is_empty() {
