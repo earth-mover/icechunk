@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, btree_map, hash_map},
     iter,
 };
 
@@ -326,14 +326,23 @@ impl ChangeSet {
         self.deleted_groups.extend(other.deleted_groups);
         self.deleted_arrays.extend(other.deleted_arrays);
 
-        for (node, other_chunks) in other.set_chunks.into_iter() {
-            match self.set_chunks.remove(&node) {
-                Some(mut old_value) => {
-                    old_value.extend(other_chunks);
-                    self.set_chunks.insert(node, old_value);
+        for (node, other_splits) in other.set_chunks.into_iter() {
+            // this complicated matching code avoids cloning `other.set_chunks`, which could be quite large
+            match self.set_chunks.entry(node) {
+                btree_map::Entry::Occupied(mut entry) => {
+                    for (extent, their_split) in other_splits.into_iter() {
+                        match entry.get_mut().entry(extent) {
+                            hash_map::Entry::Occupied(mut our_split) => {
+                                our_split.get_mut().extend(their_split);
+                            }
+                            hash_map::Entry::Vacant(entry) => {
+                                entry.insert(their_split);
+                            }
+                        }
+                    }
                 }
-                None => {
-                    self.set_chunks.insert(node, other_chunks);
+                btree_map::Entry::Vacant(entry) => {
+                    entry.insert(other_splits);
                 }
             }
         }
