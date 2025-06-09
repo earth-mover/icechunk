@@ -921,12 +921,14 @@ impl Session {
     }
 
     /// Merge a set of `ChangeSet`s into the repository without committing them
-    #[instrument(skip(self, changes))]
-    pub async fn merge(&mut self, changes: ChangeSet) -> SessionResult<()> {
+    #[instrument(skip(self, other))]
+    pub async fn merge(&mut self, other: Session) -> SessionResult<()> {
         if self.read_only() {
             return Err(SessionErrorKind::ReadOnlySession.into());
         }
-        self.change_set.merge(changes);
+        let Session { splits, change_set, .. } = other;
+        self.splits.extend(splits);
+        self.change_set.merge(change_set);
         Ok(())
     }
 

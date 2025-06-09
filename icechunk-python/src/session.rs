@@ -165,14 +165,14 @@ impl PySession {
     pub fn merge(&self, other: &PySession, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
-            // TODO: Bad clone
-            let changes = other.0.blocking_read().deref().changes().clone();
+            // TODO: bad clone
+            let other = other.0.blocking_read().deref().clone();
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 self.0
                     .write()
                     .await
-                    .merge(changes)
+                    .merge(other)
                     .await
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(())
