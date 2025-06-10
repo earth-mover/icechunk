@@ -455,14 +455,13 @@ impl Session {
         user_data: Bytes,
     ) -> SessionResult<()> {
         self.get_array(path).await.map(|node| {
-            // Q: What happens if we set a chunk, then change a dimension name, so
-            //   that the split changes.
-            // A: We ignore it. splits are set once for a node in a session, and are never changed.
-            // self.cache_splits(&node.id, path, &shape, &dimension_names);
+            // needed to handle a resize for example.
+            self.cache_splits(&node.id, path, &shape, &dimension_names);
             self.change_set.update_array(
                 &node.id,
                 path,
                 ArrayData { shape, dimension_names, user_data },
+                self.splits.get(&node.id).expect("getting splits should not fail."),
             )
         })
     }
@@ -530,6 +529,9 @@ impl Session {
         shape: &ArrayShape,
         dimension_names: &Option<Vec<DimensionName>>,
     ) {
+        // FIXME: handle conflicts here
+        // Q: What happens if we set a chunk, then change a dimension name, so
+        //    that the split changes.
         let splitting = self.config.manifest().splitting();
         let splits = splitting.get_split_sizes(path, shape, dimension_names);
         self.splits.insert(node_id.clone(), splits);
