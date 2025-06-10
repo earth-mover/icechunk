@@ -13,7 +13,7 @@ use crate::{
         manifest::{ChunkInfo, ChunkPayload, ManifestExtents, ManifestSplits, Overlap},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
     },
-    session::{SessionResult, which_extent_and_index},
+    session::{SessionResult, find_coord},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,7 +198,7 @@ impl ChangeSet {
         splits: &ManifestSplits,
     ) {
         #[allow(clippy::expect_used)]
-        let (_, extent) = splits.which_extent_and_index(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
+        let extent = splits.find(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
         self.set_chunks
@@ -225,13 +225,10 @@ impl ChangeSet {
         node_id: &NodeId,
         coords: &ChunkIndices,
     ) -> Option<&Option<ChunkPayload>> {
-        if let Some(node_chunks) = self.set_chunks.get(node_id) {
-            which_extent_and_index(node_chunks.keys(), coords).ok().and_then(
-                |(_, extent)| node_chunks.get(&extent).and_then(|s| s.get(coords)),
-            )
-        } else {
-            None
-        }
+        self.set_chunks.get(node_id).and_then(|node_chunks| {
+            find_coord(node_chunks.keys(), coords)
+                .and_then(|extent| node_chunks.get(&extent).and_then(|s| s.get(coords)))
+        })
     }
 
     /// Drop the updated chunk references for the node.
@@ -330,24 +327,13 @@ impl ChangeSet {
         self.new_arrays.iter().map(|(path, (node_id, _))| (path, node_id))
     }
 
-    // pub fn take_chunks(
-    //     &mut self,
-    // ) -> BTreeMap<NodeId, BTreeMap<ChunkIndices, Option<ChunkPayload>>> {
-    //     take(&mut self.set_chunks)
-    // }
-
-    // pub fn set_chunks(
-    //     &mut self,
-    //     chunks: BTreeMap<NodeId, BTreeMap<ChunkIndices, Option<ChunkPayload>>>,
-    // ) {
-    //     self.set_chunks = chunks
-    // }
-
     /// Merge this ChangeSet with `other`.
     ///
     /// Results of the merge are applied to `self`. Changes present in `other` take precedence over
     /// `self` changes.
     pub fn merge(&mut self, other: ChangeSet) {
+        // FIXME: this should detect conflict, for example, if different writers added on the same
+        // path, different objects, or if the same path is added and deleted, etc.
         // TODO: optimize
         self.new_groups.extend(other.new_groups);
         self.new_arrays.extend(other.new_arrays);
@@ -539,13 +525,13 @@ mod tests {
         );
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
-        let splits = ManifestSplits::from_edges(vec![vec![0, 10], vec![0, 10]]);
+        let splits1 = ManifestSplits::from_edges(vec![vec![0, 10], vec![0, 10]]);
 
         change_set.set_chunk_ref(
             node_id1.clone(),
             ChunkIndices(vec![0, 1]),
             None,
-            &splits,
+            &splits1,
         );
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
@@ -553,25 +539,27 @@ mod tests {
             node_id1.clone(),
             ChunkIndices(vec![1, 0]),
             Some(ChunkPayload::Inline("bar1".into())),
-            &splits,
+            &splits1,
         );
         change_set.set_chunk_ref(
             node_id1.clone(),
             ChunkIndices(vec![1, 1]),
             Some(ChunkPayload::Inline("bar2".into())),
-            &splits,
+            &splits1,
         );
+
+        let splits2 = ManifestSplits::from_edges(vec![vec![0, 10]]);
         change_set.set_chunk_ref(
             node_id2.clone(),
             ChunkIndices(vec![0]),
             Some(ChunkPayload::Inline("baz1".into())),
-            &splits,
+            &splits2,
         );
         change_set.set_chunk_ref(
             node_id2.clone(),
             ChunkIndices(vec![1]),
             Some(ChunkPayload::Inline("baz2".into())),
-            &splits,
+            &splits2,
         );
 
         {
