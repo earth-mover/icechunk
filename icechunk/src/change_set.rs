@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, btree_map, hash_map},
+    collections::{BTreeMap, HashMap, HashSet},
     iter,
 };
 
@@ -203,21 +203,15 @@ impl ChangeSet {
         // it allows deleting a deleted chunk by repeatedly setting None.
         self.set_chunks
             .entry(node_id.clone())
-            .and_modify(|h| {
-                h.entry(extent.clone()).or_default().insert(coord.clone(), data.clone());
-            })
             .or_insert_with(|| {
-                let mut h = HashMap::<
+                HashMap::<
                     ManifestExtents,
                     BTreeMap<ChunkIndices, Option<ChunkPayload>>,
-                >::with_capacity(splits.len());
-                h.entry(extent.clone())
-                    // TODO: this is duplicative. I can't use `or_default` because it's
-                    // nice to create the HashMap using `with_capacity`
-                    .or_default()
-                    .insert(coord, data);
-                h
-            });
+                >::with_capacity(splits.len())
+            })
+            .entry(extent.clone())
+            .or_default()
+            .insert(coord.clone(), data.clone());
     }
 
     pub fn get_chunk_ref(
@@ -342,24 +336,14 @@ impl ChangeSet {
         self.deleted_groups.extend(other.deleted_groups);
         self.deleted_arrays.extend(other.deleted_arrays);
 
-        for (node, other_splits) in other.set_chunks.into_iter() {
-            // this complicated matching code avoids cloning `other.set_chunks`, which could be quite large
-            match self.set_chunks.entry(node) {
-                btree_map::Entry::Occupied(mut entry) => {
-                    for (extent, their_split) in other_splits.into_iter() {
-                        match entry.get_mut().entry(extent) {
-                            hash_map::Entry::Occupied(mut our_split) => {
-                                our_split.get_mut().extend(their_split);
-                            }
-                            hash_map::Entry::Vacant(entry) => {
-                                entry.insert(their_split);
-                            }
-                        }
-                    }
-                }
-                btree_map::Entry::Vacant(entry) => {
-                    entry.insert(other_splits);
-                }
+        for (node, other_splits) in other.set_chunks {
+            let manifests = self.set_chunks.entry(node).or_insert_with(|| {
+                HashMap::<ManifestExtents, SplitManifest>::with_capacity(
+                    other_splits.len(),
+                )
+            });
+            for (extent, their_manifest) in other_splits {
+                manifests.entry(extent).or_default().extend(their_manifest)
             }
         }
     }
