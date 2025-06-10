@@ -3,7 +3,6 @@ use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
     future::{Future, ready},
-    iter::zip,
     ops::Range,
     pin::Pin,
     sync::Arc,
@@ -33,8 +32,9 @@ use crate::{
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
-            ManifestSplits, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
-            VirtualReferenceErrorKind, uniform_manifest_split_edges,
+            ManifestSplits, Overlap, VirtualChunkLocation, VirtualChunkRef,
+            VirtualReferenceError, VirtualReferenceErrorKind,
+            uniform_manifest_split_edges,
         },
         snapshot::{
             ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
@@ -201,30 +201,6 @@ impl ManifestSplits {
     pub fn which_index(&self, coord: &ChunkIndices) -> SessionResult<usize> {
         which_extent_and_index(self.iter(), coord).map(|(i, _)| i)
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Overlap {
-    Complete,
-    Partial,
-    None,
-}
-
-/// Important: this is not symmetric.
-pub fn overlaps(us: &ManifestExtents, them: &ManifestExtents) -> Overlap {
-    debug_assert!(us.len() == them.len());
-
-    let mut overlap = Overlap::Complete;
-    for (a, b) in zip(us.iter(), them.iter()) {
-        debug_assert!(a.start <= a.end, "Invalid range: {:?}", a.clone());
-        debug_assert!(b.start <= b.end, "Invalid range: {:?}", b.clone());
-        if (a.end <= b.start) || (a.start >= b.end) {
-            return Overlap::None;
-        } else if !((a.start <= b.start) && (a.end >= b.end)) {
-            overlap = Overlap::Partial
-        }
-    }
-    overlap
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1298,7 +1274,7 @@ async fn verified_node_chunk_iterator<'a>(
                     futures::stream::iter(manifests)
                         .filter(move |manifest_ref| {
                             futures::future::ready(extent.as_ref().is_none_or(|e| {
-                                overlaps(&manifest_ref.extents, e) != Overlap::None
+                                e.overlap_with(&manifest_ref.extents) != Overlap::None
                             }))
                         })
                         .then(move |manifest_ref| {
@@ -1734,7 +1710,7 @@ impl<'a> FlushProcess<'a> {
                 for old_ref in manifests.iter() {
                     // Remember that the extents written to disk are the `from`:`to` ranges
                     // of populated chunks
-                    match overlaps(&old_ref.extents, extent) {
+                    match extent.overlap_with(&old_ref.extents) {
                         Overlap::Complete => {
                             debug_assert!(on_disk_bbox.is_some());
                             // Just propagate this ref again, no rewriting necessary
@@ -2343,7 +2319,7 @@ mod tests {
     ) {
         prop_assert_eq!(e.intersection(&e), Some(e.clone()));
         prop_assert_eq!(e.union(&e), e.clone());
-        prop_assert_eq!(overlaps(&e, &e), Overlap::Complete);
+        prop_assert_eq!(e.overlap_with(&e), Overlap::Complete);
     }
 
     #[proptest]
@@ -2360,17 +2336,17 @@ mod tests {
         prop_assert_eq!(union.intersection(&e2), Some(e2.clone()));
 
         // order is important for the next 2
-        prop_assert_eq!(overlaps(&union, &e1), Overlap::Complete);
-        prop_assert_eq!(overlaps(&union, &e2), Overlap::Complete);
+        prop_assert_eq!(e1.overlap_with(&union), Overlap::Complete);
+        prop_assert_eq!(e2.overlap_with(&union), Overlap::Complete);
 
         if intersection.is_some() {
             let int = intersection.unwrap();
             let expected = if e1 == e1 { Overlap::Complete } else { Overlap::Partial };
-            prop_assert_eq!(overlaps(&e1, &int), expected.clone());
-            prop_assert_eq!(overlaps(&e2, &int), expected);
+            prop_assert_eq!(int.overlap_with(&e1), expected.clone());
+            prop_assert_eq!(int.overlap_with(&e2), expected);
         } else {
-            prop_assert_eq!(overlaps(&e1, &e2), Overlap::None);
-            prop_assert_eq!(overlaps(&e2, &e1), Overlap::None);
+            prop_assert_eq!(e2.overlap_with(&e1), Overlap::None);
+            prop_assert_eq!(e1.overlap_with(&e2), Overlap::None);
         }
     }
 
@@ -2393,7 +2369,7 @@ mod tests {
         if all(delta_left.iter(), |elem| elem == &0i32)
             && all(delta_right.iter(), |elem| elem == &0i32)
         {
-            prop_assert_eq!(overlaps(&extent1, &extent2), Overlap::Complete);
+            prop_assert_eq!(extent2.overlap_with(&extent1), Overlap::Complete);
         }
 
         let extent2 = ManifestExtents::from_ranges_iter(
@@ -2410,7 +2386,7 @@ mod tests {
             }),
         );
 
-        prop_assert_eq!(overlaps(&extent1, &extent2), Overlap::None);
+        prop_assert_eq!(extent2.overlap_with(&extent1), Overlap::None);
 
         let extent2 = ManifestExtents::from_ranges_iter(
             multizip((
@@ -2425,7 +2401,7 @@ mod tests {
                     ..((extent.end as i32 - width - low) as u32)
             }),
         );
-        prop_assert_eq!(overlaps(&extent1, &extent2), Overlap::None);
+        prop_assert_eq!(extent2.overlap_with(&extent1), Overlap::None);
 
         let extent2 = ManifestExtents::from_ranges_iter(
             multizip((extent1.iter(), delta_left.iter(), delta_right.iter())).map(
@@ -2435,7 +2411,7 @@ mod tests {
                 },
             ),
         );
-        prop_assert_eq!(overlaps(&extent1, &extent2), Overlap::Partial);
+        prop_assert_eq!(extent2.overlap_with(&extent1), Overlap::Partial);
     }
 
     #[icechunk_macros::test]
@@ -2455,7 +2431,7 @@ mod tests {
             vec![12u32, 4, 6].as_slice(),
         );
 
-        assert_eq!(overlaps(&e1, &e2), Overlap::None);
+        assert_eq!(e2.overlap_with(&e1), Overlap::None);
         assert_eq!(e1.intersection(&e2), None);
         assert_eq!(e1.union(&e2), union);
 
@@ -2467,8 +2443,8 @@ mod tests {
             vec![2u32, 1, 2].as_slice(),
             vec![42u32, 4, 6].as_slice(),
         );
-        assert_eq!(overlaps(&e1, &e2), Overlap::None);
-        assert_eq!(overlaps(&e2, &e1), Overlap::None);
+        assert_eq!(e2.overlap_with(&e1), Overlap::None);
+        assert_eq!(e1.overlap_with(&e2), Overlap::None);
 
         // asymmetric case
         let e1 = ManifestExtents::new(
@@ -2487,8 +2463,8 @@ mod tests {
             vec![2u32, 1, 2].as_slice(),
             vec![3u32, 4, 6].as_slice(),
         );
-        assert_eq!(overlaps(&e1, &e2), Overlap::Complete);
-        assert_eq!(overlaps(&e2, &e1), Overlap::Partial);
+        assert_eq!(e2.overlap_with(&e1), Overlap::Complete);
+        assert_eq!(e1.overlap_with(&e2), Overlap::Partial);
         assert_eq!(e1.union(&e2), union.clone());
         assert_eq!(e2.union(&e1), union.clone());
         assert_eq!(e1.intersection(&e2), Some(intersection));
@@ -2511,7 +2487,8 @@ mod tests {
             vec![0, 21, 22],
         ]);
         for vec in splits.iter().combinations(2) {
-            assert_eq!(overlaps(vec[0], vec[1]), Overlap::None)
+            assert_eq!(vec[0].overlap_with(vec[1]), Overlap::None);
+            assert_eq!(vec[1].overlap_with(vec[0]), Overlap::None);
         }
 
         Ok(())
