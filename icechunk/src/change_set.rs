@@ -135,9 +135,9 @@ impl ChangeSet {
                     .iter()
                     .find(|x| {
                         // case of increased dimension size
-                        old_extents.overlap_with(*x) == Overlap::Complete
+                        old_extents.overlap_with(x) == Overlap::Complete
                         // case of decreased dimension size
-                            || (*x).overlap_with(&old_extents) == Overlap::Complete
+                            || x.overlap_with(&old_extents) == Overlap::Complete
                     })
                     .map(|extents| new_manifests.insert(extents.clone(), chunks));
             }
