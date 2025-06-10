@@ -126,20 +126,28 @@ impl ChangeSet {
                 HashMap::<ManifestExtents, SplitManifest>::with_capacity(
                     new_splits.len(),
                 );
-            for (old_extents, chunks) in manifests.into_iter() {
-                // FIXME: these extents had better be compatible
-                // test_cases: increasing size of (multiple) dimensions
-                //             decreasing size of (multiple) dimensions
-                //
-                new_splits
-                    .iter()
-                    .find(|x| {
-                        // case of increased dimension size
-                        old_extents.overlap_with(x) == Overlap::Complete
-                        // case of decreased dimension size
-                            || x.overlap_with(&old_extents) == Overlap::Complete
-                    })
-                    .map(|extents| new_manifests.insert(extents.clone(), chunks));
+            for (old_extents, mut chunks) in manifests.into_iter() {
+                for new_extents in new_splits.iter() {
+                    if old_extents.overlap_with(new_extents) == Overlap::None {
+                        continue;
+                    }
+
+                    // TODO: replace with `BTreeMap.drain_filter` after it is stable.
+                    let mut extracted =
+                        BTreeMap::<ChunkIndices, Option<ChunkPayload>>::new();
+                    chunks.retain(|coord, payload| {
+                        if new_extents.contains(coord.0.as_slice()) {
+                            extracted.insert(coord.clone(), payload.clone());
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                    new_manifests
+                        .entry(new_extents.clone())
+                        .or_default()
+                        .extend(extracted);
+                }
             }
             self.set_chunks.insert(node_id.clone(), new_manifests);
         }

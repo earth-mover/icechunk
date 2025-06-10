@@ -2772,13 +2772,13 @@ mod tests {
 
         let array_def3 = Bytes::from_static(br#"{"this":"more arrays"}"#);
         ds.update_array(
-            &array1_path.clone(),
+            &new_array_path.clone(),
             shape3.clone(),
             dimension_names3.clone(),
             array_def3.clone(),
         )
         .await?;
-        let node = ds.get_node(&array1_path).await;
+        let node = ds.get_node(&new_array_path).await;
         if let Ok(NodeSnapshot { node_data: NodeData::Array { shape, .. }, .. }) = &node {
             assert_eq!(shape, &shape3);
         } else {
@@ -2788,11 +2788,57 @@ mod tests {
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
         let payload = ds.get_chunk_writer()(data.clone()).await?;
-        ds.set_chunk_ref(array1_path.clone(), ChunkIndices(vec![0]), Some(payload))
+        ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
 
         let chunk = get_chunk(
-            ds.get_chunk_reader(&array1_path, &ChunkIndices(vec![0]), &ByteRange::ALL)
+            ds.get_chunk_reader(&new_array_path, &ChunkIndices(vec![0]), &ByteRange::ALL)
+                .await
+                .unwrap(),
+        )
+        .await?;
+        assert_eq!(chunk, Some(data));
+
+        // reduce size of dimension
+        // // update old array zarr metadata and check it
+        let shape4 = ArrayShape::new(vec![(6, 3)]).unwrap();
+        let array_def3 = Bytes::from_static(br#"{"this":"more arrays"}"#);
+        ds.update_array(
+            &new_array_path.clone(),
+            shape4.clone(),
+            dimension_names3.clone(),
+            array_def3.clone(),
+        )
+        .await?;
+        let node = ds.get_node(&new_array_path).await;
+        if let Ok(NodeSnapshot { node_data: NodeData::Array { shape, .. }, .. }) = &node {
+            assert_eq!(shape, &shape4);
+        } else {
+            panic!("Failed to update zarr metadata");
+        }
+
+        // set old array chunk and check them
+        let data = Bytes::copy_from_slice(b"old".repeat(512).as_slice());
+        let payload = ds.get_chunk_writer()(data.clone()).await?;
+        ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
+            .await?;
+        let data = Bytes::copy_from_slice(b"new".repeat(512).as_slice());
+        let payload = ds.get_chunk_writer()(data.clone()).await?;
+        ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![1]), Some(payload))
+            .await?;
+
+        let chunk = get_chunk(
+            ds.get_chunk_reader(&new_array_path, &ChunkIndices(vec![1]), &ByteRange::ALL)
+                .await
+                .unwrap(),
+        )
+        .await?;
+        assert_eq!(chunk, Some(data.clone()));
+
+        ds.commit("commit", Some(SnapshotProperties::default())).await?;
+
+        let chunk = get_chunk(
+            ds.get_chunk_reader(&new_array_path, &ChunkIndices(vec![1]), &ByteRange::ALL)
                 .await
                 .unwrap(),
         )

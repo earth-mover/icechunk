@@ -14,8 +14,11 @@ from hypothesis.stateful import (
 )
 
 import zarr
+import logging
 from icechunk import Repository, in_memory_storage
 from zarr.core.buffer import default_buffer_prototype
+import hypothesis.extra.numpy as npst
+from zarr.storage import LoggingStore
 from zarr.testing.stateful import ZarrHierarchyStateMachine
 from zarr.testing.strategies import (
     node_names,
@@ -44,10 +47,10 @@ def chunk_paths(
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     def __init__(self, repo: Repository) -> None:
         self.repo = repo
-        store = repo.writable_session("main").store
+        store = LoggingStore(repo.writable_session("main").store, log_level=logging.INFO + 1)
         super().__init__(store)
 
-    @precondition(lambda self: self.store.session.has_uncommitted_changes)
+    @precondition(lambda self: self.store._store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def commit_with_check(self, data) -> None:
         note("committing and checking list_prefix")
@@ -57,9 +60,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         get_before = self._sync(self.store.get(path, prototype=PROTOTYPE))
         assert get_before
 
-        self.store.session.commit("foo")
+        self.store._store.session.commit("foo")
 
-        self.store = self.repo.writable_session("main").store
+        self.store = LoggingStore(self.repo.writable_session("main").store)
 
         lsafter = sorted(self._sync_iter(self.store.list_prefix("")))
         get_after = self._sync(self.store.get(path, prototype=PROTOTYPE))
@@ -181,6 +184,18 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         note(f"deleting chunk {path=!r}")
         self._sync(self.model.delete(path))
         self._sync(self.store.delete(path))
+
+    @precondition(lambda self: bool(self.all_arrays))
+    @rule(data=st.data())
+    def resize_array(self, data) -> None:
+        array = data.draw(st.sampled_from(sorted(self.all_arrays)))
+        model_array = zarr.open_array(path=array, store=self.model)
+        store_array = zarr.open_array(path=array, store=self.store)
+        ndim = model_array.ndim
+        new_shape = data.draw(npst.array_shapes(max_dims=ndim, min_dims=ndim, min_side=1))
+        note(f"resizing array from {model_array.shape} to {new_shape}")
+        model_array.resize(new_shape)
+        store_array.resize(new_shape)
 
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
     @rule(data=st.data())
