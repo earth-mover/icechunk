@@ -247,6 +247,12 @@ impl PyStore {
     }
 
     #[getter]
+    fn supports_consolidated_metadata(&self) -> PyIcechunkStoreResult<bool> {
+        let supports = self.0.supports_consolidated_metadata()?;
+        Ok(supports)
+    }
+
+    #[getter]
     fn supports_deletes(&self) -> PyIcechunkStoreResult<bool> {
         let supports_deletes = self.0.supports_deletes()?;
         Ok(supports_deletes)

@@ -67,3 +67,10 @@ async def test_support_dimension_names_null() -> None:
         (await store.get("0/zarr.json", prototype=default_buffer_prototype())).to_bytes()
     )
     assert "dimension_names" not in meta
+
+
+def test_doesnt_support_consolidated_metadata() -> None:
+    repo = parse_repo("memory", "test")
+    session = repo.writable_session("main")
+    store = session.store
+    assert not store.supports_consolidated_metadata
