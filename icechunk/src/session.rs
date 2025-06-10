@@ -13,7 +13,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream};
-use itertools::{Itertools as _, repeat_n};
+use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -164,10 +164,12 @@ pub type SessionResult<T> = Result<T, SessionError>;
 // Returns the index of split_range that includes ChunkIndices
 // This can be used at write time to split manifests based on the config
 // and at read time to choose which manifest to query for chunk payload
-pub fn which_extent_and_index<'a>(
-    iter: impl Iterator<Item = &'a ManifestExtents>,
-    coord: &ChunkIndices,
-) -> SessionResult<(usize, ManifestExtents)> {
+/// It is useful to have this act on an iterator (e.g. get_chunk_ref)
+/// The find method on ManifestSplits is simply a helper.
+pub fn find_coord<'a, I>(mut iter: I, coord: &'a ChunkIndices) -> Option<ManifestExtents>
+where
+    I: Iterator<Item = &'a ManifestExtents>,
+{
     // split_range[i] must bound ChunkIndices
     // 0 <= return value <= split_range.len()
     // it is possible that split_range does not include a coord. say we have 2x2 split grid
@@ -176,30 +178,27 @@ pub fn which_extent_and_index<'a>(
     // Since split_range need not form a regular grid, we must iterate through and find the first result.
     // ManifestExtents in split_range MUST NOT overlap with each other. How do we ensure this?
     // ndim must be the same
-    // debug_assert_eq!(coord.0.len(), split_range[0].len());
-    // FIXME: could optimize for unbounded single manifest
     // Note: I don't think we can distinguish between out of bounds index for the array
     //       and an index that is part of a split that hasn't been written yet.
-    iter.enumerate()
-        .find(|(_, e)| e.contains(coord.0.as_slice()))
-        .map(|(i, e)| (i, e.clone()))
-        .ok_or(
-            SessionErrorKind::InvalidIndexForSplitManifests { coords: coord.clone() }
-                .into(),
-        )
+    iter.find(|e| e.contains(coord.0.as_slice())).cloned()
+}
+
+pub fn position_coord<'a, I>(iter: I, coord: &'a ChunkIndices) -> Option<usize>
+where
+    I: Iterator<Item = &'a ManifestExtents>,
+{
+    enumerate(iter).find(|(_, e)| e.contains(coord.0.as_slice())).map(|x| x.0)
 }
 
 impl ManifestSplits {
-    pub fn which_extent_and_index(
-        &self,
-        coord: &ChunkIndices,
-    ) -> SessionResult<(usize, ManifestExtents)> {
-        which_extent_and_index(self.iter(), coord)
+    pub fn find(&self, coord: &ChunkIndices) -> Option<ManifestExtents> {
+        debug_assert_eq!(coord.0.len(), self.0[0].len());
+        find_coord(self.iter(), coord)
     }
 
-    #[cfg(test)]
-    pub fn which_index(&self, coord: &ChunkIndices) -> SessionResult<usize> {
-        which_extent_and_index(self.iter(), coord).map(|(i, _)| i)
+    pub fn position(&self, coord: &ChunkIndices) -> Option<usize> {
+        debug_assert_eq!(coord.0.len(), self.0[0].len());
+        position_coord(self.iter(), coord)
     }
 }
 
@@ -803,16 +802,14 @@ impl Session {
             // in the changeset, return None to Zarr.
             return Ok(None);
         }
-        let splits = ManifestSplits::from_extents(
-            manifests.iter().map(|m| m.extents.clone()).collect(),
-        );
-        let (index, _) = match splits.which_extent_and_index(coords) {
-            Ok(index) => index,
+
+        let index = match position_coord(manifests.iter().map(|m| &m.extents), coords) {
+            Some(index) => index,
             // for an invalid coordinate, we bail.
             // This happens for two cases:
             // (1) the "coords" is out-of-range for the array shape
             // (2) the "coords" belongs to a shard that hasn't been written yet.
-            Err(_) => return Ok(None),
+            None => return Ok(None),
         };
 
         let manifest = self.fetch_manifest(&manifests[index].object_id).await?;
@@ -2530,16 +2527,16 @@ mod tests {
     async fn test_which_split() -> Result<(), Box<dyn Error>> {
         let splits = ManifestSplits::from_edges(vec![vec![0, 10, 20]]);
 
-        assert_eq!(splits.which_index(&ChunkIndices(vec![1])).unwrap(), 0);
-        assert_eq!(splits.which_index(&ChunkIndices(vec![11])).unwrap(), 1);
+        assert_eq!(splits.position(&ChunkIndices(vec![1])), Some(0));
+        assert_eq!(splits.position(&ChunkIndices(vec![11])), Some(1));
 
         let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
 
         let splits = ManifestSplits::from_edges(edges);
-        assert_eq!(splits.which_index(&ChunkIndices(vec![1, 1])).unwrap(), 0);
-        assert_eq!(splits.which_index(&ChunkIndices(vec![1, 10])).unwrap(), 1);
-        assert_eq!(splits.which_index(&ChunkIndices(vec![1, 11])).unwrap(), 1);
-        assert!(splits.which_index(&ChunkIndices(vec![21, 21])).is_err());
+        assert_eq!(splits.position(&ChunkIndices(vec![1, 1])), Some(0));
+        assert_eq!(splits.position(&ChunkIndices(vec![1, 10])), Some(1));
+        assert_eq!(splits.position(&ChunkIndices(vec![1, 11])), Some(1));
+        assert!(splits.position(&ChunkIndices(vec![21, 21])).is_none());
 
         Ok(())
     }
@@ -2791,17 +2788,13 @@ mod tests {
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
         let payload = ds.get_chunk_writer()(data.clone()).await?;
-        ds.set_chunk_ref(array1_path.clone(), ChunkIndices(vec![0, 0, 0]), Some(payload))
+        ds.set_chunk_ref(array1_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
 
         let chunk = get_chunk(
-            ds.get_chunk_reader(
-                &array1_path,
-                &ChunkIndices(vec![0, 0, 0]),
-                &ByteRange::ALL,
-            )
-            .await
-            .unwrap(),
+            ds.get_chunk_reader(&array1_path, &ChunkIndices(vec![0]), &ByteRange::ALL)
+                .await
+                .unwrap(),
         )
         .await?;
         assert_eq!(chunk, Some(data));
