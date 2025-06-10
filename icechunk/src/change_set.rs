@@ -103,7 +103,13 @@ impl ChangeSet {
         self.new_arrays.insert(path, (node_id, array_data));
     }
 
-    pub fn update_array(&mut self, node_id: &NodeId, path: &Path, array_data: ArrayData) {
+    pub fn update_array(
+        &mut self,
+        node_id: &NodeId,
+        path: &Path,
+        array_data: ArrayData,
+        new_splits: &ManifestSplits,
+    ) {
         match self.new_arrays.get(path) {
             Some((id, _)) => {
                 debug_assert!(!self.updated_arrays.contains_key(id));
@@ -112,6 +118,30 @@ impl ChangeSet {
             None => {
                 self.updated_arrays.insert(node_id.clone(), array_data);
             }
+        }
+
+        // update existing splits
+        if let Some(manifests) = self.set_chunks.remove(node_id) {
+            let mut new_manifests =
+                HashMap::<ManifestExtents, SplitManifest>::with_capacity(
+                    new_splits.len(),
+                );
+            for (old_extents, chunks) in manifests.into_iter() {
+                // FIXME: these extents had better be compatible
+                // test_cases: increasing size of (multiple) dimensions
+                //             decreasing size of (multiple) dimensions
+                //
+                new_splits
+                    .iter()
+                    .find(|x| {
+                        // case of increased dimension size
+                        old_extents.overlap_with(*x) == Overlap::Complete
+                        // case of decreased dimension size
+                            || (*x).overlap_with(&old_extents) == Overlap::Complete
+                    })
+                    .map(|extents| new_manifests.insert(extents.clone(), chunks));
+            }
+            self.set_chunks.insert(node_id.clone(), new_manifests);
         }
     }
 
