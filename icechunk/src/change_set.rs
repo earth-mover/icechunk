@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     format::{
         ChunkIndices, NodeId, Path,
-        manifest::{ChunkInfo, ChunkPayload, ManifestExtents, ManifestSplits},
+        manifest::{ChunkInfo, ChunkPayload, ManifestExtents, ManifestSplits, Overlap},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
     },
     session::{SessionResult, which_extent_and_index},

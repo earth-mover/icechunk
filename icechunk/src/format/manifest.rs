@@ -25,6 +25,13 @@ use super::{
     ChunkId, ChunkIndices, ChunkLength, ChunkOffset, IcechunkResult, ManifestId, NodeId,
 };
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Overlap {
+    Complete,
+    Partial,
+    None,
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestExtents(Vec<Range<u32>>);
 
@@ -72,6 +79,23 @@ impl ManifestExtents {
             zip(self.iter(), other.iter())
                 .map(|(a, b)| min(a.start, b.start)..max(a.end, b.end)),
         )
+    }
+
+    pub fn overlap_with(&self, other: &Self) -> Overlap {
+        // Important: this is not symmetric.
+        debug_assert!(self.len() == other.len());
+
+        let mut overlap = Overlap::Complete;
+        for (a, b) in zip(other.iter(), self.iter()) {
+            debug_assert!(a.start <= a.end, "Invalid range: {:?}", a.clone());
+            debug_assert!(b.start <= b.end, "Invalid range: {:?}", b.clone());
+            if (a.end <= b.start) || (a.start >= b.end) {
+                return Overlap::None;
+            } else if !((a.start <= b.start) && (a.end >= b.end)) {
+                overlap = Overlap::Partial
+            }
+        }
+        overlap
     }
 }
 
