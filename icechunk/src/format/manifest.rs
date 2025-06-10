@@ -83,7 +83,12 @@ impl ManifestExtents {
 
     pub fn overlap_with(&self, other: &Self) -> Overlap {
         // Important: this is not symmetric.
-        debug_assert!(self.len() == other.len());
+        debug_assert!(
+            self.len() == other.len(),
+            "Length mismatch: self = {:?}, other = {:?}",
+            &self,
+            &other
+        );
 
         let mut overlap = Overlap::Complete;
         for (a, b) in zip(other.iter(), self.iter()) {
