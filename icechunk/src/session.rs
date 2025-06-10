@@ -437,6 +437,7 @@ impl Session {
                 &node.id,
                 path,
                 ArrayData { shape, dimension_names, user_data },
+                #[allow(clippy::expect_used)]
                 self.splits.get(&node.id).expect("getting splits should not fail."),
             )
         })
