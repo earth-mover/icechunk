@@ -1620,10 +1620,7 @@ impl<'a> FlushProcess<'a> {
         refs: HashMap<ManifestExtents, ManifestRef>,
     ) -> SessionResult<()> {
         for ref_ in refs.into_values() {
-            self.manifest_refs
-                .entry(node_id.clone())
-                .and_modify(|v| v.push(ref_.clone()))
-                .or_insert_with(|| vec![ref_]);
+            self.manifest_refs.entry(node_id.clone()).or_default().push(ref_);
         }
         Ok(())
     }
@@ -1682,8 +1679,7 @@ impl<'a> FlushProcess<'a> {
 
         let modified_splits = self
             .change_set
-            .array_manifests_iterator(&node.id, &node.path)
-            .map(|(extents, _)| extents)
+            .modified_manifest_extents_iterator(&node.id, &node.path)
             .collect::<HashSet<_>>();
 
         // FIXME: there is an invariant here
