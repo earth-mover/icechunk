@@ -570,7 +570,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             # need to load to dict to compare since ordering of entries might differ
             expected = json.loads(self.model[k].to_bytes())
             value = self.sync_store.get(k, default_buffer_prototype())
-            assert value is not None
+            assert value is not None, k
             actual = json.loads(value.to_bytes())
             actual_fv = actual.pop("fill_value")
             expected_fv = expected.pop("fill_value")
