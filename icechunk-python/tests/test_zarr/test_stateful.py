@@ -1,6 +1,7 @@
 import json
 from typing import Any
 
+import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -14,13 +15,11 @@ from hypothesis.stateful import (
 )
 
 import zarr
-import logging
 from icechunk import Repository, in_memory_storage
 from zarr.core.buffer import default_buffer_prototype
-import hypothesis.extra.numpy as npst
-from zarr.storage import LoggingStore
 from zarr.testing.stateful import ZarrHierarchyStateMachine
 from zarr.testing.strategies import (
+    basic_indices,
     node_names,
     np_array_and_chunks,
     numpy_arrays,
@@ -47,7 +46,7 @@ def chunk_paths(
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     def __init__(self, repo: Repository) -> None:
         self.repo = repo
-        store = LoggingStore(repo.writable_session("main").store, log_level=logging.INFO + 1)
+        store = repo.writable_session("main").store
         super().__init__(store)
 
     @precondition(lambda self: self.store._store.session.has_uncommitted_changes)
@@ -62,7 +61,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         self.store._store.session.commit("foo")
 
-        self.store = LoggingStore(self.repo.writable_session("main").store)
+        self.store = self.repo.writable_session("main").store
 
         lsafter = sorted(self._sync_iter(self.store.list_prefix("")))
         get_after = self._sync(self.store.get(path, prototype=PROTOTYPE))
@@ -184,6 +183,20 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         note(f"deleting chunk {path=!r}")
         self._sync(self.model.delete(path))
         self._sync(self.store.delete(path))
+
+    @precondition(lambda self: bool(self.all_arrays))
+    @rule(data=st.data())
+    def overwrite_array_basic_indexing(self, data) -> None:
+        array = data.draw(st.sampled_from(sorted(self.all_arrays)))
+        model_array = zarr.open_array(path=array, store=self.model)
+        store_array = zarr.open_array(path=array, store=self.store)
+        slicer = data.draw(basic_indices(shape=model_array.shape))
+        note(f"overwriting array basic {slicer=}")
+        new_data = data.draw(
+            npst.arrays(shape=model_array[slicer].shape, dtype=model_array.dtype)
+        )
+        model_array[slicer] = new_data
+        store_array[slicer] = new_data
 
     @precondition(lambda self: bool(self.all_arrays))
     @rule(data=st.data())
