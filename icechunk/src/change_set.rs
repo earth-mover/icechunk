@@ -31,9 +31,6 @@ pub struct ChangeSet {
     updated_arrays: HashMap<NodeId, ArrayData>,
     updated_groups: HashMap<NodeId, Bytes>,
     set_chunks: BTreeMap<NodeId, HashMap<ManifestExtents, SplitManifest>>,
-    // we track deleted chunk indices separately to handle the case when resizing
-    // an array changes the splits, and we might lose record of chunk deletes.
-    deleted_chunks: HashMap<NodeId, HashSet<ChunkIndices>>,
     deleted_groups: HashSet<(Path, NodeId)>,
     deleted_arrays: HashSet<(Path, NodeId)>,
 }
@@ -63,25 +60,12 @@ impl ChangeSet {
         &self,
     ) -> impl Iterator<Item = (&NodeId, impl Iterator<Item = &ChunkIndices>)> {
         self.set_chunks.iter().map(|(node_id, split_map)| {
-            let deletes = self
-                .deleted_chunks
-                .get(node_id)
-                .map(|x| Either::Right(x.iter()))
-                .or_else(|| Some(Either::Left(iter::empty())))
-                .unwrap();
-            (
-                node_id,
-                Either::<iter::Empty<&ChunkIndices>, _>::Right(
-                    split_map.values().flat_map(|x| x.keys()),
-                )
-                .chain(deletes),
-            )
+            (node_id, split_map.values().flat_map(|x| x.keys()))
         })
     }
 
     pub fn has_chunk_changes(&self, node: &NodeId) -> bool {
         self.set_chunks.get(node).map(|m| !m.is_empty()).unwrap_or(false)
-            || self.deleted_chunks.get(node).map(|m| !m.is_empty()).unwrap_or(false)
     }
 
     pub fn arrays_with_chunk_changes(&self) -> impl Iterator<Item = &NodeId> {
@@ -221,43 +205,21 @@ impl ChangeSet {
         data: Option<ChunkPayload>,
         splits: &ManifestSplits,
     ) {
-        // deletes must always be recorded, since the chunk might exist in the on-disk manifest
-        let deletes = self.deleted_chunks.entry(node_id.clone()).or_default();
-        let extent = splits.find(&coord);
-        match data {
-            Some(payload) => {
-                deletes.remove(&coord);
-                self.set_chunks
-                    .entry(node_id)
-                    .or_insert_with(|| {
-                        HashMap::<ManifestExtents, SplitManifest>::with_capacity(
-                            splits.len(),
-                        )
-                    })
-                    .entry(extent.expect("grabbing this extent should succeed"))
-                    // at this point, we have valid data so we must always insert the ref
-                    .or_default()
-                    .insert(coord.clone(), Some(payload));
-            }
-            None => {
-                // this implementation makes delete idempotent
-                // it allows deleting a deleted chunk by repeatedly setting None.
-                deletes.insert(coord.clone());
-                if let Some(extent) = extent {
-                    // both uses of `or_default` are a bit too clever.
-                    // I am making sure this extent is present in the map,
-                    // so that `modified_manifest_extents_iterator` picks it up
-                    self.set_chunks
-                        .entry(node_id)
-                        .or_default()
-                        .entry(extent)
-                        .and_modify(|manifest| {
-                            manifest.remove(&coord);
-                        })
-                        .or_default();
-                };
-            }
-        }
+        #[allow(clippy::expect_used)]
+        let extent = splits.find(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
+        // this implementation makes delete idempotent
+        // it allows deleting a deleted chunk by repeatedly setting None.
+        self.set_chunks
+            .entry(node_id.clone())
+            .or_insert_with(|| {
+                HashMap::<
+                    ManifestExtents,
+                    BTreeMap<ChunkIndices, Option<ChunkPayload>>,
+                >::with_capacity(splits.len())
+            })
+            .entry(extent.clone())
+            .or_default()
+            .insert(coord.clone(), data.clone());
     }
 
     pub fn get_chunk_ref(
@@ -265,16 +227,9 @@ impl ChangeSet {
         node_id: &NodeId,
         coords: &ChunkIndices,
     ) -> Option<&Option<ChunkPayload>> {
-        self.deleted_chunks.get(node_id).and_then(|deletes| {
-            if deletes.contains(coords) {
-                Some(&None)
-            } else {
-                self.set_chunks.get(node_id).and_then(|node_chunks| {
-                    find_coord(node_chunks.keys(), coords).and_then(|extent| {
-                        node_chunks.get(&extent).and_then(|s| s.get(coords))
-                    })
-                })
-            }
+        self.set_chunks.get(node_id).and_then(|node_chunks| {
+            find_coord(node_chunks.keys(), coords)
+                .and_then(|extent| node_chunks.get(&extent).and_then(|s| s.get(coords)))
         })
     }
 
@@ -303,22 +258,14 @@ impl ChangeSet {
         }
         match self.set_chunks.get(node_id) {
             None => Either::Left(iter::empty()),
-            Some(h) => {
-                let set_chunks = h
-                    .iter()
+            Some(h) => Either::Right(
+                h.iter()
                     // FIXME: review this
                     .filter(move |(manifest_extent, _)| {
                         extent.is_none() || Some(*manifest_extent) == extent.as_ref()
                     })
-                    .flat_map(|(_, manifest)| manifest.iter());
-                let deleted_chunks = match self.deleted_chunks.get(node_id) {
-                    Some(deletes) => Either::Right(
-                        deletes.iter().map(|coord| (coord, &None::<ChunkPayload>)),
-                    ),
-                    None => Either::Left(iter::empty()),
-                };
-                Either::Right(set_chunks.chain(deleted_chunks))
-            }
+                    .flat_map(|(_, manifest)| manifest.iter()),
+            ),
         }
     }
 
