@@ -31,6 +31,10 @@ pub struct ChangeSet {
     updated_arrays: HashMap<NodeId, ArrayData>,
     updated_groups: HashMap<NodeId, Bytes>,
     set_chunks: BTreeMap<NodeId, HashMap<ManifestExtents, SplitManifest>>,
+    // This map keeps track of any chunk deletes that are
+    // outside the domain of the current array shape. This is needed to handle
+    // the very unlikely case of multiple resizes in the same session.
+    deleted_chunks_outside_bounds: BTreeMap<NodeId, HashSet<ChunkIndices>>,
     deleted_groups: HashSet<(Path, NodeId)>,
     deleted_arrays: HashSet<(Path, NodeId)>,
 }
@@ -123,6 +127,7 @@ impl ChangeSet {
 
         // update existing splits
         if let Some(manifests) = self.set_chunks.remove(node_id) {
+            let mut new_deleted_chunks = HashSet::<ChunkIndices>::new();
             let mut new_manifests =
                 HashMap::<ManifestExtents, SplitManifest>::with_capacity(
                     new_splits.len(),
@@ -148,8 +153,31 @@ impl ChangeSet {
                         .or_default()
                         .extend(extracted);
                 }
+                new_deleted_chunks.extend(
+                    chunks.into_iter().filter_map(|(coord, payload)| {
+                        payload.is_none().then_some(coord)
+                    }),
+                );
             }
+
+            // bring back any previously tracked deletes
+            if let Some(deletes) = self.deleted_chunks_outside_bounds.get(node_id) {
+                for coord in deletes.iter() {
+                    if let Some(extents) = new_splits.find(coord) {
+                        new_manifests
+                            .entry(extents)
+                            .or_default()
+                            .insert(coord.clone(), None);
+                    };
+                }
+            };
             self.set_chunks.insert(node_id.clone(), new_manifests);
+
+            // keep track of any deletes not inserted in to set_chunks
+            self.deleted_chunks_outside_bounds
+                .entry(node_id.clone())
+                .or_default()
+                .extend(new_deleted_chunks);
         }
     }
 
@@ -244,6 +272,16 @@ impl ChangeSet {
             for split in changes.values_mut() {
                 split.retain(|coord, _| !predicate(coord));
             }
+        }
+    }
+
+    pub fn deleted_chunks_iterator(
+        &self,
+        node_id: &NodeId,
+    ) -> impl Iterator<Item = &ChunkIndices> {
+        match self.deleted_chunks_outside_bounds.get(node_id) {
+            Some(deletes) => Either::Right(deletes.iter()),
+            None => Either::Left(iter::empty()),
         }
     }
 
@@ -343,6 +381,8 @@ impl ChangeSet {
         self.updated_arrays.extend(other.updated_arrays);
         self.deleted_groups.extend(other.deleted_groups);
         self.deleted_arrays.extend(other.deleted_arrays);
+        // FIXME: do we even test this?
+        self.deleted_chunks_outside_bounds.extend(other.deleted_chunks_outside_bounds);
 
         for (node, other_splits) in other.set_chunks {
             let manifests = self.set_chunks.entry(node).or_insert_with(|| {

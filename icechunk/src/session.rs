@@ -637,9 +637,12 @@ impl Session {
                 message: "getting chunk reference".to_string(),
             }
             .into()),
-            NodeData::Array { manifests, .. } => {
-                // Note: at this point, coords could be invalid for the array shape
-                //       but we just let that pass.
+            NodeData::Array { shape, manifests, .. } => {
+                if !shape.valid_chunk_coord(coords) {
+                    // this chunk ref cannot exist
+                    return Ok(None);
+                }
+
                 // check the chunks modified in this session first
                 // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
                 let session_chunk =
@@ -1254,6 +1257,9 @@ async fn verified_node_chunk_iterator<'a>(
                 change_set
                     .array_chunks_iterator(&node.id, &node.path, extent.clone())
                     .map(|(idx, _)| idx)
+                    // by chaining here, we make sure we don't pull from the manifest
+                    // any chunks that were deleted prior to resizing in this session
+                    .chain(change_set.deleted_chunks_iterator(&node.id))
                     .collect(),
             );
 
@@ -2133,6 +2139,7 @@ mod tests {
 
     use crate::{
         ObjectStorage, Repository,
+        config::{ManifestConfig, ManifestSplitCondition},
         conflicts::{
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
@@ -2583,6 +2590,125 @@ mod tests {
         expected_result.insert("project".to_string(), "My Project".to_string().into());
         expected_result.insert("id".to_string(), "ideded".to_string().into());
         assert_eq!(snapshot_infos[0].metadata, expected_result);
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_repository_with_splits_and_resizes() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        // let storage_settings = storage.default_settings();
+        // let asset_manager =
+        //     AssetManager::new_no_cache(Arc::clone(&storage), storage_settings.clone(), 1);
+
+        let split_sizes = Some(vec![(
+            ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+            vec![ManifestSplitDim {
+                condition: ManifestSplitDimCondition::Any,
+                num_chunks: 2,
+            }],
+        )]);
+
+        let man_config = ManifestConfig {
+            splitting: Some(ManifestSplittingConfig { split_sizes }),
+            ..ManifestConfig::default()
+        };
+
+        let repo = Repository::create(
+            Some(RepositoryConfig {
+                inline_chunk_threshold_bytes: Some(0),
+                manifest: Some(man_config),
+                ..Default::default()
+            }),
+            storage,
+            HashMap::new(),
+        )
+        .await?;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(4, 1)]).unwrap();
+        let dimension_names = Some(vec!["t".into()]);
+        let array_def = Bytes::from_static(br#"{"this":"other array"}"#);
+
+        session
+            .add_array(
+                array_path.clone(),
+                shape.clone(),
+                dimension_names.clone(),
+                array_def.clone(),
+            )
+            .await?;
+
+        let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
+        for idx in vec![0, 2] {
+            let payload = session.get_chunk_writer()(bytes.clone()).await?;
+            session
+                .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
+                .await?;
+        }
+        session.commit("None", None).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        // This is how Zarr resizes
+        // first, delete any out of bounds chunks
+        session.set_chunk_ref(array_path.clone(), ChunkIndices(vec![2]), None).await?;
+        // second, update metadata
+        let shape2 = ArrayShape::new(vec![(2, 1)]).unwrap();
+        session
+            .update_array(
+                &array_path,
+                shape2.clone(),
+                dimension_names.clone(),
+                array_def.clone(),
+            )
+            .await?;
+
+        assert!(
+            session.get_chunk_ref(&array_path, &ChunkIndices(vec![2])).await?.is_none()
+        );
+
+        // resize back to original shape
+        session
+            .update_array(
+                &array_path,
+                shape.clone(),
+                dimension_names.clone(),
+                array_def.clone(),
+            )
+            .await?;
+
+        // should still be deleted
+        assert!(
+            session.get_chunk_ref(&array_path, &ChunkIndices(vec![2])).await?.is_none()
+        );
+
+        // set another chunk in this split
+        let payload = session.get_chunk_writer()(bytes.clone()).await?;
+        session
+            .set_chunk_ref(array_path.clone(), ChunkIndices(vec![3]), Some(payload))
+            .await?;
+        // should still be deleted
+        assert!(
+            session.get_chunk_ref(&array_path, &ChunkIndices(vec![2])).await?.is_none()
+        );
+        // new ref should be present
+        assert!(
+            session.get_chunk_ref(&array_path, &ChunkIndices(vec![3])).await?.is_some()
+        );
+
+        // write manifests, check number of references in manifest
+        session.commit("updated", None).await?;
+
+        // should still be deleted
+        assert!(
+            session.get_chunk_ref(&array_path, &ChunkIndices(vec![2])).await?.is_none()
+        );
+        // new ref should be present
+        assert!(
+            session.get_chunk_ref(&array_path, &ChunkIndices(vec![3])).await?.is_some()
+        );
 
         Ok(())
     }
