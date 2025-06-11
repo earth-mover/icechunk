@@ -1171,6 +1171,10 @@ async fn updated_chunk_iterator<'a>(
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
     let res = nodes.and_then(move |node| async move {
+        // Note: Confusingly, these NodeSnapshot instances have the metadata stored in the snapshot.
+        // We have not applied any changeset updates. At the moment, the downstream code only
+        // use node.id so there is no need to update yet.
+
         Ok(updated_node_chunks_iterator(
             asset_manager,
             change_set,
