@@ -1714,7 +1714,7 @@ impl<'a> FlushProcess<'a> {
                 for old_ref in manifests.iter() {
                     // Remember that the extents written to disk are the `from`:`to` ranges
                     // of populated chunks
-                    match extent.overlap_with(&old_ref.extents) {
+                    match &old_ref.extents.overlap_with(extent) {
                         Overlap::Complete => {
                             debug_assert!(on_disk_bbox.is_some());
                             // Just propagate this ref again, no rewriting necessary
@@ -1877,7 +1877,9 @@ async fn flush(
             continue;
         }
 
-        if flush_data.change_set.has_chunk_changes(node_id) {
+        if flush_data.change_set.is_updated_array(node_id)
+            || flush_data.change_set.has_chunk_changes(node_id)
+        {
             trace!(path=%node.path, "Node has changes, writing a new manifest");
             // Array wasn't deleted and has changes in this session
             // get the new node to handle changes in size, e.g. appends.
@@ -2597,9 +2599,6 @@ mod tests {
     #[tokio_test]
     async fn test_repository_with_splits_and_resizes() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        // let storage_settings = storage.default_settings();
-        // let asset_manager =
-        //     AssetManager::new_no_cache(Arc::clone(&storage), storage_settings.clone(), 1);
 
         let split_sizes = Some(vec![(
             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },

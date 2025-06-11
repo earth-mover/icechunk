@@ -68,6 +68,10 @@ impl ChangeSet {
         })
     }
 
+    pub fn is_updated_array(&self, node: &NodeId) -> bool {
+        self.updated_arrays.contains_key(node)
+    }
+
     pub fn has_chunk_changes(&self, node: &NodeId) -> bool {
         self.set_chunks.get(node).map(|m| !m.is_empty()).unwrap_or(false)
     }

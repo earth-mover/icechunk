@@ -935,6 +935,7 @@ pub async fn raise_if_invalid_snapshot_id(
 mod tests {
     use std::{collections::HashMap, error::Error, path::PathBuf, sync::Arc};
 
+    use icechunk_macros::tokio_test;
     use storage::logging::LoggingStorage;
     use tempfile::TempDir;
 
@@ -1187,6 +1188,80 @@ mod tests {
         Ok(repository)
     }
 
+    #[tokio_test]
+    async fn test_resize_rewrites_manifests() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            Some(RepositoryConfig {
+                inline_chunk_threshold_bytes: Some(0),
+                ..Default::default()
+            }),
+            Arc::clone(&storage),
+            HashMap::new(),
+        )
+        .await?;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(4, 1)]).unwrap();
+        let dimension_names = Some(vec!["t".into()]);
+        let array_def = Bytes::from_static(br#"{"this":"other array"}"#);
+
+        session
+            .add_array(
+                array_path.clone(),
+                shape.clone(),
+                dimension_names.clone(),
+                array_def.clone(),
+            )
+            .await?;
+
+        let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
+        for idx in 0..4 {
+            let payload = session.get_chunk_writer()(bytes.clone()).await?;
+            session
+                .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
+                .await?;
+        }
+        session.commit("first commit", None).await?;
+        assert_manifest_count(&storage, 1).await;
+
+        // Important we are not issuing any chunk deletes here (which is what Zarr does)
+        // Note we are still rewriting the manifest
+        let mut session = repo.writable_session("main").await?;
+        let shape2 = ArrayShape::new(vec![(2, 1)]).unwrap();
+        session
+            .update_array(
+                &array_path,
+                shape2.clone(),
+                dimension_names.clone(),
+                array_def.clone(),
+            )
+            .await?;
+        session.commit("second commit", None).await?;
+        assert_manifest_count(&storage, 2).await;
+
+        // Now we expand the size, but don't write chunks.
+        // No new manifests need to be written
+        let mut session = repo.writable_session("main").await?;
+        let shape3 = ArrayShape::new(vec![(6, 1)]).unwrap();
+        session
+            .update_array(
+                &array_path,
+                shape3.clone(),
+                dimension_names.clone(),
+                array_def.clone(),
+            )
+            .await?;
+        session.commit("second commit", None).await?;
+        assert_manifest_count(&storage, 2).await;
+
+        // FIXME: add more complex splitting test
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn tests_manifest_splitting_simple() -> Result<(), Box<dyn Error>> {
         let dim_size = 25u32;
@@ -1245,7 +1320,7 @@ mod tests {
             )
             .await?;
         session.commit("last split", None).await?;
-        total_manifests += 2; // FIXME: this should be +1 once writes are optimized
+        total_manifests += 1;
         assert_manifest_count(&storage, total_manifests).await;
 
         // check that reads are optimized; we should only fetch the last split for this query
@@ -1470,7 +1545,6 @@ mod tests {
         let ops = logging.fetch_operations();
         assert!(ops.is_empty());
 
-        let mut add = 0;
         for ax in 0..shape.len() {
             let mut session = repository.writable_session("main").await?;
             let axis_size = shape.get(ax).unwrap().array_length();
@@ -1486,9 +1560,8 @@ mod tests {
                     .await?
             }
 
-            add += (axis_size as u32).div_ceil(expected_split_sizes[ax]) as usize
-                - 1 * ((ax > 0) as usize);
-            total_manifests += add;
+            total_manifests +=
+                (axis_size as u32).div_ceil(expected_split_sizes[ax]) as usize;
             session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
             assert_manifest_count(&backend, total_manifests).await;
 
