@@ -63,10 +63,10 @@ jobs:
           git config --global user.email "joe@earthmover.io"
           git config --global user.name "Joe Hamman"
 
-      - name: publish helper macros crate to crates.io
-        run: cargo release -p icechunk-macros --no-confirm --no-tag --execute
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      # - name: publish helper macros crate to crates.io
+      #   run: cargo release -p icechunk-macros --no-confirm --no-tag --execute
+      #   env:
+      #     CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: publish icechunk crate to crates.io
         run: cargo release --no-confirm --no-tag --execute

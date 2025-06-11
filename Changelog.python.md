@@ -1,5 +1,16 @@
 # Changelog
 
+## Python Icechunk Library 0.2.16
+
+### Features
+
+- Multipart upload for objects > 100MB on Icechunk-native Storage instances.
+  `object_store` Storage instances are not supported yet.
+
+### Fixes
+
+- Compatibility with `dask>=2025.4.1`
+
 ## Python Icechunk Library 0.2.15
 
 ### Features
