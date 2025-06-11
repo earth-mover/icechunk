@@ -27,6 +27,7 @@ use conflicts::{
 use errors::{IcechunkError, PyConflictError, PyRebaseFailedError};
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
+use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
 use repository::{PyDiff, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo};
 use session::PySession;
@@ -69,11 +70,28 @@ fn cli_entrypoint(_py: Python) -> PyResult<()> {
     Ok(())
 }
 
+fn log_filters_from_env(py: Python) -> PyResult<Option<String>> {
+    let os = py.import("os")?;
+    let environ = os.getattr("environ")?;
+    let environ: &Bound<PyMapping> = environ.downcast()?;
+    let value = environ.get_item("ICECHUNK_LOG").ok().and_then(|v| v.extract().ok());
+    Ok(value)
+}
+
 #[pyfunction]
-fn initialize_logs() -> PyResult<()> {
+fn initialize_logs(py: Python) -> PyResult<()> {
     if env::var("ICECHUNK_NO_LOGS").is_err() {
-        initialize_tracing()
+        let log_filter_directive = log_filters_from_env(py)?;
+        initialize_tracing(log_filter_directive.as_deref())
     }
+    Ok(())
+}
+
+#[pyfunction]
+fn set_logs_filter(py: Python, log_filter_directive: Option<String>) -> PyResult<()> {
+    let log_filter_directive =
+        log_filter_directive.or_else(|| log_filters_from_env(py).ok().flatten());
+    initialize_tracing(log_filter_directive.as_deref());
     Ok(())
 }
 
@@ -125,6 +143,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDiff>()?;
     m.add_class::<VirtualChunkSpec>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
+    m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
 

@@ -1845,7 +1845,29 @@ def initialize_logs() -> None:
     """
     Initialize the logging system for the library.
 
-    This should be called before any other Icechunk functions are called.
+    Reads the value of the environment variable ICECHUNK_LOG to obtain the filters.
+    This is autamtically called on `import icechunk`.
+    """
+    ...
+
+def set_logs_filter(log_filter_directive: str | None) -> None:
+    """
+    Set filters and log levels for the different modules.
+
+    Examples:
+      - set_logs_filter("trace")  # trace level for all modules
+      - set_logs_filter("error")  # error level for all modules
+      - set_logs_filter("icechunk=debug,info")  # debug level for icechunk, info for everything else
+
+    Full spec for the log_filter_directive syntax is documented in
+    https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives
+
+    Parameters
+    ----------
+    log_filter_directive: str | None
+        The comma separated list of directives for modules and log levels.
+        If None, the directive will be read from the environment variable
+        ICECHUNK_LOG
     """
     ...
 
