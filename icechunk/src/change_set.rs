@@ -136,12 +136,11 @@ impl ChangeSet {
                     let mut extracted =
                         BTreeMap::<ChunkIndices, Option<ChunkPayload>>::new();
                     chunks.retain(|coord, payload| {
-                        if new_extents.contains(coord.0.as_slice()) {
+                        let cond = new_extents.contains(coord.0.as_slice());
+                        if cond {
                             extracted.insert(coord.clone(), payload.clone());
-                            false
-                        } else {
-                            true
                         }
+                        !cond
                     });
                     new_manifests
                         .entry(new_extents.clone())
@@ -295,17 +294,17 @@ impl ChangeSet {
         )
     }
 
-    pub fn array_manifests_iterator(
+    pub fn modified_manifest_extents_iterator(
         &self,
         node_id: &NodeId,
         node_path: &Path,
-    ) -> impl Iterator<Item = (&ManifestExtents, &SplitManifest)> + use<'_> {
+    ) -> impl Iterator<Item = &ManifestExtents> + use<'_> {
         if self.is_deleted(node_path, node_id) {
             return Either::Left(iter::empty());
         }
         match self.set_chunks.get(node_id) {
             None => Either::Left(iter::empty()),
-            Some(h) => Either::Right(h.iter()),
+            Some(h) => Either::Right(h.keys()),
         }
     }
 
