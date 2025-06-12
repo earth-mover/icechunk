@@ -33,7 +33,7 @@ use std::{
 };
 use tokio::io::AsyncRead;
 use tokio_util::io::SyncIoBridge;
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -497,9 +497,12 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
             .for_each_concurrent(10, |batch| {
                 let res = Arc::clone(&res);
                 async move {
-                    // FIXME: handle error instead of skipping
                     let new_deletes =
-                        self.delete_batch(prefix, batch).await.unwrap_or_default();
+                        self.delete_batch(prefix, batch).await.unwrap_or_else(|_| {
+                            // FIXME: handle error instead of skipping
+                            debug!("ignoring error in Storage::delete_batch");
+                            Default::default()
+                        });
                     #[allow(clippy::expect_used)]
                     res.lock().expect("Bug in delete objects").merge(&new_deletes);
                 }
