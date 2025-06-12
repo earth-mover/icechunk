@@ -528,8 +528,6 @@ pub enum GcsStaticCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "gcs_bearer_credential_type")]
-#[serde(rename_all = "snake_case")]
 pub struct GcsBearerCredential {
     pub bearer: String,
     pub expires_after: Option<DateTime<Utc>>,
