@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, TimeDelta, Timelike, Utc};
+use icechunk::storage::RetriesSettings;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use std::{
@@ -694,6 +695,63 @@ impl From<CachingConfig> for PyCachingConfig {
     }
 }
 
+#[pyclass(name = "StorageRetriesSettings", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyStorageRetriesSettings {
+    #[pyo3(get, set)]
+    pub max_tries: Option<NonZeroU16>,
+    #[pyo3(get, set)]
+    pub initial_backoff_ms: Option<u32>,
+    #[pyo3(get, set)]
+    pub max_backoff_ms: Option<u32>,
+}
+
+impl From<RetriesSettings> for PyStorageRetriesSettings {
+    fn from(value: RetriesSettings) -> Self {
+        Self {
+            max_tries: value.max_tries,
+            initial_backoff_ms: value.initial_backoff_ms,
+            max_backoff_ms: value.max_backoff_ms,
+        }
+    }
+}
+
+impl From<&PyStorageRetriesSettings> for RetriesSettings {
+    fn from(value: &PyStorageRetriesSettings) -> Self {
+        Self {
+            max_tries: value.max_tries,
+            initial_backoff_ms: value.initial_backoff_ms,
+            max_backoff_ms: value.max_backoff_ms,
+        }
+    }
+}
+
+#[pymethods]
+impl PyStorageRetriesSettings {
+    #[pyo3(signature = (max_tries=None, initial_backoff_ms=None, max_backoff_ms=None))]
+    #[new]
+    pub fn new(
+        max_tries: Option<NonZeroU16>,
+        initial_backoff_ms: Option<u32>,
+        max_backoff_ms: Option<u32>,
+    ) -> Self {
+        Self { max_tries, initial_backoff_ms, max_backoff_ms }
+    }
+
+    pub fn __repr__(&self) -> String {
+        storage_retries_settings_repr(self)
+    }
+}
+
+fn storage_retries_settings_repr(s: &PyStorageRetriesSettings) -> String {
+    format!(
+        r#"StorageRetriesSettings(max_tries={max}, initial_backoff_ms={init}, max_backoff_ms={max_back})"#,
+        max = format_option_to_string(s.max_tries),
+        init = format_option_to_string(s.initial_backoff_ms),
+        max_back = format_option_to_string(s.max_backoff_ms),
+    )
+}
+
 #[pyclass(name = "StorageConcurrencySettings", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyStorageConcurrencySettings {
@@ -751,6 +809,8 @@ pub struct PyStorageSettings {
     #[pyo3(get, set)]
     pub concurrency: Option<Py<PyStorageConcurrencySettings>>,
     #[pyo3(get, set)]
+    pub retries: Option<Py<PyStorageRetriesSettings>>,
+    #[pyo3(get, set)]
     pub unsafe_use_conditional_update: Option<bool>,
     #[pyo3(get, set)]
     pub unsafe_use_conditional_create: Option<bool>,
@@ -774,6 +834,12 @@ impl From<storage::Settings> for PyStorageSettings {
                 Py::new(py, Into::<PyStorageConcurrencySettings>::into(c))
                     .expect("Cannot create instance of StorageConcurrencySettings")
             }),
+            #[allow(clippy::expect_used)]
+            retries: value.retries.map(|c| {
+                Py::new(py, Into::<PyStorageRetriesSettings>::into(c))
+                    .expect("Cannot create instance of StorageRetriesSettings")
+            }),
+
             unsafe_use_conditional_create: value.unsafe_use_conditional_create,
             unsafe_use_conditional_update: value.unsafe_use_conditional_update,
             unsafe_use_metadata: value.unsafe_use_metadata,
@@ -789,6 +855,7 @@ impl From<&PyStorageSettings> for storage::Settings {
     fn from(value: &PyStorageSettings) -> Self {
         Python::with_gil(|py| Self {
             concurrency: value.concurrency.as_ref().map(|c| (&*c.borrow(py)).into()),
+            retries: value.retries.as_ref().map(|c| (&*c.borrow(py)).into()),
             unsafe_use_conditional_create: value.unsafe_use_conditional_create,
             unsafe_use_conditional_update: value.unsafe_use_conditional_update,
             unsafe_use_metadata: value.unsafe_use_metadata,
@@ -812,11 +879,12 @@ impl Eq for PyStorageSettings {}
 
 #[pymethods]
 impl PyStorageSettings {
-    #[pyo3(signature = ( concurrency=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None))]
+    #[pyo3(signature = ( concurrency=None, retries=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None))]
     #[new]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         concurrency: Option<Py<PyStorageConcurrencySettings>>,
+        retries: Option<Py<PyStorageRetriesSettings>>,
         unsafe_use_conditional_create: Option<bool>,
         unsafe_use_conditional_update: Option<bool>,
         unsafe_use_metadata: Option<bool>,
@@ -827,6 +895,7 @@ impl PyStorageSettings {
     ) -> Self {
         Self {
             concurrency,
+            retries,
             unsafe_use_conditional_create,
             unsafe_use_metadata,
             unsafe_use_conditional_update,
@@ -838,7 +907,7 @@ impl PyStorageSettings {
     }
 
     pub fn __repr__(&self) -> String {
-        let inner = match &self.concurrency {
+        let inner_conc = match &self.concurrency {
             None => "None".to_string(),
             Some(conc) => Python::with_gil(|py| {
                 let conc = &*conc.borrow(py);
@@ -846,9 +915,17 @@ impl PyStorageSettings {
             }),
         };
 
+        let inner_retries = match &self.retries {
+            None => "None".to_string(),
+            Some(retries) => Python::with_gil(|py| {
+                let conc = &*retries.borrow(py);
+                storage_retries_settings_repr(conc)
+            }),
+        };
         format!(
-            r#"StorageSettings(concurrency={conc}, unsafe_use_conditional_create={cr}, unsafe_use_conditional_update={up}, unsafe_use_metadata={me}, storage_class={sc}, metadata_storage_class={msc}, chunks_storage_class={csc})"#,
-            conc = inner,
+            r#"StorageSettings(concurrency={conc}, retries={retr}, unsafe_use_conditional_create={cr}, unsafe_use_conditional_update={up}, unsafe_use_metadata={me}, storage_class={sc}, metadata_storage_class={msc}, chunks_storage_class={csc})"#,
+            conc = inner_conc,
+            retr = inner_retries,
             cr = format_option(self.unsafe_use_conditional_create.map(format_bool)),
             up = format_option(self.unsafe_use_conditional_update.map(format_bool)),
             me = format_option(self.unsafe_use_metadata.map(format_bool)),

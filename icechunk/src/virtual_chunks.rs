@@ -376,12 +376,9 @@ impl S3Fetcher {
         credentials: &S3Credentials,
         settings: storage::Settings,
     ) -> Self {
-        Self {
-            settings,
-            client: Arc::new(
-                mk_client(opts, credentials.clone(), Vec::new(), Vec::new()).await,
-            ),
-        }
+        let client =
+            mk_client(opts, credentials.clone(), Vec::new(), Vec::new(), &settings).await;
+        Self { settings, client: Arc::new(client) }
     }
 }
 
@@ -521,11 +518,12 @@ impl ObjectStoreFetcher {
             .collect();
         let backend =
             GcsObjectStoreBackend { bucket, prefix, credentials, config: Some(config) };
+        let settings = storage::Settings::default();
         let client = backend
-            .mk_object_store()
+            .mk_object_store(&settings)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))?;
 
-        Ok(ObjectStoreFetcher { client, settings: storage::Settings::default() })
+        Ok(ObjectStoreFetcher { client, settings })
     }
 }
 
