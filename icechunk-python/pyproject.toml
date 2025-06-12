@@ -56,8 +56,8 @@ docs = [
   "scipy",
   "cftime",
   "pooch",
-  "dask>=2024.11.0,<2025.04.0",
-  "distributed>=2024.11.0,<2025.04.0",
+  "dask>=2024.11.0",
+  "distributed>=2024.11.0",
   "xarray>=2025.01.2",
   "myst_nb",
   "pydata_sphinx_theme",
@@ -81,7 +81,7 @@ docs = [
   "sphinx_copybutton",
   "sphinx_design",
   "sphinx_togglebutton",
-  "sphinx-autodoc-typehints"
+  "sphinx-autodoc-typehints",
 ]
 
 [dependency-groups]

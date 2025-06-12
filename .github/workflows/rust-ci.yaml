@@ -43,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-latest]
 
     steps:
       - name: Checkout repository
@@ -52,10 +52,12 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Stand up docker services
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' || github.event_name == 'push'
         run: |
           docker compose up -d
 
       - name: Wait for containers to be ready
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' || github.event_name == 'push'
         run: |
           for _ in {1..10}; do
               if curl --silent --fail http://minio:9000/minio/health/live; then
@@ -72,6 +74,7 @@ jobs:
           done
 
       - name: Install Just
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' || github.event_name == 'push'
         run: sudo snap install --edge --classic just
 
       - name: Install Rust toolchain
@@ -87,10 +90,11 @@ jobs:
           key: ${{ env.RUST_CHANNEL }}
 
       - name: Install cargo-deny
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' || github.event_name == 'push'
         run: cargo install --locked cargo-deny
 
       - name: Check
-        if: matrix.os == 'ubuntu-latest' || github.event_name == 'push'
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm' || github.event_name == 'push'
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -109,6 +113,11 @@ jobs:
 
         run: |
           just pre-commit
+
+      - name: Run unit tests only
+        if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
+        run: |
+          cargo test --lib
 
       - name: Run integration tests against object stores
         if: github.event_name == 'cron'

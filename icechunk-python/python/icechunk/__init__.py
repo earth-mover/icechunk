@@ -43,6 +43,7 @@ from icechunk._icechunk_python import (
     VirtualChunkSpec,
     __version__,
     initialize_logs,
+    set_logs_filter,
     spec_version,
 )
 from icechunk.credentials import (
@@ -157,6 +158,7 @@ __all__ = [
     "s3_static_credentials",
     "s3_storage",
     "s3_store",
+    "set_logs_filter",
     "spec_version",
     "tigris_storage",
 ]
