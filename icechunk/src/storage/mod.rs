@@ -33,7 +33,7 @@ use std::{
 };
 use tokio::io::AsyncRead;
 use tokio_util::io::SyncIoBridge;
-use tracing::{debug, instrument};
+use tracing::{instrument, warn};
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -500,7 +500,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
                     let new_deletes =
                         self.delete_batch(prefix, batch).await.unwrap_or_else(|_| {
                             // FIXME: handle error instead of skipping
-                            debug!("ignoring error in Storage::delete_batch");
+                            warn!("ignoring error in Storage::delete_batch");
                             Default::default()
                         });
                     #[allow(clippy::expect_used)]
