@@ -302,9 +302,8 @@ impl ChangeSet {
             None => Either::Left(iter::empty()),
             Some(h) => Either::Right(
                 h.iter()
-                    // FIXME: review this
                     .filter(move |(manifest_extent, _)| {
-                        extent.is_none() || Some(*manifest_extent) == extent.as_ref()
+                        extent.as_ref().is_none_or(|e| e == *manifest_extent)
                     })
                     .flat_map(|(_, manifest)| manifest.iter()),
             ),
