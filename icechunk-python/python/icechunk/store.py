@@ -321,6 +321,10 @@ class IcechunkStore(Store, SyncMixin):
         return self._store.supports_listing
 
     @property
+    def supports_consolidated_metadata(self) -> bool:
+        return self._store.supports_consolidated_metadata
+
+    @property
     def supports_deletes(self) -> bool:
         return self._store.supports_deletes
 
