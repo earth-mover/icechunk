@@ -524,7 +524,7 @@ impl Session {
             self.cache_splits(node_id, path, shape, dimension_names);
         }
         #[allow(clippy::expect_used)]
-        self.splits.get(node_id).expect("should not be possible.")
+        self.splits.get(node_id).expect("splits for node should always exist.")
     }
 
     // Helper function that accepts a NodeSnapshot instead of a path,
@@ -540,8 +540,6 @@ impl Session {
             if shape.valid_chunk_coord(&coord) {
                 let splits = self
                     .get_splits(&node.id, &node.path, &shape, &dimension_names)
-                    // FIXME: this clone is a workaround for two mutable borrows
-                    // on self.change_set
                     .clone();
                 self.change_set.set_chunk_ref(node.id, coord, data, &splits);
                 Ok(())
@@ -1877,7 +1875,9 @@ async fn flush(
             continue;
         }
 
-        if flush_data.change_set.is_updated_array(node_id)
+        if
+        // metadata change might have shrunk the array
+        flush_data.change_set.is_updated_array(node_id)
             || flush_data.change_set.has_chunk_changes(node_id)
         {
             trace!(path=%node.path, "Node has changes, writing a new manifest");
@@ -1902,8 +1902,6 @@ async fn flush(
         } else {
             trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
             // Array wasn't deleted but has no changes in this session
-            // FIXME: deal with the case of metadata shrinking an existing array, we should clear
-            // extra chunks that no longer fit in the array
             flush_data.copy_previous_manifest(&node, old_snapshot.as_ref());
         }
     }
