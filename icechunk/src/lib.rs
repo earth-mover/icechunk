@@ -49,24 +49,60 @@ mod private {
 }
 
 #[cfg(feature = "logs")]
-pub fn initialize_tracing() {
+#[allow(clippy::type_complexity)]
+static LOG_FILTER: std::sync::LazyLock<
+    std::sync::Mutex<
+        Option<
+            tracing_subscriber::reload::Handle<
+                tracing_subscriber::EnvFilter,
+                tracing_subscriber::layer::Layered<
+                    tracing_error::ErrorLayer<tracing_subscriber::Registry>,
+                    tracing_subscriber::Registry,
+                >,
+            >,
+        >,
+    >,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+#[cfg(feature = "logs")]
+pub fn initialize_tracing(log_filter_directive: Option<&str>) {
     use tracing_error::ErrorLayer;
     use tracing_subscriber::{
-        EnvFilter, Layer, Registry, layer::SubscriberExt, util::SubscriberInitExt,
+        EnvFilter, Layer, Registry, layer::SubscriberExt, reload, util::SubscriberInitExt,
     };
 
     // We have two Layers. One keeps track of the spans to feed the ICError instances.
     // The other is the one spitting logs to stdout. Filtering only applies to the second Layer.
 
-    let stdout_layer = tracing_subscriber::fmt::layer()
-        .pretty()
-        .with_filter(EnvFilter::from_env("ICECHUNK_LOG"));
+    let filter = log_filter_directive
+        .map(EnvFilter::new)
+        .unwrap_or_else(|| EnvFilter::from_env("ICECHUNK_LOG"));
+    match LOG_FILTER.lock() {
+        Ok(mut guard) => match guard.as_ref() {
+            Some(handle) => {
+                if let Err(err) = handle.reload(filter) {
+                    println!("Error reloading log settings: {}", err)
+                }
+            }
+            None => {
+                let (filter, handle) = reload::Layer::new(filter);
+                *guard = Some(handle);
+                let stdout_layer =
+                    tracing_subscriber::fmt::layer().pretty().with_filter(filter);
 
-    let error_span_layer = ErrorLayer::default();
+                let error_span_layer = ErrorLayer::default();
 
-    if let Err(err) =
-        Registry::default().with(error_span_layer).with(stdout_layer).try_init()
-    {
-        println!("Warning: {}", err);
+                if let Err(err) = Registry::default()
+                    .with(error_span_layer)
+                    .with(stdout_layer)
+                    .try_init()
+                {
+                    println!("Error initializing logs: {}", err);
+                }
+            }
+        },
+        Err(err) => {
+            println!("Error setting up logs: {}", err)
+        }
     }
 }
