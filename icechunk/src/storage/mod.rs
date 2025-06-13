@@ -950,6 +950,8 @@ mod tests {
 
     use std::{collections::HashSet, fs::File, io::Write, path::PathBuf};
 
+    use crate::config::{GcsBearerCredential, GcsStaticCredentials};
+
     use super::*;
     use icechunk_macros::tokio_test;
     use proptest::prelude::*;
@@ -969,6 +971,27 @@ mod tests {
             PathBuf::from_iter([repo_dir.path().as_os_str().to_str().unwrap(), "foo"]);
         let s = new_local_filesystem_storage(&inside_existing).await.unwrap();
         assert!(s.root_is_clean().await.unwrap());
+    }
+
+    #[tokio_test]
+    /// Regression test: we can deserialize a GCS credential with token
+    async fn test_gcs_session_serialization() {
+        let storage = new_gcs_storage(
+            "bucket".to_string(),
+            Some("prefix".to_string()),
+            Some(GcsCredentials::Static(GcsStaticCredentials::BearerToken(
+                GcsBearerCredential {
+                    bearer: "the token".to_string(),
+                    expires_after: None,
+                },
+            ))),
+            None,
+        )
+        .await
+        .unwrap();
+        let bytes = rmp_serde::to_vec(&storage).unwrap();
+        let dese: Result<Arc<dyn Storage>, _> = rmp_serde::from_slice(&bytes);
+        assert!(dese.is_ok())
     }
 
     proptest! {
