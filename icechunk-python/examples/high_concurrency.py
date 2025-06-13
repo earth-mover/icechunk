@@ -4,9 +4,9 @@ multiple machines to read and write from the same repository.
 
 To understand all the available options run:
 ```
-python ./high_read_concurrency.py --help
-python ./high_read_concurrency.py create-repo --help
-python ./high_read_concurrency.py read --help
+python ./high_concurrency.py --help
+python ./high_concurrency.py create-repo --help
+python ./high_concurrency.py read --help
 ```
 
 This script uses Coiled to spawn tasks in multiple machines. You'll need
@@ -26,7 +26,7 @@ Create a repository with 1M tiny chunks in AWS:
 
 ```shell
 # AWS
-python ./high_read_concurrency.py \
+python ./high_concurrency.py \
     --cloud s3 \
     --bucket my-bucket \
     --prefix my-bucket-prefix \
@@ -37,7 +37,7 @@ python ./high_read_concurrency.py \
     create-repo --chunks 1000000
 
 # R2
-python ./high_read_concurrency.py \
+python ./high_concurrency.py \
     --cloud r2 \
     --bucket my-bucket \
     --prefix my-bucket-prefix \
@@ -51,7 +51,7 @@ python ./high_read_concurrency.py \
     create-repo --chunks 1000000
 
 # Tigris
-python ./high_read_concurrency.py \
+python ./high_concurrency.py \
     --cloud tigris \
     --bucket my-bucket \
     --prefix my-bucket-prefix \
@@ -69,7 +69,7 @@ those repositories for 30 seconds.
 
 ```shell
 # AWS
-python ./high_read_concurrency.py \
+python ./high_concurrency.py \
     --cloud s3 \
     --bucket my-bucket \
     --prefix my-bucket-prefix \
@@ -80,7 +80,7 @@ python ./high_read_concurrency.py \
     read --duration 30
 
 # R2
-python ./high_read_concurrency.py \
+python ./high_concurrency.py \
     --cloud r2 \
     --bucket my-bucket \
     --prefix my-bucket-prefix \
@@ -94,7 +94,7 @@ python ./high_read_concurrency.py \
     read --duration 30
 
 # Tigris
-python ./high_read_concurrency.py \
+python ./high_concurrency.py \
     --cloud tigris \
     --bucket my-bucket \
     --prefix my-bucket-prefix \
@@ -170,6 +170,18 @@ def make_s3_repo(bucket: str, prefix: str, region: str) -> icechunk.Repository:
     return repo
 
 
+def make_gcs_repo(bucket: str, prefix: str, region: str) -> icechunk.Repository:
+    from coiled.credentials.google import CoiledShippedCredentials
+
+    repo = icechunk.Repository.open_or_create(
+        storage=icechunk.gcs_storage(
+            bucket=bucket, prefix=prefix, bearer_token=CoiledShippedCredentials().token
+        ),
+        config=repository_config(),
+    )
+    return repo
+
+
 def make_r2_repo(
     bucket: str, prefix: str, account_id: str, access_key_id: str, secret_access_key: str
 ) -> icechunk.Repository:
@@ -206,6 +218,8 @@ def make_repo(args: argparse.Namespace) -> icechunk.Repository:
     match args.cloud:
         case "s3":
             return make_s3_repo(args.bucket, args.prefix, args.bucket_region)
+        case "gcs":
+            return make_gcs_repo(args.bucket, args.prefix, args.bucket_region)
         case "r2":
             return make_r2_repo(
                 args.bucket,
@@ -232,15 +246,15 @@ def generate_repo_data(args: argparse.Namespace) -> str:
     chunks = args.chunks
     dask_chunk_factor = 100
 
-    shape = (chunks,)
-    dask_chunks = (dask_chunk_factor,)
+    shape = (args.chunk_size * chunks,)
+    dask_chunks = (args.chunk_size * dask_chunk_factor,)
     dask_array = da.random.random(shape, chunks=dask_chunks)
 
     session = repo.writable_session("main")
     with session.allow_pickling():
         store = session.store
         group = zarr.group(store=store, overwrite=True)
-        chunk_shape = (1,)
+        chunk_shape = (args.chunk_size,)
 
         zarray = group.create_array(
             "array",
@@ -267,6 +281,7 @@ def read_task(task: Task) -> int:
     store = task.session.store
     group = zarr.open_group(store=store, mode="r")
     array = cast(zarr.Array, group["array"])
+    chunk_size = array.chunks[0]
     max_index = array.shape[0] - 1
     read_size = min(task.read_size, max_index + 1)
     total_reads = 0
@@ -280,10 +295,14 @@ def read_task(task: Task) -> int:
             data = array[offset : offset + read_size][:]
             assert np.max(data) <= 1
             assert len(data) == read_size
+
             # we add the total number of chunks read
-            # chunk size is 1, so 1 read per array element
-            reads_done += read_size
-            total_reads += read_size
+            first_chunk = offset // chunk_size
+            last_chunk = (offset + read_size - 1) // chunk_size
+            chunks_read = last_chunk - first_chunk + 1
+
+            reads_done += chunks_read
+            total_reads += chunks_read
         client.log_event(topic_name, reads_done)
     return total_reads
 
@@ -311,11 +330,13 @@ class ProgressTracker:
 def mk_client(
     local: bool,
     cluster_name: str,
+    workspace: str | None,
     n_workers: int,
     n_threads: int | None,
     region: str | None,
     access_key_id: str | None,
     secret_access_key: str | None,
+    shutdown_on_close: bool,
 ) -> Client:
     if local:
         client = Client(n_workers=n_workers, threads_per_worker=n_threads)
@@ -326,10 +347,13 @@ def mk_client(
         cluster = Cluster(
             n_workers=n_workers,
             worker_options={"nthreads": n_threads},
+            workspace=workspace,
             region=region,
             name=cluster_name,
             spot_policy="spot_with_fallback",
             credentials=credentials,
+            environ={"ICECHUNK_LOG": "trace", "NO_COLOR": "true"},
+            shutdown_on_close=shutdown_on_close,
         )
         client = cluster.get_client()
     return client
@@ -339,11 +363,13 @@ def do_reads(args: argparse.Namespace) -> None:
     client = mk_client(
         local=args.local_cluster,
         cluster_name=args.cluster_name,
+        workspace=args.coiled_workspace,
         n_workers=args.workers,
         n_threads=args.threads,
         region=args.coiled_region,
         access_key_id=args.access_key_id,
         secret_access_key=args.secret_access_key,
+        shutdown_on_close=args.shutdown_cluster,
     )
     dprint(f"Total workers: {total_tasks(client)}")
     repo = make_repo(args)
@@ -370,11 +396,13 @@ def do_writes(args: argparse.Namespace) -> None:
     client = mk_client(
         local=args.local_cluster,
         cluster_name=args.cluster_name,
+        workspace=args.coiled_workspace,
         n_workers=args.workers,
         n_threads=args.threads,
         region=args.coiled_region,
         access_key_id=args.access_key_id,
         secret_access_key=args.secret_access_key,
+        shutdown_on_close=args.shutdown_cluster,
     )
     dprint(f"Total workers: {total_tasks(client)}")
     start = time.monotonic()
@@ -386,7 +414,7 @@ def main() -> None:
     global_parser = argparse.ArgumentParser(prog="high-read-concurrency")
     global_parser.add_argument(
         "--cloud",
-        choices=["s3", "r2", "tigris"],
+        choices=["s3", "gcs", "r2", "tigris"],
         help="Object store where to the repository is placed",
         required=True,
     )
@@ -427,6 +455,11 @@ def main() -> None:
         required=True,
     )
     global_parser.add_argument(
+        "--coiled-workspace",
+        type=str,
+        required=False,
+    )
+    global_parser.add_argument(
         "--account-id",
         type=str,
         # help="Object store where to the repository is placed",
@@ -436,6 +469,13 @@ def main() -> None:
         "--cluster-name",
         type=str,
         default="high-read-concurrency-tests",
+        # help="Object store where to the repository is placed",
+        required=False,
+    )
+    global_parser.add_argument(
+        "--shutdown-cluster",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         # help="Object store where to the repository is placed",
         required=False,
     )
@@ -471,6 +511,9 @@ def main() -> None:
     create_parser = subparsers.add_parser("create-repo", help="create repo and array")
     create_parser.add_argument(
         "--chunks", type=int, help="number of chunks in the array", default=1_000_000
+    )
+    create_parser.add_argument(
+        "--chunk-size", type=int, help="number of elements per chunk", default=1
     )
     create_parser.set_defaults(command="create-repo")
 
