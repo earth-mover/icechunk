@@ -16,6 +16,7 @@ from icechunk import (
     VirtualChunkContainer,
     VirtualChunkSpec,
     containers_credentials,
+    http_store,
     in_memory_storage,
     local_filesystem_storage,
     s3_credentials,
@@ -213,21 +214,33 @@ async def test_write_minio_virtual_refs() -> None:
     _snapshot_id = session.commit("Add virtual refs")
 
 
-async def test_from_s3_public_virtual_refs(tmpdir: Path) -> None:
+@pytest.mark.parametrize(
+    "container_type,url_prefix,store_config",
+    [
+        (
+            "s3",
+            "s3://earthmover-sample-data",
+            ObjectStoreConfig.S3(S3Options(region="us-east-1", anonymous=True)),
+        ),
+        (
+            "http",
+            "https://earthmover-sample-data.s3.amazonaws.com",
+            http_store(),
+        ),
+    ],
+)
+async def test_public_virtual_refs(
+    tmpdir: Path,
+    container_type: str,
+    url_prefix: str,
+    store_config: ObjectStoreConfig.S3 | ObjectStoreConfig.Http,
+) -> None:
     config = RepositoryConfig.default()
-    store_config = ObjectStoreConfig.S3(
-        S3Options(
-            region="us-east-1",
-            anonymous=True,
-        )
-    )
-    container = VirtualChunkContainer(
-        "sample-data", "s3://earthmover-sample-data", store_config
-    )
+    container = VirtualChunkContainer("sample-data", url_prefix, store_config)
     config.set_virtual_chunk_container(container)
 
     repo = Repository.open_or_create(
-        storage=local_filesystem_storage(f"{tmpdir}/virtual"),
+        storage=local_filesystem_storage(f"{tmpdir}/virtual-{container_type}"),
         config=config,
     )
     session = repo.writable_session("main")
@@ -238,9 +251,10 @@ async def test_from_s3_public_virtual_refs(tmpdir: Path) -> None:
         name="year", shape=((72,)), chunks=((72,)), dtype="float32", compressors=None
     )
 
+    file_path = f"{url_prefix}/netcdf/oscar_vel2018.nc"
     store.set_virtual_ref(
         "year/c/0",
-        "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc",
+        file_path,
         offset=22306,
         length=288,
     )

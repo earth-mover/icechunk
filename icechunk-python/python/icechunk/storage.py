@@ -40,6 +40,19 @@ def local_filesystem_storage(path: str) -> Storage:
     return Storage.new_local_filesystem(path)
 
 
+def http_store(
+    opts: dict[str, str] | None = None,
+) -> ObjectStoreConfig.Http:
+    """Build an ObjectStoreConfig instance for HTTP object stores.
+
+    Parameters
+    ----------
+    opts: dict[str, str] | None
+        A dictionary of options for the HTTP object store. See https://docs.rs/object_store/latest/object_store/client/enum.ClientConfigKey.html#variants for a list of possible keys in snake case format.
+    """
+    return ObjectStoreConfig.Http(opts)
+
+
 def s3_store(
     region: str | None = None,
     endpoint_url: str | None = None,
@@ -332,6 +345,19 @@ def r2_storage(
     )
 
 
+def gcs_store(
+    opts: dict[str, str] | None = None,
+) -> ObjectStoreConfig.Gcs:
+    """Build an ObjectStoreConfig instance for Google Cloud Storage object stores.
+
+    Parameters
+    ----------
+    opts: dict[str, str] | None
+        A dictionary of options for the Google Cloud Storage object store. See https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants for a list of possible configuration keys.
+    """
+    return ObjectStoreConfig.Gcs(opts)
+
+
 def gcs_storage(
     *,
     bucket: str,
@@ -353,10 +379,18 @@ def gcs_storage(
         The bucket where the repository will store its data
     prefix: str | None
         The prefix within the bucket that is the root directory of the repository
-    from_env: bool | None
-        Fetch credentials from the operative system environment
+    service_account_file: str | None
+        The path to the service account file
+    service_account_key: str | None
+        The service account key
+    application_credentials: str | None
+        The path to the application credentials file
     bearer_token: str | None
         The bearer token to use for the object store
+    from_env: bool | None
+        Fetch credentials from the operative system environment
+    config: dict[str, str] | None
+        A dictionary of options for the Google Cloud Storage object store. See https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants for a list of possible configuration keys.
     get_credentials: Callable[[], GcsBearerCredential] | None
         Use this function to get and refresh object store credentials
     scatter_initial_credentials: bool, optional
@@ -412,6 +446,8 @@ def azure_storage(
         Azure Blob Storage credential bearer token
     from_env: bool | None
         Fetch credentials from the operative system environment
+    config: dict[str, str] | None
+        A dictionary of options for the Azure Blob Storage object store. See https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants for a list of possible configuration keys.
     """
     credentials = azure_credentials(
         access_key=access_key,
