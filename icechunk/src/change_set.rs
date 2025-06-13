@@ -387,16 +387,16 @@ impl ChangeSet {
         // FIXME: do we even test this?
         self.deleted_chunks_outside_bounds.extend(other.deleted_chunks_outside_bounds);
 
-        for (node, other_splits) in other.set_chunks {
+        other.set_chunks.into_iter().for_each(|(node, other_splits)| {
             let manifests = self.set_chunks.entry(node).or_insert_with(|| {
                 HashMap::<ManifestExtents, SplitManifest>::with_capacity(
                     other_splits.len(),
                 )
             });
-            for (extent, their_manifest) in other_splits {
+            other_splits.into_iter().for_each(|(extent, their_manifest)| {
                 manifests.entry(extent).or_default().extend(their_manifest)
-            }
-        }
+            })
+        });
     }
 
     pub fn merge_many<T: IntoIterator<Item = ChangeSet>>(&mut self, others: T) {

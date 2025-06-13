@@ -109,6 +109,8 @@ pub enum SessionErrorKind {
     InvalidIndex { coords: ChunkIndices, path: Path },
     #[error("invalid chunk index for splitting manifests: {coords:?}")]
     InvalidIndexForSplitManifests { coords: ChunkIndices },
+    #[error("incompatible manifest splitting config when merging sessions")]
+    IncompatibleSplits,
     #[error("`to` snapshot ancestry doesn't include `from`")]
     BadSnapshotChainForDiff,
 }
@@ -904,6 +906,15 @@ impl Session {
             return Err(SessionErrorKind::ReadOnlySession.into());
         }
         let Session { splits, change_set, .. } = other;
+
+        if self.splits.iter().any(|(node, our_splits)| {
+            splits
+                .get(node)
+                .is_some_and(|their_splits| !our_splits.compatible_with(their_splits))
+        }) {
+            return Err(SessionErrorKind::IncompatibleSplits.into());
+        }
+
         self.splits.extend(splits);
         self.change_set.merge(change_set);
         Ok(())

@@ -936,6 +936,7 @@ mod tests {
     use std::{collections::HashMap, error::Error, path::PathBuf, sync::Arc};
 
     use icechunk_macros::tokio_test;
+    use itertools::enumerate;
     use storage::logging::LoggingStorage;
     use tempfile::TempDir;
 
@@ -1162,6 +1163,25 @@ mod tests {
                 num_chunk_refs: 1_000_000
             }
         ));
+    }
+
+    fn reopen_repo_with_new_splitting_config(
+        repo: &Repository,
+        split_sizes: Option<Vec<(ManifestSplitCondition, Vec<ManifestSplitDim>)>>,
+    ) -> Repository {
+        let split_config = ManifestSplittingConfig { split_sizes };
+        let man_config = ManifestConfig {
+            preload: Some(ManifestPreloadConfig {
+                max_total_refs: None,
+                preload_if: None,
+            }),
+            splitting: Some(split_config.clone()),
+        };
+        let config = RepositoryConfig {
+            manifest: Some(man_config),
+            ..RepositoryConfig::default()
+        };
+        repo.reopen(Some(config), None).unwrap()
     }
 
     async fn create_repo_with_split_manifest_config(
@@ -1640,19 +1660,8 @@ mod tests {
             }],
         )];
 
-        let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
-        let man_config = ManifestConfig {
-            preload: Some(ManifestPreloadConfig {
-                max_total_refs: None,
-                preload_if: None,
-            }),
-            splitting: Some(split_config.clone()),
-        };
-        let config = RepositoryConfig {
-            manifest: Some(man_config),
-            ..RepositoryConfig::default()
-        };
-        let repository = repository.reopen(Some(config), None)?;
+        let repository =
+            reopen_repo_with_new_splitting_config(&repository, Some(split_sizes));
         verify_all_data(&repository).await;
         let mut session = repository.writable_session("main").await?;
         let index = vec![13, 0, 0, 0];
@@ -1758,7 +1767,125 @@ mod tests {
             .unwrap()
             .unwrap();
             let expected = Bytes::copy_from_slice(format!("{0}", idx + 2).as_bytes());
-            assert_eq!(actual,expected);
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_manifest_splits_merge_sessions() -> Result<(), Box<dyn Error>> {
+        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
+        let temp_path: Path = "/temperature".try_into().unwrap();
+
+        let orig_split_sizes = vec![(
+            ManifestSplitCondition::AnyArray,
+            vec![ManifestSplitDim {
+                condition: ManifestSplitDimCondition::DimensionName("t".to_string()),
+                num_chunks: 12u32,
+            }],
+        )];
+        let split_config =
+            ManifestSplittingConfig { split_sizes: Some(orig_split_sizes.clone()) };
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repository = create_repo_with_split_manifest_config(
+            &temp_path,
+            &shape,
+            &dimension_names,
+            &split_config,
+            Some(backend),
+        )
+        .await?;
+
+        let indices =
+            vec![vec![0, 0, 1, 0], vec![0, 0, 0, 0], vec![0, 2, 0, 0], vec![0, 2, 0, 1]];
+
+        let mut session1 = repository.writable_session("main").await?;
+        session1
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(indices[0].clone()),
+                Some(ChunkPayload::Inline(format!("{0}", 0).into())),
+            )
+            .await?;
+        session1
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(indices[1].clone()),
+                Some(ChunkPayload::Inline(format!("{0}", 1).into())),
+            )
+            .await?;
+
+        for incompatible_size in [1, 11u32, 24u32, u32::MAX] {
+            let incompatible_split_sizes = vec![(
+                ManifestSplitCondition::AnyArray,
+                vec![ManifestSplitDim {
+                    condition: ManifestSplitDimCondition::DimensionName("t".to_string()),
+                    num_chunks: incompatible_size,
+                }],
+            )];
+            let other_repo = reopen_repo_with_new_splitting_config(
+                &repository,
+                Some(incompatible_split_sizes),
+            );
+
+            assert_ne!(other_repo.config(), repository.config());
+
+            let mut session2 = other_repo.writable_session("main").await?;
+            session2
+                .set_chunk_ref(
+                    temp_path.clone(),
+                    ChunkIndices(indices[2].clone()),
+                    Some(ChunkPayload::Inline(format!("{0}", 2).into())),
+                )
+                .await?;
+            session2
+                .set_chunk_ref(
+                    temp_path.clone(),
+                    ChunkIndices(indices[3].clone()),
+                    Some(ChunkPayload::Inline(format!("{0}", 3).into())),
+                )
+                .await?;
+
+            assert!(session1.merge(session2).await.is_err());
+        }
+
+        // now with the same split sizes
+        let other_repo =
+            reopen_repo_with_new_splitting_config(&repository, Some(orig_split_sizes));
+        let mut session2 = other_repo.writable_session("main").await?;
+        session2
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(indices[2].clone()),
+                Some(ChunkPayload::Inline(format!("{0}", 2).into())),
+            )
+            .await?;
+        session2
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(indices[3].clone()),
+                Some(ChunkPayload::Inline(format!("{0}", 3).into())),
+            )
+            .await?;
+
+        session1.merge(session2).await?;
+        for (val, idx) in enumerate(indices.iter()) {
+            let actual = get_chunk(
+                session1
+                    .get_chunk_reader(
+                        &temp_path,
+                        &ChunkIndices(idx.clone()),
+                        &ByteRange::ALL,
+                    )
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .expect(&format!("getting chunk ref failed for {:?}", &idx));
+            let expected = Bytes::copy_from_slice(format!("{0}", val).as_bytes());
+            assert_eq!(actual, expected);
         }
         Ok(())
     }
