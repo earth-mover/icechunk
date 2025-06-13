@@ -790,14 +790,11 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
                     .with_access_key_id(credentials.access_key_id.clone())
                     .with_secret_access_key(credentials.secret_access_key.clone());
 
-                let builder =
-                    if let Some(session_token) = credentials.session_token.as_ref() {
-                        builder.with_token(session_token.clone())
-                    } else {
-                        builder
-                    };
-
-                builder
+                if let Some(session_token) = credentials.session_token.as_ref() {
+                    builder.with_token(session_token.clone())
+                } else {
+                    builder
+                }
             }
             Some(S3Credentials::Anonymous) => builder.with_skip_signature(true),
             // TODO: Support refreshable credentials

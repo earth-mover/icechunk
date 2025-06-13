@@ -378,11 +378,9 @@ fn lookup_ref<'a>(
     array_manifest: generated::ArrayManifest<'a>,
     coord: &ChunkIndices,
 ) -> Option<generated::ChunkRef<'a>> {
-    let res =
-        array_manifest.refs().lookup_by_key(coord.0.as_slice(), |chunk_ref, coords| {
-            chunk_ref.index().iter().cmp(coords.iter().copied())
-        });
-    res
+    array_manifest.refs().lookup_by_key(coord.0.as_slice(), |chunk_ref, coords| {
+        chunk_ref.index().iter().cmp(coords.iter().copied())
+    })
 }
 
 struct PayloadIterator {
