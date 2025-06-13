@@ -1703,7 +1703,7 @@ mod tests {
             )
             .await?;
         // Important: now we rewrite one split per dimension
-        total_manifests += 4 - 1;
+        total_manifests += 3;
         session.commit(format!("finished time again").as_ref(), None).await?;
         assert_manifest_count(&backend, total_manifests).await;
         verify_all_data(&repo_clone).await;
@@ -1727,6 +1727,39 @@ mod tests {
         assert_manifest_count(&backend, total_manifests).await;
         verify_all_data(&repo_clone).await;
 
+        // do that again, but with different values and test those specifically
+        let mut session = repo_clone.writable_session("main").await?;
+        for idx in [0, 12, 24] {
+            let index = vec![idx, 0, 0, 0];
+            session
+                .set_chunk_ref(
+                    temp_path.clone(),
+                    ChunkIndices(index),
+                    Some(ChunkPayload::Inline(format!("{0}", idx + 2).into())),
+                )
+                .await?;
+        }
+        total_manifests +=
+            (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
+        session.commit(format!("finished time again").as_ref(), None).await?;
+        assert_manifest_count(&backend, total_manifests).await;
+        for idx in [0, 12, 24] {
+            let actual = get_chunk(
+                session
+                    .get_chunk_reader(
+                        &temp_path,
+                        &ChunkIndices(vec![idx.clone(), 0, 0, 0]),
+                        &ByteRange::ALL,
+                    )
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let expected = Bytes::copy_from_slice(format!("{0}", idx + 2).as_bytes());
+            assert_eq!(actual,expected);
+        }
         Ok(())
     }
 
