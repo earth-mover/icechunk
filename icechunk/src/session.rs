@@ -1622,16 +1622,6 @@ impl<'a> FlushProcess<'a> {
         }
     }
 
-    fn finalize_refs(
-        &mut self,
-        node_id: &NodeId,
-        refs: HashMap<ManifestExtents, ManifestRef>,
-    ) -> SessionResult<()> {
-        for ref_ in refs.into_values() {
-            self.manifest_refs.entry(node_id.clone()).or_default().push(ref_);
-        }
-        Ok(())
-    }
     /// Write a manifest for a node that was created in this session
     /// It doesn't need to look at previous manifests because the node is new
     async fn write_manifest_for_new_node(
@@ -1642,9 +1632,6 @@ impl<'a> FlushProcess<'a> {
         #[allow(clippy::expect_used)]
         let splits =
             self.splits.get(node_id).expect("getting split for node unexpectedly failed");
-
-        let mut refs =
-            HashMap::<ManifestExtents, ManifestRef>::with_capacity(splits.len());
 
         // TODO: this could be try_fold with the refs HashMap as state
         for extent in splits.iter() {
@@ -1658,12 +1645,14 @@ impl<'a> FlushProcess<'a> {
                         )
                         .map(Ok),
                 );
-                self.write_manifest_from_iterator(chunks)
-                    .await?
-                    .map(|new_ref| refs.insert(extent.clone(), new_ref));
+                #[allow(clippy::expect_used)]
+                let new_ref = self.write_manifest_from_iterator(chunks).await?.expect(
+                    "logic bug. for a new node, we must always write the manifest",
+                );
+                self.manifest_refs.entry(node_id.clone()).or_default().push(new_ref);
             }
         }
-        self.finalize_refs(node_id, refs)
+        Ok(())
     }
 
     /// Write a manifest for a node that was modified in this session
@@ -1678,9 +1667,8 @@ impl<'a> FlushProcess<'a> {
         #[allow(clippy::expect_used)]
         let splits =
             self.splits.get(&node.id).expect("splits should exist for this node.");
-        // populate with existing refs, if they are compatible
         let mut refs =
-            HashMap::<ManifestExtents, ManifestRef>::with_capacity(splits.len());
+            HashMap::<ManifestExtents, Vec<ManifestRef>>::with_capacity(splits.len());
 
         let on_disk_extents =
             manifests.iter().map(|m| m.extents.clone()).collect::<Vec<_>>();
@@ -1700,7 +1688,7 @@ impl<'a> FlushProcess<'a> {
                 // this split was modified in this session, rewrite it completely
                 self.write_manifest_for_updated_chunks(node, extent)
                     .await?
-                    .map(|new_ref| refs.insert(extent.clone(), new_ref));
+                    .map(|new_ref| refs.insert(extent.clone(), vec![new_ref]));
             } else {
                 let on_disk_bbox = on_disk_extents
                     .iter()
@@ -1712,11 +1700,11 @@ impl<'a> FlushProcess<'a> {
                 for old_ref in manifests.iter() {
                     // Remember that the extents written to disk are the `from`:`to` ranges
                     // of populated chunks
-                    match &old_ref.extents.overlap_with(extent) {
+                    match old_ref.extents.overlap_with(extent) {
                         Overlap::Complete => {
                             debug_assert!(on_disk_bbox.is_some());
                             // Just propagate this ref again, no rewriting necessary
-                            refs.insert(extent.clone(), old_ref.clone());
+                            refs.entry(extent.clone()).or_default().push(old_ref.clone());
                             // OK to unwrap here since this manifest file must exist in the old snapshot
                             #[allow(clippy::expect_used)]
                             self.manifest_files.insert(
@@ -1727,9 +1715,12 @@ impl<'a> FlushProcess<'a> {
                             // the splits have changed, but no refs in this split have been written in this session
                             // same as `if` block above
                             debug_assert!(on_disk_bbox.is_some());
-                            self.write_manifest_for_updated_chunks(node, extent)
+                            if let Some(new_ref) = self
+                                .write_manifest_for_updated_chunks(node, extent)
                                 .await?
-                                .map(|new_ref| refs.insert(extent.clone(), new_ref));
+                            {
+                                refs.entry(extent.clone()).or_default().push(new_ref);
+                            }
                         }
                         Overlap::None => {
                             // Nothing to do
@@ -1739,7 +1730,12 @@ impl<'a> FlushProcess<'a> {
             }
         }
 
-        self.finalize_refs(&node.id, refs)?;
+        // FIXME: Assert that bboxes in refs don't overlap
+
+        self.manifest_refs
+            .entry(node.id.clone())
+            .or_default()
+            .extend(refs.into_values().flatten());
         Ok(())
     }
 
@@ -1912,6 +1908,17 @@ async fn flush(
         trace!(path=%node_path, "New node, writing a manifest");
         flush_data.write_manifest_for_new_node(node_id, node_path).await?;
     }
+
+    // manifest_files & manifest_refs _must_ be consistent
+    debug_assert_eq!(
+        flush_data.manifest_files.iter().map(|x| x.id.clone()).collect::<HashSet<_>>(),
+        flush_data
+            .manifest_refs
+            .values()
+            .flatten()
+            .map(|x| x.object_id.clone())
+            .collect::<HashSet<_>>(),
+    );
 
     trace!("Building new snapshot");
     // gather and sort nodes:

@@ -958,18 +958,31 @@ mod tests {
 
     use super::*;
 
+    fn ravel_multi_index<'a>(index: &[u32], shape: &[u32]) -> u32 {
+        index
+            .iter()
+            .zip(shape.iter())
+            .rev()
+            .fold((0, 1), |(acc, stride), (index, size)| {
+                (acc + *index * stride, stride * *size)
+            })
+            .0
+    }
+
     async fn assert_manifest_count(
         storage: &Arc<dyn Storage + Send + Sync>,
         total_manifests: usize,
     ) {
+        let expected = storage
+            .list_manifests(&storage.default_settings())
+            .await
+            .unwrap()
+            .count()
+            .await;
         assert_eq!(
-            storage
-                .list_manifests(&storage.default_settings())
-                .await
-                .unwrap()
-                .count()
-                .await,
-            total_manifests
+            total_manifests, expected,
+            "Mismatch in manifest count: expected {}, but got {}",
+            expected, total_manifests,
         );
     }
 
@@ -1425,7 +1438,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_manifest_splitting_complex_config() -> Result<(), Box<dyn Error>> {
         let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
@@ -1490,9 +1503,10 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
     async fn test_manifest_splitting_complex_writes() -> Result<(), Box<dyn Error>> {
         let t_split_size = 12u32;
+        let other_split_size = 9u32;
         let y_split_size = 2u32;
 
         let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
@@ -1518,7 +1532,7 @@ mod tests {
                 ManifestSplitCondition::NameMatches { regex: r".*".to_string() },
                 vec![ManifestSplitDim {
                     condition: ManifestSplitDimCondition::Any,
-                    num_chunks: 9,
+                    num_chunks: other_split_size,
                 }],
             ),
         ];
@@ -1537,6 +1551,7 @@ mod tests {
             Some(logging_c),
         )
         .await?;
+        let repo_clone = repository.reopen(None, None)?;
 
         let mut total_manifests = 0;
         assert_manifest_count(&backend, total_manifests).await;
@@ -1545,29 +1560,14 @@ mod tests {
         let ops = logging.fetch_operations();
         assert!(ops.is_empty());
 
-        for ax in 0..shape.len() {
-            let mut session = repository.writable_session("main").await?;
-            let axis_size = shape.get(ax).unwrap().array_length();
-            for i in 0..axis_size {
-                let mut index = vec![0u32, 0, 0, 0];
-                index[ax] = i as u32;
-                session
-                    .set_chunk_ref(
-                        temp_path.clone(),
-                        ChunkIndices(index),
-                        Some(ChunkPayload::Inline(format!("{0}", i).into())),
-                    )
-                    .await?
-            }
+        let array_shape =
+            shape.iter().map(|x| x.array_length() as u32).collect::<Vec<_>>();
 
-            total_manifests +=
-                (axis_size as u32).div_ceil(expected_split_sizes[ax]) as usize;
-            session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
-            assert_manifest_count(&backend, total_manifests).await;
-
+        let verify_data = async |ax, session: &Session| {
             for i in 0..shape.get(ax).unwrap().array_length() {
                 let mut index = vec![0u32, 0, 0, 0];
                 index[ax] = i as u32;
+                let ic = index.clone();
                 let val = get_chunk(
                     session
                         .get_chunk_reader(
@@ -1580,10 +1580,153 @@ mod tests {
                 )
                 .await
                 .unwrap()
-                .unwrap();
-                assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
+                .expect(&format!("getting chunk ref failed for {:?}", &ic));
+                let expected_value =
+                    ravel_multi_index(ic.as_slice(), array_shape.as_slice());
+                let expected =
+                    Bytes::copy_from_slice(format!("{0}", expected_value).as_bytes());
+                assert_eq!(
+                    val, expected,
+                    "For chunk {:?}, received {:?}, expected {:?}",
+                    ic, val, expected
+                );
             }
+        };
+        let verify_all_data = async |repo: &Repository| {
+            let session = repo
+                .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+                .await
+                .unwrap();
+            for ax in 0..shape.len() {
+                verify_data(ax, &session).await;
+            }
+        };
+
+        //=========================================================
+        // This loop iterates over axis and rewrites the boundary chunks.
+        // Each loop iteration must rewrite chunk_shape/split_size manifests
+        for ax in 0..shape.len() {
+            let mut session = repository.writable_session("main").await?;
+            let axis_size = shape.get(ax).unwrap().array_length();
+            for i in 0..axis_size {
+                let mut index = vec![0u32, 0, 0, 0];
+                index[ax] = i as u32;
+                let value = ravel_multi_index(index.as_slice(), array_shape.as_slice());
+                session
+                    .set_chunk_ref(
+                        temp_path.clone(),
+                        ChunkIndices(index),
+                        Some(ChunkPayload::Inline(format!("{0}", value).into())),
+                    )
+                    .await?
+            }
+
+            total_manifests +=
+                (axis_size as u32).div_ceil(expected_split_sizes[ax]) as usize;
+            session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
+            assert_manifest_count(&backend, total_manifests).await;
+
+            verify_data(ax.clone(), &session).await;
         }
+        verify_all_data(&repository).await;
+
+        //=========================================================
+        // Now change splitting config
+        let split_sizes = vec![(
+            ManifestSplitCondition::AnyArray,
+            vec![ManifestSplitDim {
+                condition: ManifestSplitDimCondition::DimensionName("t".to_string()),
+                num_chunks: t_split_size,
+            }],
+        )];
+
+        let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
+        let man_config = ManifestConfig {
+            preload: Some(ManifestPreloadConfig {
+                max_total_refs: None,
+                preload_if: None,
+            }),
+            splitting: Some(split_config.clone()),
+        };
+        let config = RepositoryConfig {
+            manifest: Some(man_config),
+            ..RepositoryConfig::default()
+        };
+        let repository = repository.reopen(Some(config), None)?;
+        verify_all_data(&repository).await;
+        let mut session = repository.writable_session("main").await?;
+        let index = vec![13, 0, 0, 0];
+        let value = ravel_multi_index(index.as_slice(), array_shape.as_slice());
+        session
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(index),
+                Some(ChunkPayload::Inline(format!("{0}", value).into())),
+            )
+            .await?;
+        // Important: we only create one new manifest in this case for
+        // the first split in the `t`-axis. Since the other splits
+        // are not modified we preserve all the old manifests
+        total_manifests += 1;
+        session.commit(format!("finished time again").as_ref(), None).await?;
+        assert_manifest_count(&backend, total_manifests).await;
+        verify_all_data(&repository).await;
+
+        // now modify all splits to trigger a full rewrite
+        let mut session = repository.writable_session("main").await?;
+        for idx in [0, 12, 24] {
+            let index = vec![idx, 0, 0, 0];
+            let value = ravel_multi_index(index.as_slice(), array_shape.as_slice());
+            session
+                .set_chunk_ref(
+                    temp_path.clone(),
+                    ChunkIndices(index),
+                    Some(ChunkPayload::Inline(format!("{0}", value).into())),
+                )
+                .await?;
+        }
+        total_manifests +=
+            (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
+        session.commit(format!("finished time again").as_ref(), None).await?;
+        assert_manifest_count(&backend, total_manifests).await;
+        verify_all_data(&repository).await;
+
+        //=========================================================
+        // Now get back to original repository with original config
+        // Modify one `t` split.
+        let mut session = repo_clone.writable_session("main").await?;
+        session
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(vec![0, 0, 0, 0]),
+                Some(ChunkPayload::Inline(format!("{0}", 0).into())),
+            )
+            .await?;
+        // Important: now we rewrite one split per dimension
+        total_manifests += 4 - 1;
+        session.commit(format!("finished time again").as_ref(), None).await?;
+        assert_manifest_count(&backend, total_manifests).await;
+        verify_all_data(&repo_clone).await;
+        verify_all_data(&repository).await;
+
+        let mut session = repo_clone.writable_session("main").await?;
+        for idx in [0, 12, 24] {
+            let index = vec![idx, 0, 0, 0];
+            let value = ravel_multi_index(index.as_slice(), array_shape.as_slice());
+            session
+                .set_chunk_ref(
+                    temp_path.clone(),
+                    ChunkIndices(index),
+                    Some(ChunkPayload::Inline(format!("{0}", value).into())),
+                )
+                .await?;
+        }
+        total_manifests +=
+            (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
+        session.commit(format!("finished time again").as_ref(), None).await?;
+        assert_manifest_count(&backend, total_manifests).await;
+        verify_all_data(&repo_clone).await;
+
         Ok(())
     }
 
