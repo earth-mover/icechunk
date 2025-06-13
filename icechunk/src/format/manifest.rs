@@ -164,6 +164,18 @@ impl ManifestSplits {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    pub fn compatible_with(&self, other: &Self) -> bool {
+        for ours in self.iter() {
+            if any(other.iter(), |theirs| {
+                ours.overlap_with(theirs) == Overlap::Partial
+                    || theirs.overlap_with(ours) == Overlap::Partial
+            }) {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 /// Helper function for constructing uniformly spaced manifest split edges
