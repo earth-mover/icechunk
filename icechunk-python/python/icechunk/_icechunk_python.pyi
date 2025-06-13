@@ -657,6 +657,97 @@ class ManifestConfig:
         """
         ...
 
+class StorageRetriesSettings:
+    """Configuration for how Icechunk retries requests.
+
+    Icechunk retries failed requests with an exponential backoff algorithm."""
+
+    def __init__(
+        self,
+        max_tries: int | None = None,
+        initial_backoff_ms: int | None = None,
+        max_backoff_ms: int | None = None,
+    ) -> None:
+        """
+        Create a new `StorageRetriesSettings` object
+
+        Parameters
+        ----------
+        max_tries: int | None
+            The maximum number of tries, including the initial one. Set to 1 to disable retries
+        initial_backoff_ms: int | None
+            The initial backoff duration in milliseconds
+        max_backoff_ms: int | None
+            The limit to backoff duration in milliseconds
+        """
+        ...
+    @property
+    def max_tries(self) -> int | None:
+        """
+        The maximum number of tries, including the initial one.
+
+        Returns
+        -------
+        int | None
+            The maximum number of tries.
+        """
+        ...
+    @max_tries.setter
+    def max_tries(self, value: int | None) -> None:
+        """
+        Set the maximum number of tries. Set to 1 to disable retries.
+
+        Parameters
+        ----------
+        value: int | None
+            The maximum number of tries
+        """
+        ...
+    @property
+    def initial_backoff_ms(self) -> int | None:
+        """
+        The initial backoff duration in milliseconds.
+
+        Returns
+        -------
+        int | None
+            The initial backoff duration in milliseconds.
+        """
+        ...
+    @initial_backoff_ms.setter
+    def initial_backoff_ms(self, value: int | None) -> None:
+        """
+        Set the initial backoff duration in milliseconds.
+
+        Parameters
+        ----------
+        value: int | None
+            The initial backoff duration in milliseconds.
+        """
+        ...
+    @property
+    def max_backoff_ms(self) -> int | None:
+        """
+        The maximum backoff duration in milliseconds.
+
+        Returns
+        -------
+        int | None
+            The maximum backoff duration in milliseconds.
+        """
+        ...
+    @max_backoff_ms.setter
+    def max_backoff_ms(self, value: int | None) -> None:
+        """
+        Set the maximum backoff duration in milliseconds.
+
+        Parameters
+        ----------
+        value: int | None
+            The maximum backoff duration in milliseconds.
+        """
+        ...
+
 class StorageConcurrencySettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
@@ -727,6 +818,7 @@ class StorageSettings:
     def __init__(
         self,
         concurrency: StorageConcurrencySettings | None = None,
+        retries: StorageRetriesSettings | None = None,
         unsafe_use_conditional_create: bool | None = None,
         unsafe_use_conditional_update: bool | None = None,
         unsafe_use_metadata: bool | None = None,
@@ -742,6 +834,9 @@ class StorageSettings:
         ----------
         concurrency: StorageConcurrencySettings | None
             The configuration for how Icechunk uses its Storage instance.
+
+        retries: StorageRetriesSettings | None
+            The configuration for how Icechunk retries failed requests.
 
         unsafe_use_conditional_update: bool | None
             If set to False, Icechunk loses some of its consistency guarantees.
@@ -788,6 +883,17 @@ class StorageSettings:
         -------
         StorageConcurrencySettings | None
             The configuration for how Icechunk uses its Storage instance.
+        """
+
+    @property
+    def retries(self) -> StorageRetriesSettings | None:
+        """
+        The configuration for how Icechunk retries failed requests.
+
+        Returns
+        -------
+        StorageRetriesSettings | None
+            The configuration for how Icechunk retries failed requests.
         """
 
     @property

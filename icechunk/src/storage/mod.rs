@@ -153,6 +153,35 @@ impl VersionInfo {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+pub struct RetriesSettings {
+    pub max_tries: Option<NonZeroU16>,
+    pub initial_backoff_ms: Option<u32>,
+    pub max_backoff_ms: Option<u32>,
+}
+
+impl RetriesSettings {
+    pub fn max_tries(&self) -> NonZeroU16 {
+        self.max_tries.unwrap_or_else(|| NonZeroU16::new(10).unwrap_or(NonZeroU16::MIN))
+    }
+
+    pub fn initial_backoff_ms(&self) -> u32 {
+        self.initial_backoff_ms.unwrap_or(100)
+    }
+
+    pub fn max_backoff_ms(&self) -> u32 {
+        self.max_backoff_ms.unwrap_or(3 * 60 * 1000)
+    }
+
+    pub fn merge(&self, other: Self) -> Self {
+        Self {
+            max_tries: other.max_tries.or(self.max_tries),
+            initial_backoff_ms: other.initial_backoff_ms.or(self.initial_backoff_ms),
+            max_backoff_ms: other.max_backoff_ms.or(self.max_backoff_ms),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ConcurrencySettings {
     pub max_concurrent_requests_for_object: Option<NonZeroU16>,
     pub ideal_concurrent_request_size: Option<NonZeroU64>,
@@ -189,6 +218,7 @@ impl ConcurrencySettings {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
     pub concurrency: Option<ConcurrencySettings>,
+    pub retries: Option<RetriesSettings>,
     pub unsafe_use_conditional_update: Option<bool>,
     pub unsafe_use_conditional_create: Option<bool>,
     pub unsafe_use_metadata: Option<bool>,
@@ -203,12 +233,19 @@ pub struct Settings {
 }
 
 static DEFAULT_CONCURRENCY: OnceLock<ConcurrencySettings> = OnceLock::new();
+static DEFAULT_RETRIES: OnceLock<RetriesSettings> = OnceLock::new();
 
 impl Settings {
     pub fn concurrency(&self) -> &ConcurrencySettings {
         self.concurrency
             .as_ref()
             .unwrap_or_else(|| DEFAULT_CONCURRENCY.get_or_init(Default::default))
+    }
+
+    pub fn retries(&self) -> &RetriesSettings {
+        self.retries
+            .as_ref()
+            .unwrap_or_else(|| DEFAULT_RETRIES.get_or_init(Default::default))
     }
 
     pub fn unsafe_use_conditional_create(&self) -> bool {
@@ -239,6 +276,12 @@ impl Settings {
     pub fn merge(&self, other: Self) -> Self {
         Self {
             concurrency: match (&self.concurrency, other.concurrency) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            retries: match (&self.retries, other.retries) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
@@ -478,16 +521,17 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
 
     async fn delete_batch(
         &self,
+        settings: &Settings,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult>;
 
     /// Delete a stream of objects, by their id string representations
     /// Input stream includes sizes to get as result the total number of bytes deleted
-    #[instrument(skip(self, _settings, ids))]
+    #[instrument(skip(self, settings, ids))]
     async fn delete_objects(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         prefix: &str,
         ids: BoxStream<'_, (String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
@@ -497,8 +541,10 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
             .for_each_concurrent(10, |batch| {
                 let res = Arc::clone(&res);
                 async move {
-                    let new_deletes =
-                        self.delete_batch(prefix, batch).await.unwrap_or_else(|_| {
+                    let new_deletes = self
+                        .delete_batch(settings, prefix, batch)
+                        .await
+                        .unwrap_or_else(|_| {
                             // FIXME: handle error instead of skipping
                             warn!("ignoring error in Storage::delete_batch");
                             Default::default()
@@ -618,25 +664,31 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
 
     async fn get_object_range_buf(
         &self,
+        settings: &Settings,
         key: &str,
         range: &Range<u64>,
     ) -> StorageResult<Box<dyn Buf + Unpin + Send>>;
 
     async fn get_object_range_read(
         &self,
+        settings: &Settings,
         key: &str,
         range: &Range<u64>,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
 
     async fn get_object_concurrently_multiple(
         &self,
+        settings: &Settings,
         key: &str,
         parts: Vec<Range<u64>>,
     ) -> StorageResult<Box<dyn Buf + Send + Unpin>> {
-        let results = parts
-            .into_iter()
-            .map(|range| async move { self.get_object_range_buf(key, &range).await })
-            .collect::<FuturesOrdered<_>>();
+        let results =
+            parts
+                .into_iter()
+                .map(|range| async move {
+                    self.get_object_range_buf(settings, key, &range).await
+                })
+                .collect::<FuturesOrdered<_>>();
 
         let init: Box<dyn Buf + Unpin + Send> = Box::new(&[][..]);
         let buf = results
@@ -664,9 +716,11 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
 
         let res = match parts.len() {
             0 => Reader::Asynchronous(Box::new(tokio::io::empty())),
-            1 => Reader::Asynchronous(self.get_object_range_read(key, range).await?),
+            1 => Reader::Asynchronous(
+                self.get_object_range_read(settings, key, range).await?,
+            ),
             _ => Reader::Synchronous(
-                self.get_object_concurrently_multiple(key, parts).await?,
+                self.get_object_concurrently_multiple(settings, key, parts).await?,
             ),
         };
         Ok(res)

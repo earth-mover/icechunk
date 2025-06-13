@@ -578,6 +578,7 @@ pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
         common::get_aws_integration_credentials()?,
         Vec::new(),
         Vec::new(),
+        &storage::Settings::default(),
     )
     .await;
 
