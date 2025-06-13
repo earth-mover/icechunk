@@ -130,6 +130,7 @@ impl ChangeSet {
         }
 
         // update existing splits
+        let mut to_remove = HashSet::<ChunkIndices>::new();
         if let Some(manifests) = self.set_chunks.remove(node_id) {
             let mut new_deleted_chunks = HashSet::<ChunkIndices>::new();
             let mut new_manifests =
@@ -165,15 +166,18 @@ impl ChangeSet {
             }
 
             // bring back any previously tracked deletes
-            if let Some(deletes) = self.deleted_chunks_outside_bounds.get(node_id) {
+            if let Some(deletes) = self.deleted_chunks_outside_bounds.get_mut(node_id) {
                 for coord in deletes.iter() {
                     if let Some(extents) = new_splits.find(coord) {
                         new_manifests
                             .entry(extents)
                             .or_default()
                             .insert(coord.clone(), None);
+                        to_remove.insert(coord.clone());
                     };
                 }
+                deletes.retain(|item| !to_remove.contains(item));
+                to_remove.drain();
             };
             self.set_chunks.insert(node_id.clone(), new_manifests);
 
@@ -242,16 +246,16 @@ impl ChangeSet {
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
         self.set_chunks
-            .entry(node_id.clone())
+            .entry(node_id)
             .or_insert_with(|| {
                 HashMap::<
                     ManifestExtents,
                     BTreeMap<ChunkIndices, Option<ChunkPayload>>,
                 >::with_capacity(splits.len())
             })
-            .entry(extent.clone())
+            .entry(extent)
             .or_default()
-            .insert(coord.clone(), data.clone());
+            .insert(coord, data);
     }
 
     pub fn get_chunk_ref(
