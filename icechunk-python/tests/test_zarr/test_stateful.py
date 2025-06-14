@@ -1,6 +1,7 @@
 import json
 from typing import Any
 
+import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -18,6 +19,7 @@ from icechunk import Repository, in_memory_storage
 from zarr.core.buffer import default_buffer_prototype
 from zarr.testing.stateful import ZarrHierarchyStateMachine
 from zarr.testing.strategies import (
+    basic_indices,
     node_names,
     np_array_and_chunks,
     numpy_arrays,
@@ -181,6 +183,32 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         note(f"deleting chunk {path=!r}")
         self._sync(self.model.delete(path))
         self._sync(self.store.delete(path))
+
+    @precondition(lambda self: bool(self.all_arrays))
+    @rule(data=st.data())
+    def overwrite_array_basic_indexing(self, data) -> None:
+        array = data.draw(st.sampled_from(sorted(self.all_arrays)))
+        model_array = zarr.open_array(path=array, store=self.model)
+        store_array = zarr.open_array(path=array, store=self.store)
+        slicer = data.draw(basic_indices(shape=model_array.shape))
+        note(f"overwriting array basic {slicer=}")
+        new_data = data.draw(
+            npst.arrays(shape=model_array[slicer].shape, dtype=model_array.dtype)
+        )
+        model_array[slicer] = new_data
+        store_array[slicer] = new_data
+
+    @precondition(lambda self: bool(self.all_arrays))
+    @rule(data=st.data())
+    def resize_array(self, data) -> None:
+        array = data.draw(st.sampled_from(sorted(self.all_arrays)))
+        model_array = zarr.open_array(path=array, store=self.model)
+        store_array = zarr.open_array(path=array, store=self.store)
+        ndim = model_array.ndim
+        new_shape = data.draw(npst.array_shapes(max_dims=ndim, min_dims=ndim, min_side=1))
+        note(f"resizing array from {model_array.shape} to {new_shape}")
+        model_array.resize(new_shape)
+        store_array.resize(new_shape)
 
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
     @rule(data=st.data())

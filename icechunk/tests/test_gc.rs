@@ -108,6 +108,7 @@ pub async fn do_test_gc(
 
     let first_snap_id = ds.commit("first", None).await?;
     assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1100);
+    assert_eq!(storage.list_manifests(&storage_settings).await?.count().await, 110);
 
     let mut ds = repo.writable_session("main").await?;
 
@@ -120,6 +121,7 @@ pub async fn do_test_gc(
     }
     let second_snap_id = ds.commit("second", None).await?;
     assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
+    assert_eq!(storage.list_manifests(&storage_settings).await?.count().await, 111);
 
     // verify doing gc without dangling objects doesn't change the repo
     let now = Utc::now();
@@ -155,6 +157,7 @@ pub async fn do_test_gc(
 
     // we still have all the chunks
     assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
+    assert_eq!(storage.list_manifests(&storage_settings).await?.count().await, 111);
 
     let summary = garbage_collect(
         storage.as_ref(),
@@ -164,7 +167,7 @@ pub async fn do_test_gc(
     )
     .await?;
     assert_eq!(summary.chunks_deleted, 10);
-    assert_eq!(summary.manifests_deleted, 110);
+    assert_eq!(summary.manifests_deleted, 1);
     assert_eq!(summary.snapshots_deleted, 1);
     assert!(summary.bytes_deleted > summary.chunks_deleted);
 
