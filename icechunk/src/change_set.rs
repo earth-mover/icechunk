@@ -77,7 +77,6 @@ impl ChangeSet {
     }
 
     pub fn arrays_with_chunk_changes(&self) -> impl Iterator<Item = &NodeId> {
-        // FIXME: needs test for session with only chunk deletes on existing nodes
         self.set_chunks.keys()
     }
 

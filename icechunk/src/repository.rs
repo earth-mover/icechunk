@@ -933,7 +933,7 @@ pub async fn raise_if_invalid_snapshot_id(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::{collections::HashMap, error::Error, path::PathBuf, sync::Arc};
+    use std::{collections::HashMap, error::Error, iter::zip, path::PathBuf, sync::Arc};
 
     use icechunk_macros::tokio_test;
     use itertools::enumerate;
@@ -947,13 +947,14 @@ mod tests {
             ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
             RepositoryConfig,
         },
+        conflicts::basic_solver::BasicConflictSolver,
         format::{
             ByteRange, ChunkIndices,
             manifest::{ChunkPayload, ManifestSplits},
             snapshot::{ArrayShape, DimensionName},
         },
         new_local_filesystem_storage,
-        session::get_chunk,
+        session::{SessionError, get_chunk},
         storage::new_in_memory_storage,
     };
 
@@ -1887,6 +1888,163 @@ mod tests {
             let expected = Bytes::copy_from_slice(format!("{0}", val).as_bytes());
             assert_eq!(actual, expected);
         }
+
+        // now merge two sessions: one with only writes, one with only deletes
+        let mut session1 = repository.writable_session("main").await?;
+        session1
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(indices[0].clone()),
+                Some(ChunkPayload::Inline(format!("{0}", 3).into())),
+            )
+            .await?;
+        session1
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(indices[1].clone()),
+                Some(ChunkPayload::Inline(format!("{0}", 4).into())),
+            )
+            .await?;
+        let mut session2 = repository.writable_session("main").await?;
+        session2
+            .set_chunk_ref(temp_path.clone(), ChunkIndices(indices[2].clone()), None)
+            .await?;
+        session2
+            .set_chunk_ref(temp_path.clone(), ChunkIndices(indices[3].clone()), None)
+            .await?;
+
+        session1.merge(session2).await?;
+        let expected = vec![Some(3), Some(4), None, None];
+        for (expect, idx) in zip(expected.iter(), indices.iter()) {
+            let actual = get_chunk(
+                session1
+                    .get_chunk_reader(
+                        &temp_path,
+                        &ChunkIndices(idx.clone()),
+                        &ByteRange::ALL,
+                    )
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            let expected_value =
+                expect.map(|val| Bytes::copy_from_slice(format!("{0}", val).as_bytes()));
+            assert_eq!(actual, expected_value);
+        }
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_commits_with_conflicting_manifest_splits() -> Result<(), Box<dyn Error>>
+    {
+        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
+        let temp_path: Path = "/temperature".try_into().unwrap();
+
+        let orig_split_sizes = vec![(
+            ManifestSplitCondition::AnyArray,
+            vec![ManifestSplitDim {
+                condition: ManifestSplitDimCondition::DimensionName("t".to_string()),
+                num_chunks: 12u32,
+            }],
+        )];
+        let split_config =
+            ManifestSplittingConfig { split_sizes: Some(orig_split_sizes.clone()) };
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repository = create_repo_with_split_manifest_config(
+            &temp_path,
+            &shape,
+            &dimension_names,
+            &split_config,
+            Some(backend),
+        )
+        .await?;
+
+        let indices =
+            vec![vec![0, 0, 1, 0], vec![0, 0, 0, 0], vec![0, 2, 0, 0], vec![0, 2, 0, 1]];
+
+        let mut session1 = repository.writable_session("main").await?;
+        session1
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(indices[0].clone()),
+                Some(ChunkPayload::Inline(format!("{0}", 0).into())),
+            )
+            .await?;
+        session1
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(indices[1].clone()),
+                Some(ChunkPayload::Inline(format!("{0}", 1).into())),
+            )
+            .await?;
+
+        let incompatible_size = 11u32;
+        let incompatible_split_sizes = vec![(
+            ManifestSplitCondition::AnyArray,
+            vec![ManifestSplitDim {
+                condition: ManifestSplitDimCondition::DimensionName("t".to_string()),
+                num_chunks: incompatible_size,
+            }],
+        )];
+        let other_repo = reopen_repo_with_new_splitting_config(
+            &repository,
+            Some(incompatible_split_sizes),
+        );
+
+        assert_ne!(other_repo.config(), repository.config());
+
+        let mut session2 = other_repo.writable_session("main").await?;
+        session2
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(indices[2].clone()),
+                Some(ChunkPayload::Inline(format!("{0}", 2).into())),
+            )
+            .await?;
+        session2
+            .set_chunk_ref(
+                temp_path.clone(),
+                ChunkIndices(indices[3].clone()),
+                Some(ChunkPayload::Inline(format!("{0}", 3).into())),
+            )
+            .await?;
+
+        session1.commit("first commit", None).await?;
+        if let Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) =
+            session2.commit("second commit", None).await
+        {
+            let solver = BasicConflictSolver::default();
+            // different chunks were written so this should fast forward
+            assert!(session2.rebase(&solver).await.is_ok());
+            session2.commit("second commit after rebase", None).await?;
+        } else {
+            panic!("this should have conflicted!");
+        }
+
+        let new_session = repository
+            .readonly_session(&VersionInfo::BranchTipRef("main".into()))
+            .await?;
+        for (val, idx) in enumerate(indices.iter()) {
+            let actual = get_chunk(
+                new_session
+                    .get_chunk_reader(
+                        &temp_path,
+                        &ChunkIndices(idx.clone()),
+                        &ByteRange::ALL,
+                    )
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .expect(&format!("getting chunk ref failed for {:?}", &idx));
+            let expected = Bytes::copy_from_slice(format!("{0}", val).as_bytes());
+            assert_eq!(actual, expected);
+        }
+
         Ok(())
     }
 
