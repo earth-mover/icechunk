@@ -500,6 +500,10 @@ impl Session {
         self.set_node_chunk_ref(node_snapshot, coord, data).await
     }
 
+    pub fn lookup_splits(&self, node_id: &NodeId) -> Option<&ManifestSplits> {
+        self.splits.get(node_id)
+    }
+
     fn cache_splits(
         &mut self,
         node_id: &NodeId,
@@ -507,9 +511,9 @@ impl Session {
         shape: &ArrayShape,
         dimension_names: &Option<Vec<DimensionName>>,
     ) {
-        // FIXME: handle conflicts here
         // Q: What happens if we set a chunk, then change a dimension name, so
         //    that the split changes.
+        // A: we reorg the existing chunk refs in the changeset to the new splits.
         let splitting = self.config.manifest().splitting();
         let splits = splitting.get_split_sizes(path, shape, dimension_names);
         self.splits.insert(node_id.clone(), splits);
@@ -1842,6 +1846,7 @@ impl ManifestSplittingConfig {
                     } in dim_specs.iter()
                     {
                         if dim_condition.matches(axis, dimname.clone().into()) {
+                            dbg!(&dim_condition, "matched", &dimname);
                             edges[axis] = uniform_manifest_split_edges(
                                 num_chunks[axis],
                                 split_size,
