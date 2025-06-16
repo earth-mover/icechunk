@@ -1354,7 +1354,8 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-                let expected = Bytes::copy_from_slice(format!("{0}", idx + offset).as_bytes());
+                let expected =
+                    Bytes::copy_from_slice(format!("{0}", idx + offset).as_bytes());
                 assert_eq!(actual, expected);
             }
         };
@@ -1408,7 +1409,7 @@ mod tests {
                 .set_chunk_ref(
                     array_path.clone(),
                     ChunkIndices(vec![i, 0, 0]),
-                    Some(ChunkPayload::Inline(format!("{0}", i+10).into())),
+                    Some(ChunkPayload::Inline(format!("{0}", i + 10).into())),
                 )
                 .await?
         }

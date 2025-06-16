@@ -1846,7 +1846,6 @@ impl ManifestSplittingConfig {
                     } in dim_specs.iter()
                     {
                         if dim_condition.matches(axis, dimname.clone().into()) {
-                            dbg!(&dim_condition, "matched", &dimname);
                             edges[axis] = uniform_manifest_split_edges(
                                 num_chunks[axis],
                                 split_size,
