@@ -552,10 +552,11 @@ impl ObjectStoreFetcher {
             .collect();
         let backend =
             HttpObjectStoreBackend { url: url.to_string(), config: Some(config) };
+        let settings = storage::Settings::default();
         let client = backend
-            .mk_object_store()
+            .mk_object_store(&settings)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))?;
-        Ok(ObjectStoreFetcher { client, settings: storage::Settings::default() })
+        Ok(ObjectStoreFetcher { client, settings })
     }
 
     pub async fn new_gcs(

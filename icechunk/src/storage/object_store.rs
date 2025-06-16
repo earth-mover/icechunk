@@ -14,12 +14,9 @@ use futures::{
     stream::{self, BoxStream},
 };
 use object_store::{
-    Attribute, AttributeValue, Attributes, , CredentialProvider,
-    GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload,
-    Attribute, AttributeValue, Attributes, BackoffConfig, ClientConfigKey, 
-    CredentialProvider, GetOptions, ObjectMeta, ObjectStore, PutMode, 
-    PutOptions, PutPayload, RetryConfig, StaticCredentialProvider, 
-    UpdateVersion,
+    Attribute, AttributeValue, Attributes, BackoffConfig, ClientConfigKey,
+    CredentialProvider, GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions,
+    PutPayload, RetryConfig, StaticCredentialProvider, UpdateVersion,
     aws::AmazonS3Builder,
     azure::{AzureConfigKey, MicrosoftAzureBuilder},
     gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey},
@@ -786,7 +783,10 @@ impl fmt::Display for HttpObjectStoreBackend {
 
 #[typetag::serde(name = "http_object_store_provider")]
 impl ObjectStoreBackend for HttpObjectStoreBackend {
-    fn mk_object_store(&self) -> Result<Arc<dyn ObjectStore>, StorageError> {
+    fn mk_object_store(
+        &self,
+        _settings: &Settings,
+    ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = HttpBuilder::new().with_url(&self.url);
 
         // Add options
