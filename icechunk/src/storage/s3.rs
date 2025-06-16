@@ -15,7 +15,9 @@ use crate::{
 };
 use async_trait::async_trait;
 use aws_config::{
-    AppName, BehaviorVersion, meta::region::RegionProviderChain, retry::ProvideErrorKind,
+    AppName, BehaviorVersion,
+    meta::region::RegionProviderChain,
+    retry::{ProvideErrorKind, RetryConfig},
 };
 use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_s3::{
@@ -113,6 +115,7 @@ pub async fn mk_client(
     credentials: S3Credentials,
     extra_read_headers: Vec<(String, String)>,
     extra_write_headers: Vec<(String, String)>,
+    settings: &Settings,
 ) -> Client {
     let region = config
         .region
@@ -160,8 +163,17 @@ pub async fn mk_client(
         }
     }
 
-    let mut s3_builder =
-        Builder::from(&aws_config.load().await).force_path_style(config.force_path_style);
+    let retry_config = RetryConfig::standard()
+        .with_max_attempts(settings.retries().max_tries().get() as u32)
+        .with_initial_backoff(core::time::Duration::from_millis(
+            settings.retries().initial_backoff_ms() as u64,
+        ))
+        .with_max_backoff(core::time::Duration::from_millis(
+            settings.retries().max_backoff_ms() as u64,
+        ));
+    let mut s3_builder = Builder::from(&aws_config.load().await)
+        .force_path_style(config.force_path_style)
+        .retry_config(retry_config);
 
     if !extra_read_headers.is_empty() || !extra_write_headers.is_empty() {
         s3_builder = s3_builder.interceptor(ExtraHeadersInterceptor {
@@ -202,7 +214,7 @@ impl S3Storage {
     /// client is not serializeable and must be initialized after deserialization. Under normal construction
     /// the original client is returned immediately.
     #[instrument(skip_all)]
-    async fn get_client(&self) -> &Arc<Client> {
+    async fn get_client(&self, settings: &Settings) -> &Arc<Client> {
         self.client
             .get_or_init(|| async {
                 Arc::new(
@@ -211,6 +223,7 @@ impl S3Storage {
                         self.credentials.clone(),
                         self.extra_read_headers.clone(),
                         self.extra_write_headers.clone(),
+                        settings,
                     )
                     .await,
                 )
@@ -265,10 +278,10 @@ impl S3Storage {
 
     async fn get_object_reader(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         key: &str,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let client = self.get_client().await;
+        let client = self.get_client(settings).await;
         let b = client.get_object().bucket(self.bucket.as_str()).key(key);
         Ok(Box::new(b.send().await?.body.into_async_read()))
     }
@@ -284,8 +297,12 @@ impl S3Storage {
         storage_class: Option<&String>,
         bytes: impl Into<ByteStream>,
     ) -> StorageResult<()> {
-        let mut b =
-            self.get_client().await.put_object().bucket(self.bucket.clone()).key(key);
+        let mut b = self
+            .get_client(settings)
+            .await
+            .put_object()
+            .bucket(self.bucket.clone())
+            .key(key);
 
         if settings.unsafe_use_metadata() {
             if let Some(ct) = content_type {
@@ -320,7 +337,7 @@ impl S3Storage {
         bytes: &Bytes,
     ) -> StorageResult<()> {
         let mut multi = self
-            .get_client()
+            .get_client(settings)
             .await
             .create_multipart_upload()
             // We would like this, but it fails in MinIO
@@ -364,7 +381,7 @@ impl S3Storage {
             .map(|(part_idx, range)| async move {
                 let body = bytes.slice(range.start as usize..range.end as usize).into();
                 let idx = part_idx as i32 + 1;
-                self.get_client()
+                self.get_client(settings)
                     .await
                     .upload_part()
                     .upload_id(upload_id)
@@ -389,7 +406,7 @@ impl S3Storage {
         let completed_parts =
             CompletedMultipartUpload::builder().set_parts(Some(completed_parts)).build();
 
-        self.get_client()
+        self.get_client(settings)
             .await
             .complete_multipart_upload()
             .bucket(self.bucket.clone())
@@ -462,11 +479,11 @@ impl Storage for S3Storage {
     #[instrument(skip_all)]
     async fn fetch_config(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
     ) -> StorageResult<FetchConfigResult> {
         let key = self.get_config_path()?;
         let res = self
-            .get_client()
+            .get_client(settings)
             .await
             .get_object()
             .bucket(self.bucket.clone())
@@ -509,7 +526,7 @@ impl Storage for S3Storage {
     ) -> StorageResult<UpdateConfigResult> {
         let key = self.get_config_path()?;
         let mut req = self
-            .get_client()
+            .get_client(settings)
             .await
             .put_object()
             .bucket(self.bucket.clone())
@@ -706,15 +723,15 @@ impl Storage for S3Storage {
         .await
     }
 
-    #[instrument(skip(self, _settings))]
+    #[instrument(skip(self, settings))]
     async fn get_ref(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         ref_key: &str,
     ) -> StorageResult<GetRefResult> {
         let key = self.ref_key(ref_key)?;
         let res = self
-            .get_client()
+            .get_client(settings)
             .await
             .get_object()
             .bucket(self.bucket.clone())
@@ -744,10 +761,10 @@ impl Storage for S3Storage {
     }
 
     #[instrument(skip_all)]
-    async fn ref_names(&self, _settings: &Settings) -> StorageResult<Vec<String>> {
+    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>> {
         let prefix = self.ref_key("")?;
         let mut paginator = self
-            .get_client()
+            .get_client(settings)
             .await
             .list_objects_v2()
             .bucket(self.bucket.clone())
@@ -781,7 +798,7 @@ impl Storage for S3Storage {
     ) -> StorageResult<WriteRefResult> {
         let key = self.ref_key(ref_key)?;
         let mut builder = self
-            .get_client()
+            .get_client(settings)
             .await
             .put_object()
             .bucket(self.bucket.clone())
@@ -822,15 +839,15 @@ impl Storage for S3Storage {
         }
     }
 
-    #[instrument(skip(self, _settings))]
+    #[instrument(skip(self, settings))]
     async fn list_objects<'a>(
         &'a self,
-        _settings: &Settings,
+        settings: &Settings,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let prefix = format!("{}/{}", self.prefix, prefix).replace("//", "/");
         let stream = self
-            .get_client()
+            .get_client(settings)
             .await
             .list_objects_v2()
             .bucket(self.bucket.clone())
@@ -856,6 +873,7 @@ impl Storage for S3Storage {
     #[instrument(skip(self, batch))]
     async fn delete_batch(
         &self,
+        settings: &Settings,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
@@ -876,7 +894,7 @@ impl Storage for S3Storage {
             .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
 
         let res = self
-            .get_client()
+            .get_client(settings)
             .await
             .delete_objects()
             .bucket(self.bucket.clone())
@@ -904,15 +922,15 @@ impl Storage for S3Storage {
         Ok(result)
     }
 
-    #[instrument(skip(self, _settings))]
+    #[instrument(skip(self, settings))]
     async fn get_snapshot_last_modified(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>> {
         let key = self.get_snapshot_path(snapshot)?;
         let res = self
-            .get_client()
+            .get_client(settings)
             .await
             .head_object()
             .bucket(self.bucket.clone())
@@ -933,11 +951,12 @@ impl Storage for S3Storage {
     #[instrument(skip(self))]
     async fn get_object_range_buf(
         &self,
+        settings: &Settings,
         key: &str,
         range: &Range<u64>,
     ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
         let b = self
-            .get_client()
+            .get_client(settings)
             .await
             .get_object()
             .bucket(self.bucket.clone())
@@ -949,10 +968,11 @@ impl Storage for S3Storage {
     #[instrument(skip(self))]
     async fn get_object_range_read(
         &self,
+        settings: &Settings,
         key: &str,
         range: &Range<u64>,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let client = self.get_client().await;
+        let client = self.get_client(settings).await;
         let bucket = self.bucket.clone();
         Ok(Box::new(get_object_range(client.as_ref(), bucket, key, range).await?))
     }

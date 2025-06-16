@@ -212,10 +212,11 @@ impl Storage for LoggingStorage {
 
     async fn delete_batch(
         &self,
+        settings: &Settings,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
-        self.backend.delete_batch(prefix, batch).await
+        self.backend.delete_batch(settings, prefix, batch).await
     }
 
     async fn get_snapshot_last_modified(
@@ -228,17 +229,19 @@ impl Storage for LoggingStorage {
 
     async fn get_object_range_buf(
         &self,
+        settings: &Settings,
         key: &str,
         range: &Range<u64>,
     ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
-        self.backend.get_object_range_buf(key, range).await
+        self.backend.get_object_range_buf(settings, key, range).await
     }
 
     async fn get_object_range_read(
         &self,
+        settings: &Settings,
         key: &str,
         range: &Range<u64>,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        self.backend.get_object_range_read(key, range).await
+        self.backend.get_object_range_read(settings, key, range).await
     }
 }

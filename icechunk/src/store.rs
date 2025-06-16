@@ -272,6 +272,11 @@ impl Store {
     }
 
     #[instrument(skip_all)]
+    pub fn supports_consolidated_metadata(&self) -> StoreResult<bool> {
+        Ok(false)
+    }
+
+    #[instrument(skip_all)]
     pub fn supports_deletes(&self) -> StoreResult<bool> {
         Ok(true)
     }

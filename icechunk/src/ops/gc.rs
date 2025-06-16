@@ -303,7 +303,7 @@ async fn gc_chunks(
     Ok(storage.delete_chunks(storage_settings, to_delete).await?)
 }
 
-#[instrument(skip(storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
+#[instrument(skip(asset_manager, storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_manifests(
     asset_manager: &AssetManager,
     storage: &(dyn Storage + Send + Sync),
@@ -331,7 +331,7 @@ async fn gc_manifests(
     Ok(storage.delete_manifests(storage_settings, to_delete).await?)
 }
 
-#[instrument(skip(storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
+#[instrument(skip(asset_manager, storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_snapshots(
     asset_manager: &AssetManager,
     storage: &(dyn Storage + Send + Sync),
@@ -359,7 +359,7 @@ async fn gc_snapshots(
     Ok(storage.delete_snapshots(storage_settings, to_delete).await?)
 }
 
-#[instrument(skip(storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
+#[instrument(skip(asset_manager, storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_transaction_logs(
     asset_manager: &AssetManager,
     storage: &(dyn Storage + Send + Sync),
