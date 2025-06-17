@@ -14,12 +14,13 @@ use futures::{
     stream::{self, BoxStream},
 };
 use object_store::{
-    Attribute, AttributeValue, Attributes, BackoffConfig, CredentialProvider, GetOptions,
-    ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload, RetryConfig,
-    StaticCredentialProvider, UpdateVersion,
+    Attribute, AttributeValue, Attributes, BackoffConfig, ClientConfigKey,
+    CredentialProvider, GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions,
+    PutPayload, RetryConfig, StaticCredentialProvider, UpdateVersion,
     aws::AmazonS3Builder,
     azure::{AzureConfigKey, MicrosoftAzureBuilder},
     gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey},
+    http::HttpBuilder,
     local::LocalFileSystem,
     memory::InMemory,
     path::Path as ObjectPath,
@@ -278,7 +279,7 @@ impl private::Sealed for ObjectStorage {}
 #[typetag::serde]
 impl Storage for ObjectStorage {
     fn can_write(&self) -> bool {
-        true
+        self.backend.can_write()
     }
 
     #[instrument(skip_all)]
@@ -653,6 +654,10 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
     }
 
     fn default_settings(&self) -> Settings;
+
+    fn can_write(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -753,6 +758,80 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
             }),
             ..Default::default()
         }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HttpObjectStoreBackend {
+    pub url: String,
+    pub config: Option<HashMap<ClientConfigKey, String>>,
+}
+
+impl fmt::Display for HttpObjectStoreBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "HttpObjectStoreBackend(url={}, config={})",
+            self.url,
+            self.config
+                .as_ref()
+                .map(|c| c
+                    .iter()
+                    .map(|(k, v)| format!("{:?}={}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", "))
+                .unwrap_or("None".to_string())
+        )
+    }
+}
+
+#[typetag::serde(name = "http_object_store_provider")]
+impl ObjectStoreBackend for HttpObjectStoreBackend {
+    fn mk_object_store(
+        &self,
+        settings: &Settings,
+    ) -> Result<Arc<dyn ObjectStore>, StorageError> {
+        let builder = HttpBuilder::new().with_url(&self.url);
+
+        // Add options
+        let builder = self
+            .config
+            .as_ref()
+            .unwrap_or(&HashMap::new())
+            .iter()
+            .fold(builder, |builder, (key, value)| builder.with_config(*key, value));
+
+        let builder = builder.with_retry(RetryConfig {
+            backoff: BackoffConfig {
+                init_backoff: core::time::Duration::from_millis(
+                    settings.retries().initial_backoff_ms() as u64,
+                ),
+                max_backoff: core::time::Duration::from_millis(
+                    settings.retries().max_backoff_ms() as u64,
+                ),
+                base: 2.,
+            },
+            max_retries: settings.retries().max_tries().get() as usize - 1,
+            retry_timeout: core::time::Duration::from_secs(5 * 60),
+        });
+
+        let store =
+            builder.build().map_err(|e| StorageErrorKind::Other(e.to_string()))?;
+
+        Ok(Arc::new(store))
+    }
+
+    fn prefix(&self) -> String {
+        "".to_string()
+    }
+
+    fn default_settings(&self) -> Settings {
+        Default::default()
+    }
+
+    fn can_write(&self) -> bool {
+        // TODO: Support write operations?
+        false
     }
 }
 

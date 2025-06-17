@@ -3,6 +3,7 @@ use std::{
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::PathBuf,
+    str::FromStr,
     sync::Arc,
 };
 
@@ -11,7 +12,8 @@ use aws_sdk_s3::{Client, error::SdkError, operation::get_object::GetObjectError}
 use bytes::{Buf, Bytes};
 use futures::{TryStreamExt, stream::FuturesOrdered};
 use object_store::{
-    GetOptions, ObjectStore, gcp::GoogleConfigKey, local::LocalFileSystem, path::Path,
+    ClientConfigKey, GetOptions, ObjectStore, gcp::GoogleConfigKey,
+    local::LocalFileSystem, path::Path,
 };
 use quick_cache::sync::Cache;
 use serde::{Deserialize, Serialize};
@@ -29,7 +31,9 @@ use crate::{
     private,
     storage::{
         self,
-        object_store::{GcsObjectStoreBackend, ObjectStoreBackend as _},
+        object_store::{
+            GcsObjectStoreBackend, HttpObjectStoreBackend, ObjectStoreBackend as _,
+        },
         s3::{mk_client, range_to_header},
         split_in_multiple_requests,
     },
@@ -57,6 +61,10 @@ impl VirtualChunkContainer {
             }
             (ObjectStoreConfig::LocalFileSystem(..), _) => {
                 Err("in memory storage does not accept credentials".to_string())
+            }
+            (ObjectStoreConfig::Http(_), _) => {
+                // TODO: Support basic and bearer auth
+                Err("http storage does not support credentials".to_string())
             }
             (ObjectStoreConfig::S3Compatible(_), Credentials::S3(_)) => Ok(()),
             (ObjectStoreConfig::S3(_), Credentials::S3(_)) => Ok(()),
@@ -122,8 +130,17 @@ pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> 
                 store: ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
             },
         ),
+        (
+            "http".to_string(),
+            VirtualChunkContainer {
+                name: "http".to_string(),
+                url_prefix: "http".to_string(),
+                store: ObjectStoreConfig::Http(HashMap::new()),
+            },
+        ),
     ]
-    .into()
+    .into_iter()
+    .collect()
 }
 
 #[async_trait]
@@ -332,6 +349,18 @@ impl VirtualChunkResolver {
                     .await?,
                 ))
             }
+            ObjectStoreConfig::Http(opts) => {
+                let hostname = if let Some(host) = chunk_location.host_str() {
+                    host.to_string()
+                } else {
+                    Err(VirtualReferenceErrorKind::CannotParseBucketName(
+                        "No hostname found for HTTP store".to_string(),
+                    ))?
+                };
+
+                let root_url = format!("{}://{}", chunk_location.scheme(), hostname);
+                Ok(Arc::new(ObjectStoreFetcher::new_http(&root_url, opts).await?))
+            }
             ObjectStoreConfig::Azure { .. } => {
                 unimplemented!("support for virtual chunks on azure")
             }
@@ -343,7 +372,7 @@ impl VirtualChunkResolver {
 }
 
 fn is_fetcher_bucket_constrained(store: &ObjectStoreConfig) -> bool {
-    matches!(store, ObjectStoreConfig::Gcs(_))
+    matches!(store, ObjectStoreConfig::Gcs(_) | ObjectStoreConfig::Http(_))
 }
 
 fn fetcher_cache_key(
@@ -352,7 +381,7 @@ fn fetcher_cache_key(
 ) -> Result<(String, Option<String>), VirtualReferenceError> {
     if is_fetcher_bucket_constrained(&cont.store) {
         if let Some(host) = location.host_str() {
-            Ok((cont.name.clone(), Some(host.to_string())))
+            Ok((cont.name.clone(), Some(format!("{}://{}", location.scheme(), host))))
         } else {
             Err(VirtualReferenceErrorKind::CannotParseBucketName(
                 "No bucket name found".to_string(),
@@ -504,6 +533,25 @@ impl ObjectStoreFetcher {
         }
     }
 
+    pub async fn new_http(
+        url: &str,
+        opts: &HashMap<String, String>,
+    ) -> Result<Self, VirtualReferenceError> {
+        let config = opts
+            .iter()
+            .filter_map(|(k, v)| {
+                ClientConfigKey::from_str(k).ok().map(|key| (key, v.clone()))
+            })
+            .collect();
+        let backend =
+            HttpObjectStoreBackend { url: url.to_string(), config: Some(config) };
+        let settings = storage::Settings::default();
+        let client = backend
+            .mk_object_store(&settings)
+            .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))?;
+        Ok(ObjectStoreFetcher { client, settings })
+    }
+
     pub async fn new_gcs(
         bucket: String,
         prefix: Option<String>,
@@ -512,8 +560,8 @@ impl ObjectStoreFetcher {
     ) -> Result<Self, VirtualReferenceError> {
         let config = config
             .into_iter()
-            .filter_map(|(key, value)| {
-                key.parse::<GoogleConfigKey>().map(|k| (k, value)).ok()
+            .filter_map(|(k, v)| {
+                GoogleConfigKey::from_str(&k).ok().map(|key| (key, v.clone()))
             })
             .collect();
         let backend =
