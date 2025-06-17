@@ -63,6 +63,7 @@ impl VirtualChunkContainer {
                 Err("in memory storage does not accept credentials".to_string())
             }
             (ObjectStoreConfig::Http(_), _) => {
+                // TODO: Support basic and bearer auth
                 Err("http storage does not support credentials".to_string())
             }
             (ObjectStoreConfig::S3Compatible(_), Credentials::S3(_)) => Ok(()),
@@ -134,14 +135,6 @@ pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> 
             VirtualChunkContainer {
                 name: "http".to_string(),
                 url_prefix: "http".to_string(),
-                store: ObjectStoreConfig::Http(HashMap::new()),
-            },
-        ),
-        (
-            "https".to_string(),
-            VirtualChunkContainer {
-                name: "https".to_string(),
-                url_prefix: "https".to_string(),
                 store: ObjectStoreConfig::Http(HashMap::new()),
             },
         ),

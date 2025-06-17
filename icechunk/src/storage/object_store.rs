@@ -279,7 +279,7 @@ impl private::Sealed for ObjectStorage {}
 #[typetag::serde]
 impl Storage for ObjectStorage {
     fn can_write(&self) -> bool {
-        true
+        self.backend.can_write()
     }
 
     #[instrument(skip_all)]
@@ -654,6 +654,10 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
     }
 
     fn default_settings(&self) -> Settings;
+
+    fn can_write(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -785,7 +789,7 @@ impl fmt::Display for HttpObjectStoreBackend {
 impl ObjectStoreBackend for HttpObjectStoreBackend {
     fn mk_object_store(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = HttpBuilder::new().with_url(&self.url);
 
@@ -796,6 +800,20 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
             .unwrap_or(&HashMap::new())
             .iter()
             .fold(builder, |builder, (key, value)| builder.with_config(*key, value));
+
+        let builder = builder.with_retry(RetryConfig {
+            backoff: BackoffConfig {
+                init_backoff: core::time::Duration::from_millis(
+                    settings.retries().initial_backoff_ms() as u64,
+                ),
+                max_backoff: core::time::Duration::from_millis(
+                    settings.retries().max_backoff_ms() as u64,
+                ),
+                base: 2.,
+            },
+            max_retries: settings.retries().max_tries().get() as usize - 1,
+            retry_timeout: core::time::Duration::from_secs(5 * 60),
+        });
 
         let store =
             builder.build().map_err(|e| StorageErrorKind::Other(e.to_string()))?;
@@ -809,6 +827,11 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
 
     fn default_settings(&self) -> Settings {
         Default::default()
+    }
+
+    fn can_write(&self) -> bool {
+        // TODO: Support write operations?
+        false
     }
 }
 
