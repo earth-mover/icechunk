@@ -26,7 +26,7 @@ Let's break down what "transactional storage engine for Zarr" actually means:
   Zarr defines the metadata for describing arrays (shape, dtype, etc.) and the way these arrays are chunked, compressed, and converted to raw bytes for storage. Zarr can store its data in any key-value store.
   There are many different implementations of Zarr in different languages. _Right now, Icechunk only supports
   [Zarr Python](https://zarr.readthedocs.io/en/stable/)._
-  If you're interested in implementing Icehcunk support, please [open an issue](https://github.com/earth-mover/icechunk/issues) so we can help you.
+  If you're interested in implementing Icechunk support, please [open an issue](https://github.com/earth-mover/icechunk/issues) so we can help you.
 - **Storage engine** - Icechunk exposes a key-value interface to Zarr and manages all of the actual I/O for getting, setting, and updating both metadata and chunk data in cloud object storage.
   Zarr libraries don't have to know exactly how icechunk works under the hood in order to use it.
 - **Transactional** - The key improvement that Icechunk brings on top of regular Zarr is to provide consistent serializable isolation between transactions.
