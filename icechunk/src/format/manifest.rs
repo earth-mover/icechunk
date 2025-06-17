@@ -36,6 +36,9 @@ pub enum Overlap {
 pub struct ManifestExtents(Vec<Range<u32>>);
 
 impl ManifestExtents {
+    // sentinel for a "universal set"
+    pub const ALL: Self = Self(Vec::new());
+
     pub fn new(from: &[u32], to: &[u32]) -> Self {
         let v = from
             .iter()
@@ -66,6 +69,10 @@ impl ManifestExtents {
     }
 
     pub fn intersection(&self, other: &Self) -> Option<Self> {
+        if self == &Self::ALL {
+            return Some(other.clone());
+        }
+
         debug_assert_eq!(self.len(), other.len());
         let ranges = zip(self.iter(), other.iter())
             .map(|(a, b)| max(a.start, b.start)..min(a.end, b.end))
@@ -74,6 +81,9 @@ impl ManifestExtents {
     }
 
     pub fn union(&self, other: &Self) -> Self {
+        if self == &Self::ALL {
+            return Self::ALL;
+        }
         debug_assert_eq!(self.len(), other.len());
         Self::from_ranges_iter(
             zip(self.iter(), other.iter())
@@ -83,13 +93,17 @@ impl ManifestExtents {
 
     pub fn overlap_with(&self, other: &Self) -> Overlap {
         // Important: this is not symmetric.
+        if *other == Self::ALL {
+            return Overlap::Complete;
+        } else if *self == Self::ALL {
+            return Overlap::Partial;
+        }
         debug_assert!(
             self.len() == other.len(),
             "Length mismatch: self = {:?}, other = {:?}",
             &self,
             &other
         );
-
         let mut overlap = Overlap::Complete;
         for (a, b) in zip(other.iter(), self.iter()) {
             debug_assert!(a.start <= a.end, "Invalid range: {:?}", a.clone());
@@ -101,6 +115,12 @@ impl ManifestExtents {
             }
         }
         overlap
+    }
+
+    pub fn matches(&self, other: &ManifestExtents) -> bool {
+        // used in `.filter`
+        // ALL always matches any other extents
+        if *self == Self::ALL { true } else { self == other }
     }
 }
 

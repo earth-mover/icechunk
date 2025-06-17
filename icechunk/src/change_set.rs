@@ -297,7 +297,7 @@ impl ChangeSet {
         &self,
         node_id: &NodeId,
         node_path: &Path,
-        extent: Option<ManifestExtents>,
+        extent: ManifestExtents,
     ) -> impl Iterator<Item = (&ChunkIndices, &Option<ChunkPayload>)> + use<'_> {
         if self.is_deleted(node_path, node_id) {
             return Either::Left(iter::empty());
@@ -306,9 +306,7 @@ impl ChangeSet {
             None => Either::Left(iter::empty()),
             Some(h) => Either::Right(
                 h.iter()
-                    .filter(move |(manifest_extent, _)| {
-                        extent.as_ref().is_none_or(|e| e == *manifest_extent)
-                    })
+                    .filter(move |(manifest_extent, _)| extent.matches(manifest_extent))
                     .flat_map(|(_, manifest)| manifest.iter()),
             ),
         }
@@ -318,7 +316,7 @@ impl ChangeSet {
         &self,
     ) -> impl Iterator<Item = (Path, ChunkInfo)> + use<'_> {
         self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
-            self.new_array_chunk_iterator(node_id, path, None)
+            self.new_array_chunk_iterator(node_id, path, ManifestExtents::ALL)
                 .map(|ci| (path.clone(), ci))
         })
     }
@@ -327,7 +325,7 @@ impl ChangeSet {
         &'a self,
         node_id: &'a NodeId,
         node_path: &Path,
-        extent: Option<ManifestExtents>,
+        extent: ManifestExtents,
     ) -> impl Iterator<Item = ChunkInfo> + use<'a> {
         self.array_chunks_iterator(node_id, node_path, extent).filter_map(
             move |(coords, payload)| {

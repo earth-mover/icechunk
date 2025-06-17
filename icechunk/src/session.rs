@@ -628,7 +628,7 @@ impl Session {
             &self.change_set,
             &self.snapshot_id,
             path,
-            None,
+            ManifestExtents::ALL,
         )
         .await
     }
@@ -870,7 +870,7 @@ impl Session {
             &self.change_set,
             &self.snapshot_id,
             node.clone(),
-            None,
+            ManifestExtents::ALL,
         )
         .await
         .map_ok(|(_path, chunk_info)| chunk_info.coord);
@@ -878,7 +878,7 @@ impl Session {
         let res = try_stream! {
             let new_chunks = stream::iter(
                 self.change_set
-                    .new_array_chunk_iterator(&node.id, array_path, None)
+                    .new_array_chunk_iterator(&node.id, array_path, ManifestExtents::ALL)
                     .map(|chunk_info| Ok::<ChunkIndices, SessionError>(chunk_info.coord)),
             );
 
@@ -1210,7 +1210,7 @@ async fn updated_chunk_iterator<'a>(
             change_set,
             snapshot_id,
             node,
-            None,
+            ManifestExtents::ALL,
         )
         .await)
     });
@@ -1222,7 +1222,7 @@ async fn updated_node_chunks_iterator<'a>(
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
     node: NodeSnapshot,
-    extent: Option<ManifestExtents>,
+    extent: ManifestExtents,
 ) -> impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a {
     // This iterator should yield chunks for existing arrays + any updates.
     // we check for deletion here in the case that `path` exists in the snapshot,
@@ -1252,7 +1252,7 @@ async fn node_chunk_iterator<'a>(
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
     path: &Path,
-    extent: Option<ManifestExtents>,
+    extent: ManifestExtents,
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a + use<'a> {
     match get_node(asset_manager, change_set, snapshot_id, path).await {
         Ok(node) => futures::future::Either::Left(
@@ -1275,7 +1275,7 @@ async fn verified_node_chunk_iterator<'a>(
     snapshot_id: &'a SnapshotId,
     change_set: &'a ChangeSet,
     node: NodeSnapshot,
-    extent: Option<ManifestExtents>,
+    extent: ManifestExtents,
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
     match node.node_data {
         NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
@@ -1308,9 +1308,10 @@ async fn verified_node_chunk_iterator<'a>(
                 futures::stream::iter(new_chunks).chain(
                     futures::stream::iter(manifests)
                         .filter(move |manifest_ref| {
-                            futures::future::ready(extent.as_ref().is_none_or(|e| {
-                                e.overlap_with(&manifest_ref.extents) != Overlap::None
-                            }))
+                            futures::future::ready(
+                                extent.overlap_with(&manifest_ref.extents)
+                                    != Overlap::None,
+                            )
                         })
                         .then(move |manifest_ref| {
                             let new_chunk_indices = new_chunk_indices.clone();
@@ -1333,11 +1334,7 @@ async fn verified_node_chunk_iterator<'a>(
                                                 !new_chunk_indices.contains(coord)
                                                     // If the manifest we are parsing partially overlaps with `extent`,
                                                     // we need to filter all coordinates
-                                                    && extent_c2.as_ref().is_none_or(
-                                                        move |e| {
-                                                            e.contains(coord.0.as_slice())
-                                                        },
-                                                    )
+                                                    && extent_c2.contains(coord.0.as_slice())
                                             })
                                             .map_ok(move |(coord, payload)| ChunkInfo {
                                                 node: node_id_c2.clone(),
@@ -1612,7 +1609,7 @@ impl<'a> FlushProcess<'a> {
             self.change_set,
             self.parent_id,
             node.clone(),
-            Some(extent.clone()),
+            extent.clone(),
         )
         .await
         .map_ok(|(_path, chunk_info)| chunk_info);
@@ -1664,11 +1661,7 @@ impl<'a> FlushProcess<'a> {
             if self.change_set.array_manifest(node_id, extent).is_some() {
                 let chunks = stream::iter(
                     self.change_set
-                        .new_array_chunk_iterator(
-                            node_id,
-                            node_path,
-                            Some(extent.clone()),
-                        )
+                        .new_array_chunk_iterator(node_id, node_path, extent.clone())
                         .map(Ok),
                 );
                 #[allow(clippy::expect_used)]
