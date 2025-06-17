@@ -1924,6 +1924,7 @@ mod tests {
             vec![vec![0, 0, 1, 0], vec![0, 0, 0, 0], vec![0, 2, 0, 0], vec![0, 2, 0, 1]];
 
         let mut session1 = repository.writable_session("main").await?;
+        let node_id = session1.get_node(&temp_path).await?.id;
         session1
             .set_chunk_ref(
                 temp_path.clone(),
@@ -1992,7 +1993,12 @@ mod tests {
             )
             .await?;
 
+        // Session.splits should be _complete_ so it should be identical for the same node
+        // on any two sessions with compatible splits
+        let splits = session1.lookup_splits(&node_id).unwrap().clone();
+        assert_eq!(session1.lookup_splits(&node_id), session2.lookup_splits(&node_id));
         session1.merge(session2).await?;
+        assert_eq!(session1.lookup_splits(&node_id), Some(&splits));
         for (val, idx) in enumerate(indices.iter()) {
             let actual = get_chunk(
                 session1

@@ -67,6 +67,7 @@ pub async fn do_test_gc(
     let storage_settings = storage.default_settings();
 
     let shape = ArrayShape::new(vec![(1100, 1)]).unwrap();
+    // intentionally small to create garbage
     let manifest_split_size = 10;
     let split_sizes = Some(vec![(
         ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
@@ -113,6 +114,7 @@ pub async fn do_test_gc(
     let mut ds = repo.writable_session("main").await?;
 
     // overwrite 10 chunks
+    // This will only overwrite one split manifest.
     for idx in 0..10 {
         let bytes = Bytes::copy_from_slice(&0i8.to_be_bytes());
         let payload = ds.get_chunk_writer()(bytes.clone()).await?;
@@ -167,6 +169,7 @@ pub async fn do_test_gc(
     )
     .await?;
     assert_eq!(summary.chunks_deleted, 10);
+    // only one manifest was re-created, so there is only one garbage manifest
     assert_eq!(summary.manifests_deleted, 1);
     assert_eq!(summary.snapshots_deleted, 1);
     assert!(summary.bytes_deleted > summary.chunks_deleted);

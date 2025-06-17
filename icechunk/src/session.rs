@@ -109,10 +109,15 @@ pub enum SessionErrorKind {
     InvalidIndex { coords: ChunkIndices, path: Path },
     #[error("invalid chunk index for splitting manifests: {coords:?}")]
     InvalidIndexForSplitManifests { coords: ChunkIndices },
-    #[error("incompatible manifest splitting config when merging sessions")]
-    IncompatibleSplits,
+    #[error("incompatible manifest splitting config when merging two sessions")]
+    IncompatibleSplittingConfig {
+        ours: ManifestSplittingConfig,
+        theirs: ManifestSplittingConfig,
+    },
     #[error("`to` snapshot ancestry doesn't include `from`")]
     BadSnapshotChainForDiff,
+    #[error("failed to create manifest from chunk stream")]
+    ManifestCreationError(#[from] Box<SessionError>),
 }
 
 pub type SessionError = ICError<SessionErrorKind>;
@@ -168,7 +173,10 @@ pub type SessionResult<T> = Result<T, SessionError>;
 // and at read time to choose which manifest to query for chunk payload
 /// It is useful to have this act on an iterator (e.g. get_chunk_ref)
 /// The find method on ManifestSplits is simply a helper.
-pub fn find_coord<'a, I>(mut iter: I, coord: &'a ChunkIndices) -> Option<ManifestExtents>
+pub fn find_coord<'a, I>(
+    iter: I,
+    coord: &'a ChunkIndices,
+) -> Option<(usize, &'a ManifestExtents)>
 where
     I: Iterator<Item = &'a ManifestExtents>,
 {
@@ -182,25 +190,18 @@ where
     // ndim must be the same
     // Note: I don't think we can distinguish between out of bounds index for the array
     //       and an index that is part of a split that hasn't been written yet.
-    iter.find(|e| e.contains(coord.0.as_slice())).cloned()
-}
-
-pub fn position_coord<'a, I>(iter: I, coord: &'a ChunkIndices) -> Option<usize>
-where
-    I: Iterator<Item = &'a ManifestExtents>,
-{
-    enumerate(iter).find(|(_, e)| e.contains(coord.0.as_slice())).map(|x| x.0)
+    enumerate(iter).find(|(_, e)| e.contains(coord.0.as_slice()))
 }
 
 impl ManifestSplits {
-    pub fn find(&self, coord: &ChunkIndices) -> Option<ManifestExtents> {
+    pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<&'a ManifestExtents> {
         debug_assert_eq!(coord.0.len(), self.0[0].len());
-        find_coord(self.iter(), coord)
+        find_coord(self.iter(), coord).map(|x| x.1)
     }
 
     pub fn position(&self, coord: &ChunkIndices) -> Option<usize> {
         debug_assert_eq!(coord.0.len(), self.0[0].len());
-        position_coord(self.iter(), coord)
+        find_coord(self.iter(), coord).map(|x| x.0)
     }
 }
 
@@ -238,6 +239,8 @@ impl Session {
             snapshot_id,
             change_set: ChangeSet::default(),
             default_commit_metadata: SnapshotProperties::default(),
+            // Splits are populated for a node during
+            // `add_array`, `update_array`, and `set_chunk_ref`
             splits: Default::default(),
         }
     }
@@ -504,6 +507,8 @@ impl Session {
         self.splits.get(node_id)
     }
 
+    /// This method is directly called in add_array & update_array
+    /// where we know we must update the splits HashMap
     fn cache_splits(
         &mut self,
         node_id: &NodeId,
@@ -526,11 +531,13 @@ impl Session {
         shape: &ArrayShape,
         dimension_names: &Option<Vec<DimensionName>>,
     ) -> &ManifestSplits {
-        if !self.splits.contains_key(node_id) {
-            self.cache_splits(node_id, path, shape, dimension_names);
-        }
-        #[allow(clippy::expect_used)]
-        self.splits.get(node_id).expect("splits for node should always exist.")
+        self.splits.entry(node_id.clone()).or_insert_with(|| {
+            self.config.manifest().splitting().get_split_sizes(
+                path,
+                shape,
+                dimension_names,
+            )
+        })
     }
 
     // Helper function that accepts a NodeSnapshot instead of a path,
@@ -810,8 +817,8 @@ impl Session {
             return Ok(None);
         }
 
-        let index = match position_coord(manifests.iter().map(|m| &m.extents), coords) {
-            Some(index) => index,
+        let index = match find_coord(manifests.iter().map(|m| &m.extents), coords) {
+            Some((index, _)) => index,
             // for an invalid coordinate, we bail.
             // This happens for two cases:
             // (1) the "coords" is out-of-range for the array shape
@@ -909,17 +916,24 @@ impl Session {
         if self.read_only() {
             return Err(SessionErrorKind::ReadOnlySession.into());
         }
-        let Session { splits, change_set, .. } = other;
+        let Session { splits: other_splits, change_set, .. } = other;
 
         if self.splits.iter().any(|(node, our_splits)| {
-            splits
+            other_splits
                 .get(node)
                 .is_some_and(|their_splits| !our_splits.compatible_with(their_splits))
         }) {
-            return Err(SessionErrorKind::IncompatibleSplits.into());
+            let ours = self.config().manifest().splitting().clone();
+            let theirs = self.config().manifest().splitting().clone();
+            return Err(
+                SessionErrorKind::IncompatibleSplittingConfig { ours, theirs }.into()
+            );
         }
 
-        self.splits.extend(splits);
+        // Session.splits is _complete_ in that it will include every possible split.
+        // So a simple `extend` is fine, if the same node appears in two sessions,
+        // it must have the same splits and overwriting is fine.
+        self.splits.extend(other_splits);
         self.change_set.merge(change_set);
         Ok(())
     }
@@ -1331,7 +1345,6 @@ async fn verified_node_chunk_iterator<'a>(
                                                 payload,
                                             });
 
-                                        // FIXME: I don't understand this
                                         let old_chunks = change_set
                                             .update_existing_chunks(
                                                 node_id_c3, old_chunks,
@@ -1614,10 +1627,9 @@ impl<'a> FlushProcess<'a> {
         let mut to = vec![];
         let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-        #[allow(clippy::expect_used)]
         if let Some(new_manifest) = Manifest::from_stream(chunks)
             .await
-            .expect("failed to create manifest from chunk stream")
+            .map_err(|e| SessionErrorKind::ManifestCreationError(Box::new(e)))?
         {
             let new_manifest = Arc::new(new_manifest);
             let new_manifest_size =
@@ -1648,7 +1660,6 @@ impl<'a> FlushProcess<'a> {
         let splits =
             self.splits.get(node_id).expect("getting split for node unexpectedly failed");
 
-        // TODO: this could be try_fold with the refs HashMap as state
         for extent in splits.iter() {
             if self.change_set.array_manifest(node_id, extent).is_some() {
                 let chunks = stream::iter(
@@ -1676,7 +1687,7 @@ impl<'a> FlushProcess<'a> {
     async fn write_manifest_for_existing_node(
         &mut self,
         node: &NodeSnapshot,
-        manifests: Vec<ManifestRef>,
+        existing_manifests: Vec<ManifestRef>,
         old_snapshot: &Snapshot,
     ) -> SessionResult<()> {
         #[allow(clippy::expect_used)]
@@ -1686,18 +1697,17 @@ impl<'a> FlushProcess<'a> {
             HashMap::<ManifestExtents, Vec<ManifestRef>>::with_capacity(splits.len());
 
         let on_disk_extents =
-            manifests.iter().map(|m| m.extents.clone()).collect::<Vec<_>>();
+            existing_manifests.iter().map(|m| m.extents.clone()).collect::<Vec<_>>();
 
         let modified_splits = self
             .change_set
             .modified_manifest_extents_iterator(&node.id, &node.path)
             .collect::<HashSet<_>>();
 
-        // FIXME: there is an invariant here
         // ``modified_splits`` (i.e. splits used in this session)
         // must be a subset of ``splits`` (the splits set in the config)
+        debug_assert!(modified_splits.is_subset(&splits.iter().collect::<HashSet<_>>()));
 
-        // TODO: this should be try_fold with the refs HashMap as state
         for extent in splits.iter() {
             if modified_splits.contains(extent) {
                 // this split was modified in this session, rewrite it completely
@@ -1705,6 +1715,7 @@ impl<'a> FlushProcess<'a> {
                     .await?
                     .map(|new_ref| refs.insert(extent.clone(), vec![new_ref]));
             } else {
+                // intersection of the current split with extents on disk
                 let on_disk_bbox = on_disk_extents
                     .iter()
                     .filter_map(|e| e.intersection(extent))
@@ -1712,7 +1723,7 @@ impl<'a> FlushProcess<'a> {
 
                 // split was unmodified in this session. Let's look at the current manifests
                 // and see what we need to do with them
-                for old_ref in manifests.iter() {
+                for old_ref in existing_manifests.iter() {
                     // Remember that the extents written to disk are the `from`:`to` ranges
                     // of populated chunks
                     match old_ref.extents.overlap_with(extent) {
@@ -3330,10 +3341,8 @@ mod tests {
         ds.add_array(a2path.clone(), shape.clone(), dimension_names.clone(), def.clone())
             .await?;
 
-        dbg!("added arrays, now commit");
         let _ = ds.commit("first commit", None).await?;
 
-        dbg!("committed arrays");
         // there should be no manifests yet because we didn't add any chunks
         assert_eq!(
             0,
@@ -3358,7 +3367,6 @@ mod tests {
 
         let mut ds = repo.writable_session("main").await?;
 
-        dbg!("setting chunk ref");
         // add 3 chunks
         ds.set_chunk_ref(
             a1path.clone(),

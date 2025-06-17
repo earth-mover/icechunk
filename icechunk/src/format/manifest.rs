@@ -166,6 +166,9 @@ impl ManifestSplits {
     }
 
     pub fn compatible_with(&self, other: &Self) -> bool {
+        // this is not a simple zip + all(equals) because
+        // ordering might differ though both sets of splits
+        // must be complete.
         for ours in self.iter() {
             if any(other.iter(), |theirs| {
                 ours.overlap_with(theirs) == Overlap::Partial

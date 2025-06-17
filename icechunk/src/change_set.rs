@@ -169,7 +169,7 @@ impl ChangeSet {
                 for coord in deletes.iter() {
                     if let Some(extents) = new_splits.find(coord) {
                         new_manifests
-                            .entry(extents)
+                            .entry(extents.clone())
                             .or_default()
                             .insert(coord.clone(), None);
                         to_remove.insert(coord.clone());
@@ -252,7 +252,7 @@ impl ChangeSet {
                     BTreeMap<ChunkIndices, Option<ChunkPayload>>,
                 >::with_capacity(splits.len())
             })
-            .entry(extent)
+            .entry(extent.clone())
             .or_default()
             .insert(coord, data);
     }
@@ -263,8 +263,9 @@ impl ChangeSet {
         coords: &ChunkIndices,
     ) -> Option<&Option<ChunkPayload>> {
         self.set_chunks.get(node_id).and_then(|node_chunks| {
-            find_coord(node_chunks.keys(), coords)
-                .and_then(|extent| node_chunks.get(&extent).and_then(|s| s.get(coords)))
+            find_coord(node_chunks.keys(), coords).and_then(|(_, extent)| {
+                node_chunks.get(extent).and_then(|s| s.get(coords))
+            })
         })
     }
 
