@@ -1578,6 +1578,46 @@ mod tests {
             assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
         }
 
+        // delete all chunks
+        let mut session = repository.writable_session("main").await?;
+        for i in 0..dim_size {
+            session
+                .set_chunk_ref(temp_path.clone(), ChunkIndices(vec![i, 0, 0]), None)
+                .await?;
+        }
+        total_manifests += 0;
+        session.commit("clear existing array", None).await?;
+        assert_manifest_count(&storage, total_manifests).await;
+
+        // add a new array
+        let def = Bytes::from_static(br#"{"this":"array"}"#);
+        let array_path: Path = "/array2".to_string().try_into().unwrap();
+        let mut session = repository.writable_session("main").await?;
+        session
+            .add_array(
+                array_path.clone(),
+                shape.clone(),
+                dimension_names.clone(),
+                def.clone(),
+            )
+            .await?;
+        // set a chunk
+        session
+            .set_chunk_ref(
+                array_path.clone(),
+                ChunkIndices(vec![1, 0, 0]),
+                Some(ChunkPayload::Inline(format!("{0}", 10).into())),
+            )
+            .await?;
+        // delete that chunk, so the chunks iterator is empty
+        // regression test for bug found by hypothesis
+        session
+            .set_chunk_ref(array_path.clone(), ChunkIndices(vec![1, 0, 0]), None)
+            .await?;
+        total_manifests += 0;
+        session.commit("clear new array", None).await?;
+        assert_manifest_count(&storage, total_manifests).await;
+
         Ok(())
     }
 
