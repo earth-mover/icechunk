@@ -30,11 +30,11 @@ from zarr.testing.strategies import (
 
 PROTOTYPE = default_buffer_prototype()
 
-pytestmark = [
-    pytest.mark.filterwarnings(
-        "ignore::zarr.core.dtype.common.UnstableSpecificationWarning"
-    ),
-]
+# pytestmark = [
+#     pytest.mark.filterwarnings(
+#         "ignore::zarr.core.dtype.common.UnstableSpecificationWarning"
+#     ),
+# ]
 
 
 import functools
