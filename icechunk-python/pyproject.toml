@@ -51,6 +51,7 @@ benchmark = [
   "humanize",
   "platformdirs",
   "ipdb",
+  "coiled",
 ]
 docs = [
   "scipy",

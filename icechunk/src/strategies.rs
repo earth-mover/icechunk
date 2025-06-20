@@ -7,10 +7,13 @@ use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
 
 use crate::Repository;
+use crate::format::manifest::ManifestExtents;
 use crate::format::snapshot::{ArrayShape, DimensionName};
 use crate::format::{ChunkIndices, Path};
 use crate::session::Session;
 use crate::storage::new_in_memory_storage;
+
+const MAX_NDIM: usize = 4;
 
 pub fn node_paths() -> impl Strategy<Value = Path> {
     // FIXME: Add valid paths
@@ -66,7 +69,7 @@ pub struct ShapeDim {
 
 pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDim> {
     // FIXME: ndim = 0
-    let max_ndim = max_ndim.unwrap_or(4usize);
+    let max_ndim = max_ndim.unwrap_or(MAX_NDIM);
     vec(1u64..26u64, 1..max_ndim)
         .prop_flat_map(|shape| {
             let ndim = shape.len();
@@ -95,6 +98,15 @@ pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDi
                 ds.iter().map(|s| From::from(s.as_ref().map(|s| s.as_str()))).collect()
             }),
         })
+}
+
+pub fn manifest_extents(ndim: usize) -> impl Strategy<Value = ManifestExtents> {
+    (vec(0u32..1000u32, ndim), vec(1u32..1000u32, ndim)).prop_map(|(start, delta)| {
+        let stop = std::iter::zip(start.iter(), delta.iter())
+            .map(|(s, d)| s + d)
+            .collect::<Vec<_>>();
+        ManifestExtents::new(start.as_slice(), stop.as_slice())
+    })
 }
 
 //prop_compose! {

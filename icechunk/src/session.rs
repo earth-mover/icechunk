@@ -13,7 +13,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream};
-use itertools::{Itertools as _, repeat_n};
+use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -32,8 +32,9 @@ use crate::{
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
-            ManifestSplits, VirtualChunkLocation, VirtualChunkRef, VirtualReferenceError,
-            VirtualReferenceErrorKind, uniform_manifest_split_edges,
+            ManifestSplits, Overlap, VirtualChunkLocation, VirtualChunkRef,
+            VirtualReferenceError, VirtualReferenceErrorKind,
+            uniform_manifest_split_edges,
         },
         snapshot::{
             ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
@@ -108,8 +109,15 @@ pub enum SessionErrorKind {
     InvalidIndex { coords: ChunkIndices, path: Path },
     #[error("invalid chunk index for splitting manifests: {coords:?}")]
     InvalidIndexForSplitManifests { coords: ChunkIndices },
+    #[error("incompatible manifest splitting config when merging two sessions")]
+    IncompatibleSplittingConfig {
+        ours: ManifestSplittingConfig,
+        theirs: ManifestSplittingConfig,
+    },
     #[error("`to` snapshot ancestry doesn't include `from`")]
     BadSnapshotChainForDiff,
+    #[error("failed to create manifest from chunk stream")]
+    ManifestCreationError(#[from] Box<SessionError>),
 }
 
 pub type SessionError = ICError<SessionErrorKind>;
@@ -160,31 +168,40 @@ impl From<VirtualReferenceError> for SessionError {
 
 pub type SessionResult<T> = Result<T, SessionError>;
 
+// Returns the index of split_range that includes ChunkIndices
+// This can be used at write time to split manifests based on the config
+// and at read time to choose which manifest to query for chunk payload
+/// It is useful to have this act on an iterator (e.g. get_chunk_ref)
+/// The find method on ManifestSplits is simply a helper.
+pub fn find_coord<'a, I>(
+    iter: I,
+    coord: &'a ChunkIndices,
+) -> Option<(usize, &'a ManifestExtents)>
+where
+    I: Iterator<Item = &'a ManifestExtents>,
+{
+    // split_range[i] must bound ChunkIndices
+    // 0 <= return value <= split_range.len()
+    // it is possible that split_range does not include a coord. say we have 2x2 split grid
+    // but only split (0,0) and split (1,1) are populated with data.
+    // A coord located in (1, 0) should return Err
+    // Since split_range need not form a regular grid, we must iterate through and find the first result.
+    // ManifestExtents in split_range MUST NOT overlap with each other. How do we ensure this?
+    // ndim must be the same
+    // Note: I don't think we can distinguish between out of bounds index for the array
+    //       and an index that is part of a split that hasn't been written yet.
+    enumerate(iter).find(|(_, e)| e.contains(coord.0.as_slice()))
+}
+
 impl ManifestSplits {
-    // Returns the index of split_range that includes ChunkIndices
-    // This can be used at write time to split manifests based on the config
-    // and at read time to choose which manifest to query for chunk payload
-    pub fn which(&self, coord: &ChunkIndices) -> SessionResult<usize> {
-        // split_range[i] must bound ChunkIndices
-        // 0 <= return value <= split_range.len()
-        // it is possible that split_range does not include a coord. say we have 2x2 split grid
-        // but only split (0,0) and split (1,1) are populated with data.
-        // A coord located in (1, 0) should return Err
-        // Since split_range need not form a regular grid, we must iterate through and find the first result.
-        // ManifestExtents in split_range MUST NOT overlap with each other. How do we ensure this?
-        // ndim must be the same
-        // debug_assert_eq!(coord.0.len(), split_range[0].len());
-        // FIXME: could optimize for unbounded single manifest
-        // Note: I don't think we can distinguish between out of bounds index for the array
-        //       and an index that is part of a split that hasn't been written yet.
-        self.iter()
-            .enumerate()
-            .find(|(_, e)| e.contains(coord.0.as_slice()))
-            .map(|(i, _)| i)
-            .ok_or(
-                SessionErrorKind::InvalidIndexForSplitManifests { coords: coord.clone() }
-                    .into(),
-            )
+    pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<&'a ManifestExtents> {
+        debug_assert_eq!(coord.0.len(), self.0[0].len());
+        find_coord(self.iter(), coord).map(|x| x.1)
+    }
+
+    pub fn position(&self, coord: &ChunkIndices) -> Option<usize> {
+        debug_assert_eq!(coord.0.len(), self.0[0].len());
+        find_coord(self.iter(), coord).map(|x| x.0)
     }
 }
 
@@ -199,6 +216,8 @@ pub struct Session {
     snapshot_id: SnapshotId,
     change_set: ChangeSet,
     default_commit_metadata: SnapshotProperties,
+    // This is an optimization so that we needn't figure out the split sizes on every set.
+    splits: HashMap<NodeId, ManifestSplits>,
 }
 
 impl Session {
@@ -220,6 +239,9 @@ impl Session {
             snapshot_id,
             change_set: ChangeSet::default(),
             default_commit_metadata: SnapshotProperties::default(),
+            // Splits are populated for a node during
+            // `add_array`, `update_array`, and `set_chunk_ref`
+            splits: Default::default(),
         }
     }
 
@@ -242,8 +264,9 @@ impl Session {
             virtual_resolver,
             branch_name: Some(branch_name),
             snapshot_id,
-            change_set: ChangeSet::default(),
+            change_set: Default::default(),
             default_commit_metadata,
+            splits: Default::default(),
         }
     }
 
@@ -383,6 +406,7 @@ impl Session {
         match self.get_node(&path).await {
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 let id = NodeId::random();
+                self.cache_splits(&id, &path, &shape, &dimension_names);
                 self.change_set.add_array(
                     path,
                     id,
@@ -411,10 +435,14 @@ impl Session {
         user_data: Bytes,
     ) -> SessionResult<()> {
         self.get_array(path).await.map(|node| {
+            // needed to handle a resize for example.
+            self.cache_splits(&node.id, path, &shape, &dimension_names);
             self.change_set.update_array(
                 &node.id,
                 path,
                 ArrayData { shape, dimension_names, user_data },
+                #[allow(clippy::expect_used)]
+                self.splits.get(&node.id).expect("getting splits should not fail."),
             )
         })
     }
@@ -475,6 +503,43 @@ impl Session {
         self.set_node_chunk_ref(node_snapshot, coord, data).await
     }
 
+    pub fn lookup_splits(&self, node_id: &NodeId) -> Option<&ManifestSplits> {
+        self.splits.get(node_id)
+    }
+
+    /// This method is directly called in add_array & update_array
+    /// where we know we must update the splits HashMap
+    fn cache_splits(
+        &mut self,
+        node_id: &NodeId,
+        path: &Path,
+        shape: &ArrayShape,
+        dimension_names: &Option<Vec<DimensionName>>,
+    ) {
+        // Q: What happens if we set a chunk, then change a dimension name, so
+        //    that the split changes.
+        // A: we reorg the existing chunk refs in the changeset to the new splits.
+        let splitting = self.config.manifest().splitting();
+        let splits = splitting.get_split_sizes(path, shape, dimension_names);
+        self.splits.insert(node_id.clone(), splits);
+    }
+
+    fn get_splits(
+        &mut self,
+        node_id: &NodeId,
+        path: &Path,
+        shape: &ArrayShape,
+        dimension_names: &Option<Vec<DimensionName>>,
+    ) -> &ManifestSplits {
+        self.splits.entry(node_id.clone()).or_insert_with(|| {
+            self.config.manifest().splitting().get_split_sizes(
+                path,
+                shape,
+                dimension_names,
+            )
+        })
+    }
+
     // Helper function that accepts a NodeSnapshot instead of a path,
     // this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
     #[instrument(skip(self))]
@@ -484,9 +549,12 @@ impl Session {
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
-        if let NodeData::Array { shape, .. } = node.node_data {
+        if let NodeData::Array { shape, dimension_names, .. } = node.node_data {
             if shape.valid_chunk_coord(&coord) {
-                self.change_set.set_chunk_ref(node.id, coord, data);
+                let splits = self
+                    .get_splits(&node.id, &node.path, &shape, &dimension_names)
+                    .clone();
+                self.change_set.set_chunk_ref(node.id, coord, data, &splits);
                 Ok(())
             } else {
                 Err(SessionErrorKind::InvalidIndex {
@@ -560,6 +628,7 @@ impl Session {
             &self.change_set,
             &self.snapshot_id,
             path,
+            ManifestExtents::ALL,
         )
         .await
     }
@@ -579,9 +648,12 @@ impl Session {
                 message: "getting chunk reference".to_string(),
             }
             .into()),
-            NodeData::Array { manifests, .. } => {
-                // Note: at this point, coords could be invalid for the array shape
-                //       but we just let that pass.
+            NodeData::Array { shape, manifests, .. } => {
+                if !shape.valid_chunk_coord(coords) {
+                    // this chunk ref cannot exist
+                    return Ok(None);
+                }
+
                 // check the chunks modified in this session first
                 // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
                 let session_chunk =
@@ -744,16 +816,14 @@ impl Session {
             // in the changeset, return None to Zarr.
             return Ok(None);
         }
-        let splits = ManifestSplits::from_extents(
-            manifests.iter().map(|m| m.extents.clone()).collect(),
-        );
-        let index = match splits.which(coords) {
-            Ok(index) => index,
+
+        let index = match find_coord(manifests.iter().map(|m| &m.extents), coords) {
+            Some((index, _)) => index,
             // for an invalid coordinate, we bail.
             // This happens for two cases:
             // (1) the "coords" is out-of-range for the array shape
             // (2) the "coords" belongs to a shard that hasn't been written yet.
-            Err(_) => return Ok(None),
+            None => return Ok(None),
         };
 
         let manifest = self.fetch_manifest(&manifests[index].object_id).await?;
@@ -800,6 +870,7 @@ impl Session {
             &self.change_set,
             &self.snapshot_id,
             node.clone(),
+            ManifestExtents::ALL,
         )
         .await
         .map_ok(|(_path, chunk_info)| chunk_info.coord);
@@ -807,7 +878,7 @@ impl Session {
         let res = try_stream! {
             let new_chunks = stream::iter(
                 self.change_set
-                    .new_array_chunk_iterator(&node.id, array_path)
+                    .new_array_chunk_iterator(&node.id, array_path, ManifestExtents::ALL)
                     .map(|chunk_info| Ok::<ChunkIndices, SessionError>(chunk_info.coord)),
             );
 
@@ -840,12 +911,30 @@ impl Session {
     }
 
     /// Merge a set of `ChangeSet`s into the repository without committing them
-    #[instrument(skip(self, changes))]
-    pub async fn merge(&mut self, changes: ChangeSet) -> SessionResult<()> {
+    #[instrument(skip(self, other))]
+    pub async fn merge(&mut self, other: Session) -> SessionResult<()> {
         if self.read_only() {
             return Err(SessionErrorKind::ReadOnlySession.into());
         }
-        self.change_set.merge(changes);
+        let Session { splits: other_splits, change_set, .. } = other;
+
+        if self.splits.iter().any(|(node, our_splits)| {
+            other_splits
+                .get(node)
+                .is_some_and(|their_splits| !our_splits.compatible_with(their_splits))
+        }) {
+            let ours = self.config().manifest().splitting().clone();
+            let theirs = self.config().manifest().splitting().clone();
+            return Err(
+                SessionErrorKind::IncompatibleSplittingConfig { ours, theirs }.into()
+            );
+        }
+
+        // Session.splits is _complete_ in that it will include every possible split.
+        // So a simple `extend` is fine, if the same node appears in two sessions,
+        // it must have the same splits and overwriting is fine.
+        self.splits.extend(other_splits);
+        self.change_set.merge(change_set);
         Ok(())
     }
 
@@ -884,9 +973,9 @@ impl Session {
                     branch_name,
                     &self.snapshot_id,
                     &self.change_set,
-                    &self.config,
                     message,
                     Some(properties),
+                    &self.splits,
                 )
                 .await
             }
@@ -907,9 +996,9 @@ impl Session {
                         branch_name,
                         &self.snapshot_id,
                         &self.change_set,
-                        &self.config,
                         message,
                         Some(properties),
+                        &self.splits,
                     )
                     .await
                 }
@@ -1112,8 +1201,18 @@ async fn updated_chunk_iterator<'a>(
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
     let nodes = futures::stream::iter(snapshot.iter_arc());
     let res = nodes.and_then(move |node| async move {
-        Ok(updated_node_chunks_iterator(asset_manager, change_set, snapshot_id, node)
-            .await)
+        // Note: Confusingly, these NodeSnapshot instances have the metadata stored in the snapshot.
+        // We have not applied any changeset updates. At the moment, the downstream code only
+        // use node.id so there is no need to update yet.
+
+        Ok(updated_node_chunks_iterator(
+            asset_manager,
+            change_set,
+            snapshot_id,
+            node,
+            ManifestExtents::ALL,
+        )
+        .await)
     });
     Ok(res.try_flatten())
 }
@@ -1123,6 +1222,7 @@ async fn updated_node_chunks_iterator<'a>(
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
     node: NodeSnapshot,
+    extent: ManifestExtents,
 ) -> impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a {
     // This iterator should yield chunks for existing arrays + any updates.
     // we check for deletion here in the case that `path` exists in the snapshot,
@@ -1133,9 +1233,15 @@ async fn updated_node_chunks_iterator<'a>(
         let path = node.path.clone();
         Either::Right(
             // TODO: avoid clone
-            verified_node_chunk_iterator(asset_manager, snapshot_id, change_set, node)
-                .await
-                .map_ok(move |ci| (path.clone(), ci)),
+            verified_node_chunk_iterator(
+                asset_manager,
+                snapshot_id,
+                change_set,
+                node,
+                extent,
+            )
+            .await
+            .map_ok(move |ci| (path.clone(), ci)),
         )
     }
 }
@@ -1146,11 +1252,18 @@ async fn node_chunk_iterator<'a>(
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
     path: &Path,
+    extent: ManifestExtents,
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a + use<'a> {
     match get_node(asset_manager, change_set, snapshot_id, path).await {
         Ok(node) => futures::future::Either::Left(
-            verified_node_chunk_iterator(asset_manager, snapshot_id, change_set, node)
-                .await,
+            verified_node_chunk_iterator(
+                asset_manager,
+                snapshot_id,
+                change_set,
+                node,
+                extent,
+            )
+            .await,
         ),
         Err(_) => futures::future::Either::Right(futures::stream::empty()),
     }
@@ -1162,20 +1275,25 @@ async fn verified_node_chunk_iterator<'a>(
     snapshot_id: &'a SnapshotId,
     change_set: &'a ChangeSet,
     node: NodeSnapshot,
+    extent: ManifestExtents,
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
     match node.node_data {
         NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
         NodeData::Array { manifests, .. } => {
             let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                 change_set
-                    .array_chunks_iterator(&node.id, &node.path)
+                    .array_chunks_iterator(&node.id, &node.path, extent.clone())
                     .map(|(idx, _)| idx)
+                    // by chaining here, we make sure we don't pull from the manifest
+                    // any chunks that were deleted prior to resizing in this session
+                    .chain(change_set.deleted_chunks_iterator(&node.id))
                     .collect(),
             );
 
             let node_id_c = node.id.clone();
+            let extent_c = extent.clone();
             let new_chunks = change_set
-                .array_chunks_iterator(&node.id, &node.path)
+                .array_chunks_iterator(&node.id, &node.path, extent.clone())
                 .filter_map(move |(idx, payload)| {
                     payload.as_ref().map(|payload| {
                         Ok(ChunkInfo {
@@ -1189,11 +1307,18 @@ async fn verified_node_chunk_iterator<'a>(
             futures::future::Either::Right(
                 futures::stream::iter(new_chunks).chain(
                     futures::stream::iter(manifests)
+                        .filter(move |manifest_ref| {
+                            futures::future::ready(
+                                extent.overlap_with(&manifest_ref.extents)
+                                    != Overlap::None,
+                            )
+                        })
                         .then(move |manifest_ref| {
                             let new_chunk_indices = new_chunk_indices.clone();
                             let node_id_c = node.id.clone();
                             let node_id_c2 = node.id.clone();
                             let node_id_c3 = node.id.clone();
+                            let extent_c2 = extent_c.clone();
                             async move {
                                 let manifest = fetch_manifest(
                                     &manifest_ref.object_id,
@@ -1207,6 +1332,9 @@ async fn verified_node_chunk_iterator<'a>(
                                             .iter(node_id_c.clone())
                                             .filter_ok(move |(coord, _)| {
                                                 !new_chunk_indices.contains(coord)
+                                                    // If the manifest we are parsing partially overlaps with `extent`,
+                                                    // we need to filter all coordinates
+                                                    && extent_c2.contains(coord.0.as_slice())
                                             })
                                             .map_ok(move |(coord, payload)| ChunkInfo {
                                                 node: node_id_c2.clone(),
@@ -1444,46 +1572,11 @@ pub fn construct_valid_byte_range(
     }
 }
 
-#[derive(Default, Debug)]
-struct SplitManifest {
-    from: Vec<u32>,
-    to: Vec<u32>,
-    chunks: Vec<ChunkInfo>,
-}
-
-impl SplitManifest {
-    fn update(&mut self, chunk: ChunkInfo) {
-        if self.from.is_empty() {
-            debug_assert!(self.to.is_empty());
-            debug_assert!(self.chunks.is_empty());
-            // important to remember that `to` is not inclusive, so we need +1
-            let mut coord = chunk.coord.0.clone();
-            self.to.extend(coord.iter().map(|n| *n + 1));
-            self.from.append(&mut coord);
-        } else {
-            for (existing, coord) in self.from.iter_mut().zip(chunk.coord.0.iter()) {
-                if coord < existing {
-                    *existing = *coord
-                }
-            }
-            for (existing, coord) in self.to.iter_mut().zip(chunk.coord.0.iter()) {
-                // important to remember that `to` is not inclusive, so we need +1
-                let range_value = coord + 1;
-                if range_value > *existing {
-                    *existing = range_value
-                }
-            }
-        }
-
-        self.chunks.push(chunk)
-    }
-}
-
 struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
     parent_id: &'a SnapshotId,
-    config: &'a RepositoryConfig,
+    splits: &'a HashMap<NodeId, ManifestSplits>,
     manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
     manifest_files: HashSet<ManifestFileInfo>,
 }
@@ -1493,67 +1586,64 @@ impl<'a> FlushProcess<'a> {
         asset_manager: Arc<AssetManager>,
         change_set: &'a ChangeSet,
         parent_id: &'a SnapshotId,
-        config: &'a RepositoryConfig,
+        splits: &'a HashMap<NodeId, ManifestSplits>,
     ) -> Self {
         Self {
             asset_manager,
             change_set,
             parent_id,
-            config,
+            splits,
             manifest_refs: Default::default(),
             manifest_files: Default::default(),
         }
     }
 
-    async fn write_manifests_from_iterator(
+    async fn write_manifest_for_updated_chunks(
         &mut self,
-        node_id: &NodeId,
+        node: &NodeSnapshot,
+        extent: &ManifestExtents,
+    ) -> SessionResult<Option<ManifestRef>> {
+        let asset_manager = Arc::clone(&self.asset_manager);
+        let updated_chunks = updated_node_chunks_iterator(
+            asset_manager.as_ref(),
+            self.change_set,
+            self.parent_id,
+            node.clone(),
+            extent.clone(),
+        )
+        .await
+        .map_ok(|(_path, chunk_info)| chunk_info);
+        self.write_manifest_from_iterator(updated_chunks).await
+    }
+
+    async fn write_manifest_from_iterator(
+        &mut self,
         chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
-        splits: ManifestSplits,
-    ) -> SessionResult<()> {
-        // TODO: think about optimizing writes to manifests
-        // TODO: add benchmarks
-        let split_refs = chunks
-            .try_fold(
-                // TODO: have the changeset track this HashMap
-                HashMap::<usize, SplitManifest>::with_capacity(splits.len()),
-                |mut split_refs, chunk| async {
-                    let split_index = splits.which(&chunk.coord);
-                    split_index.map(|index| {
-                        split_refs.entry(index).or_default().update(chunk);
-                        split_refs
-                    })
-                },
-            )
-            .await?;
+    ) -> SessionResult<Option<ManifestRef>> {
+        let mut from = vec![];
+        let mut to = vec![];
+        let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-        for (_, shard) in split_refs.into_iter() {
-            let shard_chunks =
-                stream::iter(shard.chunks.into_iter().map(Ok::<ChunkInfo, Infallible>));
+        if let Some(new_manifest) = Manifest::from_stream(chunks)
+            .await
+            .map_err(|e| SessionErrorKind::ManifestCreationError(Box::new(e)))?
+        {
+            let new_manifest = Arc::new(new_manifest);
+            let new_manifest_size =
+                self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
 
-            if let Some(new_manifest) = Manifest::from_stream(shard_chunks).await.unwrap()
-            {
-                let new_manifest = Arc::new(new_manifest);
-                let new_manifest_size =
-                    self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
+            let file_info =
+                ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
+            self.manifest_files.insert(file_info);
 
-                let file_info =
-                    ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
-                self.manifest_files.insert(file_info);
-
-                let new_ref = ManifestRef {
-                    object_id: new_manifest.id().clone(),
-                    extents: ManifestExtents::new(&shard.from, &shard.to),
-                };
-
-                self.manifest_refs
-                    .entry(node_id.clone())
-                    .and_modify(|v| v.push(new_ref.clone()))
-                    .or_insert_with(|| vec![new_ref]);
-            }
+            let new_ref = ManifestRef {
+                object_id: new_manifest.id().clone(),
+                extents: ManifestExtents::new(&from, &to),
+            };
+            Ok(Some(new_ref))
+        } else {
+            Ok(None)
         }
-
-        Ok(())
     }
 
     /// Write a manifest for a node that was created in this session
@@ -1562,12 +1652,29 @@ impl<'a> FlushProcess<'a> {
         &mut self,
         node_id: &NodeId,
         node_path: &Path,
-        splits: ManifestSplits,
     ) -> SessionResult<()> {
-        let chunks = stream::iter(
-            self.change_set.new_array_chunk_iterator(node_id, node_path).map(Ok),
-        );
-        self.write_manifests_from_iterator(node_id, chunks, splits).await
+        #[allow(clippy::expect_used)]
+        let splits =
+            self.splits.get(node_id).expect("getting split for node unexpectedly failed");
+
+        for extent in splits.iter() {
+            if self.change_set.array_manifest(node_id, extent).is_some() {
+                let chunks = stream::iter(
+                    self.change_set
+                        .new_array_chunk_iterator(node_id, node_path, extent.clone())
+                        .map(Ok),
+                );
+                #[allow(clippy::expect_used)]
+                let new_ref = self.write_manifest_from_iterator(chunks).await.expect(
+                    "logic bug. for a new node, we must always write the manifest",
+                );
+                // new_ref is None if there were no chunks in the iterator
+                if let Some(new_ref) = new_ref {
+                    self.manifest_refs.entry(node_id.clone()).or_default().push(new_ref);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Write a manifest for a node that was modified in this session
@@ -1576,19 +1683,82 @@ impl<'a> FlushProcess<'a> {
     async fn write_manifest_for_existing_node(
         &mut self,
         node: &NodeSnapshot,
-        splits: ManifestSplits,
+        existing_manifests: Vec<ManifestRef>,
+        old_snapshot: &Snapshot,
     ) -> SessionResult<()> {
-        let asset_manager = Arc::clone(&self.asset_manager);
-        let updated_chunks = updated_node_chunks_iterator(
-            asset_manager.as_ref(),
-            self.change_set,
-            self.parent_id,
-            node.clone(),
-        )
-        .await
-        .map_ok(|(_path, chunk_info)| chunk_info);
+        #[allow(clippy::expect_used)]
+        let splits =
+            self.splits.get(&node.id).expect("splits should exist for this node.");
+        let mut refs =
+            HashMap::<ManifestExtents, Vec<ManifestRef>>::with_capacity(splits.len());
 
-        self.write_manifests_from_iterator(&node.id, updated_chunks, splits).await
+        let on_disk_extents =
+            existing_manifests.iter().map(|m| m.extents.clone()).collect::<Vec<_>>();
+
+        let modified_splits = self
+            .change_set
+            .modified_manifest_extents_iterator(&node.id, &node.path)
+            .collect::<HashSet<_>>();
+
+        // ``modified_splits`` (i.e. splits used in this session)
+        // must be a subset of ``splits`` (the splits set in the config)
+        debug_assert!(modified_splits.is_subset(&splits.iter().collect::<HashSet<_>>()));
+
+        for extent in splits.iter() {
+            if modified_splits.contains(extent) {
+                // this split was modified in this session, rewrite it completely
+                self.write_manifest_for_updated_chunks(node, extent)
+                    .await?
+                    .map(|new_ref| refs.insert(extent.clone(), vec![new_ref]));
+            } else {
+                // intersection of the current split with extents on disk
+                let on_disk_bbox = on_disk_extents
+                    .iter()
+                    .filter_map(|e| e.intersection(extent))
+                    .reduce(|a, b| a.union(&b));
+
+                // split was unmodified in this session. Let's look at the current manifests
+                // and see what we need to do with them
+                for old_ref in existing_manifests.iter() {
+                    // Remember that the extents written to disk are the `from`:`to` ranges
+                    // of populated chunks
+                    match old_ref.extents.overlap_with(extent) {
+                        Overlap::Complete => {
+                            debug_assert!(on_disk_bbox.is_some());
+                            // Just propagate this ref again, no rewriting necessary
+                            refs.entry(extent.clone()).or_default().push(old_ref.clone());
+                            // OK to unwrap here since this manifest file must exist in the old snapshot
+                            #[allow(clippy::expect_used)]
+                            self.manifest_files.insert(
+                                old_snapshot.manifest_info(&old_ref.object_id).expect("logic bug. creating manifest file info for an existing manifest failed."),
+                            );
+                        }
+                        Overlap::Partial => {
+                            // the splits have changed, but no refs in this split have been written in this session
+                            // same as `if` block above
+                            debug_assert!(on_disk_bbox.is_some());
+                            if let Some(new_ref) = self
+                                .write_manifest_for_updated_chunks(node, extent)
+                                .await?
+                            {
+                                refs.entry(extent.clone()).or_default().push(new_ref);
+                            }
+                        }
+                        Overlap::None => {
+                            // Nothing to do
+                        }
+                    };
+                }
+            }
+        }
+
+        // FIXME: Assert that bboxes in refs don't overlap
+
+        self.manifest_refs
+            .entry(node.id.clone())
+            .or_default()
+            .extend(refs.into_values().flatten());
+        Ok(())
     }
 
     /// Record the previous manifests for an array that was not modified in the session
@@ -1636,69 +1806,65 @@ impl ManifestSplitDimCondition {
 }
 
 impl ManifestSplittingConfig {
-    pub fn get_split_sizes(&self, node: &NodeSnapshot) -> SessionResult<ManifestSplits> {
-        match &node.node_data {
-            NodeData::Group => Err(SessionErrorKind::NotAnArray {
-                node: node.clone(),
-                message: "attempting to split manifest for group".to_string(),
-            }
-            .into()),
-            NodeData::Array { shape, dimension_names, .. } => {
-                let ndim = shape.len();
-                let num_chunks = shape.num_chunks().collect::<Vec<_>>();
-                let mut edges: Vec<Vec<u32>> =
-                    (0..ndim).map(|axis| vec![0, num_chunks[axis]]).collect();
+    pub fn get_split_sizes(
+        &self,
+        path: &Path,
+        shape: &ArrayShape,
+        dimension_names: &Option<Vec<DimensionName>>,
+    ) -> ManifestSplits {
+        let ndim = shape.len();
+        let num_chunks = shape.num_chunks().collect::<Vec<_>>();
+        let mut edges: Vec<Vec<u32>> =
+            (0..ndim).map(|axis| vec![0, num_chunks[axis]]).collect();
 
-                // This is ugly but necessary to handle:
-                //   - path: *
-                //     manifest-split-size:
-                //     - t : 10
-                //   - path: *
-                //     manifest-split-size:
-                //     - y : 2
-                // which is now identical to:
-                //   - path: *
-                //     manifest-split-size:
-                //     - t : 10
-                //     - y : 2
-                let mut already_matched: HashSet<usize> = HashSet::new();
+        // This is ugly but necessary to handle:
+        //   - path: *
+        //     manifest-split-size:
+        //     - t : 10
+        //   - path: *
+        //     manifest-split-size:
+        //     - y : 2
+        // which is now identical to:
+        //   - path: *
+        //     manifest-split-size:
+        //     - t : 10
+        //     - y : 2
+        let mut already_matched: HashSet<usize> = HashSet::new();
 
-                #[allow(clippy::expect_used)]
-                let split_sizes = self
-                    .split_sizes
+        #[allow(clippy::expect_used)]
+        let split_sizes = self
+            .split_sizes
+            .clone()
+            .or_else(|| Self::default().split_sizes)
+            .expect("logic bug in grabbing split sizes from ManifestSplittingConfig");
+
+        for (condition, dim_specs) in split_sizes.iter() {
+            if condition.matches(path) {
+                let dimension_names = dimension_names
                     .clone()
-                    .or_else(|| Self::default().split_sizes)
-                    .expect("logic bug");
-
-                for (condition, dim_specs) in split_sizes.iter() {
-                    if condition.matches(&node.path) {
-                        let dimension_names = dimension_names.clone().unwrap_or(
-                            repeat_n(DimensionName::NotSpecified, ndim).collect(),
-                        );
-                        for (axis, dimname) in itertools::enumerate(dimension_names) {
-                            if already_matched.contains(&axis) {
-                                continue;
-                            }
-                            for ManifestSplitDim {
-                                condition: dim_condition,
-                                num_chunks: split_size,
-                            } in dim_specs.iter()
-                            {
-                                if dim_condition.matches(axis, dimname.clone().into()) {
-                                    edges[axis] = uniform_manifest_split_edges(
-                                        num_chunks[axis],
-                                        split_size,
-                                    );
-                                    already_matched.insert(axis);
-                                    break;
-                                };
-                            }
-                        }
+                    .unwrap_or(repeat_n(DimensionName::NotSpecified, ndim).collect());
+                for (axis, dimname) in itertools::enumerate(dimension_names) {
+                    if already_matched.contains(&axis) {
+                        continue;
+                    }
+                    for ManifestSplitDim {
+                        condition: dim_condition,
+                        num_chunks: split_size,
+                    } in dim_specs.iter()
+                    {
+                        if dim_condition.matches(axis, dimname.clone().into()) {
+                            edges[axis] = uniform_manifest_split_edges(
+                                num_chunks[axis],
+                                split_size,
+                            );
+                            already_matched.insert(axis);
+                            break;
+                        };
                     }
                 }
-                Ok(ManifestSplits::from_edges(edges))
             }
         }
+        ManifestSplits::from_edges(edges)
     }
 }
 
@@ -1713,7 +1879,6 @@ async fn flush(
 
     let old_snapshot =
         flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await?;
-    let splitting_config = flush_data.config.manifest().splitting();
 
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
@@ -1728,7 +1893,11 @@ async fn flush(
             continue;
         }
 
-        if flush_data.change_set.has_chunk_changes(node_id) {
+        if
+        // metadata change might have shrunk the array
+        flush_data.change_set.is_updated_array(node_id)
+            || flush_data.change_set.has_chunk_changes(node_id)
+        {
             trace!(path=%node.path, "Node has changes, writing a new manifest");
             // Array wasn't deleted and has changes in this session
             // get the new node to handle changes in size, e.g. appends.
@@ -1739,13 +1908,18 @@ async fn flush(
                 &node.path,
             )
             .await?;
-            let splits = splitting_config.get_split_sizes(&new_node)?;
-            flush_data.write_manifest_for_existing_node(&node, splits).await?;
+            if let NodeData::Array { manifests, .. } = new_node.node_data {
+                flush_data
+                    .write_manifest_for_existing_node(
+                        &node,
+                        manifests,
+                        old_snapshot.as_ref(),
+                    )
+                    .await?;
+            }
         } else {
             trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
             // Array wasn't deleted but has no changes in this session
-            // FIXME: deal with the case of metadata shrinking an existing array, we should clear
-            // extra chunks that no longer fit in the array
             flush_data.copy_previous_manifest(&node, old_snapshot.as_ref());
         }
     }
@@ -1754,16 +1928,19 @@ async fn flush(
 
     for (node_path, node_id) in flush_data.change_set.new_arrays() {
         trace!(path=%node_path, "New node, writing a manifest");
-        let node = get_node(
-            &flush_data.asset_manager,
-            flush_data.change_set,
-            flush_data.parent_id,
-            node_path,
-        )
-        .await?;
-        let splits = splitting_config.get_split_sizes(&node)?;
-        flush_data.write_manifest_for_new_node(node_id, node_path, splits).await?;
+        flush_data.write_manifest_for_new_node(node_id, node_path).await?;
     }
+
+    // manifest_files & manifest_refs _must_ be consistent
+    debug_assert_eq!(
+        flush_data.manifest_files.iter().map(|x| x.id.clone()).collect::<HashSet<_>>(),
+        flush_data
+            .manifest_refs
+            .values()
+            .flatten()
+            .map(|x| x.object_id.clone())
+            .collect::<HashSet<_>>(),
+    );
 
     trace!("Building new snapshot");
     // gather and sort nodes:
@@ -1875,14 +2052,14 @@ async fn do_commit(
     branch_name: &str,
     snapshot_id: &SnapshotId,
     change_set: &ChangeSet,
-    config: &RepositoryConfig,
     message: &str,
     properties: Option<SnapshotProperties>,
+    splits: &HashMap<NodeId, ManifestSplits>,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
-    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id, config);
+    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id, splits);
     let new_snapshot = flush(flush_data, message, properties).await?;
 
     debug!(branch_name, new_snapshot_id=%new_snapshot, "Updating branch");
@@ -1923,6 +2100,63 @@ async fn fetch_manifest(
     Ok(asset_manager.fetch_manifest(manifest_id, manifest_info.size_bytes).await?)
 }
 
+/// Map the iterator to accumulate the extents of the chunks traversed
+///
+/// As we are processing chunks to create a manifest, we need to keep track
+/// of the extents of the manifests. This means, for each coordinate, we need
+/// to record its minimum and maximum values.
+///
+/// This very ugly code does that, without having to traverse the iterator twice.
+/// It adapts the stream using [`StreamExt::map_ok`] and keeps a running min/max
+/// for each coordinate.
+///
+/// When the iterator is fully traversed, the min and max values will be
+/// available in `from` and `to` arguments.
+///
+/// Yes, this is horrible.
+fn aggregate_extents<'a, T: std::fmt::Debug, E>(
+    from: &'a mut Vec<u32>,
+    to: &'a mut Vec<u32>,
+    it: impl Stream<Item = Result<T, E>> + 'a,
+    extract_index: impl for<'b> Fn(&'b T) -> &'b ChunkIndices + 'a,
+) -> impl Stream<Item = Result<T, E>> + 'a {
+    // we initialize the destination with an empty array, because we don't know
+    // the dimensions of the array yet. On the first element we will re-initialize
+    *from = Vec::new();
+    *to = Vec::new();
+    it.map_ok(move |t| {
+        // these are the coordinates for the chunk
+        let idx = extract_index(&t);
+
+        // we need to initialize the mins/maxes the first time
+        // we initialize with the value of the first element
+        // this obviously doesn't work for empty streams
+        // but we never generate manifests for them
+        if from.is_empty() {
+            *from = idx.0.clone();
+            // important to remember that `to` is not inclusive, so we need +1
+            *to = idx.0.iter().map(|n| n + 1).collect();
+        } else {
+            // We need to iterate over coordinates, and update the
+            // minimum and maximum for each if needed
+            for (coord_idx, value) in idx.0.iter().enumerate() {
+                if let Some(from_current) = from.get_mut(coord_idx) {
+                    if value < from_current {
+                        *from_current = *value
+                    }
+                }
+                if let Some(to_current) = to.get_mut(coord_idx) {
+                    let range_value = value + 1;
+                    if range_value > *to_current {
+                        *to_current = range_value
+                    }
+                }
+            }
+        }
+        t
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1934,6 +2168,7 @@ mod tests {
 
     use crate::{
         ObjectStorage, Repository,
+        config::{ManifestConfig, ManifestSplitCondition},
         conflicts::{
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
@@ -1942,7 +2177,9 @@ mod tests {
         refs::{Ref, fetch_tag},
         repository::VersionInfo,
         storage::new_in_memory_storage,
-        strategies::{ShapeDim, empty_writable_session, node_paths, shapes_and_dims},
+        strategies::{
+            ShapeDim, chunk_indices, empty_writable_session, node_paths, shapes_and_dims,
+        },
     };
 
     use super::*;
@@ -2108,20 +2345,52 @@ mod tests {
         prop_assert!(session.delete_group(path.clone()).await.is_ok());
     }
 
+    #[proptest(async = "tokio")]
+    async fn test_aggregate_extents(
+        #[strategy(proptest::collection::vec(chunk_indices(3, 0..1_000_000), 1..50))]
+        indices: Vec<ChunkIndices>,
+    ) {
+        let mut from = vec![];
+        let mut to = vec![];
+
+        let expected_from = vec![
+            indices.iter().map(|i| i.0[0]).min().unwrap(),
+            indices.iter().map(|i| i.0[1]).min().unwrap(),
+            indices.iter().map(|i| i.0[2]).min().unwrap(),
+        ];
+        let expected_to = vec![
+            indices.iter().map(|i| i.0[0]).max().unwrap() + 1,
+            indices.iter().map(|i| i.0[1]).max().unwrap() + 1,
+            indices.iter().map(|i| i.0[2]).max().unwrap() + 1,
+        ];
+
+        let _ = aggregate_extents(
+            &mut from,
+            &mut to,
+            stream::iter(indices.into_iter().map(Ok::<ChunkIndices, Infallible>)),
+            |idx| idx,
+        )
+        .count()
+        .await;
+
+        prop_assert_eq!(from, expected_from);
+        prop_assert_eq!(to, expected_to);
+    }
+
     #[tokio::test]
     async fn test_which_split() -> Result<(), Box<dyn Error>> {
         let splits = ManifestSplits::from_edges(vec![vec![0, 10, 20]]);
 
-        assert_eq!(splits.which(&ChunkIndices(vec![1])).unwrap(), 0);
-        assert_eq!(splits.which(&ChunkIndices(vec![11])).unwrap(), 1);
+        assert_eq!(splits.position(&ChunkIndices(vec![1])), Some(0));
+        assert_eq!(splits.position(&ChunkIndices(vec![11])), Some(1));
 
         let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
 
         let splits = ManifestSplits::from_edges(edges);
-        assert_eq!(splits.which(&ChunkIndices(vec![1, 1])).unwrap(), 0);
-        assert_eq!(splits.which(&ChunkIndices(vec![1, 10])).unwrap(), 1);
-        assert_eq!(splits.which(&ChunkIndices(vec![1, 11])).unwrap(), 1);
-        assert!(splits.which(&ChunkIndices(vec![21, 21])).is_err());
+        assert_eq!(splits.position(&ChunkIndices(vec![1, 1])), Some(0));
+        assert_eq!(splits.position(&ChunkIndices(vec![1, 10])), Some(1));
+        assert_eq!(splits.position(&ChunkIndices(vec![1, 11])), Some(1));
+        assert!(splits.position(&ChunkIndices(vec![21, 21])).is_none());
 
         Ok(())
     }
@@ -2168,6 +2437,122 @@ mod tests {
         expected_result.insert("project".to_string(), "My Project".to_string().into());
         expected_result.insert("id".to_string(), "ideded".to_string().into());
         assert_eq!(snapshot_infos[0].metadata, expected_result);
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_repository_with_splits_and_resizes() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+
+        let split_sizes = Some(vec![(
+            ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+            vec![ManifestSplitDim {
+                condition: ManifestSplitDimCondition::Any,
+                num_chunks: 2,
+            }],
+        )]);
+
+        let man_config = ManifestConfig {
+            splitting: Some(ManifestSplittingConfig { split_sizes }),
+            ..ManifestConfig::default()
+        };
+
+        let repo = Repository::create(
+            Some(RepositoryConfig {
+                inline_chunk_threshold_bytes: Some(0),
+                manifest: Some(man_config),
+                ..Default::default()
+            }),
+            storage,
+            HashMap::new(),
+        )
+        .await?;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(4, 1)]).unwrap();
+        let dimension_names = Some(vec!["t".into()]);
+        let array_def = Bytes::from_static(br#"{"this":"other array"}"#);
+
+        session
+            .add_array(
+                array_path.clone(),
+                shape.clone(),
+                dimension_names.clone(),
+                array_def.clone(),
+            )
+            .await?;
+
+        let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
+        for idx in vec![0, 2] {
+            let payload = session.get_chunk_writer()(bytes.clone()).await?;
+            session
+                .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
+                .await?;
+        }
+        session.commit("None", None).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        // This is how Zarr resizes
+        // first, delete any out of bounds chunks
+        session.set_chunk_ref(array_path.clone(), ChunkIndices(vec![2]), None).await?;
+        // second, update metadata
+        let shape2 = ArrayShape::new(vec![(2, 1)]).unwrap();
+        session
+            .update_array(
+                &array_path,
+                shape2.clone(),
+                dimension_names.clone(),
+                array_def.clone(),
+            )
+            .await?;
+
+        assert!(
+            session.get_chunk_ref(&array_path, &ChunkIndices(vec![2])).await?.is_none()
+        );
+
+        // resize back to original shape
+        session
+            .update_array(
+                &array_path,
+                shape.clone(),
+                dimension_names.clone(),
+                array_def.clone(),
+            )
+            .await?;
+
+        // should still be deleted
+        assert!(
+            session.get_chunk_ref(&array_path, &ChunkIndices(vec![2])).await?.is_none()
+        );
+
+        // set another chunk in this split
+        let payload = session.get_chunk_writer()(bytes.clone()).await?;
+        session
+            .set_chunk_ref(array_path.clone(), ChunkIndices(vec![3]), Some(payload))
+            .await?;
+        // should still be deleted
+        assert!(
+            session.get_chunk_ref(&array_path, &ChunkIndices(vec![2])).await?.is_none()
+        );
+        // new ref should be present
+        assert!(
+            session.get_chunk_ref(&array_path, &ChunkIndices(vec![3])).await?.is_some()
+        );
+
+        // write manifests, check number of references in manifest
+        session.commit("updated", None).await?;
+
+        // should still be deleted
+        assert!(
+            session.get_chunk_ref(&array_path, &ChunkIndices(vec![2])).await?.is_none()
+        );
+        // new ref should be present
+        assert!(
+            session.get_chunk_ref(&array_path, &ChunkIndices(vec![3])).await?.is_some()
+        );
 
         Ok(())
     }
@@ -2357,13 +2742,13 @@ mod tests {
 
         let array_def3 = Bytes::from_static(br#"{"this":"more arrays"}"#);
         ds.update_array(
-            &array1_path.clone(),
+            &new_array_path.clone(),
             shape3.clone(),
             dimension_names3.clone(),
             array_def3.clone(),
         )
         .await?;
-        let node = ds.get_node(&array1_path).await;
+        let node = ds.get_node(&new_array_path).await;
         if let Ok(NodeSnapshot { node_data: NodeData::Array { shape, .. }, .. }) = &node {
             assert_eq!(shape, &shape3);
         } else {
@@ -2373,17 +2758,59 @@ mod tests {
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
         let payload = ds.get_chunk_writer()(data.clone()).await?;
-        ds.set_chunk_ref(array1_path.clone(), ChunkIndices(vec![0, 0, 0]), Some(payload))
+        ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
 
         let chunk = get_chunk(
-            ds.get_chunk_reader(
-                &array1_path,
-                &ChunkIndices(vec![0, 0, 0]),
-                &ByteRange::ALL,
-            )
-            .await
-            .unwrap(),
+            ds.get_chunk_reader(&new_array_path, &ChunkIndices(vec![0]), &ByteRange::ALL)
+                .await
+                .unwrap(),
+        )
+        .await?;
+        assert_eq!(chunk, Some(data));
+
+        // reduce size of dimension
+        // // update old array zarr metadata and check it
+        let shape4 = ArrayShape::new(vec![(6, 3)]).unwrap();
+        let array_def3 = Bytes::from_static(br#"{"this":"more arrays"}"#);
+        ds.update_array(
+            &new_array_path.clone(),
+            shape4.clone(),
+            dimension_names3.clone(),
+            array_def3.clone(),
+        )
+        .await?;
+        let node = ds.get_node(&new_array_path).await;
+        if let Ok(NodeSnapshot { node_data: NodeData::Array { shape, .. }, .. }) = &node {
+            assert_eq!(shape, &shape4);
+        } else {
+            panic!("Failed to update zarr metadata");
+        }
+
+        // set old array chunk and check them
+        let data = Bytes::copy_from_slice(b"old".repeat(512).as_slice());
+        let payload = ds.get_chunk_writer()(data.clone()).await?;
+        ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
+            .await?;
+        let data = Bytes::copy_from_slice(b"new".repeat(512).as_slice());
+        let payload = ds.get_chunk_writer()(data.clone()).await?;
+        ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![1]), Some(payload))
+            .await?;
+
+        let chunk = get_chunk(
+            ds.get_chunk_reader(&new_array_path, &ChunkIndices(vec![1]), &ByteRange::ALL)
+                .await
+                .unwrap(),
+        )
+        .await?;
+        assert_eq!(chunk, Some(data.clone()));
+
+        ds.commit("commit", Some(SnapshotProperties::default())).await?;
+
+        let chunk = get_chunk(
+            ds.get_chunk_reader(&new_array_path, &ChunkIndices(vec![1]), &ByteRange::ALL)
+                .await
+                .unwrap(),
         )
         .await?;
         assert_eq!(chunk, Some(data));

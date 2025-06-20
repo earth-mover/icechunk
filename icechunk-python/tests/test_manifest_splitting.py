@@ -102,7 +102,7 @@ def test_manifest_splitting_appends():
         nchunks += math.prod(NEWSHAPE) * 2
         # the lon size goes from 17 -> 19 so one extra manifest,
         # compared to previous writes
-        nmanifests += 7 * 2
+        nmanifests += 2 * 2
 
         assert len(os.listdir(f"{tmpdir}/chunks")) == nchunks
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
