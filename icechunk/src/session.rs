@@ -12,7 +12,9 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream};
+use futures::{
+    FutureExt, Stream, StreamExt, TryStream, TryStreamExt, future::Either, stream,
+};
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
@@ -1572,6 +1574,40 @@ pub fn construct_valid_byte_range(
     }
 }
 
+async fn write_manifest_from_iterator(
+    asset_manager: &AssetManager,
+    chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
+) -> SessionResult<Option<(ManifestRef, ManifestFileInfo)>> {
+    let mut from = vec![];
+    let mut to = vec![];
+    let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
+
+    if let Some(new_manifest) = Manifest::from_stream(chunks)
+        .await
+        .map_err(|e| SessionErrorKind::ManifestCreationError(Box::new(e)))?
+    {
+        let new_manifest = Arc::new(new_manifest);
+        let new_manifest_size =
+            asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
+
+        let file_info = ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
+
+        let new_ref = ManifestRef {
+            object_id: new_manifest.id().clone(),
+            extents: ManifestExtents::new(&from, &to),
+        };
+        Ok(Some((new_ref, file_info)))
+    } else {
+        Ok(None)
+    }
+}
+
+fn map_ok_second<A, B, E>(
+    stream: impl TryStream<Item = Result<(A, B), E>, Ok = (A, B), Error = E>,
+) -> impl TryStream<Item = Result<B, E>, Ok = B, Error = E> {
+    stream.map_ok(|(_, second)| second)
+}
+
 struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
@@ -1598,54 +1634,6 @@ impl<'a> FlushProcess<'a> {
         }
     }
 
-    async fn write_manifest_for_updated_chunks(
-        &mut self,
-        node: &NodeSnapshot,
-        extent: &ManifestExtents,
-    ) -> SessionResult<Option<ManifestRef>> {
-        let asset_manager = Arc::clone(&self.asset_manager);
-        let updated_chunks = updated_node_chunks_iterator(
-            asset_manager.as_ref(),
-            self.change_set,
-            self.parent_id,
-            node.clone(),
-            extent.clone(),
-        )
-        .await
-        .map_ok(|(_path, chunk_info)| chunk_info);
-        self.write_manifest_from_iterator(updated_chunks).await
-    }
-
-    async fn write_manifest_from_iterator(
-        &mut self,
-        chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
-    ) -> SessionResult<Option<ManifestRef>> {
-        let mut from = vec![];
-        let mut to = vec![];
-        let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
-
-        if let Some(new_manifest) = Manifest::from_stream(chunks)
-            .await
-            .map_err(|e| SessionErrorKind::ManifestCreationError(Box::new(e)))?
-        {
-            let new_manifest = Arc::new(new_manifest);
-            let new_manifest_size =
-                self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
-
-            let file_info =
-                ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
-            self.manifest_files.insert(file_info);
-
-            let new_ref = ManifestRef {
-                object_id: new_manifest.id().clone(),
-                extents: ManifestExtents::new(&from, &to),
-            };
-            Ok(Some(new_ref))
-        } else {
-            Ok(None)
-        }
-    }
-
     /// Write a manifest for a node that was created in this session
     /// It doesn't need to look at previous manifests because the node is new
     async fn write_manifest_for_new_node(
@@ -1657,23 +1645,38 @@ impl<'a> FlushProcess<'a> {
         let splits =
             self.splits.get(node_id).expect("getting split for node unexpectedly failed");
 
-        for extent in splits.iter() {
-            if self.change_set.array_manifest(node_id, extent).is_some() {
-                let chunks = stream::iter(
-                    self.change_set
-                        .new_array_chunk_iterator(node_id, node_path, extent.clone())
-                        .map(Ok),
-                );
-                #[allow(clippy::expect_used)]
-                let new_ref = self.write_manifest_from_iterator(chunks).await.expect(
-                    "logic bug. for a new node, we must always write the manifest",
-                );
-                // new_ref is None if there were no chunks in the iterator
-                if let Some(new_ref) = new_ref {
-                    self.manifest_refs.entry(node_id.clone()).or_default().push(new_ref);
+        let iterators = splits
+            .iter()
+            .filter_map(|extent| {
+                if self.change_set.array_manifest(node_id, extent).is_some() {
+                    let chunks = stream::iter(
+                        self.change_set
+                            .new_array_chunk_iterator(node_id, node_path, extent.clone())
+                            .map(Ok),
+                    );
+                    Some(chunks)
+                } else {
+                    None
                 }
-            }
+            })
+            .collect::<Vec<_>>();
+
+        let new_refs =
+            futures::future::join_all(iterators.into_iter().map(|chunks| async {
+                #[allow(clippy::expect_used)]
+                write_manifest_from_iterator(self.asset_manager.as_ref(), chunks)
+                    .await
+                    .expect(
+                        "logic bug. for a new node, we must always write the manifest",
+                    )
+            }))
+            .await;
+
+        for (new_ref, file_info) in new_refs.into_iter().flatten() {
+            self.manifest_refs.entry(node_id.clone()).or_default().push(new_ref);
+            self.manifest_files.insert(file_info);
         }
+
         Ok(())
     }
 
@@ -1689,9 +1692,6 @@ impl<'a> FlushProcess<'a> {
         #[allow(clippy::expect_used)]
         let splits =
             self.splits.get(&node.id).expect("splits should exist for this node.");
-        let mut refs =
-            HashMap::<ManifestExtents, Vec<ManifestRef>>::with_capacity(splits.len());
-
         let on_disk_extents =
             existing_manifests.iter().map(|m| m.extents.clone()).collect::<Vec<_>>();
 
@@ -1704,12 +1704,23 @@ impl<'a> FlushProcess<'a> {
         // must be a subset of ``splits`` (the splits set in the config)
         debug_assert!(modified_splits.is_subset(&splits.iter().collect::<HashSet<_>>()));
 
+        let mut tasks = Vec::new();
         for extent in splits.iter() {
             if modified_splits.contains(extent) {
-                // this split was modified in this session, rewrite it completely
-                self.write_manifest_for_updated_chunks(node, extent)
-                    .await?
-                    .map(|new_ref| refs.insert(extent.clone(), vec![new_ref]));
+                let updated_chunks = map_ok_second(
+                    updated_node_chunks_iterator(
+                        self.asset_manager.as_ref(),
+                        self.change_set,
+                        self.parent_id,
+                        node.clone(),
+                        extent.clone(),
+                    )
+                    .await,
+                );
+                tasks.push(write_manifest_from_iterator(
+                    self.asset_manager.as_ref(),
+                    updated_chunks,
+                ));
             } else {
                 // intersection of the current split with extents on disk
                 let on_disk_bbox = on_disk_extents
@@ -1726,7 +1737,10 @@ impl<'a> FlushProcess<'a> {
                         Overlap::Complete => {
                             debug_assert!(on_disk_bbox.is_some());
                             // Just propagate this ref again, no rewriting necessary
-                            refs.entry(extent.clone()).or_default().push(old_ref.clone());
+                            self.manifest_refs
+                                .entry(node.id.clone())
+                                .or_default()
+                                .push(old_ref.clone());
                             // OK to unwrap here since this manifest file must exist in the old snapshot
                             #[allow(clippy::expect_used)]
                             self.manifest_files.insert(
@@ -1737,12 +1751,20 @@ impl<'a> FlushProcess<'a> {
                             // the splits have changed, but no refs in this split have been written in this session
                             // same as `if` block above
                             debug_assert!(on_disk_bbox.is_some());
-                            if let Some(new_ref) = self
-                                .write_manifest_for_updated_chunks(node, extent)
-                                .await?
-                            {
-                                refs.entry(extent.clone()).or_default().push(new_ref);
-                            }
+                            let updated_chunks = map_ok_second(
+                                updated_node_chunks_iterator(
+                                    self.asset_manager.as_ref(),
+                                    self.change_set,
+                                    self.parent_id,
+                                    node.clone(),
+                                    extent.clone(),
+                                )
+                                .await,
+                            );
+                            tasks.push(write_manifest_from_iterator(
+                                self.asset_manager.as_ref(),
+                                updated_chunks,
+                            ));
                         }
                         Overlap::None => {
                             // Nothing to do
@@ -1752,12 +1774,15 @@ impl<'a> FlushProcess<'a> {
             }
         }
 
+        let new_refs = futures::future::join_all(tasks.into_iter()).await;
+
         // FIXME: Assert that bboxes in refs don't overlap
 
-        self.manifest_refs
-            .entry(node.id.clone())
-            .or_default()
-            .extend(refs.into_values().flatten());
+        for (new_ref, file_info) in new_refs.into_iter().flatten().flatten() {
+            self.manifest_refs.entry(node.id.clone()).or_default().push(new_ref);
+            self.manifest_files.insert(file_info);
+        }
+
         Ok(())
     }
 
