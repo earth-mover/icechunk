@@ -181,7 +181,9 @@ def test_set_many_virtual_chunk_refs(benchmark, repo) -> None:
 
 
 @pytest.mark.benchmark(group="refs-write")
-def test_write_split_manifest_refs_full_rewrite(benchmark, splitting, large_write_dataset) -> None:
+def test_write_split_manifest_refs_full_rewrite(
+    benchmark, splitting, large_write_dataset
+) -> None:
     dataset = large_write_dataset
     config = repo_config_with(splitting=splitting)
     assert config is not None
@@ -222,7 +224,9 @@ def test_write_split_manifest_refs_full_rewrite(benchmark, splitting, large_writ
 
 
 @pytest.mark.benchmark(group="refs-write")
-def test_write_split_manifest_refs_append(benchmark, splitting, large_write_dataset) -> None:
+def test_write_split_manifest_refs_append(
+    benchmark, splitting, large_write_dataset
+) -> None:
     dataset = large_write_dataset
     config = repo_config_with(splitting=splitting)
     assert config is not None
