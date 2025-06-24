@@ -1,10 +1,17 @@
-use std::{borrow::Cow, convert::Infallible, ops::Range, sync::Arc};
+use std::{
+    borrow::Cow,
+    cmp::{max, min},
+    convert::Infallible,
+    iter::zip,
+    ops::Range,
+    sync::Arc,
+};
 
 use crate::format::flatbuffers::generated;
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
-use itertools::{Itertools, multiunzip};
+use itertools::{Itertools, any, multiunzip};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -18,16 +25,20 @@ use super::{
     ChunkId, ChunkIndices, ChunkLength, ChunkOffset, IcechunkResult, ManifestId, NodeId,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManifestExtents(Vec<Range<u32>>);
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManifestRef {
-    pub object_id: ManifestId,
-    pub extents: ManifestExtents,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Overlap {
+    Complete,
+    Partial,
+    None,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestExtents(Vec<Range<u32>>);
+
 impl ManifestExtents {
+    // sentinel for a "universal set"
+    pub const ALL: Self = Self(Vec::new());
+
     pub fn new(from: &[u32], to: &[u32]) -> Self {
         let v = from
             .iter()
@@ -35,6 +46,10 @@ impl ManifestExtents {
             .map(|(a, b)| Range { start: *a, end: *b })
             .collect();
         Self(v)
+    }
+
+    pub fn from_ranges_iter(ranges: impl IntoIterator<Item = Range<u32>>) -> Self {
+        Self(ranges.into_iter().collect())
     }
 
     pub fn contains(&self, coord: &[u32]) -> bool {
@@ -52,10 +67,71 @@ impl ManifestExtents {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub fn intersection(&self, other: &Self) -> Option<Self> {
+        if self == &Self::ALL {
+            return Some(other.clone());
+        }
+
+        debug_assert_eq!(self.len(), other.len());
+        let ranges = zip(self.iter(), other.iter())
+            .map(|(a, b)| max(a.start, b.start)..min(a.end, b.end))
+            .collect::<Vec<_>>();
+        if any(ranges.iter(), |r| r.end <= r.start) { None } else { Some(Self(ranges)) }
+    }
+
+    pub fn union(&self, other: &Self) -> Self {
+        if self == &Self::ALL {
+            return Self::ALL;
+        }
+        debug_assert_eq!(self.len(), other.len());
+        Self::from_ranges_iter(
+            zip(self.iter(), other.iter())
+                .map(|(a, b)| min(a.start, b.start)..max(a.end, b.end)),
+        )
+    }
+
+    pub fn overlap_with(&self, other: &Self) -> Overlap {
+        // Important: this is not symmetric.
+        if *other == Self::ALL {
+            return Overlap::Complete;
+        } else if *self == Self::ALL {
+            return Overlap::Partial;
+        }
+        debug_assert!(
+            self.len() == other.len(),
+            "Length mismatch: self = {:?}, other = {:?}",
+            &self,
+            &other
+        );
+        let mut overlap = Overlap::Complete;
+        for (a, b) in zip(other.iter(), self.iter()) {
+            debug_assert!(a.start <= a.end, "Invalid range: {:?}", a.clone());
+            debug_assert!(b.start <= b.end, "Invalid range: {:?}", b.clone());
+            if (a.end <= b.start) || (a.start >= b.end) {
+                return Overlap::None;
+            } else if !((a.start <= b.start) && (a.end >= b.end)) {
+                overlap = Overlap::Partial
+            }
+        }
+        overlap
+    }
+
+    pub fn matches(&self, other: &ManifestExtents) -> bool {
+        // used in `.filter`
+        // ALL always matches any other extents
+        if *self == Self::ALL { true } else { self == other }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestSplits(Vec<ManifestExtents>);
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestRef {
+    pub object_id: ManifestId,
+    pub extents: ManifestExtents,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestSplits(pub Vec<ManifestExtents>);
 
 impl ManifestSplits {
     /// Used at read-time
@@ -107,6 +183,21 @@ impl ManifestSplits {
 
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn compatible_with(&self, other: &Self) -> bool {
+        // this is not a simple zip + all(equals) because
+        // ordering might differ though both sets of splits
+        // must be complete.
+        for ours in self.iter() {
+            if any(other.iter(), |theirs| {
+                ours.overlap_with(theirs) == Overlap::Partial
+                    || theirs.overlap_with(ours) == Overlap::Partial
+            }) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -526,43 +617,232 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::strategies::{ShapeDim, shapes_and_dims};
+    use crate::strategies::{ShapeDim, manifest_extents, shapes_and_dims};
     use icechunk_macros;
+    use itertools::{all, multizip};
+    use proptest::collection::vec;
     use proptest::prelude::*;
+    use std::error::Error;
+    use test_strategy::proptest;
 
-    proptest! {
-        #[icechunk_macros::test]
-        fn test_manifest_split_from_edges(shape_dim in shapes_and_dims(Some(5))) {
-            // Note: using the shape, chunks strategy to generate chunk_shape, split_shape
-            let ShapeDim { shape, .. } = shape_dim;
+    #[proptest]
+    fn test_property_extents_set_ops_same(
+        #[strategy(manifest_extents(4))] e: ManifestExtents,
+    ) {
+        prop_assert_eq!(e.intersection(&e), Some(e.clone()));
+        prop_assert_eq!(e.union(&e), e.clone());
+        prop_assert_eq!(e.overlap_with(&e), Overlap::Complete);
+    }
 
-            let num_chunks = shape.iter().map(|x| x.array_length()).collect::<Vec<_>>();
-            let split_shape = shape.iter().map(|x| x.chunk_length()).collect::<Vec<_>>();
+    #[proptest]
+    fn test_property_extents_set_ops(
+        #[strategy(manifest_extents(4))] e1: ManifestExtents,
+        #[strategy(manifest_extents(4))] e2: ManifestExtents,
+    ) {
+        let union = e1.union(&e2);
+        let intersection = e1.intersection(&e2);
 
-            let ndim = shape.len();
-            let edges: Vec<Vec<u32>> =
-                (0usize..ndim).map(|axis| {
-                    uniform_manifest_split_edges(num_chunks[axis] as u32, &(split_shape[axis] as u32))
-                }
-                ).collect();
+        prop_assert_eq!(e1.intersection(&union), Some(e1.clone()));
+        prop_assert_eq!(union.intersection(&e1), Some(e1.clone()));
+        prop_assert_eq!(e2.intersection(&union), Some(e2.clone()));
+        prop_assert_eq!(union.intersection(&e2), Some(e2.clone()));
 
-            let splits = ManifestSplits::from_edges(edges.into_iter());
-            for edge in splits.iter() {
-                // must be ndim ranges
-                prop_assert_eq!(edge.len(), ndim);
-                for range in edge.iter() {
-                    prop_assert!(range.end > range.start);
-                }
+        // order is important for the next 2
+        prop_assert_eq!(e1.overlap_with(&union), Overlap::Complete);
+        prop_assert_eq!(e2.overlap_with(&union), Overlap::Complete);
+
+        if intersection.is_some() {
+            let int = intersection.unwrap();
+            let expected = if e1 == e1 { Overlap::Complete } else { Overlap::Partial };
+            prop_assert_eq!(int.overlap_with(&e1), expected.clone());
+            prop_assert_eq!(int.overlap_with(&e2), expected);
+        } else {
+            prop_assert_eq!(e2.overlap_with(&e1), Overlap::None);
+            prop_assert_eq!(e1.overlap_with(&e2), Overlap::None);
+        }
+    }
+
+    #[proptest]
+    fn test_property_extents_widths(
+        #[strategy(manifest_extents(4))] extent1: ManifestExtents,
+        #[strategy(vec(0..100, 4))] delta_left: Vec<i32>,
+        #[strategy(vec(0..100, 4))] delta_right: Vec<i32>,
+    ) {
+        let widths = extent1.iter().map(|r| (r.end - r.start) as i32).collect::<Vec<_>>();
+        let extent2 = ManifestExtents::from_ranges_iter(
+            multizip((extent1.iter(), delta_left.iter(), delta_right.iter())).map(
+                |(extent, dleft, dright)| {
+                    ((extent.start as i32 + dleft) as u32)
+                        ..((extent.end as i32 + dright) as u32)
+                },
+            ),
+        );
+
+        if all(delta_left.iter(), |elem| elem == &0i32)
+            && all(delta_right.iter(), |elem| elem == &0i32)
+        {
+            prop_assert_eq!(extent2.overlap_with(&extent1), Overlap::Complete);
+        }
+
+        let extent2 = ManifestExtents::from_ranges_iter(
+            multizip((
+                extent1.iter(),
+                widths.iter(),
+                delta_left.iter(),
+                delta_right.iter(),
+            ))
+            .map(|(extent, width, dleft, dright)| {
+                let (low, high) = (dleft.min(dright), dleft.max(dright));
+                ((extent.start as i32 + width + low) as u32)
+                    ..((extent.end as i32 + width + high) as u32)
+            }),
+        );
+
+        prop_assert_eq!(extent2.overlap_with(&extent1), Overlap::None);
+
+        let extent2 = ManifestExtents::from_ranges_iter(
+            multizip((
+                extent1.iter(),
+                widths.iter(),
+                delta_left.iter(),
+                delta_right.iter(),
+            ))
+            .map(|(extent, width, dleft, dright)| {
+                let (low, high) = (dleft.min(dright), dleft.max(dright));
+                ((extent.start as i32 - width - high).max(0i32) as u32)
+                    ..((extent.end as i32 - width - low) as u32)
+            }),
+        );
+        prop_assert_eq!(extent2.overlap_with(&extent1), Overlap::None);
+
+        let extent2 = ManifestExtents::from_ranges_iter(
+            multizip((extent1.iter(), delta_left.iter(), delta_right.iter())).map(
+                |(extent, dleft, dright)| {
+                    ((extent.start as i32 - dleft - 1).max(0i32) as u32)
+                        ..((extent.end as i32 + dright + 1) as u32)
+                },
+            ),
+        );
+        prop_assert_eq!(extent2.overlap_with(&extent1), Overlap::Partial);
+    }
+
+    #[icechunk_macros::test]
+    fn test_overlaps() -> Result<(), Box<dyn Error>> {
+        let e1 = ManifestExtents::new(
+            vec![0u32, 1, 2].as_slice(),
+            vec![2u32, 4, 6].as_slice(),
+        );
+
+        let e2 = ManifestExtents::new(
+            vec![10u32, 1, 2].as_slice(),
+            vec![12u32, 4, 6].as_slice(),
+        );
+
+        let union = ManifestExtents::new(
+            vec![0u32, 1, 2].as_slice(),
+            vec![12u32, 4, 6].as_slice(),
+        );
+
+        assert_eq!(e2.overlap_with(&e1), Overlap::None);
+        assert_eq!(e1.intersection(&e2), None);
+        assert_eq!(e1.union(&e2), union);
+
+        let e1 = ManifestExtents::new(
+            vec![0u32, 1, 2].as_slice(),
+            vec![2u32, 4, 6].as_slice(),
+        );
+        let e2 = ManifestExtents::new(
+            vec![2u32, 1, 2].as_slice(),
+            vec![42u32, 4, 6].as_slice(),
+        );
+        assert_eq!(e2.overlap_with(&e1), Overlap::None);
+        assert_eq!(e1.overlap_with(&e2), Overlap::None);
+
+        // asymmetric case
+        let e1 = ManifestExtents::new(
+            vec![0u32, 1, 2].as_slice(),
+            vec![3u32, 4, 6].as_slice(),
+        );
+        let e2 = ManifestExtents::new(
+            vec![2u32, 1, 2].as_slice(),
+            vec![3u32, 4, 6].as_slice(),
+        );
+        let union = ManifestExtents::new(
+            vec![0u32, 1, 2].as_slice(),
+            vec![3u32, 4, 6].as_slice(),
+        );
+        let intersection = ManifestExtents::new(
+            vec![2u32, 1, 2].as_slice(),
+            vec![3u32, 4, 6].as_slice(),
+        );
+        assert_eq!(e2.overlap_with(&e1), Overlap::Complete);
+        assert_eq!(e1.overlap_with(&e2), Overlap::Partial);
+        assert_eq!(e1.union(&e2), union.clone());
+        assert_eq!(e2.union(&e1), union.clone());
+        assert_eq!(e1.intersection(&e2), Some(intersection));
+
+        // empty set
+        let e1 = ManifestExtents::new(
+            vec![0u32, 1, 2].as_slice(),
+            vec![3u32, 4, 6].as_slice(),
+        );
+        let e2 = ManifestExtents::new(
+            vec![2u32, 1, 2].as_slice(),
+            vec![2u32, 4, 6].as_slice(),
+        );
+        assert_eq!(e1.intersection(&e2), None);
+
+        // this should create non-overlapping extents
+        let splits = ManifestSplits::from_edges(vec![
+            vec![0, 10, 20],
+            vec![0, 1, 2],
+            vec![0, 21, 22],
+        ]);
+        for vec in splits.iter().combinations(2) {
+            assert_eq!(vec[0].overlap_with(vec[1]), Overlap::None);
+            assert_eq!(vec[1].overlap_with(vec[0]), Overlap::None);
+        }
+
+        Ok(())
+    }
+
+    #[proptest]
+    fn test_manifest_split_from_edges(
+        #[strategy(shapes_and_dims(Some(5)))] shape_dim: ShapeDim,
+    ) {
+        // Note: using the shape, chunks strategy to generate chunk_shape, split_shape
+        let ShapeDim { shape, .. } = shape_dim;
+
+        let num_chunks = shape.iter().map(|x| x.array_length()).collect::<Vec<_>>();
+        let split_shape = shape.iter().map(|x| x.chunk_length()).collect::<Vec<_>>();
+
+        let ndim = shape.len();
+        let edges: Vec<Vec<u32>> = (0usize..ndim)
+            .map(|axis| {
+                uniform_manifest_split_edges(
+                    num_chunks[axis] as u32,
+                    &(split_shape[axis] as u32),
+                )
+            })
+            .collect();
+
+        let splits = ManifestSplits::from_edges(edges.into_iter());
+        for edge in splits.iter() {
+            // must be ndim ranges
+            prop_assert_eq!(edge.len(), ndim);
+            for range in edge.iter() {
+                prop_assert!(range.end > range.start);
             }
+        }
 
-            // when using from_edges, extents must not exactly overlap
-            for edges in splits.iter().combinations(2) {
-                let is_equal = std::iter::zip(edges[0].iter(), edges[1].iter())
-                    .all(|(range1, range2)| {
-                        (range1.start == range2.start) && (range1.end == range2.end)
-                    });
-                prop_assert!(!is_equal);
-            }
+        // when using from_edges, extents must not exactly overlap
+        for edges in splits.iter().combinations(2) {
+            let is_equal = std::iter::zip(edges[0].iter(), edges[1].iter()).all(
+                |(range1, range2)| {
+                    (range1.start == range2.start) && (range1.end == range2.end)
+                },
+            );
+            prop_assert!(!is_equal);
         }
     }
 }

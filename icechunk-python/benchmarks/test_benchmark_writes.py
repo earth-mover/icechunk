@@ -181,7 +181,9 @@ def test_set_many_virtual_chunk_refs(benchmark, repo) -> None:
 
 
 @pytest.mark.benchmark(group="refs-write")
-def test_write_split_manifest_refs(benchmark, splitting, large_write_dataset) -> None:
+def test_write_split_manifest_refs_full_rewrite(
+    benchmark, splitting, large_write_dataset
+) -> None:
     dataset = large_write_dataset
     config = repo_config_with(splitting=splitting)
     assert config is not None
@@ -219,3 +221,53 @@ def test_write_split_manifest_refs(benchmark, splitting, large_write_dataset) ->
         session_from_setup.commit("wrote refs")
 
     benchmark.pedantic(commit, setup=write_refs, iterations=1, rounds=10)
+
+
+@pytest.mark.benchmark(group="refs-write")
+def test_write_split_manifest_refs_append(
+    benchmark, splitting, large_write_dataset
+) -> None:
+    dataset = large_write_dataset
+    config = repo_config_with(splitting=splitting)
+    assert config is not None
+    if hasattr(config.manifest, "splitting"):
+        assert config.manifest.splitting == splitting
+    repo = dataset.create(config=config)
+    session = repo.writable_session(branch="main")
+    store = session.store
+    group = zarr.open_group(store, zarr_format=3)
+    group.create_array(
+        "array",
+        shape=dataset.shape,
+        chunks=dataset.chunks,
+        dtype="int8",
+        fill_value=0,
+        compressors=None,
+    )
+    session.commit("initialize")
+
+    # yuck, but I'm abusing `rounds` to do a loop and time _only_ the commit.
+    global counter
+    counter = 0
+    rounds = 10
+    num_chunks = dataset.shape[0] // dataset.chunks[0]
+    batch_size = num_chunks // rounds
+
+    def write_refs() -> Session:
+        global counter
+        session = repo.writable_session(branch="main")
+        chunks = [
+            VirtualChunkSpec(
+                index=[i], location=f"s3://foo/bar/{i}.nc", offset=0, length=1
+            )
+            for i in range(counter * batch_size, counter * batch_size + batch_size)
+        ]
+        counter += 1
+        session.store.set_virtual_refs("array", chunks)
+        # (args, kwargs)
+        return ((session,), {})
+
+    def commit(session_from_setup):
+        session_from_setup.commit("wrote refs")
+
+    benchmark.pedantic(commit, setup=write_refs, iterations=1, rounds=rounds)
