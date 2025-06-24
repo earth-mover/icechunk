@@ -1204,7 +1204,7 @@ impl PyManifestSplitDimCondition {
         match self {
             Axis(axis) => format!("Axis({})", axis),
             DimensionName(name) => format!(r#"DimensionName("{}")"#, name),
-            Any() => "Rest".to_string(),
+            Any() => "Any".to_string(),
         }
     }
 

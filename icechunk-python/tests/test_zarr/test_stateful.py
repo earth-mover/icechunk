@@ -1,5 +1,5 @@
+import functools
 import json
-from collections.abc import Iterable
 from typing import Any
 
 import hypothesis.extra.numpy as npst
@@ -18,6 +18,7 @@ from hypothesis.stateful import (
 import icechunk as ic
 import zarr
 from icechunk import Repository, Storage, in_memory_storage
+from icechunk.testing import strategies as icst
 from zarr.core.buffer import default_buffer_prototype
 from zarr.testing.stateful import ZarrHierarchyStateMachine
 from zarr.testing.strategies import (
@@ -35,9 +36,6 @@ PROTOTYPE = default_buffer_prototype()
 #         "ignore::zarr.core.dtype.common.UnstableSpecificationWarning"
 #     ),
 # ]
-
-
-import functools
 
 
 def with_frequency(frequency):
@@ -97,39 +95,6 @@ def chunk_paths(
     return "/".join(map(str, blockidx[subset_slicer]))
 
 
-@st.composite
-def splitting_configs(
-    draw: st.DrawFn, *, arrays: Iterable[zarr.Array]
-) -> ic.ManifestSplittingConfig:
-    config_dict = {}
-    for array in arrays:
-        if draw(st.booleans()):
-            array_condition = ic.ManifestSplitCondition.name_matches(
-                array.path.split("/")[-1]
-            )
-        else:
-            array_condition = ic.ManifestSplitCondition.path_matches(array.path)
-        dimnames = array.metadata.dimension_names or (None,) * array.ndim
-        dimsize_axis_names = draw(
-            st.lists(
-                st.sampled_from(
-                    tuple(zip(array.shape, range(array.ndim), dimnames, strict=False))
-                ),
-                min_size=1,
-                unique=True,
-            )
-        )
-        for size, axis, dimname in dimsize_axis_names:
-            if dimname is None or draw(st.booleans()):
-                key = ic.ManifestSplitDimCondition.Axis(axis)
-            else:
-                key = ic.ManifestSplitDimCondition.DimensionName(dimname)
-            config_dict[array_condition] = {
-                key: draw(st.integers(min_value=1, max_value=size + 10))
-            }
-        return ic.ManifestSplittingConfig.from_dict(config_dict)
-
-
 # TODO: more before/after commit invariants?
 # TODO: add "/" to self.all_groups, deleting "/" seems to be problematic
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
@@ -149,7 +114,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             st.lists(st.sampled_from(sorted(self.all_arrays)), max_size=3, unique=True)
         )
         arrays = tuple(zarr.open_array(self.model, path=path) for path in array_paths)
-        sconfig = data.draw(splitting_configs(arrays=arrays))
+        sconfig = data.draw(icst.splitting_configs(arrays=arrays))
         config = ic.RepositoryConfig(
             inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)
         )

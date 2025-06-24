@@ -195,6 +195,14 @@ def from_dict(split_sizes: SplitSizesDict) -> ManifestSplittingConfig:
     return ManifestSplittingConfig(unwrapped)
 
 
+def to_dict(config: ManifestSplittingConfig) -> SplitSizesDict:
+    return {
+        split_condition: dict(dim_conditions)
+        for split_condition, dim_conditions in config.split_sizes
+    }
+
+
 ManifestSplittingConfig.from_dict = from_dict  # type: ignore[attr-defined]
+ManifestSplittingConfig.to_dict = to_dict  # type: ignore[attr-defined]
 
 initialize_logs()

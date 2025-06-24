@@ -6,16 +6,31 @@ import tempfile
 
 import numpy as np
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 import icechunk as ic
 import xarray as xr
 import zarr
 from icechunk import ManifestSplitCondition, ManifestSplitDimCondition
+from icechunk.testing.strategies import splitting_configs
 from icechunk.xarray import to_icechunk
+from zarr.testing.strategies import arrays as zarr_arrays
 
 SHAPE = (3, 4, 17)
 CHUNKS = (1, 1, 1)
 DIMS = ("time", "latitude", "longitude")
+
+
+@given(data=st.data())
+def test_splitting_config_dict_roundtrip(data):
+    arrays = data.draw(
+        st.lists(
+            zarr_arrays(compressors=st.none(), attrs=st.none(), zarr_formats=st.just(3))
+        )
+    )
+    config = data.draw(splitting_configs(arrays=arrays))
+    assert ic.ManifestSplittingConfig.from_dict(config.to_dict()) == config
 
 
 def test_manifest_splitting_appends():
