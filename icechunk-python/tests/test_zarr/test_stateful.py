@@ -155,6 +155,32 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         )
         note(f"reopening with splitting config {sconfig=!r}")
         self.repo = Repository.open(self.storage, config=config)
+        if data.draw(st.booleans()):
+            self.repo.save_config()
+        self.store = self.repo.writable_session("main").store
+
+    @precondition(lambda self: not self.store.session.has_uncommitted_changes)
+    @rule(data=st.data())
+    def rewrite_manifests(self, data):
+        config_dict = {
+            ic.ManifestSplitCondition.AnyArray(): {
+                ic.ManifestSplitDimCondition.Any(): data.draw(
+                    st.integers(min_value=1, max_value=10)
+                )
+            }
+        }
+        sconfig = ic.ManifestSplittingConfig.from_dict(config_dict)
+
+        config = ic.RepositoryConfig(
+            inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)
+        )
+        note(f"rewriting manifests with config {sconfig=!r}")
+        self.repo = Repository.open(self.storage, config=config)
+        self.repo.rewrite_manifests(
+            f"rewriting manifests with {sconfig!s}", branch="main"
+        )
+        if data.draw(st.booleans()):
+            self.repo.save_config()
         self.store = self.repo.writable_session("main").store
 
     @precondition(lambda self: self.store.session.has_uncommitted_changes)

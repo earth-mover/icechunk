@@ -1,7 +1,7 @@
 use icechunk::{
     StorageError,
     format::IcechunkFormatError,
-    ops::gc::GCError,
+    ops::{gc::GCError, manifests::ManifestOpsError},
     repository::RepositoryError,
     session::{SessionError, SessionErrorKind},
     store::{StoreError, StoreErrorKind},
@@ -38,6 +38,8 @@ pub(crate) enum PyIcechunkStoreError {
     IcechunkFormatError(#[from] IcechunkFormatError),
     #[error(transparent)]
     GCError(#[from] GCError),
+    #[error(transparent)]
+    ManifestOpsError(#[from] ManifestOpsError),
     #[error("{0}")]
     PyKeyError(String),
     #[error("{0}")]

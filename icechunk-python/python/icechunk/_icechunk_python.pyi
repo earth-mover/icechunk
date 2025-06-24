@@ -1298,6 +1298,9 @@ class PyRepository:
     def garbage_collect(
         self, delete_object_older_than: datetime.datetime
     ) -> GCSummary: ...
+    def rewrite_manifests(
+        self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
+    ) -> str: ...
     def total_chunks_storage(self) -> int: ...
 
 class PySession:

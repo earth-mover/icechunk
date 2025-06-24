@@ -944,6 +944,37 @@ impl Session {
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
+        self._commit(message, properties, false).await
+    }
+
+    #[instrument(skip(self, properties))]
+    pub async fn rewrite_manifests(
+        &mut self,
+        message: &str,
+        properties: Option<SnapshotProperties>,
+    ) -> SessionResult<SnapshotId> {
+        let nodes = self.list_nodes().await?.collect::<Vec<_>>();
+        for node in nodes.into_iter().flatten() {
+            if let NodeSnapshot {
+                id,
+                path,
+                node_data: NodeData::Array { shape, dimension_names, .. },
+                ..
+            } = node
+            {
+                self.get_splits(&id, &path, &shape, &dimension_names);
+            }
+        }
+        self._commit(message, properties, true).await
+    }
+
+    #[instrument(skip(self, properties))]
+    async fn _commit(
+        &mut self,
+        message: &str,
+        properties: Option<SnapshotProperties>,
+        rewrite_manifests: bool,
+    ) -> SessionResult<SnapshotId> {
         let Some(branch_name) = &self.branch_name else {
             return Err(SessionErrorKind::ReadOnlySession.into());
         };
@@ -976,6 +1007,7 @@ impl Session {
                     message,
                     Some(properties),
                     &self.splits,
+                    rewrite_manifests,
                 )
                 .await
             }
@@ -999,6 +1031,7 @@ impl Session {
                         message,
                         Some(properties),
                         &self.splits,
+                        rewrite_manifests,
                     )
                     .await
                 }
@@ -1685,6 +1718,7 @@ impl<'a> FlushProcess<'a> {
         node: &NodeSnapshot,
         existing_manifests: Vec<ManifestRef>,
         old_snapshot: &Snapshot,
+        rewrite_manifests: bool,
     ) -> SessionResult<()> {
         #[allow(clippy::expect_used)]
         let splits =
@@ -1705,7 +1739,7 @@ impl<'a> FlushProcess<'a> {
         debug_assert!(modified_splits.is_subset(&splits.iter().collect::<HashSet<_>>()));
 
         for extent in splits.iter() {
-            if modified_splits.contains(extent) {
+            if rewrite_manifests || modified_splits.contains(extent) {
                 // this split was modified in this session, rewrite it completely
                 self.write_manifest_for_updated_chunks(node, extent)
                     .await?
@@ -1872,8 +1906,9 @@ async fn flush(
     mut flush_data: FlushProcess<'_>,
     message: &str,
     properties: SnapshotProperties,
+    rewrite_manifests: bool,
 ) -> SessionResult<SnapshotId> {
-    if flush_data.change_set.is_empty() {
+    if !rewrite_manifests && flush_data.change_set.is_empty() {
         return Err(SessionErrorKind::NoChangesToCommit.into());
     }
 
@@ -1893,9 +1928,9 @@ async fn flush(
             continue;
         }
 
-        if
+        if rewrite_manifests
         // metadata change might have shrunk the array
-        flush_data.change_set.is_updated_array(node_id)
+        || flush_data.change_set.is_updated_array(node_id)
             || flush_data.change_set.has_chunk_changes(node_id)
         {
             trace!(path=%node.path, "Node has changes, writing a new manifest");
@@ -1914,6 +1949,7 @@ async fn flush(
                         &node,
                         manifests,
                         old_snapshot.as_ref(),
+                        rewrite_manifests,
                     )
                     .await?;
             }
@@ -2055,12 +2091,13 @@ async fn do_commit(
     message: &str,
     properties: Option<SnapshotProperties>,
     splits: &HashMap<NodeId, ManifestSplits>,
+    rewrite_manifests: bool,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
     let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id, splits);
-    let new_snapshot = flush(flush_data, message, properties).await?;
+    let new_snapshot = flush(flush_data, message, properties, rewrite_manifests).await?;
 
     debug!(branch_name, new_snapshot_id=%new_snapshot, "Updating branch");
     let id = match update_branch(
