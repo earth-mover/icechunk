@@ -10,7 +10,7 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
 
 !!! note
 
-    [Currently only `s3` compatible storage and `local` storage are supported for virtual references](#virtual-reference-storage-support). Support for other storage types like [`gcs`](https://github.com/earth-mover/icechunk/issues/524), [`azure`](https://github.com/earth-mover/icechunk/issues/602), and [`https`](https://github.com/earth-mover/icechunk/issues/526) are on the roadmap.
+    Currently, Icechunk support virtual references to data stored in `s3` compatible,`gcs`, `http/https`, and  `local` storage backends. Support for [`azure`](https://github.com/earth-mover/icechunk/issues/602) is on the roadmap.
 
 ## Creating a virtual dataset with VirtualiZarr
 
