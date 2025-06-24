@@ -131,10 +131,12 @@ plugins:
       module_name: macros
   - git-revision-date-localized:
   - mkdocstrings:
+      enable_inventory: true
       default_handler: python
       handlers:
         python:
           options:
+            line_length: 80
             docstring_style: numpy
             docstring_section_style: "table"
             filters: "public"
