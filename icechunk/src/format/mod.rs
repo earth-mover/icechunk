@@ -98,7 +98,7 @@ impl<const SIZE: usize, T: FileTypeTag> ObjectId<SIZE, T> {
         Self(buf, PhantomData)
     }
 
-    pub fn new(buf: [u8; SIZE]) -> Self {
+    pub const fn new(buf: [u8; SIZE]) -> Self {
         Self(buf, PhantomData)
     }
 

@@ -3576,6 +3576,7 @@ mod tests {
         assert_eq!(parents[0].message, "second commit");
         assert_eq!(parents[1].message, "first commit");
         assert_eq!(parents[2].message, Snapshot::INITIAL_COMMIT_MESSAGE);
+        assert_eq!(parents[2].id, Snapshot::INITIAL_SNAPSHOT_ID);
         itertools::assert_equal(
             parents.iter().sorted_by_key(|m| m.flushed_at).rev(),
             parents.iter(),
@@ -3645,6 +3646,7 @@ mod tests {
         assert!(msg == "from 1" || msg == "from 2");
 
         assert_eq!(parents[1].message.as_str(), Snapshot::INITIAL_COMMIT_MESSAGE);
+        assert_eq!(parents[1].id, Snapshot::INITIAL_SNAPSHOT_ID);
         Ok(())
     }
 
