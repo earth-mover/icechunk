@@ -120,7 +120,7 @@ Now we can read the dataset from the store using xarray to confirm everything we
 
 ```python
 ds = xr.open_zarr(
-    store,
+    session.store,
     zarr_version=3,
     consolidated=False,
     chunks={},
