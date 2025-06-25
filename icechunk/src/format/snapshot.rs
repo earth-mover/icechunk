@@ -340,7 +340,9 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 
 impl Snapshot {
     pub const INITIAL_COMMIT_MESSAGE: &'static str = "Repository initialized";
-    pub const INITIAL_SNAPSHOT_ID: SnapshotId = SnapshotId::new([0; 12]);
+    pub const INITIAL_SNAPSHOT_ID: SnapshotId = SnapshotId::new([
+        0x69, 0x63, 0x65, 0x63, 0x68, 0x75, 0x6E, 0x6B, 0x72, 0x65, 0x70, 0x6F, // "icechunkrepo"
+    ]);
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<Snapshot> {
         let _ = flatbuffers::root_with_opts::<generated::Snapshot>(
