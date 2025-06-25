@@ -340,6 +340,7 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 
 impl Snapshot {
     pub const INITIAL_COMMIT_MESSAGE: &'static str = "Repository initialized";
+    pub const INITIAL_SNAPSHOT_ID: SnapshotId = SnapshotId::new([0; 12]);
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<Snapshot> {
         let _ = flatbuffers::root_with_opts::<generated::Snapshot>(
@@ -429,7 +430,7 @@ impl Snapshot {
         let properties = [("__root".to_string(), serde_json::Value::from(true))].into();
         let nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::new();
         Self::from_iter(
-            None,
+            Some(Self::INITIAL_SNAPSHOT_ID),
             None,
             Self::INITIAL_COMMIT_MESSAGE.to_string(),
             Some(properties),
