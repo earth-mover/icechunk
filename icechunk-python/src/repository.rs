@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    ops::Deref,
     sync::Arc,
 };
 
@@ -941,7 +940,7 @@ impl PyRepository {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let lock = self.0.read().await;
-                    rewrite_manifests(lock.deref(), branch, message, metadata)
+                    rewrite_manifests(&lock, branch, message, metadata)
                         .await
                         .map_err(PyIcechunkStoreError::ManifestOpsError)
                 })?;

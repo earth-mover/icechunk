@@ -638,7 +638,14 @@ class Repository:
         self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
     ) -> str:
         """
-        Rewrite manifests for all arrays and commit to the specified branch.
+        Rewrite manifests for all arrays.
+
+        This method will start a new writable session on the specified branch,
+        rewrite manifests for all arrays, and then commits with the specifeid ``message``
+        and ``metadata``.
+
+        A JSON representation of the currently active splitting configuration will be
+        stored in the commit's metadata under the key `"splitting_config"`.
 
         Parameters
         ----------

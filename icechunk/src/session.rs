@@ -1,13 +1,3 @@
-use std::{
-    cmp::min,
-    collections::{HashMap, HashSet},
-    convert::Infallible,
-    future::{Future, ready},
-    ops::Range,
-    pin::Pin,
-    sync::Arc,
-};
-
 use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -16,6 +6,16 @@ use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::{
+    cmp::min,
+    collections::{BTreeMap, HashMap, HashSet},
+    convert::Infallible,
+    future::{Future, ready},
+    ops::Range,
+    pin::Pin,
+    sync::Arc,
+};
 use thiserror::Error;
 use tokio::task::JoinError;
 use tracing::{Instrument, debug, info, instrument, trace, warn};
@@ -95,6 +95,8 @@ pub enum SessionErrorKind {
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
     #[error("cannot rebase snapshot {snapshot} on top of the branch")]
     RebaseFailed { snapshot: SnapshotId, conflicts: Vec<Conflict> },
+    #[error("error in serializing config to JSON")]
+    JsonSerializationError(#[from] serde_json::Error),
     #[error("error in session serialization")]
     SerializationError(#[from] rmp_serde::encode::Error),
     #[error("error in session deserialization")]
@@ -954,6 +956,8 @@ impl Session {
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
         let nodes = self.list_nodes().await?.collect::<Vec<_>>();
+        // We need to populate the `splits` before calling `commit`.
+        // In the normal chunk setting workflow, that would've been done by `set_chunk_ref`
         for node in nodes.into_iter().flatten() {
             if let NodeSnapshot {
                 id,
@@ -965,7 +969,13 @@ impl Session {
                 self.get_splits(&id, &path, &shape, &dimension_names);
             }
         }
-        self._commit(message, properties, true).await
+
+        let splitting_config_serialized =
+            serde_json::to_value(self.config.manifest().splitting())?;
+        let mut properties =
+            properties.unwrap_or_else(|| BTreeMap::<String, Value>::new());
+        properties.insert("splitting_config".to_string(), splitting_config_serialized);
+        self._commit(message, Some(properties), true).await
     }
 
     #[instrument(skip(self, properties))]

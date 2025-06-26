@@ -16,9 +16,9 @@ Coming Soon.
 ## Splitting manifests
 
 Icechunk stores chunk references in a chunk manifest file stored in `manifests/`.
-For very large arrays (millions of chunks), these files can get quite large.
 By default, Icechunk stores all chunk references in a single manifest file per array.
-Requesting even a single chunk requires downloading the entire manifest.
+For very large arrays (millions of chunks), these files can get quite large.
+Requesting even a single chunk will require downloading the entire manifest.
 In some cases, this can result in a slow time-to-first-byte or large memory usage.
 Similarly, appending a small amount of data to a large array requires
 downloading and rewriting the entire manifest.
@@ -47,7 +47,7 @@ repo_config = ic.RepositoryConfig(
 )
 ```
 
-Then pass the config to `Repository.open` or `Repository.create`
+Then pass the `config` to `Repository.open` or `Repository.create`
 ```python
 repo = ic.Repository.open(..., config=repo_config)
 ```
@@ -206,7 +206,13 @@ This ends up rewriting all refs to two new manifests.
 
 ### Rewriting manifests
 
-To force Icechunk to rewrite all chunk refs to the current splitting configuration use [`rewrite_manifests`](./reference.md#icechunk.Repository.rewrite_manifests) --- for the current example this will consolidate to two manifests.
+Remember, by default Icechunk only writes one manifest per array regardless of size.
+For large enough arrays, you might see a relative performance hit while committing a new update (e.g. an append),
+or when reading from a Repository object that was just created.
+At that point, you will want to experiment with different manifest split configurations.
+
+To force Icechunk to rewrite all chunk refs to the current splitting configuration use [`rewrite_manifests`](./reference.md#icechunk.Repository.rewrite_manifests)
+--- for the current example this will consolidate to two manifests.
 
 To illustrate, we will use a split size of 3.
 ```python exec="on" session="perf" source="material-block"
@@ -219,7 +225,7 @@ repo_config = ic.RepositoryConfig(
 new_repo = ic.Repository.open(storage, config=repo_config)
 
 snap4 = new_repo.rewrite_manifests(
-    f"rewrite_manifests with new config {str(split_config.to_dict())!r}", branch="main"
+    f"rewrite_manifests with new config", branch="main"
 )
 ```
 
@@ -228,6 +234,57 @@ snap4 = new_repo.rewrite_manifests(
 print(repo.lookup_snapshot(snap4).manifests)
 ```
 
+The splitting configuration is saved in the snapshot metadata.
+```python exec="on" session="perf" source="material-block"
+print(repo.lookup_snapshot(snap4).metadata)
+```
+
 !!! important
 
     Once you find a splitting configuration you like, remember to persist it on-disk using `repo.save_config`.
+
+
+### Example workflow
+
+Here is an example workflow for experimenting with splitting
+
+```python exec="on" session="perf" source="material-block"
+# first define a new config
+split_config = ManifestSplittingConfig.from_dict(
+    {ManifestSplitCondition.AnyArray(): {ManifestSplitDimCondition.Any(): 5}}
+)
+repo_config = ic.RepositoryConfig(
+    manifest=ic.ManifestConfig(splitting=split_config),
+)
+# open the repo with the new config.
+repo = ic.Repository.open(storage, config=repo_config)
+```
+
+We will rewrite the manifests on a different branch
+```python exec="on" session="perf" source="material-block"
+repo.create_branch("split-experiment-1")
+snap = repo.rewrite_manifests(
+    f"rewrite_manifests with new config", branch="split-experiment-1"
+)
+```
+Now benchmark reads on `main` vs `split-experiment-1`
+```python exec="on" session="perf" source="material-block"
+store = repo.readonly_session("main").store
+store_split = repo.readonly_session("split-experiment-1").store
+# ...
+```
+Assume we decided the configuration on `split-experiment-1` was good.
+First we persist that configuration to disk
+```python exec="on" session="perf" source="material-block"
+repo.save_config()
+```
+
+Now point main to the commit with rewritten manifests
+```python exec="on" session="perf" source="material-block"
+repo.reset_branch("main", repo.lookup_branch("split-experiment-1"))
+```
+
+Notice that the persisted config is restored when opening a Repository
+```python exec="on" session="perf" source="material-block"
+print(ic.Repository.open(storage).config.manifest)
+```
