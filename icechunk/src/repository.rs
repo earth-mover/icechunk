@@ -954,6 +954,7 @@ mod tests {
             snapshot::{ArrayShape, DimensionName},
         },
         new_local_filesystem_storage,
+        ops::manifests::rewrite_manifests,
         session::{SessionError, get_chunk},
         storage::new_in_memory_storage,
     };
@@ -1414,6 +1415,133 @@ mod tests {
                 .await?
         }
         verify_data(&session, 10).await;
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn tests_manifest_rewriting_simple() -> Result<(), Box<dyn Error>> {
+        let split_size = 3u32;
+        let dim_size = 10u32;
+
+        let shape = ArrayShape::new(vec![(dim_size as u64, 1)]).unwrap();
+        let dimension_names = Some(vec!["t".into()]);
+        let temp_path: Path = "/temperature".try_into().unwrap();
+        let split_config = ManifestSplittingConfig::with_size(split_size);
+
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repository = create_repo_with_split_manifest_config(
+            &temp_path,
+            &shape,
+            &dimension_names,
+            &split_config,
+            Some(Arc::clone(&storage)),
+        )
+        .await?;
+
+        let mut total_manifests = 0;
+        assert_manifest_count(&storage, total_manifests).await;
+
+        let mut session = repository.writable_session("main").await?;
+        for i in 0..dim_size {
+            session
+                .set_chunk_ref(
+                    temp_path.clone(),
+                    ChunkIndices(vec![i]),
+                    Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                )
+                .await?
+        }
+        session.commit("first split", None).await?;
+        total_manifests += 4;
+        assert_manifest_count(&storage, total_manifests).await;
+
+        // make sure data is correct
+        let validate_data = async || {
+            let new_repo = reopen_repo_with_new_splitting_config(&repository, None);
+            let session = new_repo
+                .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+                .await
+                .unwrap();
+            for i in 0..dim_size {
+                let val = get_chunk(
+                    session
+                        .get_chunk_reader(
+                            &temp_path,
+                            &ChunkIndices(vec![i]),
+                            &ByteRange::ALL,
+                        )
+                        .await
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
+            }
+        };
+
+        validate_data().await;
+
+        // consolidate manifests together
+        let split_sizes = vec![(
+            ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+            vec![ManifestSplitDim {
+                condition: ManifestSplitDimCondition::Any,
+                num_chunks: 12,
+            }],
+        )];
+
+        let new_repo =
+            reopen_repo_with_new_splitting_config(&repository, Some(split_sizes));
+
+        let snap = rewrite_manifests(
+            &new_repo,
+            "main",
+            "rewrite_manifests with split-size=12",
+            None,
+        )
+        .await?;
+        total_manifests += 1;
+        assert_manifest_count(&storage, total_manifests).await;
+        validate_data().await;
+        assert!(
+            repository
+                .lookup_snapshot(&snap)
+                .await?
+                .metadata
+                .contains_key("splitting_config")
+        );
+
+        // split manifests to smaller sizes
+        let split_sizes = vec![(
+            ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+            vec![ManifestSplitDim {
+                condition: ManifestSplitDimCondition::Any,
+                num_chunks: 4,
+            }],
+        )];
+
+        let new_repo =
+            reopen_repo_with_new_splitting_config(&repository, Some(split_sizes));
+
+        let snap = rewrite_manifests(
+            &new_repo,
+            "main",
+            "rewrite_manifests with split-size=4",
+            None,
+        )
+        .await?;
+        total_manifests += 3;
+        assert_manifest_count(&storage, total_manifests).await;
+        validate_data().await;
+        assert!(
+            repository
+                .lookup_snapshot(&snap)
+                .await?
+                .metadata
+                .contains_key("splitting_config")
+        );
 
         Ok(())
     }

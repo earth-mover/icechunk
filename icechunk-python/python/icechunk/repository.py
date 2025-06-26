@@ -634,6 +634,38 @@ class Repository:
 
         return self._repository.garbage_collect(delete_object_older_than)
 
+    def rewrite_manifests(
+        self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
+    ) -> str:
+        """
+        Rewrite manifests for all arrays.
+
+        This method will start a new writable session on the specified branch,
+        rewrite manifests for all arrays, and then commits with the specifeid ``message``
+        and ``metadata``.
+
+        A JSON representation of the currently active splitting configuration will be
+        stored in the commit's metadata under the key `"splitting_config"`.
+
+        Parameters
+        ----------
+        message : str
+            The message to write with the commit.
+        branch: str
+            The branch to commit to.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+
+        Returns
+        -------
+        str
+            The snapshot ID of the new commit.
+
+        """
+        return self._repository.rewrite_manifests(
+            message, branch=branch, metadata=metadata
+        )
+
     def total_chunks_storage(self) -> int:
         """Calculate the total storage used for chunks, in bytes .
 

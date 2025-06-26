@@ -11,8 +11,8 @@ use crate::{
     repository::{RepositoryError, RepositoryResult},
     storage,
 };
-
 pub mod gc;
+pub mod manifests;
 pub mod stats;
 
 pub async fn all_roots<'a>(

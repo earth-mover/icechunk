@@ -18,6 +18,7 @@ use icechunk::{
     },
     ops::{
         gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
+        manifests::rewrite_manifests,
         stats::repo_chunks_storage,
     },
     repository::{RepositoryErrorKind, VersionInfo},
@@ -922,6 +923,28 @@ impl PyRepository {
                 })?;
 
             Ok(PySession(Arc::new(RwLock::new(session))))
+        })
+    }
+
+    #[pyo3(signature = (message, branch, metadata=None))]
+    pub fn rewrite_manifests(
+        &self,
+        py: Python<'_>,
+        message: &str,
+        branch: &str,
+        metadata: Option<PySnapshotProperties>,
+    ) -> PyResult<String> {
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            let metadata = metadata.map(|m| m.into());
+            let result =
+                pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                    let lock = self.0.read().await;
+                    rewrite_manifests(&lock, branch, message, metadata)
+                        .await
+                        .map_err(PyIcechunkStoreError::ManifestOpsError)
+                })?;
+            Ok(result.to_string())
         })
     }
 
