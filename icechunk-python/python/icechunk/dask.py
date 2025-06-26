@@ -10,8 +10,8 @@ import dask.array
 import dask.array as da
 import zarr
 from dask.array.core import Array
-from icechunk import Session
 from icechunk.distributed import extract_session, merge_sessions
+from icechunk.session import ForkSession, Session
 
 SimpleGraph: TypeAlias = Mapping[tuple[str, int], tuple[Any, ...]]
 
@@ -40,6 +40,10 @@ def computing_meta(func: Callable[P, R]) -> Callable[P, Any]:
     return wrapper
 
 
+def merge_sessions_fork(*sessions, axis: Any = None, keepdims: Any = None) -> ForkSession:
+    return merge_sessions(*sessions).fork()
+
+
 def _assert_correct_dask_version() -> None:
     if Version(dask.__version__) < Version("2024.11.0"):
         raise ValueError(
@@ -48,14 +52,13 @@ def _assert_correct_dask_version() -> None:
 
 
 def store_dask(
-    session: Session,
     *,
     sources: list[Array],
     targets: list[zarr.Array],
     regions: list[tuple[slice, ...]] | None = None,
     split_every: int | None = None,
     **store_kwargs: Any,
-) -> None:
+) -> Session:
     """
     A version of ``dask.array.store`` for Icechunk stores.
 
@@ -94,9 +97,7 @@ def store_dask(
         lock=False,
         **store_kwargs,
     )
-    session.merge(
-        session_merge_reduction(stored_arrays, split_every=split_every, **store_kwargs)
-    )
+    return session_merge_reduction(stored_arrays, split_every=split_every, **store_kwargs)
 
 
 def session_merge_reduction(
@@ -112,7 +113,7 @@ def session_merge_reduction(
             arr,
             name="ice-changeset",
             chunk=computing_meta(extract_session),
-            aggregate=computing_meta(merge_sessions),
+            aggregate=computing_meta(merge_sessions_fork),
             split_every=split_every,
             concatenate=False,
             keepdims=False,

@@ -3,7 +3,8 @@ from collections.abc import Generator, Iterable
 from typing import Any, cast
 
 import zarr
-from icechunk import IcechunkStore, Session
+from icechunk import IcechunkStore
+from icechunk.session import ForkSession, Session
 
 __all__ = [
     "extract_session",
@@ -31,11 +32,11 @@ def extract_session(
 
 
 def merge_sessions(
-    *sessions: Session | list[Session] | list[list[Session]],
-    axis: Any = None,
-    keepdims: Any = None,
+    *sessions: ForkSession | list[ForkSession] | list[list[ForkSession]],
 ) -> Session:
     session, *rest = list(_flatten(sessions))
+    for s in (session, *rest):
+        assert isinstance(s, ForkSession), type(s)
     for other in rest:
         session.merge(other)
-    return cast(Session, session)
+    return cast(Session, session.to_session())

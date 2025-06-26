@@ -1,5 +1,4 @@
-import contextlib
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator
 from typing import Any, Self
 
 from icechunk import (
@@ -14,11 +13,9 @@ class Session:
     """A session object that allows for reading and writing data from an Icechunk repository."""
 
     _session: PySession
-    _allow_pickling: bool
 
-    def __init__(self, session: PySession, _allow_pickling: bool = False):
+    def __init__(self, session: PySession):
         self._session = session
-        self._allow_pickling = _allow_pickling
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Session):
@@ -26,17 +23,16 @@ class Session:
         return self._session == value._session
 
     def __getstate__(self) -> object:
-        if not self._allow_pickling and not self.read_only:
+        if not self.read_only:
             raise ValueError(
                 "You must opt-in to pickle writable sessions in a distributed context "
-                "using the `Session.allow_pickling` context manager. "
+                "using Session.fork() "
                 # link to docs
                 "If you are using xarray's `Dataset.to_zarr` method with dask arrays, "
                 "please consider `icechunk.xarray.to_icechunk` instead."
             )
         state = {
             "_session": self._session.as_bytes(),
-            "_allow_pickling": self._allow_pickling,
         }
         return state
 
@@ -44,21 +40,6 @@ class Session:
         if not isinstance(state, dict):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
-        self._allow_pickling = state["_allow_pickling"]
-
-    @contextlib.contextmanager
-    def allow_pickling(self) -> Generator[None, None, None]:
-        """
-        Context manager to allow unpickling this store if writable.
-        """
-        # While this property can only be changed by this context manager,
-        # it can be nested (sometimes unintentionally since `to_icechunk` does it)
-        current = self._allow_pickling
-        try:
-            self._allow_pickling = True
-            yield
-        finally:
-            self._allow_pickling = current
 
     @property
     def read_only(self) -> bool:
@@ -135,7 +116,7 @@ class Session:
         IcechunkStore
             A zarr Store object for reading and writing data from the repository.
         """
-        return IcechunkStore(self._session.store, self._allow_pickling)
+        return IcechunkStore(self._session.store, for_fork=False)
 
     def all_virtual_chunk_locations(self) -> list[str]:
         """
@@ -173,7 +154,7 @@ class Session:
         other : Self
             The other session to merge changes from.
         """
-        self._session.merge(other._session)
+        raise NotImplementedError
 
     def commit(
         self,
@@ -233,3 +214,42 @@ class Session:
             When a conflict is detected and the solver fails to resolve it.
         """
         self._session.rebase(solver)
+
+    def fork(self):
+        return ForkSession(self._session)
+
+
+class ForkSession(Session):
+    def __getstate__(self) -> object:
+        state = {"_session": self._session.as_bytes()}
+        return state
+
+    def __setstate__(self, state: object) -> None:
+        if not isinstance(state, dict):
+            raise ValueError("Invalid state")
+        self._session = PySession.from_bytes(state["_session"])
+
+    def to_session(self) -> Session:
+        return Session(self._session)
+
+    def merge(self, other: Self) -> Session:
+        assert isinstance(other, ForkSession)
+        self._session.merge(other._session)
+        return self.to_session()
+
+    def commit(self, *args, **kwargs):
+        raise TypeError(
+            "Cannot commit a fork of a Session. Call `to_session` to commit first."
+        )
+
+    @property
+    def store(self) -> IcechunkStore:
+        """
+        Get a zarr Store object for reading and writing data from the repository using zarr python.
+
+        Returns
+        -------
+        IcechunkStore
+            A zarr Store object for reading and writing data from the repository.
+        """
+        return IcechunkStore(self._session.store, for_fork=True)

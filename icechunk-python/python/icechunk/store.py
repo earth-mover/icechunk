@@ -36,13 +36,13 @@ def _byte_request_to_tuple(
 
 class IcechunkStore(Store, SyncMixin):
     _store: PyStore
-    _allow_pickling: bool
+    _for_fork: bool
 
     def __init__(
         self,
         store: PyStore,
-        allow_pickling: bool,
         read_only: bool | None = None,
+        for_fork: bool,
         *args: Any,
         **kwargs: Any,
     ):
@@ -58,7 +58,7 @@ class IcechunkStore(Store, SyncMixin):
             )
         self._store = store
         self._is_open = True
-        self._allow_pickling = allow_pickling
+        self._for_fork = for_fork
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, IcechunkStore):
@@ -67,19 +67,19 @@ class IcechunkStore(Store, SyncMixin):
 
     def __getstate__(self) -> object:
         # we serialize the Rust store as bytes
-        if not self._allow_pickling and not self._store.read_only:
-            raise ValueError(
-                "You must opt in to pickling this *writable* store by using `Session.allow_pickling` context manager"
-            )
         d = self.__dict__.copy()
         d["_store"] = self._store.as_bytes()
+        d["_for_fork"] = self._for_fork
         return d
 
     def __setstate__(self, state: Any) -> None:
         # we have to deserialize the bytes of the Rust store
         store_repr = state["_store"]
         state["_store"] = PyStore.from_bytes(store_repr)
-        state["_read_only"] = state["_store"].read_only
+        if not state["_for_fork"]:
+            state["_read_only"] = False
+        else:
+            state["_read_only"] = state["_store"].read_only
         self.__dict__ = state
 
     def with_read_only(self, read_only: bool = False) -> Store:
@@ -91,9 +91,12 @@ class IcechunkStore(Store, SyncMixin):
 
     @property
     def session(self) -> "Session":
-        from icechunk import Session
+        from icechunk.session import ForkSession, Session
 
-        return Session(self._store.session, self._allow_pickling)
+        if self._for_fork:
+            return ForkSession(self._store.session)
+        else:
+            return Session(self._store.session)
 
     async def clear(self) -> None:
         """Clear the store.

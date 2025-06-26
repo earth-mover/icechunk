@@ -50,17 +50,13 @@ def create_test_data(
 
 
 @contextlib.contextmanager
-def roundtrip(
-    data: xr.Dataset, allow_pickling: bool = False
-) -> Generator[xr.Dataset, None, None]:
+def roundtrip(data: xr.Dataset) -> Generator[xr.Dataset, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Repository.create(local_filesystem_storage(tmpdir))
         session = repo.writable_session("main")
-
         to_icechunk(data, session=session, mode="w")
-        with session.allow_pickling():
-            with xr.open_zarr(session.store, consolidated=False) as ds:
-                yield ds
+        with xr.open_zarr(session.store, consolidated=False) as ds:
+            yield ds
 
 
 def test_xarray_to_icechunk() -> None:

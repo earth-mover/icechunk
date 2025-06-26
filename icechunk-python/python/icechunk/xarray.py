@@ -279,18 +279,20 @@ def to_icechunk(
     """
 
     as_dataset = _make_dataset(obj)
-    with session.allow_pickling():
-        store = session.store
-        writer = _XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
 
-        writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
+    fork = session.fork()
 
-        # write metadata
-        writer.write_metadata(encoding)
-        # write in-memory arrays
-        writer.write_eager()
-        # eagerly write dask arrays
-        writer.write_lazy(chunkmanager_store_kwargs=chunkmanager_store_kwargs)
+    store = fork.store
+    writer = _XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
+
+    writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
+
+    # write metadata
+    writer.write_metadata(encoding)
+    # write in-memory arrays
+    writer.write_eager()
+    # eagerly write dask arrays
+    writer.write_lazy(chunkmanager_store_kwargs=chunkmanager_store_kwargs)
 
 
 @overload
