@@ -999,6 +999,7 @@ impl PyRepository {
                             Arc::clone(lock.asset_manager()),
                         )
                     };
+
                     let result = garbage_collect(
                         storage.as_ref(),
                         &storage_settings,

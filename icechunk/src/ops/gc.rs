@@ -14,7 +14,7 @@ use crate::{
     },
     ops::pointed_snapshots,
     refs::{Ref, RefError, delete_branch, delete_tag, list_refs},
-    repository::RepositoryError,
+    repository::{RepositoryError, RepositoryErrorKind},
     storage::{self, DeleteObjectsResult, ListInfo},
 };
 
@@ -160,6 +160,13 @@ pub async fn garbage_collect(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
 ) -> GCResult<GCSummary> {
+    if !storage.can_write() {
+        return Err(GCError::Repository(
+            RepositoryErrorKind::ReadonlyStorage("Cannot garbage collect".to_string())
+                .into(),
+        ));
+    }
+
     // TODO: this function could have much more parallelism
     if !config.action_needed() {
         tracing::info!("No action requested");
@@ -543,6 +550,13 @@ pub async fn expire(
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
 ) -> GCResult<ExpireResult> {
+    if !storage.can_write() {
+        return Err(GCError::Repository(
+            RepositoryErrorKind::ReadonlyStorage("Cannot expire snapshots".to_string())
+                .into(),
+        ));
+    }
+
     let all_refs = stream::iter(list_refs(storage, storage_settings).await?);
     let asset_manager = Arc::clone(&asset_manager.clone());
 
