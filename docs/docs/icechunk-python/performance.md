@@ -242,9 +242,8 @@ or when reading from a Repository object that was just created.
 At that point, you will want to experiment with different manifest split configurations.
 
 To force Icechunk to rewrite all chunk refs to the current splitting configuration use [`rewrite_manifests`](./reference.md#icechunk.Repository.rewrite_manifests)
---- for the current example this will consolidate to two manifests.
 
-To illustrate, we will use a split size of 3.
+To illustrate, we will use a split size of 3 --- for the current example this will consolidate to two manifests.
 ```python exec="on" session="perf" source="material-block"
 split_config = ManifestSplittingConfig.from_dict(
     {ManifestSplitCondition.AnyArray(): {ManifestSplitDimCondition.Any(): 3}}
@@ -310,7 +309,7 @@ First we persist that configuration to disk
 repo.save_config()
 ```
 
-Now point main to the commit with rewritten manifests
+Now point the `main` branch to the commit with rewritten manifests
 ```python exec="on" session="perf" source="material-block"
 repo.reset_branch("main", repo.lookup_branch("split-experiment-1"))
 ```
