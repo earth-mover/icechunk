@@ -262,10 +262,11 @@ repo = ic.Repository.open(storage, config=repo_config)
 
 We will rewrite the manifests on a different branch
 ```python exec="on" session="perf" source="material-block"
-repo.create_branch("split-experiment-1")
+repo.create_branch("split-experiment-1", repo.lookup_branch("main"))
 snap = repo.rewrite_manifests(
     f"rewrite_manifests with new config", branch="split-experiment-1"
 )
+print(repo.lookup_snapshot(snap).manifests)
 ```
 Now benchmark reads on `main` vs `split-experiment-1`
 ```python exec="on" session="perf" source="material-block"

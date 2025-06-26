@@ -1442,7 +1442,6 @@ mod tests {
         let mut total_manifests = 0;
         assert_manifest_count(&storage, total_manifests).await;
 
-        // only add refs that will be packed in the first split.
         let mut session = repository.writable_session("main").await?;
         for i in 0..dim_size {
             session
@@ -1457,6 +1456,34 @@ mod tests {
         total_manifests += 4;
         assert_manifest_count(&storage, total_manifests).await;
 
+        // make sure data is correct
+        let validate_data = async || {
+            let new_repo = reopen_repo_with_new_splitting_config(&repository, None);
+            let session = new_repo
+                .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+                .await
+                .unwrap();
+            for i in 0..dim_size {
+                let val = get_chunk(
+                    session
+                        .get_chunk_reader(
+                            &temp_path,
+                            &ChunkIndices(vec![i]),
+                            &ByteRange::ALL,
+                        )
+                        .await
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
+            }
+        };
+
+        validate_data().await;
+
+        // consolidate manifests together
         let split_sizes = vec![(
             ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
             vec![ManifestSplitDim {
@@ -1477,24 +1504,25 @@ mod tests {
         .await?;
         total_manifests += 1;
         assert_manifest_count(&storage, total_manifests).await;
+        validate_data().await;
 
-        // make sure data is correct
-        let new_repo = reopen_repo_with_new_splitting_config(&repository, None);
-        let session = new_repo
-            .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+        // split manifests to smaller sizes
+        let split_sizes = vec![(
+            ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+            vec![ManifestSplitDim {
+                condition: ManifestSplitDimCondition::Any,
+                num_chunks: 4,
+            }],
+        )];
+
+        let new_repo =
+            reopen_repo_with_new_splitting_config(&repository, Some(split_sizes));
+
+        rewrite_manifests(&new_repo, "main", "rewrite_manifests with split-size=4", None)
             .await?;
-        for i in 0..dim_size {
-            let val = get_chunk(
-                session
-                    .get_chunk_reader(&temp_path, &ChunkIndices(vec![i]), &ByteRange::ALL)
-                    .await
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-            .unwrap();
-            assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
-        }
+        total_manifests += 3;
+        assert_manifest_count(&storage, total_manifests).await;
+        validate_data().await;
 
         Ok(())
     }
