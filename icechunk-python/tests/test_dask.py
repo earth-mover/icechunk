@@ -35,13 +35,11 @@ def test_xarray_to_icechunk_nested_pickling() -> None:
             repo = Repository.create(local_filesystem_storage(tmpdir))
             session = repo.writable_session("main")
 
-            with session.allow_pickling():
-                to_icechunk(ds, session=session, mode="w")
-                with xr.open_zarr(session.store, consolidated=False) as actual:
-                    assert_identical(actual, ds)
+            to_icechunk(ds, session=session, mode="w")
+            with xr.open_zarr(session.store, consolidated=False) as actual:
+                assert_identical(actual, ds)
 
         newds = ds + 1
         to_icechunk(newds, session=session, mode="w")
-        with session.allow_pickling():
-            with xr.open_zarr(session.store, consolidated=False) as actual:
-                assert_identical(actual, newds)
+        with xr.open_zarr(session.store, consolidated=False) as actual:
+            assert_identical(actual, newds)

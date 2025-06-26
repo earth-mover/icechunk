@@ -29,16 +29,16 @@ if __name__ == "__main__":
     session.commit("initialize store")
 
     session = repo.writable_session("main")
+    fork = session.fork()
     with ProcessPoolExecutor() as executor:
         # opt-in to successful pickling of a writable session
-        with session.allow_pickling():
-            # submit the writes
-            futures = [
-                executor.submit(write_timestamp, itime=i, session=session)
-                for i in range(ds.sizes["time"])
-            ]
-            # grab the Session objects from each individual write task
-            sessions = [f.result() for f in futures]
+        # submit the writes
+        futures = [
+            executor.submit(write_timestamp, itime=i, session=fork)
+            for i in range(ds.sizes["time"])
+        ]
+        # grab the Session objects from each individual write task
+        sessions = [f.result() for f in futures]
 
     # manually merge the remote sessions in to the local session
     session = merge_sessions(session, *sessions)
