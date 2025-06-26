@@ -6,10 +6,9 @@ use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::{
     cmp::min,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     convert::Infallible,
     future::{Future, ready},
     ops::Range,
@@ -972,7 +971,7 @@ impl Session {
 
         let splitting_config_serialized =
             serde_json::to_value(self.config.manifest().splitting())?;
-        let mut properties = properties.unwrap_or_else(BTreeMap::<String, Value>::new);
+        let mut properties = properties.unwrap_or_default();
         properties.insert("splitting_config".to_string(), splitting_config_serialized);
         self._commit(message, Some(properties), true).await
     }
