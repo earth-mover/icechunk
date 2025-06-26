@@ -972,8 +972,7 @@ impl Session {
 
         let splitting_config_serialized =
             serde_json::to_value(self.config.manifest().splitting())?;
-        let mut properties =
-            properties.unwrap_or_else(|| BTreeMap::<String, Value>::new());
+        let mut properties = properties.unwrap_or_else(BTreeMap::<String, Value>::new);
         properties.insert("splitting_config".to_string(), splitting_config_serialized);
         self._commit(message, Some(properties), true).await
     }

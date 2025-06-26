@@ -1495,7 +1495,7 @@ mod tests {
         let new_repo =
             reopen_repo_with_new_splitting_config(&repository, Some(split_sizes));
 
-        rewrite_manifests(
+        let snap = rewrite_manifests(
             &new_repo,
             "main",
             "rewrite_manifests with split-size=12",
@@ -1505,6 +1505,13 @@ mod tests {
         total_manifests += 1;
         assert_manifest_count(&storage, total_manifests).await;
         validate_data().await;
+        assert!(
+            repository
+                .lookup_snapshot(&snap)
+                .await?
+                .metadata
+                .contains_key("splitting_config")
+        );
 
         // split manifests to smaller sizes
         let split_sizes = vec![(
@@ -1518,11 +1525,23 @@ mod tests {
         let new_repo =
             reopen_repo_with_new_splitting_config(&repository, Some(split_sizes));
 
-        rewrite_manifests(&new_repo, "main", "rewrite_manifests with split-size=4", None)
-            .await?;
+        let snap = rewrite_manifests(
+            &new_repo,
+            "main",
+            "rewrite_manifests with split-size=4",
+            None,
+        )
+        .await?;
         total_manifests += 3;
         assert_manifest_count(&storage, total_manifests).await;
         validate_data().await;
+        assert!(
+            repository
+                .lookup_snapshot(&snap)
+                .await?
+                .metadata
+                .contains_key("splitting_config")
+        );
 
         Ok(())
     }
