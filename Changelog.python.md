@@ -15,7 +15,7 @@ significantly improves performance for very large arrays.
 - Support dynamically changing log levels. See [`set_logs_filter` function](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.set_logs_filter).
 - Support for anonymous access to GCS buckets.
 - The first snapshot has a known id now. This allows to check if a directory is an Icechunk
-  repo by looking for that path in the `snapshots` subdir.
+  repo by looking for the `1CECHNKREP0F1RSTCMT0` path in the `snapshots` subdir.
 
 ### Performance
 
