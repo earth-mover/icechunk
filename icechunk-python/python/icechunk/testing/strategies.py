@@ -41,3 +41,42 @@ def splitting_configs(
                 key: draw(st.integers(min_value=1, max_value=size + 10))
             }
     return ic.ManifestSplittingConfig.from_dict(config_dict)  # type: ignore[attr-defined, no-any-return]
+
+
+@st.composite
+def chunk_coordinates(draw: st.DrawFn, numblocks: tuple[int, ...]) -> tuple[int, ...]:
+    return draw(
+        st.tuples(*tuple(st.integers(min_value=0, max_value=b - 1) for b in numblocks))
+    )
+
+
+@st.composite
+def chunk_slicers(
+    draw: st.DrawFn, numblocks: tuple[int, ...], chunk_shape: tuple[int, ...]
+) -> tuple[slice, ...]:
+    return tuple(
+        (
+            slice(coord * size, coord + 1 * size)
+            for coord, size in zip(
+                draw(chunk_coordinates(numblocks)), chunk_shape, strict=False
+            )
+        )
+    )
+
+
+@st.composite
+def chunk_paths(draw: st.DrawFn, numblocks: tuple[int, ...]) -> str:
+    blockidx = draw(chunk_coordinates(numblocks))
+    return "/".join(map(str, blockidx))
+
+
+@st.composite
+def chunk_directories(draw: st.DrawFn, numblocks: tuple[int, ...]) -> str:
+    ndim = len(numblocks)
+    blockidx = draw(chunk_coordinates(numblocks))
+    subset_slicer = (
+        slice(draw(st.integers(min_value=0, max_value=ndim)))
+        if draw(st.booleans())
+        else slice(None)
+    )
+    return "/".join(map(str, blockidx[subset_slicer]))

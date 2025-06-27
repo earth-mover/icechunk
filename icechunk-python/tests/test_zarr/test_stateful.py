@@ -82,19 +82,6 @@ def with_frequency(frequency):
     return decorator
 
 
-@st.composite
-def chunk_paths(
-    draw: st.DrawFn, ndim: int, numblocks: tuple[int, ...], subset: bool = True
-) -> str:
-    blockidx = draw(
-        st.tuples(*tuple(st.integers(min_value=0, max_value=b - 1) for b in numblocks))
-    )
-    subset_slicer = (
-        slice(draw(st.integers(min_value=0, max_value=ndim))) if subset else slice(None)
-    )
-    return "/".join(map(str, blockidx[subset_slicer]))
-
-
 # TODO: more before/after commit invariants?
 # TODO: add "/" to self.all_groups, deleting "/" seems to be problematic
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
@@ -285,7 +272,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             path = data.draw(
                 st.one_of(
                     st.sampled_from([array_or_group]),
-                    chunk_paths(ndim=arr.ndim, numblocks=arr.cdata_shape).map(
+                    icst.chunk_directories(numblocks=arr.cdata_shape).map(
                         lambda x: f"{array_or_group}/c/"
                     ),
                 )
@@ -299,9 +286,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     def delete_chunk(self, data) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
         arr = zarr.open_array(path=array, store=self.model)
-        chunk_path = data.draw(
-            chunk_paths(ndim=arr.ndim, numblocks=arr.cdata_shape, subset=False)
-        )
+        chunk_path = data.draw(icst.chunk_paths(numblocks=arr.cdata_shape))
         path = f"{array}/c/{chunk_path}"
         note(f"deleting chunk {path=!r}")
         self._sync(self.model.delete(path))
