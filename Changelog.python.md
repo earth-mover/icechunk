@@ -1,5 +1,33 @@
 # Changelog
 
+## Python Icechunk Library 0.2.17
+
+This is a feature packed released, and yet, the most important change is in the
+performance section. We have put a lot of work implementing manifest split, which
+significantly improves performance for very large arrays.
+
+### Features
+
+- Virtual chunks can now be resolved using HTTP(s) protocol. This extends virtual datasets
+  that can now be stored outside of an object store.
+- Users can now configure how they want to retry failed requests to the object store. See
+  [StorageRetriesSettings](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.StorageRetriesSettings).
+- Support dynamically changing log levels. See [`set_logs_filter` function](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.set_logs_filter).
+- Support for anonymous access to GCS buckets.
+- The first snapshot has a known id now. This allows to check if a directory is an Icechunk
+  repo by looking for the `1CECHNKREP0F1RSTCMT0` path in the `snapshots` subdir.
+
+### Performance
+
+- Large arrays can now have multiple manifests, significantly improving memory usage,
+  read, and write time performance. See the relevant section in the
+  [documentation](https://icechunk.io/en/latest/icechunk-python/performance/#splitting-manifests).
+
+### Fixes
+
+- GCS sessions that use bearer token can now be serialized.
+- Log error when deletion fails during garbage collection.
+
 ## Python Icechunk Library 0.2.16
 
 ### Features
