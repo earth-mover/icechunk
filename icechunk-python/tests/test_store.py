@@ -4,7 +4,7 @@ import numpy as np
 
 import zarr
 from tests.conftest import parse_repo
-from zarr.core.buffer import default_buffer_prototype
+from zarr.core.buffer import cpu, default_buffer_prototype
 
 rng = np.random.default_rng(seed=12345)
 
@@ -74,3 +74,24 @@ def test_doesnt_support_consolidated_metadata() -> None:
     session = repo.writable_session("main")
     store = session.store
     assert not store.supports_consolidated_metadata
+
+
+async def test_with_readonly() -> None:
+    repo = parse_repo("memory", "test")
+    session = repo.readonly_session("main")
+    store = session.store
+    assert store.read_only
+
+    session = repo.writable_session("main")
+    store = session.store
+    writer = store.with_read_only(read_only=False)
+    assert not writer._is_open
+    assert not writer.read_only
+
+    root = zarr.group(store=store)
+    root.create_array(name="foo", shape=(1,), chunks=(1,), dtype=np.int64)
+    await writer.set("foo/c/0", cpu.Buffer.from_bytes(b"bar"))
+    await writer.delete("foo/c/0")
+
+    reader = store.with_read_only(read_only=True)
+    assert reader.read_only
