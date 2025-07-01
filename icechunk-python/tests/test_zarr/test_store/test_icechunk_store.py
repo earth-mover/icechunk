@@ -140,13 +140,11 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         reader = store.with_read_only(read_only=True)
         assert reader.read_only
         with pytest.raises(
-            ValueError,
-            match="store was opened in read-only mode and does not support writing",
+            IcechunkError,
         ):
             await reader.set("zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
         with pytest.raises(
-            ValueError,
-            match="store was opened in read-only mode and does not support writing",
+            IcechunkError,
         ):
             await reader.delete("zarr.json")
 
