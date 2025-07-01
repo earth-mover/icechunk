@@ -42,6 +42,7 @@ class IcechunkStore(Store, SyncMixin):
         self,
         store: PyStore,
         allow_pickling: bool,
+        read_only: bool | None = None,
         *args: Any,
         **kwargs: Any,
     ):
@@ -49,7 +50,8 @@ class IcechunkStore(Store, SyncMixin):
 
         This should not be called directly, instead use the `create`, `open_existing` or `open_or_create` class methods.
         """
-        super().__init__(read_only=store.read_only)
+        read_only = read_only if read_only is not None else store.read_only
+        super().__init__(read_only=read_only)
         if store is None:
             raise ValueError(
                 "An IcechunkStore should not be created with the default constructor, instead use either the create or open_existing class methods."
@@ -79,6 +81,13 @@ class IcechunkStore(Store, SyncMixin):
         state["_store"] = PyStore.from_bytes(store_repr)
         state["_read_only"] = state["_store"].read_only
         self.__dict__ = state
+
+    def with_read_only(self, read_only: bool = False) -> Store:
+        new_store = IcechunkStore(
+            store=self._store, allow_pickling=self._allow_pickling, read_only=read_only
+        )
+        new_store._is_open = False
+        return new_store
 
     @property
     def session(self) -> "Session":
