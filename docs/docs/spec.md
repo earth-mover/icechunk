@@ -28,7 +28,7 @@ The goals of the specification are as follows:
 1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a repository. Writes to repositories will be committed atomically and will not be partially visible. Readers will not acquire locks.
 1. **Time travel** - Previous snapshots of a repository remain accessible after new ones have been written.
 1. **Chunk sharding and references** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding). Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
-1. **Schema Evolution** - Arrays and Groups can be added, renamed, and removed from the hierarchy with minimal overhead.
+1. **Schema Evolution** - Arrays and Groups can be added and removed from the hierarchy with minimal overhead.
 
 ### Non Goals
 
@@ -42,14 +42,19 @@ The spec is not designed to enable fine-grained access restrictions (e.g. only r
 Icechunk requires that the storage system support the following operations:
 
 - **In-place write** - Strong read-after-write and list-after-write consistency is expected. Files are not moved or altered once they are written.
-- **Conditional write if-not-exists** - For the commit process to be safe and consistent, the storage system must guard against two files of the same name being created at the same time.
+- **Write-if-not-exists** - For creating new references.
+- **Conditional update** - For the commit process to be safe and consistent, the storage system must be able to atomically update a file only if the current version is known to the writer.
 - **Seekable reads** - Chunk file formats may require seek support (e.g. shards).
 - **Deletes** - Delete files that are no longer used (via a garbage-collection operation).
-- **Sorted List** - The storage system must allow the listing of directories / prefixes in a consistent sorted order.
+- **Sorted List** - The storage system must allow the listing of directories / prefixes in lexicographical order.
 
 These requirements are compatible with object stores, like S3, as well as with filesystems.
 
-The storage system is not required to support random-access writes. Once written, chunk and metadata files are immutable until they are deleted.
+The storage system is not required to support random-access writes. Once written, most files are immutable until they are deleted. The exceptions to this rule are:
+
+- the repository configuration file doesn't track history, updates are done atomically but in place,
+- branch reference files are also atomically updated in place,
+- snapshot files can be updated in place by the expiration process (and administrative operation).
 
 ## Specification
 
@@ -57,18 +62,21 @@ The storage system is not required to support random-access writes. Once written
 
 Icechunk uses a series of linked metadata files to describe the state of the repository.
 
-- The **Snapshot file** records all of the different arrays and groups in the repository, plus their metadata. Every new commit creates a new snapshot file. The snapshot file contains pointers to one or more chunk manifest files and [optionally] attribute files.
+- The **Snapshot file** records all of the different arrays and groups in a specific snapshot of the repository, plus their metadata. Every new commit creates a new snapshot file. The snapshot file contains pointers to one or more chunk manifest files.
 - **Chunk manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array.
-- **Attributes files** provide a way to store additional user-defined attributes for arrays and groups outside of the structure file. This is important if attributes are very large, otherwise, they will be stored inline in the snapshot file.
 - **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file.
-- **Reference files** track the state of branches and tags, containing a lightweight pointer to a snapshot file. Transactions on a branch are committed by creating the next branch file in a sequence.
+- **Transaction log files**, an overview of the operations executed during a session, used for rebase and diffs.
+- **Reference files**, also called refs, track the state of branches and tags, containing a lightweight pointer to a snapshot file. Transactions on a branch are committed by atomically updating the branch reference file.
+- **Tag tombstones**, tags are immutable in Icechunk but can be deleted. When they are deleted a tombstone file is created so the
+same tag name cannot be reused later.
+- **Config file**, a yaml file with the default repository configuration.
 
 When reading from object store, the client opens the latest branch or tag file to obtain a pointer to the relevant snapshot file.
 The client then reads the snapshot file to determine the structure and hierarchy of the repository.
 When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
 
 When writing a new repository snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new snapshot file.
-Finally, in an atomic put-if-not-exists operation, to commit the transaction, it creates the next branch file in the sequence.
+Finally, to commit the transaction, it updates the branch reference file using an atomic conditional update operation.
 This operation may fail if a different client has already committed the next snapshot.
 In this case, the client may attempt to resolve the conflicts and retry the commit.
 
@@ -83,8 +91,6 @@ flowchart TD
     snapshot1[Snapshot File 1]
     snapshot2[Snapshot File 2]
     end
-    subgraph attributes[Attributes]
-    attrs[Attribute File]
     end
     subgraph manifests[Manifests]
     manifestA[Chunk Manifest A]
@@ -99,9 +105,7 @@ flowchart TD
     end
 
     branch -- snapshot ID --> snapshot2
-    snapshot1 --> attrs
     snapshot1 --> manifestA
-    snapshot2 --> attrs
     snapshot2 -->manifestA
     snapshot2 -->manifestB
     manifestA --> chunk1
@@ -116,17 +120,14 @@ flowchart TD
 All data and metadata files are stored within a root directory (typically a prefix within an object store) using the following directory structure.
 
 - `$ROOT` base URI (s3, gcs, local directory, etc.)
+- `$ROOT/config.yaml` optional persistent default configuration for the repository
 - `$ROOT/refs/` reference files
 - `$ROOT/snapshots/` snapshot files
-- `$ROOT/attributes/` attribute files
 - `$ROOT/manifests/` chunk manifests
 - `$ROOT/transactions/` transaction log files
 - `$ROOT/chunks/` chunks
 
 ### File Formats
-
-!!! warning
-    The actual file formats used for each type of metadata file are in flux. The spec currently describes the data structures encoded in these files, rather than a specific file format.
 
 ### Reference Files
 
@@ -165,51 +166,35 @@ The client creates a new snapshot and then updates the branch reference to point
 However, when updating the branch reference, the client must detect whether a _different session_ has updated the branch reference in the interim, possibly retrying or failing the commit if so.
 This is an "optimistic concurrency" strategy; the resolution mechanism can be expensive, but conflicts are expected to be infrequent.
 
-All popular object stores support a "create if not exists" operation.
-In other words, object stores can guard against the race condition which occurs when two sessions attempt to create the same file at the same time.
-This motivates the design of Icechunk's branch file naming convention.
+All major object stores support a "conditional update" operation.
+In other words, object stores can guard against the race condition which occurs when two sessions attempt to update the same file at the same time. Only one of those will succeed.
 
-Each commit to an Icechunk branch augments a counter called the _sequence number_.
-The first commit creates sequence number 0.
-The next commit creates sequence number 1. Etc.
-This sequence number is encoded into the branch reference file name.
-
-When a client checks out a branch, it keeps track of its current sequence number _N_.
-When it tries to commit, it attempts to create the file corresponding to sequence number _N + 1_ in an atomic "create if not exists" operation.
+This mechanism is used by Icechunk on commits.
+When a client checks out a branch, it keeps track of the "version" of the reference file for the branch.
+When it tries to commit, it attempts to conditionally update this file in an atomic "all or nothing" operation.
 If this succeeds, the commit is successful.
-If this fails (because another client created that file already), the commit fails.
-At this point, the client may choose to retry its commit (possibly re-reading the updated data) and then create sequence number _N + 2_.
+If this fails (because another client updated that file since the session started), the commit fails.
+At this point, the client may choose to retry its commit (possibly re-reading the updated data) and then try the conditional update again.
 
-Branch references are stored in the `refs/` directory within a subdirectory corresponding to the branch name prepended by the string `branch.`: `refs/branch.$BRANCH_NAME/`.
+Branch references are stored in the `refs/` directory within a subdirectory corresponding to the branch name prepended by the string `branch.`: `refs/branch.$BRANCH_NAME/ref.json`.
 Branch names may not contain the `/` character.
 
-To facilitate easy lookups of the latest branch reference, we use the following encoding for the sequence number:
-
-- subtract the sequence number from the integer `1099511627775`
-- encode the resulting integer as a string using [Base 32 Crockford](https://www.crockford.com/base32.html)
-- left-padding the string with 0s to a length of 8 characters
-This produces a deterministic sequence of branch file names in which the latest sequence always appears first when sorted lexicographically, facilitating easy lookup by listing the object store.
-
-The full branch file name is then given by `refs/branch.$BRANCH_NAME/$ENCODED_SEQUENCE.json`.
-
-For example, the first main branch file is in a store, corresponding with sequence number 0, is always named `refs/branch.main/ZZZZZZZZ.json`.
-The branch file for sequence number 100 is `refs/branch.main/ZZZZZZWV.json`.
-The maximum number of commits allowed in an Icechunk repository is consequently `1099511627775`,
-corresponding to the state file `refs/branch.main/00000000.json`.
+Branch are deleted simply eliminating their ref file.
 
 #### Tags
 
-Since tags are immutable, they are simpler than branches.
-
-Tag files follow the pattern `refs/tag.$TAG_NAME/ref.json`.
+Tags are immutable. Their files follow the pattern `refs/tag.$TAG_NAME/ref.json`.
 
 Tag names may not contain the `/` character.
 
 When creating a new tag, the client attempts to create the tag file using a "create if not exists" operation.
-If successful, the tag is created successful.
+If successful, the tag is created.
 If not, that means another client has already created that tag.
 
-Tags cannot be deleted once created.
+Tags can also be deleted once created, but we cannot allow a delete followed by a creation, since that would
+result in an observable mutation of the tag. To solve this issue, we don't allow recreating tags that were deleted.
+When a tag is deleted, its reference file is not deleted, but a new file is created in the path:
+`refs/tags.$TAG_NAME/ref.json.deleted`.
 
 ### Snapshot Files
 
@@ -218,14 +203,34 @@ The snapshot file fully describes the schema of the repository, including all ar
 The snapshot file is encoded using [flatbuffers](https://github.com/google/flatbuffers). The IDL for the
 on-disk format can be found in [the repository file](https://github.com/earth-mover/icechunk/tree/main/icechunk/flatbuffers/snapshot.fbs)
 
-### Attributes Files
+The most important parts of a snapshot file are:
 
-Attribute files hold user-defined attributes separately from the snapshot file.
+- An id, 12 random bytes also encoded in the file name.
+- The id of its parent snapshot. All snapshots but the first one in the repository must have a parent.
+- The commit time (`flushed_at`), message string, (`message`) and metadata map (`metadata`).
+- A list of `NodeSnapshot`, one item for each group or array in the repository snapshot.
+- A list of `ManifestFileInfo`
 
-!!! warning
-    Attribute files have not been implemented.
+`NodeSnapshot` objects can also be found in the same flatbuffers file. They contain:
 
-The on-disk format for attribute files has not been defined in full yet.
+- A node id (8 random bytes).
+- The node path within the repository hierarchy, for example `foo/bar/baz`.
+- `user_data`, any metadata used to create the node, this will usually be the Zarr metadata.
+- A `node_data` union, that can be either an `ArrayNodeData` or a `GroupNodeData`.
+
+`GroupNodeData` is empty, so it works as a pure marker signaling that the node is a group.
+
+`ArrayNodeData` is a richer datastructure that keeps:
+
+- The array shape, both for the whole array and its chunks.
+- The array dimension names
+- A list of `ManifestRef`
+
+A `ManifestRef` is a pointer to a manifest file. It includes an id, that is used to determine the file path,
+and a range of coordinates contained in the manifest for each array dimension.
+
+Finally, a `ManifestFileInfo` is also a pointer to a manifest file, but it includes information about all the chunks
+held in the manifest.
 
 ### Chunk Manifest Files
 
@@ -233,17 +238,25 @@ A chunk manifest file stores chunk references.
 Chunk references from multiple arrays can be stored in the same chunk manifest.
 The chunks from a single array can also be spread across multiple manifests.
 
-Manifest files are encoded using [flatbuffers](https://github.com/google/flatbuffers). The IDL for the
+Manifest files are encoded using flatbuffers. The IDL for the
 on-disk format can be found in [the repository file](https://github.com/earth-mover/icechunk/tree/main/icechunk/flatbuffers/manifest.fbs)
 
-The most important part to understand from the data structure is the fact that manifests can hold three types of references:
+A manifest file has:
 
-- Native (`Ref`), pointing to the id of a chunk within the Icechunk repository.
-- Inline (`Inline`), an optimization for very small chunks that can be embedded directly in the manifest. Mostly used for coordinate arrays.
-- Virtual (`Virtual`), pointing to a region of a file outside of the Icechunk repository, for example,
+- An id (12 random bytes), that is also encoded in the file name.
+- A list of `ArrayManifest` sorted by node id
+
+Each `ArrayManifest` contains chunk references for a given array. It contains the `node_id`
+of the array and a list of `ChunkRef` sorted by the chunk coordinate.
+
+`ChunkRef` is a complex data structure because chunk references in Icechunk can have three different types:
+
+- Native, pointing to a chunk object within the Icechunk repository.
+- Inline, an optimization for very small chunks that can be embedded directly in the manifest. Mostly used for coordinate arrays.
+- Virtual, pointing to a region of a file outside of the Icechunk repository, for example,
   a chunk that is inside a NetCDF file in object store
 
-To get full details on what each field contains, please refer to the [Icechunk library code](https://github.com/earth-mover/icechunk/blob/f460a56577ec560c4debfd89e401a98153cd3560/icechunk/src/format/manifest.rs#L106).
+These three types of chunks references are encoded in the same flatbuffers table, using optional fields.
 
 ### Chunk Files
 
@@ -258,11 +271,34 @@ Chunk files can be:
 
 Applications may choose to arrange chunks within files in different ways to optimize I/O patterns.
 
+### Transaction logs
+
+Transaction logs keep track of the operations done in a commit. They are not used to read objects
+from the repo, but they are useful for features such as commit diff and conflict resolution.
+
+Transaction logs are an optimization, to provide fast conflict resolution and commit diff. They are
+not absolutely required to implement the core Icechunk operations.
+
+Transaction log files are encoded using flatbuffers. The IDL for the
+on-disk format can be found in [the repository file](https://github.com/earth-mover/icechunk/tree/main/icechunk/flatbuffers/transaction_log.fbs)
+
+The transaction log file maintains information about the id of modified objects:
+
+- `new_groups`: list of node ids.
+- `new_arrays`: list of node ids.
+- `deleted_groups`: list of node ids.
+- `deleted_arrays`: list of node ids.
+- `updated_groups`: list of node ids.
+- `updated_arrays`: list of node ids.
+- `updated_chunks`: list of node ids and chunk indices.
+
 ## Algorithms
 
 ### Initialize New Repository
 
-A new repository is initialized by creating a new [possibly empty] snapshot file and then creating the first file in the main branch sequence.
+A new repository is initialized by creating a new empty snapshot file and then creating the reference for branch `main`.
+The first snapshot has a well known id, that encodes to a file name: `1CECHNKREP0F1RSTCMT0`. All object ids are
+encoded in paths using Crockford base 32.
 
 If another client attempts to initialize a repository in the same location, only one can succeed.
 
@@ -273,30 +309,32 @@ If another client attempts to initialize a repository in the same location, only
 If the specific snapshot ID is known, a client can open it directly in read only mode.
 
 1. Use the specified snapshot ID to fetch the snapshot file.
-1. Fetch desired attributes and values from arrays.
+1. Inspect the snapshot to find the relevant manifest or manifests.
+1. Fetch the relevant manifests and the desired chunks pointed by them.
 
 #### From Branch
 
 Usually, a client will want to read from the latest branch (e.g. `main`).
 
-1. List the object store prefix `refs/branch.$BRANCH_NAME/` to obtain the latest branch file in the sequence. Due to the encoding of the sequence number, this should be the _first file_ in lexicographical order.
-1. Read the branch file JSON contents to obtain the snapshot ID.
+1. Resolve the object store prefix `refs/branch.$BRANCH_NAME/ref.json` to obtain the latest ref file.
+1. Parse the branch file JSON contents to obtain the snapshot ID.
 1. Use the snapshot ID to fetch the snapshot file.
-1. Fetch desired attributes and values from arrays.
+1. Fetch the relevant manifests and the desired chunks pointed by them.
 
 #### From Tag
 
 1. Read the tag file found at `refs/tag.$TAG_NAME/ref.json` to obtain the snapshot ID.
 1. Use the snapshot ID to fetch the snapshot file.
-1. Fetch desired attributes and values from arrays.
+1. Fetch the relevant manifests and the desired chunks pointed by them.
 
 ### Write New Snapshot
 
 1. Open a repository at a specific branch as described above, keeping track of the sequence number and branch name in the session context.
 1. [optional] Write new chunk files.
 1. [optional] Write new chunk manifests.
-1. Write a new snapshot file.
-1. Attempt to write the next branch file in the sequence
+1. Write a new transaction log file summarizing all changes in the session.
+1. Write a new snapshot file with the new repository hierarchy and manifest links.
+1. Do conditional update to write the new value of the branch reference file
     1. If successful, the commit succeeded and the branch is updated.
     1. If unsuccessful, attempt to reconcile and retry the commit.
 
