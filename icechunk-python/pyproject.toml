@@ -16,6 +16,7 @@ classifiers = [
 ]
 readme = "../README.md"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 dynamic = ["version"]
 authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
