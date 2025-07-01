@@ -193,7 +193,7 @@ If not, that means another client has already created that tag.
 
 Tags can also be deleted once created, but we cannot allow a delete followed by a creation, since that would
 result in an observable mutation of the tag. To solve this issue, we don't allow recreating tags that were deleted.
-When a tag is deleted, its reference file is not deleted, but a new file is created in the path:
+When a tag is deleted, its reference file is not deleted, but a new tombstone file is created in the path:
 `refs/tags.$TAG_NAME/ref.json.deleted`.
 
 ### Snapshot Files
