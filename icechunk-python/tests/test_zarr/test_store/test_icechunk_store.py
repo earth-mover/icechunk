@@ -134,6 +134,22 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # pickled stores dont point to the same session instance, so they are not equal
         assert loaded != store
 
+    async def test_with_read_only_store(self, store: IcechunkStore) -> None:
+        assert not store.read_only
+
+        reader = store.with_read_only(read_only=True)
+        assert reader.read_only
+        with pytest.raises(
+            ValueError,
+            match="store was opened in read-only mode and does not support writing",
+        ):
+            await reader.set("zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
+        with pytest.raises(
+            ValueError,
+            match="store was opened in read-only mode and does not support writing",
+        ):
+            await reader.delete("zarr.json")
+
     async def test_get_not_open(self, store_not_open: IcechunkStore) -> None:
         """
         Ensure that data can be read from the store that isn't yet open using the store.get method.
