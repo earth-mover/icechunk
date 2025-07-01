@@ -41,8 +41,8 @@ class IcechunkStore(Store, SyncMixin):
     def __init__(
         self,
         store: PyStore,
-        read_only: bool | None = None,
         for_fork: bool,
+        read_only: bool | None = None,
         *args: Any,
         **kwargs: Any,
     ):
@@ -66,8 +66,18 @@ class IcechunkStore(Store, SyncMixin):
         return self._store == value._store
 
     def __getstate__(self) -> object:
-        # we serialize the Rust store as bytes
+        # for read_only sessions we allow pickling, this allows distributed reads without forking
+        writable = not self.session.read_only
+        if writable and not self._for_fork:
+            raise ValueError(
+                "You must opt-in to pickle writable sessions in a distributed context "
+                "using Session.fork(). "
+                # link to docs
+                "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
+                "please use `icechunk.xarray.to_icechunk` instead. "
+            )
         d = self.__dict__.copy()
+        # we serialize the Rust store as bytes
         d["_store"] = self._store.as_bytes()
         d["_for_fork"] = self._for_fork
         return d
@@ -76,16 +86,10 @@ class IcechunkStore(Store, SyncMixin):
         # we have to deserialize the bytes of the Rust store
         store_repr = state["_store"]
         state["_store"] = PyStore.from_bytes(store_repr)
-        if not state["_for_fork"]:
-            state["_read_only"] = False
-        else:
-            state["_read_only"] = state["_store"].read_only
         self.__dict__ = state
 
     def with_read_only(self, read_only: bool = False) -> Store:
-        new_store = IcechunkStore(
-            store=self._store, allow_pickling=self._allow_pickling, read_only=read_only
-        )
+        new_store = IcechunkStore(store=self._store, for_fork=False, read_only=read_only)
         new_store._is_open = False
         return new_store
 

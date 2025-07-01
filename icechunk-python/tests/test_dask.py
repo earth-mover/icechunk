@@ -28,18 +28,26 @@ def test_threaded() -> None:
             assert_identical(actual, ds)
 
 
-def test_xarray_to_icechunk_nested_pickling() -> None:
-    with dask.config.set(scheduler="processes"):
+@pytest.mark.parametrize("scheduler", ["threads", "processes"])
+def test_xarray_to_icechunk_nested_pickling(scheduler) -> None:
+    with dask.config.set(scheduler=scheduler):
         ds = create_test_data(dim_sizes=(2, 3, 4)).chunk(-1)
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Repository.create(local_filesystem_storage(tmpdir))
             session = repo.writable_session("main")
 
             to_icechunk(ds, session=session, mode="w")
+            with pytest.raises(ValueError, match="Please commit first"):
+                to_icechunk(ds, session=session, mode="w")
+            # Needed because we can't pickle the writable session for distributed read
+            session.commit("wrote a commit.")
             with xr.open_zarr(session.store, consolidated=False) as actual:
                 assert_identical(actual, ds)
 
-        newds = ds + 1
-        to_icechunk(newds, session=session, mode="w")
-        with xr.open_zarr(session.store, consolidated=False) as actual:
-            assert_identical(actual, newds)
+            newds = ds + 1
+            session = repo.writable_session("main")
+            to_icechunk(newds, session=session, mode="w")
+            # Needed because we can't pickle the writable session
+            session.commit("wrote another commit.")
+            with xr.open_zarr(session.store, consolidated=False) as actual:
+                assert_identical(actual, newds)

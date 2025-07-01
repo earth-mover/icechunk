@@ -38,10 +38,11 @@ if __name__ == "__main__":
             for i in range(ds.sizes["time"])
         ]
         # grab the Session objects from each individual write task
-        sessions = [f.result() for f in futures]
+        fork_sessions = [f.result() for f in futures]
 
     # manually merge the remote sessions in to the local session
-    session = merge_sessions(session, *sessions)
+    merged_forks = merge_sessions(*fork_sessions)
+    session.merge(merged_forks)
     session.commit("finished writes")
 
     ondisk = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)

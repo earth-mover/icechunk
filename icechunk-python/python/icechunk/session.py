@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from typing import Any, Self
+from typing import Any, NoReturn, Self
 
 from icechunk import (
     ConflictSolver,
@@ -13,9 +13,11 @@ class Session:
     """A session object that allows for reading and writing data from an Icechunk repository."""
 
     _session: PySession
+    _poisoned: bool
 
     def __init__(self, session: PySession):
         self._session = session
+        self._poisoned = False
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Session):
@@ -26,10 +28,10 @@ class Session:
         if not self.read_only:
             raise ValueError(
                 "You must opt-in to pickle writable sessions in a distributed context "
-                "using Session.fork() "
+                "using Session.fork(). "
                 # link to docs
-                "If you are using xarray's `Dataset.to_zarr` method with dask arrays, "
-                "please consider `icechunk.xarray.to_icechunk` instead."
+                "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
+                "please use `icechunk.xarray.to_icechunk` instead. "
             )
         state = {
             "_session": self._session.as_bytes(),
@@ -145,7 +147,7 @@ class Session:
             for coord in batch:
                 yield tuple(coord)
 
-    def merge(self, other: Self) -> None:
+    def merge(self, other: "ForkSession") -> None:
         """
         Merge the changes for this session with the changes from another session.
 
@@ -154,7 +156,12 @@ class Session:
         other : Self
             The other session to merge changes from.
         """
-        raise NotImplementedError
+        if not isinstance(other, ForkSession):
+            raise ValueError(
+                "Sessions can only be merged with a ForkSession created with Session.fork()"
+            )
+        self._session.merge(other._session)
+        self._poisoned = False
 
     def commit(
         self,
@@ -191,6 +198,11 @@ class Session:
         ConflictError
             If the session is out of date and a conflict occurs.
         """
+        if self._poisoned:
+            raise ValueError(
+                "Committing a session after forking, and without merging is not allowed. "
+                "Merge back in the remote changes first using Session.merge()."
+            )
         return self._session.commit(
             message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
         )
@@ -215,7 +227,13 @@ class Session:
         """
         self._session.rebase(solver)
 
-    def fork(self):
+    def fork(self) -> "ForkSession":
+        if self.has_uncommitted_changes:
+            raise ValueError(
+                "Cannot fork a Session with uncommitted changes. "
+                "Make a commit, create a new Session, and then fork that to execute distributed writes."
+            )
+        self._poisoned = True
         return ForkSession(self._session)
 
 
@@ -232,12 +250,17 @@ class ForkSession(Session):
     def to_session(self) -> Session:
         return Session(self._session)
 
-    def merge(self, other: Self) -> Session:
+    def merge(self, other: Self) -> None:
         assert isinstance(other, ForkSession)
         self._session.merge(other._session)
-        return self.to_session()
 
-    def commit(self, *args, **kwargs):
+    def commit(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        rebase_with: ConflictSolver | None = None,
+        rebase_tries: int = 1_000,
+    ) -> NoReturn:
         raise TypeError(
             "Cannot commit a fork of a Session. Call `to_session` to commit first."
         )

@@ -90,7 +90,8 @@ async def test_distributed_writers(use_object_store: bool) -> None:
         group = zarr.open_group(store=fork.store)
         zarray = cast(zarr.Array, group["array"])
         merged_session = store_dask(sources=[dask_array], targets=[zarray])
-        commit_res = merged_session.commit("distributed commit")
+        session.merge(merged_session)
+        commit_res = session.commit("distributed commit")
         assert commit_res
 
     async def verify(branch_name: str) -> None:

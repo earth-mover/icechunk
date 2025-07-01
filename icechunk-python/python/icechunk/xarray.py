@@ -9,6 +9,7 @@ from packaging.version import Version
 import xarray as xr
 import zarr
 from icechunk import IcechunkStore, Session
+from icechunk.session import ForkSession
 from icechunk.vendor.xarray import _choose_default_mode
 from xarray import DataArray, Dataset
 from xarray.backends.common import ArrayWriter
@@ -156,7 +157,7 @@ class _XarrayDatasetWriter:
         self,
         chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
         split_every: int | None = None,
-    ) -> None:
+    ) -> ForkSession | None:
         """
         Write lazy arrays (e.g. dask) to store.
         """
@@ -166,7 +167,7 @@ class _XarrayDatasetWriter:
             raise ValueError("Please call `write_metadata` first.")
 
         if not self.writer.sources:
-            return
+            return None
 
         chunkmanager_store_kwargs = chunkmanager_store_kwargs or {}
         chunkmanager_store_kwargs["load_stored"] = False
@@ -177,9 +178,7 @@ class _XarrayDatasetWriter:
         stored_arrays = self.writer.sync(
             compute=False, chunkmanager_store_kwargs=chunkmanager_store_kwargs
         )  # type: ignore[no-untyped-call]
-        self.store.session.merge(
-            session_merge_reduction(stored_arrays, split_every=split_every)
-        )
+        return session_merge_reduction(stored_arrays, split_every=split_every)
 
 
 def to_icechunk(
@@ -280,10 +279,13 @@ def to_icechunk(
 
     as_dataset = _make_dataset(obj)
 
+    if session.has_uncommitted_changes:
+        raise ValueError(
+            "Calling `to_icechunk` is not allowed on a Session with uncommitted changes. Please commit first."
+        )
     fork = session.fork()
 
-    store = fork.store
-    writer = _XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
+    writer = _XarrayDatasetWriter(as_dataset, store=fork.store, safe_chunks=safe_chunks)
 
     writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 
@@ -292,7 +294,10 @@ def to_icechunk(
     # write in-memory arrays
     writer.write_eager()
     # eagerly write dask arrays
-    writer.write_lazy(chunkmanager_store_kwargs=chunkmanager_store_kwargs)
+    maybe_fork_session = writer.write_lazy(
+        chunkmanager_store_kwargs=chunkmanager_store_kwargs
+    )
+    session.merge(maybe_fork_session or fork)
 
 
 @overload

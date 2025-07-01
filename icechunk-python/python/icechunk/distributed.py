@@ -33,10 +33,10 @@ def extract_session(
 
 def merge_sessions(
     *sessions: ForkSession | list[ForkSession] | list[list[ForkSession]],
-) -> Session:
+) -> ForkSession:
     session, *rest = list(_flatten(sessions))
     for s in (session, *rest):
         assert isinstance(s, ForkSession), type(s)
     for other in rest:
         session.merge(other)
-    return cast(Session, session.to_session())
+    return cast(ForkSession, session)
