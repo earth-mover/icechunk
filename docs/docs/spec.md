@@ -50,7 +50,11 @@ Icechunk requires that the storage system support the following operations:
 
 These requirements are compatible with object stores, like S3, as well as with filesystems.
 
-The storage system is not required to support random-access writes. Once written, most files are immutable until they are deleted. The exceptions to this rule are: the repository configuration file, and branch refs.
+The storage system is not required to support random-access writes. Once written, most files are immutable until they are deleted. The exceptions to this rule are:
+
+- the repository configuration file doesn't track history, updates are done atomically but in place,
+- branch reference files are also atomically updated in place,
+- snapshot files can be updated in place by the expiration process (and administrative operation).
 
 ## Specification
 
@@ -234,7 +238,7 @@ A chunk manifest file stores chunk references.
 Chunk references from multiple arrays can be stored in the same chunk manifest.
 The chunks from a single array can also be spread across multiple manifests.
 
-Manifest files are encoded using [flatbuffers](https://github.com/google/flatbuffers). The IDL for the
+Manifest files are encoded using flatbuffers. The IDL for the
 on-disk format can be found in [the repository file](https://github.com/earth-mover/icechunk/tree/main/icechunk/flatbuffers/manifest.fbs)
 
 A manifest file has:
@@ -275,7 +279,7 @@ from the repo, but they are useful for features such as commit diff and conflict
 Transaction logs are an optimization, to provide fast conflict resolution and commit diff. They are
 not absolutely required to implement the core Icechunk operations.
 
-Transaction log files are encoded using [flatbuffers](https://github.com/google/flatbuffers). The IDL for the
+Transaction log files are encoded using flatbuffers. The IDL for the
 on-disk format can be found in [the repository file](https://github.com/earth-mover/icechunk/tree/main/icechunk/flatbuffers/transaction_log.fbs)
 
 The transaction log file maintains information about the id of modified objects:
@@ -328,7 +332,8 @@ Usually, a client will want to read from the latest branch (e.g. `main`).
 1. Open a repository at a specific branch as described above, keeping track of the sequence number and branch name in the session context.
 1. [optional] Write new chunk files.
 1. [optional] Write new chunk manifests.
-1. Write a new snapshot file.
+1. Write a new transaction log file summarizing all changes in the session.
+1. Write a new snapshot file with the new repository hierarchy and manifest links.
 1. Do conditional update to write the new value of the branch reference file
     1. If successful, the commit succeeded and the branch is updated.
     1. If unsuccessful, attempt to reconcile and retry the commit.
