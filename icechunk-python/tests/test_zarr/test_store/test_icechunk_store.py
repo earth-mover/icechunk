@@ -134,6 +134,12 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # pickled stores dont point to the same session instance, so they are not equal
         assert loaded != store
 
+    @pytest.mark.skip(
+        reason="icechunk read-only follows the read-only flag of the session"
+    )
+    async def test_with_read_only_store(self, open_kwargs: dict[str, Any]) -> None:
+        pass
+
     async def test_get_not_open(self, store_not_open: IcechunkStore) -> None:
         """
         Ensure that data can be read from the store that isn't yet open using the store.get method.
@@ -354,6 +360,13 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert await store.exists("foo/zarr.json")
         await store.delete("foo/zarr.json")
         assert not await store.exists("foo/zarr.json")
+
+    async def test_delete_nonexistent_key_does_not_raise(
+        self, store: IcechunkStore
+    ) -> None:
+        if not store.supports_deletes:
+            pytest.skip("store does not support deletes")
+        await store.delete("zarr.json")
 
     async def test_get_partial_values(
         self,
