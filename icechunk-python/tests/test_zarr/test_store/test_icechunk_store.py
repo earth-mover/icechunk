@@ -355,6 +355,13 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         await store.delete("foo/zarr.json")
         assert not await store.exists("foo/zarr.json")
 
+    async def test_delete_nonexistent_key_does_not_raise(
+        self, store: IcechunkStore
+    ) -> None:
+        if not store.supports_deletes:
+            pytest.skip("store does not support deletes")
+        await store.delete("zarr.json")
+
     async def test_get_partial_values(
         self,
         store: IcechunkStore,
