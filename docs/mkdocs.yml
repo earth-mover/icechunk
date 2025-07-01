@@ -2,7 +2,7 @@ site_name: Icechunk
 site_description: >-
   Open-source, cloud-native transactional tensor storage engine
 site_author: Earthmover PBC
-site_url: https://icechunk.io
+site_url: !ENV [READTHEDOCS_CANONICAL_URL, 'https://icechunk.io']
 repo_url: https://github.com/earth-mover/icechunk
 repo_name: earth-mover/icechunk
 copyright: Earthmover PBC # @see overrides/partials/footer.html
