@@ -28,7 +28,7 @@ The goals of the specification are as follows:
 1. **Serializable isolation** - Reads will be isolated from concurrent writes and always use a committed snapshot of a repository. Writes to repositories will be committed atomically and will not be partially visible. Readers will not acquire locks.
 1. **Time travel** - Previous snapshots of a repository remain accessible after new ones have been written.
 1. **Chunk sharding and references** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding). Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
-1. **Schema Evolution** - Arrays and Groups can be added, and removed from the hierarchy with minimal overhead.
+1. **Schema Evolution** - Arrays and Groups can be added and removed from the hierarchy with minimal overhead.
 
 ### Non Goals
 
@@ -58,11 +58,11 @@ The storage system is not required to support random-access writes. Once written
 
 Icechunk uses a series of linked metadata files to describe the state of the repository.
 
-- The **Snapshot file** records all of the different arrays and groups in a version of the repository, plus their metadata. Every new commit creates a new snapshot file. The snapshot file contains pointers to one or more chunk manifest files.
+- The **Snapshot file** records all of the different arrays and groups in a specific snapshot of the repository, plus their metadata. Every new commit creates a new snapshot file. The snapshot file contains pointers to one or more chunk manifest files.
 - **Chunk manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array.
 - **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file.
 - **Transaction log files**, an overview of the operations executed during a session, used for rebase and diffs.
-- **Reference files**, also called refs, track the state of branches and tags, containing a lightweight pointer to a snapshot file. Transactions on a branch are committed by atomically updating the branch reference.
+- **Reference files**, also called refs, track the state of branches and tags, containing a lightweight pointer to a snapshot file. Transactions on a branch are committed by atomically updating the branch reference file.
 - **Tag tombstones**, tags are immutable in Icechunk but can be deleted. When they are deleted a tombstone file is created so the
 same tag name cannot be reused later.
 - **Config file**, a yaml file with the default repository configuration.
@@ -72,7 +72,7 @@ The client then reads the snapshot file to determine the structure and hierarchy
 When fetching data from an array, the client first examines the chunk manifest file[s] for that array and finally fetches the chunks referenced therein.
 
 When writing a new repository snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new snapshot file.
-Finally, to commit the transaction, using an atomic conditional update operation, it updates the branch reference file.
+Finally, to commit the transaction, it updates the branch reference file using an atomic conditional update operation.
 This operation may fail if a different client has already committed the next snapshot.
 In this case, the client may attempt to resolve the conflicts and retry the commit.
 
@@ -187,7 +187,7 @@ When creating a new tag, the client attempts to create the tag file using a "cre
 If successful, the tag is created.
 If not, that means another client has already created that tag.
 
-Tags can also be deleted once created, but we cannot allow a delete followed by a creation, that would
+Tags can also be deleted once created, but we cannot allow a delete followed by a creation, since that would
 result in an observable mutation of the tag. To solve this issue, we don't allow recreating tags that were deleted.
 When a tag is deleted, its reference file is not deleted, but a new file is created in the path:
 `refs/tags.$TAG_NAME/ref.json.deleted`.
@@ -226,7 +226,7 @@ A `ManifestRef` is a pointer to a manifest file. It includes an id, that is used
 and a range of coordinates contained in the manifest for each array dimension.
 
 Finally, a `ManifestFileInfo` is also a pointer to a manifest file, but it includes information about all the chunks
-hold in the manifest.
+held in the manifest.
 
 ### Chunk Manifest Files
 
@@ -242,10 +242,10 @@ A manifest file has:
 - An id (12 random bytes), that is also encoded in the file name.
 - A list of `ArrayManifest` sorted by node id
 
-Each `ArrayManifest` is contains chunk references for a given array. It contains the `node_id`
+Each `ArrayManifest` contains chunk references for a given array. It contains the `node_id`
 of the array and a list of `ChunkRef` sorted by the chunk coordinate.
 
-`ChunkRef` is a complex datastructure because chunk references in Icechunk can have three different types:
+`ChunkRef` is a complex data structure because chunk references in Icechunk can have three different types:
 
 - Native, pointing to a chunk object within the Icechunk repository.
 - Inline, an optimization for very small chunks that can be embedded directly in the manifest. Mostly used for coordinate arrays.
