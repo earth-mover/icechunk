@@ -134,19 +134,11 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # pickled stores dont point to the same session instance, so they are not equal
         assert loaded != store
 
-    async def test_with_read_only_store(self, store: IcechunkStore) -> None:
-        assert not store.read_only
-
-        reader = store.with_read_only(read_only=True)
-        assert reader.read_only
-        with pytest.raises(
-            IcechunkError,
-        ):
-            await reader.set("zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
-        with pytest.raises(
-            IcechunkError,
-        ):
-            await reader.delete("zarr.json")
+    @pytest.mark.skip(
+        reason="icechunk read-only follows the read-only flag of the session"
+    )
+    async def test_with_read_only_store(self, open_kwargs: dict[str, Any]) -> None:
+        pass
 
     async def test_get_not_open(self, store_not_open: IcechunkStore) -> None:
         """
