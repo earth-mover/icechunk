@@ -17,14 +17,15 @@ from xarray.testing import assert_identical
 def test_distributed() -> None:
     with distributed.Client():  # type: ignore [no-untyped-call]
         ds = create_test_data().chunk(dim1=3, dim2=4)
-        with roundtrip(ds) as actual:
+        with roundtrip(ds, commit=True) as actual:
             assert_identical(actual, ds)
 
 
-def test_threaded() -> None:
-    with dask.config.set(scheduler="threads"):
+@pytest.mark.parametrize("scheduler", ["threads", "processes"])
+def test_dask_schedulers(scheduler) -> None:
+    with dask.config.set(scheduler=scheduler):
         ds = create_test_data().chunk(dim1=3, dim2=4)
-        with roundtrip(ds) as actual:
+        with roundtrip(ds, commit=scheduler == "processes") as actual:
             assert_identical(actual, ds)
 
 
