@@ -1,4 +1,5 @@
-from collections.abc import AsyncIterator
+import contextlib
+from collections.abc import AsyncIterator, Generator
 from typing import Any, NoReturn, Self
 
 from icechunk import (
@@ -44,6 +45,18 @@ class Session:
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
         self._allow_changes = state["_allow_changes"]
+
+    @contextlib.contextmanager
+    def allow_pickling(self) -> Generator[None, None, None]:
+        """
+        Context manager to allow unpickling this store if writable.
+        """
+        raise RuntimeError(
+            "The allow_pickling context manager has been removed. "
+            "Use the new `Session.fork` API instead. "
+            # FIXME: Add link to docs
+            "Better yet, use `to_icechunk` if that will fit your needs."
+        )
 
     @property
     def read_only(self) -> bool:
@@ -177,7 +190,7 @@ class Session:
 
         When successful, the writable session is completed and the session is now read-only and based on the new commit. The snapshot ID of the new commit is returned.
 
-        If the session is out of date, this will raise a ConflictError exception depicting the conflict that occurred. The session will need to be rebased before committing.
+        If the session is out of date, this will raise a conflict error depicting the conflict that occurred. The session will need to be rebased before committing.
 
         Parameters
         ----------
@@ -197,7 +210,7 @@ class Session:
 
         Raises
         ------
-        ConflictError
+        icechunk.ConflictError
             If the session is out of date and a conflict occurs.
         """
         if self._allow_changes:
