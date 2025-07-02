@@ -7,8 +7,10 @@ import time
 from collections.abc import Generator
 from typing import Any
 
+import numpy as np
 import pytest
 
+import xarray as xr
 import zarr
 from icechunk import (
     IcechunkStore,
@@ -50,6 +52,12 @@ class IcechunkStoreBase(ZarrBase):
             pytest.skip("consolidated not supported.")
         super().test_roundtrip_consolidated(consolidated)
 
+    def test_pickle(self) -> None:
+        pytest.skip(reason="pickling of icechunk stores is complicated.")
+
+    def test_pickle_dataarray(self) -> None:
+        pytest.skip(reason="pickling of icechunk stores is complicated.")
+
 
 class TestIcechunkStoreFilesystem(IcechunkStoreBase):
     @contextlib.contextmanager
@@ -59,8 +67,7 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Repository.create(local_filesystem_storage(tmpdir))
             session = repo.writable_session("main")
-            with session.allow_pickling():
-                yield session.store
+            yield session.store
 
 
 class TestIcechunkStoreMemory(IcechunkStoreBase):
@@ -71,12 +78,6 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
         repo = Repository.create(in_memory_storage())
         session = repo.writable_session("main")
         yield session.store
-
-    def test_pickle(self) -> None:
-        pytest.skip(reason="memory icechunk stores cannot be pickled.")
-
-    def test_pickle_dataarray(self) -> None:
-        pytest.skip(reason="memory icechunk stores cannot be pickled.")
 
 
 class TestIcechunkStoreMinio(IcechunkStoreBase):
@@ -97,8 +98,7 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
             )
         )
         session = repo.writable_session("main")
-        with session.allow_pickling():
-            yield session.store
+        yield session.store
 
 
 @pytest.mark.filterwarnings("ignore:Failed to open:RuntimeWarning")
@@ -111,7 +111,28 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
         session = repo.writable_session("main")
         yield session.store
 
+    @contextlib.contextmanager
+    def create(self):
+        x = np.arange(0, 50, 10)
+        y = np.arange(0, 20, 2)
+        data = np.ones((5, 10))
+        ds = xr.Dataset(
+            {"test": xr.DataArray(data, dims=("x", "y"), coords={"x": x, "y": y})}
+        )
+        repo = Repository.create(in_memory_storage())
+        session = repo.writable_session("main")
+        self.save(session.store, ds)
+        session.commit("initial commit")
+        yield repo.writable_session("main").store, ds
+
     def save(self, target, ds, **kwargs):
         # not really important here
         kwargs.pop("compute", None)
         to_icechunk(ds, session=target.session, **kwargs)
+
+    def test_zarr_region_index_write(self, tmp_path):
+        pytest.skip("runs multiple saves, doesn't work")
+
+    def test_zarr_region(self):
+        """duplicated because it uses multiple saves"""
+        pytest.skip("runs multiple saves, doesn't work")

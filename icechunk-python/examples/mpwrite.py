@@ -23,7 +23,11 @@ if __name__ == "__main__":
 
     chunks = {1 if dim == "time" else ds.sizes[dim] for dim in ds.Tair.dims}
     ds.to_zarr(
-        session.store, compute=False, encoding={"Tair": {"chunks": chunks}}, mode="w"
+        session.store,
+        compute=False,
+        encoding={"Tair": {"chunks": chunks}},
+        mode="w",
+        consolidated=False,
     )
     # this commit is optional, but may be useful in your workflow
     session.commit("initialize store")
