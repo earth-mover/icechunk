@@ -17,7 +17,7 @@ class Session:
 
     def __init__(self, session: PySession):
         self._session = session
-        self._poisoned = False
+        self._allow_changes = False
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Session):
@@ -35,6 +35,7 @@ class Session:
             )
         state = {
             "_session": self._session.as_bytes(),
+            "_allow_changes": self._allow_changes,
         }
         return state
 
@@ -42,6 +43,7 @@ class Session:
         if not isinstance(state, dict):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
+        self._allow_changes = state["_allow_changes"]
 
     @property
     def read_only(self) -> bool:
@@ -161,7 +163,7 @@ class Session:
                 "Sessions can only be merged with a ForkSession created with Session.fork()"
             )
         self._session.merge(other._session)
-        self._poisoned = False
+        self._allow_changes = False
 
     def commit(
         self,
@@ -198,7 +200,7 @@ class Session:
         ConflictError
             If the session is out of date and a conflict occurs.
         """
-        if self._poisoned:
+        if self._allow_changes:
             raise ValueError(
                 "Committing a session after forking, and without merging is not allowed. "
                 "Merge back in the remote changes first using Session.merge()."
@@ -233,7 +235,7 @@ class Session:
                 "Cannot fork a Session with uncommitted changes. "
                 "Make a commit, create a new Session, and then fork that to execute distributed writes."
             )
-        self._poisoned = True
+        self._allow_changes = True
         return ForkSession(self._session)
 
 
@@ -251,7 +253,10 @@ class ForkSession(Session):
         return Session(self._session)
 
     def merge(self, other: Self) -> None:
-        assert isinstance(other, ForkSession)
+        if not isinstance(other, ForkSession):
+            raise TypeError(
+                f"A ForkSession can only be merged with another ForkSession. Received {type(other)} instead."
+            )
         self._session.merge(other._session)
 
     def commit(
