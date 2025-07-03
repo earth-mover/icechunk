@@ -131,7 +131,8 @@ filterwarnings = [
   "ignore:The dtype `<U1` is currently not part in the Zarr format 3 specification.",
   "ignore::ResourceWarning",
   "ignore:Unused async fixture loop scope:pytest.PytestWarning",
-  "ignore::zarr.core.dtype.common.UnstableSpecificationWarning",
+  "ignore:.*does not have a Zarr V3 specification.*",
+  "ignore:'gpu' not found in `markers`:pytest.PytestUnknownMarkWarning",
 ]
 
 [tool.mypy]
