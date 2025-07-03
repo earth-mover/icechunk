@@ -42,7 +42,7 @@ and `compute=False`, this will NOT write any chunked array data, but will write 
 in-memory arrays (only `time` in this case).
 
 ```python exec="on" session="parallel" source="material-block"
-ds.to_zarr(session.store, compute=False, encoding={"Tair": {"chunks": chunks}}, mode="w")
+ds.to_zarr(session.store, compute=False, encoding={"Tair": {"chunks": chunks}}, mode="w", consolidated=False)
 # this commit is optional, but may be useful in your workflow
 print(session.commit("initialize store"))
 ```
