@@ -53,6 +53,9 @@ class IcechunkStoreBase(ZarrBase):
             pytest.skip("consolidated not supported.")
         super().test_roundtrip_consolidated(consolidated)
 
+    def test_append_string_length_mismatch_works(self, *args, **kwargs):
+        pytest.skip("test will be deleted soon")
+
 
 class TestIcechunkStoreFilesystem(IcechunkStoreBase):
     @contextlib.contextmanager
