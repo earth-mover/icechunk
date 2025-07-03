@@ -388,7 +388,7 @@ This will preload all manifests that match the array name "x" while the number o
 
 !!! important
 
-    Once you find a preload configuration you like, remember to persist it on-disk using `repo.save_config`. It will still be able to be overridden at runtime for different applications.
+    Once you find a preload configuration you like, remember to persist it on-disk using `repo.save_config`. The saved config can be overridden at runtime for different applications.
 
 
 #### Default preload configuration
