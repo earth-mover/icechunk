@@ -74,8 +74,6 @@ def store_dask(
 
     Parameters
     ----------
-    session: Sessions
-        Icechunk writable session
     sources: list of `dask.array.Array`
         List of dask arrays to write.
     targets : list of `zarr.Array`
