@@ -77,7 +77,9 @@ impl ObjectStorage {
     pub async fn new_local_filesystem(
         prefix: &StdPath,
     ) -> Result<ObjectStorage, StorageError> {
-        tracing::warn!("The LocalFileSystem backend is not safe for concurrent writes due to a race condition at commit time. Use with caution, and prefer using object stores for production data.");
+        tracing::warn!(
+            "The LocalFileSystem storage is not safe for concurrent commits. If more than one thread/process will attempt to commit at the same time, prefer using object stores."
+        );
         let backend =
             Arc::new(LocalFileSystemObjectStoreBackend { path: prefix.to_path_buf() });
         let storage = ObjectStorage { backend, client: OnceCell::new() };
