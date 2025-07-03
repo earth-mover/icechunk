@@ -164,6 +164,5 @@ jobs:
           source .venv/bin/activate
           pip install icechunk['test'] --find-links dist --force-reinstall
           pip install pytest-mypy-plugins
-          pip install ../../xarray
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
           pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
