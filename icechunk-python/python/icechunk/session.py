@@ -191,7 +191,7 @@ class Session:
 
         When successful, the writable session is completed and the session is now read-only and based on the new commit. The snapshot ID of the new commit is returned.
 
-        If the session is out of date, this will raise a conflict error depicting the conflict that occurred. The session will need to be rebased before committing.
+        If the session is out of date, this will raise a ConflictError exception depicting the conflict that occurred. The session will need to be rebased before committing.
 
         Parameters
         ----------
