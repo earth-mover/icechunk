@@ -249,6 +249,8 @@ class Session:
                 "Cannot fork a Session with uncommitted changes. "
                 "Make a commit, create a new Session, and then fork that to execute distributed writes."
             )
+        if self.read_only:
+            raise ValueError("You should not need to fork a read-only session.")
         self._allow_changes = True
         return ForkSession(self._session)
 
@@ -262,9 +264,6 @@ class ForkSession(Session):
         if not isinstance(state, dict):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
-
-    def to_session(self) -> Session:
-        return Session(self._session)
 
     def merge(self, other: Self) -> None:
         if not isinstance(other, ForkSession):
@@ -281,7 +280,9 @@ class ForkSession(Session):
         rebase_tries: int = 1_000,
     ) -> NoReturn:
         raise TypeError(
-            "Cannot commit a fork of a Session. Call `to_session` to commit first."
+            "Cannot commit a fork of a Session. If you are using uncooperative writes, "
+            "please communicate the Repository object to your workers, not a Session. "
+            "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
         )
 
     @property

@@ -36,7 +36,14 @@ def merge_sessions(
 ) -> ForkSession:
     session, *rest = list(_flatten(sessions))
     for s in (session, *rest):
-        assert isinstance(s, ForkSession), type(s)
+        if not isinstance(s, ForkSession):
+            raise TypeError(
+                "merge_sessions only accepts ForkSession objects. "
+                f"Received {type(s).__name__!r} instance instead. "
+                "First merge all your ForkSessions using `result = merge_sessions(*forked_session)`. "
+                "Then call `session.merge(result)`. "
+                "See https://icechunk.io/en/stable/icechunk-python/parallel/#cooperative-distributed-writes."
+            )
     for other in rest:
         session.merge(other)
     return cast(ForkSession, session)
