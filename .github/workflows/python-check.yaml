@@ -104,6 +104,15 @@ jobs:
           source .venv/bin/activate
           pytest -n 4
 
+      - name: python examples
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python examples/run_in_ci.py
+
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
