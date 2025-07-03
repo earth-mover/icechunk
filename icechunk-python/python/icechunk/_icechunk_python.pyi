@@ -530,6 +530,14 @@ class ManifestSplitCondition:
         """Create a splitting condition that matches any array."""
         ...
 
+    def __or__(self, other: ManifestSplitCondition) -> ManifestSplitCondition:
+        """Create a splitting condition that matches if either this condition or `other` matches"""
+        ...
+
+    def __and__(self, other: ManifestSplitCondition) -> ManifestSplitCondition:
+        """Create a splitting condition that matches if both this condition and `other` match"""
+        ...
+
 class ManifestSplitDimCondition:
     """Conditions for specifying dimensions along which to shard manifests."""
     class Axis:
