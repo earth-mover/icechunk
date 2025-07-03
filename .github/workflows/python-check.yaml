@@ -111,7 +111,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          python examples/run_in_ci.py
+          sh examples/run_in_ci.sh
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
