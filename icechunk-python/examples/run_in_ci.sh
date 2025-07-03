@@ -1,7 +1,5 @@
 #!/bin/bash
-
-# Generate timestamp-based path
-
+set -e
 TIMESTAMP=$(date +%s)
 S3_PATH="s3://icechunk-test/${TIMESTAMP}/foo2"
 
