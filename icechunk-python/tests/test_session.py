@@ -12,7 +12,7 @@ def test_session_fork() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Repository.create(local_filesystem_storage(tmpdir))
         session = repo.writable_session("main")
-        root = zarr.group(session.store)
+        zarr.group(session.store)
         assert session.has_uncommitted_changes
 
         with pytest.raises(ValueError):
@@ -26,7 +26,7 @@ def test_session_fork() -> None:
 
         session = repo.writable_session("main")
         fork = pickle.loads(pickle.dumps(session.fork()))
-        root = zarr.create_group(fork.store, path="/foo")
+        zarr.create_group(fork.store, path="/foo")
         assert not session.has_uncommitted_changes
         assert fork.has_uncommitted_changes
         with pytest.raises(ValueError, match="without merging"):
@@ -37,8 +37,8 @@ def test_session_fork() -> None:
         session = repo.writable_session("main")
         fork1 = pickle.loads(pickle.dumps(session.fork()))
         fork2 = pickle.loads(pickle.dumps(session.fork()))
-        g1 = zarr.create_group(fork1.store, path="/foo1")
-        g2 = zarr.create_group(fork2.store, path="/foo2")
+        zarr.create_group(fork1.store, path="/foo1")
+        zarr.create_group(fork2.store, path="/foo2")
 
         with pytest.raises(TypeError, match="Cannot commit a fork"):
             fork1.commit("foo")
@@ -51,5 +51,7 @@ def test_session_fork() -> None:
         session.merge(merge_sessions(fork1, fork2))
         session.commit("all done")
 
-        groups = set(name for name, _ in zarr.open_group(session.store, mode="r").groups())
+        groups = set(
+            name for name, _ in zarr.open_group(session.store, mode="r").groups()
+        )
         assert groups == {"foo", "foo1", "foo2"}
