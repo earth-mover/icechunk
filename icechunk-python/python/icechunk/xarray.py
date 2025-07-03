@@ -32,7 +32,7 @@ if Version(xr.__version__) < Version("2024.10.0"):
     )
 
 
-def is_chunked_array(x: Any) -> bool:
+def is_dask_collection(x: Any) -> bool:
     if has_dask:
         import dask
 
@@ -50,7 +50,7 @@ class LazyArrayWriter(ArrayWriter):
         self.eager_regions: list[tuple[slice, ...]] = []
 
     def add(self, source: Any, target: Any, region: Any = None) -> Any:
-        if is_chunked_array(source):
+        if is_dask_collection(source):
             self.sources.append(source)
             self.targets.append(target)
             self.regions.append(region)
@@ -279,11 +279,18 @@ def to_icechunk(
 
     as_dataset = _make_dataset(obj)
 
-    if session.has_uncommitted_changes:
-        raise ValueError(
-            "Calling `to_icechunk` is not allowed on a Session with uncommitted changes. Please commit first."
-        )
-    fork = session.fork()
+    # This ugliness is needed so that we allow users to call `to_icechunk` with a dirty Session
+    # for _serial_ writes
+    is_dask = is_dask_collection(obj)
+    fork: Session | ForkSession
+    if is_dask:
+        if session.has_uncommitted_changes:
+            raise ValueError(
+                "Calling `to_icechunk` is not allowed on a Session with uncommitted changes. Please commit first."
+            )
+        fork = session.fork()
+    else:
+        fork = session
 
     writer = _XarrayDatasetWriter(as_dataset, store=fork.store, safe_chunks=safe_chunks)
 
@@ -297,7 +304,17 @@ def to_icechunk(
     maybe_fork_session = writer.write_lazy(
         chunkmanager_store_kwargs=chunkmanager_store_kwargs
     )
-    session.merge(maybe_fork_session or fork)
+    if is_dask:
+        if maybe_fork_session is None:
+            raise RuntimeError(
+                "Logic bug! Please open at issue at https://github.com/earth-mover/icechunk"
+            )
+        session.merge(maybe_fork_session)
+    else:
+        if maybe_fork_session is not None:
+            raise RuntimeError(
+                "Unexpected write of dask arrays! Please open at issue at https://github.com/earth-mover/icechunk"
+            )
 
 
 @overload

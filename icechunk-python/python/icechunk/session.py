@@ -14,7 +14,7 @@ class Session:
     """A session object that allows for reading and writing data from an Icechunk repository."""
 
     _session: PySession
-    _poisoned: bool
+    _allow_changes: bool
 
     def __init__(self, session: PySession):
         self._session = session
@@ -173,7 +173,8 @@ class Session:
         """
         if not isinstance(other, ForkSession):
             raise ValueError(
-                "Sessions can only be merged with a ForkSession created with Session.fork()"
+                "Sessions can only be merged with a ForkSession created with Session.fork(). "
+                f"Received {type(other).__name__} instead."
             )
         self._session.merge(other._session)
         self._allow_changes = False
