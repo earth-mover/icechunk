@@ -122,6 +122,9 @@ testpaths = ["tests", "integration_tests"]
 log_cli_level = "INFO"
 xfail_strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers"]
+markers = [
+  "gpu",  # need this to run the zarr tests
+]
 filterwarnings = [
   "error",
   "ignore:Jupyter is migrating its paths to use:DeprecationWarning:",
