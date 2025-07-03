@@ -317,7 +317,7 @@ print(ic.Repository.open(storage).config.manifest)
 
 ## Preloading manifests
 
-While [manifest splitting](./performance.md#splitting-manifests) is a great way to control the size of manifests, it can be useful to configure the manner in which manifests are loaded. In Icechunk manifests are loaded lazily by default, meaning that when you read a chunk, Icechunk will only load the manifest for that chunk when it is needed to fetch the chunk data. While this is good for memory performance, it can be a bottleneck for read performance when you are reading a lot of chunks.
+While [manifest splitting](./performance.md#splitting-manifests) is a great way to control the size of manifests, it can be useful to configure the manner in which manifests are loaded. In Icechunk manifests are loaded lazily by default, meaning that when you read a chunk, Icechunk will only load the manifest for that chunk when it is needed to fetch the chunk data. While this is good for memory performance, it can increase the latency to first the first elements of an array. Once a manifest has been loaded, it will usually remain in memory for future chunks in the same manifest.
 
 To address this, Icechunk provides a way to preload manifests at the time of opening a Session, loading all manifests that match specific conditions into the cache. This means when it is time to read a chunk, the manifest will already be in the cache and the chunk can be found without having to first load the manifest from storage.
 
