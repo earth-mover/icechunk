@@ -38,7 +38,7 @@ use crate::{
     },
     session::{Session, SessionErrorKind, SessionResult},
     storage::{self, FetchConfigResult, StorageErrorKind, UpdateConfigResult},
-    virtual_chunks::{ContainerName, VirtualChunkResolver},
+    virtual_chunks::VirtualChunkResolver,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,7 +136,7 @@ pub struct Repository {
     storage: Arc<dyn Storage + Send + Sync>,
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
-    virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
+    authorized_virtual_containers: HashMap<String, Option<Credentials>>,
     default_commit_metadata: SnapshotProperties,
 }
 
@@ -145,7 +145,7 @@ impl Repository {
     pub async fn create(
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
+        authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
     ) -> RepositoryResult<Self> {
         debug!("Creating Repository");
         if !storage.can_write() {
@@ -220,14 +220,14 @@ impl Repository {
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
 
-        Self::new(config, config_version, storage, virtual_chunk_credentials)
+        Self::new(config, config_version, storage, authorize_virtual_chunk_access)
     }
 
     #[instrument(skip_all)]
     pub async fn open(
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
+        authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
     ) -> RepositoryResult<Self> {
         debug!("Opening Repository");
         let storage_c = Arc::clone(&storage);
@@ -258,14 +258,14 @@ impl Repository {
             let config =
                 config.map(|c| default_config.merge(c)).unwrap_or(default_config);
 
-            Self::new(config, config_version, storage, virtual_chunk_credentials)
+            Self::new(config, config_version, storage, authorize_virtual_chunk_access)
         } else {
             let config = config.unwrap_or_default();
             Self::new(
                 config,
                 storage::VersionInfo::for_creation(),
                 storage,
-                virtual_chunk_credentials,
+                authorize_virtual_chunk_access,
             )
         }
     }
@@ -273,12 +273,12 @@ impl Repository {
     pub async fn open_or_create(
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
+        authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
     ) -> RepositoryResult<Self> {
         if Self::exists(storage.as_ref()).await? {
-            Self::open(config, storage, virtual_chunk_credentials).await
+            Self::open(config, storage, authorize_virtual_chunk_access).await
         } else {
-            Self::create(config, storage, virtual_chunk_credentials).await
+            Self::create(config, storage, authorize_virtual_chunk_access).await
         }
     }
 
@@ -286,15 +286,15 @@ impl Repository {
         config: RepositoryConfig,
         config_version: storage::VersionInfo,
         storage: Arc<dyn Storage + Send + Sync>,
-        virtual_chunk_credentials: HashMap<ContainerName, Credentials>,
+        authorized_virtual_containers: HashMap<String, Option<Credentials>>,
     ) -> RepositoryResult<Self> {
         let containers = config.virtual_chunk_containers().cloned();
-        validate_credentials(&config, &virtual_chunk_credentials)?;
+        validate_credentials(&config, &authorized_virtual_containers)?;
         let storage_settings =
             config.storage().cloned().unwrap_or_else(|| storage.default_settings());
         let virtual_resolver = Arc::new(VirtualChunkResolver::new(
             containers,
-            virtual_chunk_credentials.clone(),
+            authorized_virtual_containers.clone(),
             storage_settings.clone(),
         ));
         let asset_manager = Arc::new(AssetManager::new_with_config(
@@ -310,7 +310,7 @@ impl Repository {
             storage_settings,
             virtual_resolver,
             asset_manager,
-            virtual_chunk_credentials,
+            authorized_virtual_containers,
             default_commit_metadata: SnapshotProperties::default(),
         })
     }
@@ -331,7 +331,7 @@ impl Repository {
     pub fn reopen(
         &self,
         config: Option<RepositoryConfig>,
-        virtual_chunk_credentials: Option<HashMap<ContainerName, Credentials>>,
+        authorize_virtual_chunk_access: Option<HashMap<String, Option<Credentials>>>,
     ) -> RepositoryResult<Self> {
         // Merge the given config with the current config
         let config = config
@@ -342,8 +342,8 @@ impl Repository {
             config,
             self.config_version.clone(),
             Arc::clone(&self.storage),
-            virtual_chunk_credentials
-                .unwrap_or_else(|| self.virtual_chunk_credentials.clone()),
+            authorize_virtual_chunk_access
+                .unwrap_or_else(|| self.authorized_virtual_containers.clone()),
         )
     }
 
@@ -903,11 +903,11 @@ impl ManifestPreloadCondition {
 
 fn validate_credentials(
     config: &RepositoryConfig,
-    creds: &HashMap<String, Credentials>,
+    creds: &HashMap<String, Option<Credentials>>,
 ) -> RepositoryResult<()> {
-    for (cont, cred) in creds {
-        if let Some(cont) = config.get_virtual_chunk_container(cont) {
-            if let Err(error) = cont.validate_credentials(cred) {
+    for (url_prefix, cred) in creds {
+        if let Some(cont) = config.get_virtual_chunk_container(url_prefix) {
+            if let Err(error) = cont.validate_credentials(cred.as_ref()) {
                 return Err(RepositoryErrorKind::StorageError(StorageErrorKind::Other(
                     error,
                 ))

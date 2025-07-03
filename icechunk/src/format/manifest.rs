@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::format::flatbuffers::generated;
+use crate::{format::flatbuffers::generated, virtual_chunks::VirtualChunkContainer};
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
@@ -217,6 +217,8 @@ pub enum VirtualReferenceErrorKind {
     CannotParseUrl(#[from] url::ParseError),
     #[error("invalid credentials for virtual reference of type {0}")]
     InvalidCredentials(String),
+    #[error("a virtual chunk resolves to an unauthorized virtual chunk container {0:?}")]
+    UnauthorizedVirtualChunkContainer(Box<VirtualChunkContainer>),
     #[error("virtual reference has no path segments {0}")]
     NoPathSegments(String),
     #[error("unsupported scheme for virtual chunk refs: {0}")]

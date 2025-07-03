@@ -46,17 +46,21 @@ def mk_repo(
             s3_compatible=True,
             force_path_style=True,
         )
-        container = ic.VirtualChunkContainer("s3", "s3://", virtual_store_config)
+        container = ic.VirtualChunkContainer("s3://testbucket", virtual_store_config)
         config.set_virtual_chunk_container(container)
     credentials = ic.containers_credentials(
-        s3=ic.s3_credentials(access_key_id="minio123", secret_access_key="minio123")
+        {
+            "s3://testbucket": ic.s3_credentials(
+                access_key_id="minio123", secret_access_key="minio123"
+            )
+        }
     )
 
     operation = ic.Repository.create if create else ic.Repository.open
     repo = operation(
         storage=ic.local_filesystem_storage(store_path),
         config=config,
-        virtual_chunk_credentials=credentials,
+        authorize_virtual_chunk_access=credentials,
     )
 
     return repo

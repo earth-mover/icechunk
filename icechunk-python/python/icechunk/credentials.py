@@ -340,15 +340,13 @@ def azure_credentials(
     raise ValueError("Conflicting arguments to azure_credentials function")
 
 
-def containers_credentials(
-    m: Mapping[str, AnyS3Credential] = {}, **kwargs: AnyS3Credential
-) -> dict[str, Credentials.S3]:
+def containers_credentials(m: Mapping[str, AnyS3Credential]) -> dict[str, Credentials.S3]:
     """Build a map of credentials for virtual chunk containers.
 
     Parameters
     ----------
     m: Mapping[str, AnyS3Credential]
-        A mapping from container name to credentials.
+        A mapping from container url prefixes to credentials.
 
     Examples
     --------
@@ -365,10 +363,10 @@ def containers_credentials(
         s3_compatible=True,
         force_path_style=True,
     )
-    container = ic.VirtualChunkContainer("s3", "s3://", virtual_store_config)
+    container = ic.VirtualChunkContainer("s3://somebucket", virtual_store_config)
     config.set_virtual_chunk_container(container)
     credentials = ic.containers_credentials(
-        s3=ic.s3_credentials(access_key_id="ACCESS_KEY", secret_access_key="SECRET")
+        {"s3://somebucket": ic.s3_credentials(access_key_id="ACCESS_KEY", secret_access_key="SECRET"}
     )
 
     repo = ic.Repository.create(
@@ -380,7 +378,7 @@ def containers_credentials(
 
     """
     res = {}
-    for name, cred in {**m, **kwargs}.items():
+    for name, cred in m.items():
         if isinstance(cred, AnyS3Credential):
             res[name] = Credentials.S3(cred)
         else:

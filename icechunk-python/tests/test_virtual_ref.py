@@ -44,17 +44,21 @@ async def test_write_minio_virtual_refs() -> None:
         s3_compatible=True,
         force_path_style=True,
     )
-    container = VirtualChunkContainer("s3", "s3://", store_config)
+    container = VirtualChunkContainer("s3://testbucket", store_config)
     config.set_virtual_chunk_container(container)
     credentials = containers_credentials(
-        s3=s3_credentials(access_key_id="minio123", secret_access_key="minio123")
+        {
+            "s3://testbucket": s3_credentials(
+                access_key_id="minio123", secret_access_key="minio123"
+            )
+        }
     )
 
     # Open the store
     repo = Repository.open_or_create(
         storage=in_memory_storage(),
         config=config,
-        virtual_chunk_credentials=credentials,
+        authorize_virtual_chunk_access=credentials,
     )
     session = repo.writable_session("main")
     store = session.store
@@ -236,12 +240,13 @@ async def test_public_virtual_refs(
     store_config: ObjectStoreConfig.S3 | ObjectStoreConfig.Http,
 ) -> None:
     config = RepositoryConfig.default()
-    container = VirtualChunkContainer("sample-data", url_prefix, store_config)
+    container = VirtualChunkContainer(url_prefix, store_config)
     config.set_virtual_chunk_container(container)
 
     repo = Repository.open_or_create(
         storage=local_filesystem_storage(f"{tmpdir}/virtual-{container_type}"),
         config=config,
+        authorize_virtual_chunk_access={url_prefix: None},
     )
     session = repo.writable_session("main")
     store = session.store
