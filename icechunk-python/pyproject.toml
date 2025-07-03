@@ -132,7 +132,6 @@ filterwarnings = [
   "ignore::ResourceWarning",
   "ignore:Unused async fixture loop scope:pytest.PytestWarning",
   "ignore:.*does not have a Zarr V3 specification.*",
-  "ignore:'gpu' not found in `markers`:pytest.PytestUnknownMarkWarning",
 ]
 
 [tool.mypy]
