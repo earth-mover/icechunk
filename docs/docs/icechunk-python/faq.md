@@ -16,3 +16,10 @@ This function also accepts the filter directive. If you prefer not to use enviro
 ```python
 icechunk.set_logs_filter("debug,icechunk=trace")
 ```
+
+**How to get a read-only Icechunk store?**
+
+Zarr has a few mechanisms to define read-only zarr stores. These don't always work perfectly with Icechunk,
+because Icechunk has a more advanced session model. The safest way to make sure you don't write to
+an Icechunk repo is to use `Repository.readonly_session` to create the session. It doesn't matter what
+you do to the Zarr store, a read-only session cannot do writes.

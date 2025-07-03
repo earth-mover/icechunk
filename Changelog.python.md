@@ -1,5 +1,15 @@
 # Changelog
 
+## Python Icechunk Library 0.2.18
+
+### Features
+
+- Implement new Zarr method: `Store.with_read_only`.
+
+### Fixes
+
+- Update Spec documentation to the modern on-disk format based on flatbuffers.
+
 ## Python Icechunk Library 0.2.17
 
 This is a feature packed released, and yet, the most important change is in the
