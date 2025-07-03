@@ -18,6 +18,9 @@ from icechunk import (
     s3_storage,
 )
 from icechunk.xarray import to_icechunk
+
+# needed otherwise not discovered
+from xarray.tests.conftest import time_unit  # noqa: F401, RUF100
 from xarray.tests.test_backends import (
     TestZarrRegionAuto as ZarrRegionAutoTests,
 )
