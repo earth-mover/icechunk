@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
-    path::PathBuf,
     str::FromStr,
     sync::Arc,
 };
@@ -43,104 +42,125 @@ pub type ContainerName = String;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VirtualChunkContainer {
-    pub name: ContainerName,
-    pub url_prefix: String,
+    // name is no longer needed, but we keep it for compatibility with
+    // old serialized configurations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub name: Option<ContainerName>,
+
+    url_prefix: String,
     pub store: ObjectStoreConfig,
 }
 
 pub type VirtualChunkCredentialsError = String;
 
 impl VirtualChunkContainer {
+    pub fn new(url_prefix: String, store: ObjectStoreConfig) -> Result<Self, String> {
+        let url = Url::parse(url_prefix.as_str()).map_err(|e| e.to_string())?;
+        match (url.scheme(), &store) {
+            (
+                "s3",
+                ObjectStoreConfig::S3(_)
+                | ObjectStoreConfig::S3Compatible(_)
+                | ObjectStoreConfig::Tigris(_),
+            ) => {
+                if !url.has_host() {
+                    return Err(
+                        "Url prefix for s3:// containers must include a host".to_string()
+                    );
+                }
+            }
+            ("gcs", ObjectStoreConfig::Gcs(_)) => {
+                if !url.has_host() {
+                    return Err("Url prefix for gcs:// containers must include a host"
+                        .to_string());
+                }
+            }
+            ("az", ObjectStoreConfig::Azure(_)) => {
+                if !url.has_host() {
+                    return Err(
+                        "Url prefix for az:// containers must include a host".to_string()
+                    );
+                }
+            }
+            ("tigris", ObjectStoreConfig::Tigris(_)) => {
+                if !url.has_host() {
+                    return Err(
+                        "Url prefix for tigris:// containers must include a host"
+                            .to_string(),
+                    );
+                }
+            }
+            ("http" | "https", ObjectStoreConfig::Http(_)) => {
+                if !url.has_host() {
+                    return Err(
+                        "Url prefix for http(s):// containers must include a host"
+                            .to_string(),
+                    );
+                }
+            }
+            ("file", ObjectStoreConfig::LocalFileSystem(_)) => {
+                if !url.has_host() && url.path().len() < 2 {
+                    return Err("Url prefix for file:// containers must include a path"
+                        .to_string());
+                }
+
+                let mut segments = url.path_segments().ok_or(
+                    "Url prefix for file:// containers must include a path".to_string(),
+                )?;
+
+                if segments.any(|s| s == ".." || s == ".") {
+                    return Err(
+                        "Url prefix for file:// containers must be a canonical url"
+                            .to_string(),
+                    );
+                }
+            }
+            (scheme, _) => {
+                return Err(format!(
+                    "Invalid url prefix scheme ({scheme}) for this object store config"
+                ));
+            }
+        };
+
+        Ok(Self { url_prefix, store, name: None })
+    }
+
+    pub fn url_prefix(&self) -> &str {
+        self.url_prefix.as_str()
+    }
+
     pub fn validate_credentials(
         &self,
-        cred: &Credentials,
+        cred: Option<&Credentials>,
     ) -> Result<(), VirtualChunkCredentialsError> {
         match (&self.store, cred) {
-            (ObjectStoreConfig::InMemory, _) => {
+            (ObjectStoreConfig::S3Compatible(_), Some(Credentials::S3(_)) | None) => {
+                Ok(())
+            }
+            (ObjectStoreConfig::S3(_), Some(Credentials::S3(_)) | None) => Ok(()),
+            (ObjectStoreConfig::Gcs(_), Some(Credentials::Gcs(_)) | None) => Ok(()),
+            (ObjectStoreConfig::Azure(_), Some(Credentials::Azure(_)) | None) => Ok(()),
+            (ObjectStoreConfig::Tigris(_), Some(Credentials::S3(_)) | None) => Ok(()),
+            (ObjectStoreConfig::InMemory, None) => Ok(()),
+            (ObjectStoreConfig::LocalFileSystem(_), None) => Ok(()),
+            (ObjectStoreConfig::Http(_), None) => Ok(()),
+
+            (ObjectStoreConfig::InMemory, Some(_)) => {
                 Err("in memory storage does not accept credentials".to_string())
             }
-            (ObjectStoreConfig::LocalFileSystem(..), _) => {
+            (ObjectStoreConfig::LocalFileSystem(..), Some(_)) => {
                 Err("in memory storage does not accept credentials".to_string())
             }
-            (ObjectStoreConfig::Http(_), _) => {
+            (ObjectStoreConfig::Http(_), Some(_)) => {
                 // TODO: Support basic and bearer auth
-                Err("http storage does not support credentials".to_string())
+                Err("http storage does not support credentials yet".to_string())
             }
-            (ObjectStoreConfig::S3Compatible(_), Credentials::S3(_)) => Ok(()),
-            (ObjectStoreConfig::S3(_), Credentials::S3(_)) => Ok(()),
-            (ObjectStoreConfig::Gcs(_), Credentials::Gcs(_)) => Ok(()),
-            (ObjectStoreConfig::Azure(_), Credentials::Azure(_)) => Ok(()),
-            (ObjectStoreConfig::Tigris(_), Credentials::S3(_)) => Ok(()),
-            _ => Err("credentials do not match store type".to_string()),
+            (store, cred) => Err(format!(
+                "Virtual chunk container credentials do not match store type. store={store:?}, credentials={cred:?}"
+            )),
         }
     }
-}
-
-pub fn mk_default_containers() -> HashMap<ContainerName, VirtualChunkContainer> {
-    [
-        (
-            "s3".to_string(),
-            VirtualChunkContainer {
-                name: "s3".to_string(),
-                url_prefix: "s3".to_string(),
-                store: ObjectStoreConfig::S3(S3Options {
-                    region: None,
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                }),
-            },
-        ),
-        (
-            "gcs".to_string(),
-            VirtualChunkContainer {
-                name: "gcs".to_string(),
-                url_prefix: "gcs".to_string(),
-                store: ObjectStoreConfig::Gcs(HashMap::new()),
-            },
-        ),
-        (
-            "az".to_string(),
-            VirtualChunkContainer {
-                name: "az".to_string(),
-                url_prefix: "az".to_string(),
-                store: ObjectStoreConfig::Azure(HashMap::new()),
-            },
-        ),
-        (
-            "tigris".to_string(),
-            VirtualChunkContainer {
-                name: "tigris".to_string(),
-                url_prefix: "tigris".to_string(),
-                store: ObjectStoreConfig::Tigris(S3Options {
-                    region: None,
-                    endpoint_url: Some("https://fly.storage.tigris.dev".to_string()),
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                }),
-            },
-        ),
-        (
-            "file".to_string(),
-            VirtualChunkContainer {
-                name: "file".to_string(),
-                url_prefix: "file".to_string(),
-                store: ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
-            },
-        ),
-        (
-            "http".to_string(),
-            VirtualChunkContainer {
-                name: "http".to_string(),
-                url_prefix: "http".to_string(),
-                store: ObjectStoreConfig::Http(HashMap::new()),
-            },
-        ),
-    ]
-    .into_iter()
-    .collect()
 }
 
 #[async_trait]
@@ -211,7 +231,8 @@ type ChunkFetcherCache = Cache<CacheKey, Arc<dyn ChunkFetcher>>;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VirtualChunkResolver {
     containers: Vec<VirtualChunkContainer>,
-    credentials: HashMap<ContainerName, Credentials>,
+    // url_prefix to Credentials
+    credentials: HashMap<String, Option<Credentials>>,
     settings: storage::Settings,
     #[serde(skip, default = "new_cache")]
     fetchers: ChunkFetcherCache,
@@ -225,10 +246,24 @@ fn new_cache() -> ChunkFetcherCache {
 impl VirtualChunkResolver {
     pub fn new(
         containers: impl Iterator<Item = VirtualChunkContainer>,
-        credentials: HashMap<ContainerName, Credentials>,
+        credentials: HashMap<String, Option<Credentials>>,
         settings: storage::Settings,
     ) -> Self {
-        let mut containers = containers.collect::<Vec<_>>();
+        // we need to validate the containers because they can come from persisted config
+        // they can be manipulated to have invalid url prefixes
+        // We chose to silently filter out invalid containers
+
+        let mut containers = containers
+            .filter_map(|cont| {
+                VirtualChunkContainer::new(cont.url_prefix, cont.store)
+                    .inspect_err(|err| {
+                        tracing::warn!(
+                            "Invalid virtual chunk container, ignoring it: {err}"
+                        )
+                    })
+                    .ok()
+            })
+            .collect::<Vec<_>>();
         sort_containers(&mut containers);
         VirtualChunkResolver { containers, credentials, settings, fetchers: new_cache() }
     }
@@ -267,6 +302,7 @@ impl VirtualChunkResolver {
         range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
+        // this resolves things like /../
         let url = Url::parse(chunk_location)
             .map_err(VirtualReferenceErrorKind::CannotParseUrl)?;
         let fetcher = self.get_fetcher(&url).await?;
@@ -281,34 +317,44 @@ impl VirtualChunkResolver {
         #[allow(clippy::unimplemented)]
         match &cont.store {
             ObjectStoreConfig::S3(opts) | ObjectStoreConfig::S3Compatible(opts) => {
-                let creds = match self.credentials.get(&cont.name) {
-                    Some(Credentials::S3(creds)) => creds,
-                    Some(_) => Err(VirtualReferenceErrorKind::InvalidCredentials(
+                let creds = match self.credentials.get(&cont.url_prefix) {
+                    Some(Some(Credentials::S3(creds))) => creds,
+                    Some(Some(_)) => Err(VirtualReferenceErrorKind::InvalidCredentials(
                         "S3".to_string(),
                     ))?,
-                    None => {
+                    Some(None) => {
                         if opts.anonymous {
                             &S3Credentials::Anonymous
                         } else {
                             &S3Credentials::FromEnv
                         }
                     }
+                    None => Err(
+                        VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
+                            Box::new(cont.clone()),
+                        ),
+                    )?,
                 };
                 Ok(Arc::new(S3Fetcher::new(opts, creds, self.settings.clone()).await))
             }
             ObjectStoreConfig::Tigris(opts) => {
-                let creds = match self.credentials.get(&cont.name) {
-                    Some(Credentials::S3(creds)) => creds,
-                    Some(_) => Err(VirtualReferenceErrorKind::InvalidCredentials(
-                        "S3".to_string(),
+                let creds = match self.credentials.get(&cont.url_prefix) {
+                    Some(Some(Credentials::S3(creds))) => creds,
+                    Some(Some(_)) => Err(VirtualReferenceErrorKind::InvalidCredentials(
+                        "tigris".to_string(),
                     ))?,
-                    None => {
+                    Some(None) => {
                         if opts.anonymous {
                             &S3Credentials::Anonymous
                         } else {
                             &S3Credentials::FromEnv
                         }
                     }
+                    None => Err(
+                        VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
+                            Box::new(cont.clone()),
+                        ),
+                    )?,
                 };
                 let opts = if opts.endpoint_url.is_some() {
                     opts
@@ -321,15 +367,31 @@ impl VirtualChunkResolver {
                 Ok(Arc::new(S3Fetcher::new(opts, creds, self.settings.clone()).await))
             }
             ObjectStoreConfig::LocalFileSystem { .. } => {
-                Ok(Arc::new(ObjectStoreFetcher::new_local()))
+                match self.credentials.get(&cont.url_prefix) {
+                    Some(None) => Ok(Arc::new(ObjectStoreFetcher::new_local())),
+                    Some(Some(_)) => Err(VirtualReferenceErrorKind::InvalidCredentials(
+                        "file".to_string(),
+                    ))?,
+                    None => Err(
+                        VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
+                            Box::new(cont.clone()),
+                        ),
+                    )?,
+                }
             }
             ObjectStoreConfig::Gcs(opts) => {
-                let creds = match self.credentials.get(&cont.name) {
-                    Some(Credentials::Gcs(creds)) => creds,
-                    Some(_) => Err(VirtualReferenceErrorKind::InvalidCredentials(
+                let creds = match self.credentials.get(&cont.url_prefix) {
+                    Some(Some(Credentials::Gcs(creds))) => creds,
+                    Some(Some(_)) => Err(VirtualReferenceErrorKind::InvalidCredentials(
                         "GCS".to_string(),
                     ))?,
-                    None => &GcsCredentials::Anonymous,
+                    // FIXME: support from env
+                    Some(None) => &GcsCredentials::Anonymous,
+                    None => Err(
+                        VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
+                            Box::new(cont.clone()),
+                        ),
+                    )?,
                 };
 
                 let bucket_name = if let Some(host) = chunk_location.host_str() {
@@ -350,6 +412,18 @@ impl VirtualChunkResolver {
                 ))
             }
             ObjectStoreConfig::Http(opts) => {
+                match self.credentials.get(&cont.url_prefix) {
+                    // FIXME: support http auth
+                    Some(None) => {}
+                    Some(Some(_)) => Err(VirtualReferenceErrorKind::InvalidCredentials(
+                        "HTTP".to_string(),
+                    ))?,
+                    None => Err(
+                        VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
+                            Box::new(cont.clone()),
+                        ),
+                    )?,
+                };
                 let hostname = if let Some(host) = chunk_location.host_str() {
                     host.to_string()
                 } else {
@@ -381,7 +455,10 @@ fn fetcher_cache_key(
 ) -> Result<(String, Option<String>), VirtualReferenceError> {
     if is_fetcher_bucket_constrained(&cont.store) {
         if let Some(host) = location.host_str() {
-            Ok((cont.name.clone(), Some(format!("{}://{}", location.scheme(), host))))
+            Ok((
+                cont.url_prefix.clone(),
+                Some(format!("{}://{}", location.scheme(), host)),
+            ))
         } else {
             Err(VirtualReferenceErrorKind::CannotParseBucketName(
                 "No bucket name found".to_string(),
@@ -389,7 +466,7 @@ fn fetcher_cache_key(
             .into())
         }
     } else {
-        Ok((cont.name.clone(), None))
+        Ok((cont.url_prefix.clone(), None))
     }
 }
 

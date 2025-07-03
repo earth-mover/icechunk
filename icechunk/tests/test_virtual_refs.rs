@@ -7,7 +7,9 @@
 use futures::TryStreamExt;
 use icechunk::{
     ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,
-    config::{Credentials, S3Credentials, S3Options, S3StaticCredentials},
+    config::{
+        Credentials, GcsCredentials, S3Credentials, S3Options, S3StaticCredentials,
+    },
     format::{
         ByteRange, ChunkId, ChunkIndices, Path,
         manifest::{
@@ -61,16 +63,11 @@ fn minio_s3_config() -> (S3Options, S3Credentials) {
 async fn create_repository(
     storage: Arc<dyn Storage + Send + Sync>,
     virtual_chunk_containers: Vec<VirtualChunkContainer>,
-    s3_credentials: Option<S3Credentials>,
+    credentials: HashMap<String, Option<Credentials>>,
 ) -> Repository {
-    let mut creds = HashMap::new();
-    if let Some(s3_credentials) = s3_credentials {
-        creds.insert("s3".to_string(), Credentials::S3(s3_credentials));
-    }
-
     let virtual_chunk_containers = virtual_chunk_containers
         .into_iter()
-        .map(|cont| (cont.name.clone(), cont))
+        .map(|cont| (cont.url_prefix().to_string(), cont))
         .collect();
 
     Repository::create(
@@ -79,7 +76,7 @@ async fn create_repository(
             ..Default::default()
         }),
         storage,
-        creds,
+        credentials,
     )
     .await
     .expect("Failed to initialize repository")
@@ -103,37 +100,78 @@ async fn write_chunks_to_store(
             .expect(&format!("putting chunk to {} failed", &path));
     }
 }
-async fn create_local_repository(path: &StdPath) -> Repository {
+async fn create_local_repository(
+    repo_path: &StdPath,
+    chunks_path: Option<&StdPath>,
+) -> Repository {
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
-        ObjectStorage::new_local_filesystem(path)
+        ObjectStorage::new_local_filesystem(repo_path)
             .await
             .expect("Creating local storage failed"),
     );
 
-    let containers = vec![
-        VirtualChunkContainer {
-            name: "file".to_string(),
-            url_prefix: "file://".to_string(),
-            store: ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
-        },
-        VirtualChunkContainer {
-            name: "s3".to_string(),
-            url_prefix: "s3://".to_string(),
-            store: ObjectStoreConfig::S3(S3Options {
+    let mut containers = vec![
+        VirtualChunkContainer::new(
+            "s3://testbucket".to_string(),
+            ObjectStoreConfig::S3(S3Options {
                 region: Some("us-east-1".to_string()),
                 endpoint_url: None,
                 anonymous: true,
                 allow_http: false,
                 force_path_style: false,
             }),
-        },
-        VirtualChunkContainer {
-            name: "gcs".to_string(),
-            url_prefix: "gcs://".to_string(),
-            store: ObjectStoreConfig::Gcs(Default::default()),
-        },
+        )
+        .unwrap(),
+        VirtualChunkContainer::new(
+            "s3://earthmover-sample-data".to_string(),
+            ObjectStoreConfig::S3(S3Options {
+                region: Some("us-east-1".to_string()),
+                endpoint_url: None,
+                anonymous: true,
+                allow_http: false,
+                force_path_style: false,
+            }),
+        )
+        .unwrap(),
+        VirtualChunkContainer::new(
+            "gcs://testbucket".to_string(),
+            ObjectStoreConfig::Gcs(Default::default()),
+        )
+        .unwrap(),
+        VirtualChunkContainer::new(
+            "gcs://earthmover-sample-data".to_string(),
+            ObjectStoreConfig::Gcs(Default::default()),
+        )
+        .unwrap(),
     ];
-    create_repository(storage, containers, None).await
+
+    let mut creds: HashMap<_, Option<Credentials>> = [
+        ("s3://testbucket".to_string(), None),
+        ("gcs://testbucket".to_string(), None),
+        (
+            "s3://earthmover-sample-data".to_string(),
+            Some(Credentials::S3(S3Credentials::Anonymous)),
+        ),
+        (
+            "gcs://earthmover-sample-data".to_string(),
+            Some(Credentials::Gcs(GcsCredentials::Anonymous)),
+        ),
+    ]
+    .into();
+
+    if let Some(chunks_path) = chunks_path {
+        let prefix = format!("file://{}", chunks_path.to_str().unwrap());
+        containers.push(
+            VirtualChunkContainer::new(
+                prefix.clone(),
+                ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
+            )
+            .unwrap(),
+        );
+        creds.insert(prefix, None);
+    }
+
+    create_repository(storage, containers, creds).await
 }
 
 async fn create_minio_repository() -> Repository {
@@ -143,26 +181,32 @@ async fn create_minio_repository() -> Repository {
         new_s3_storage(config, "testbucket".to_string(), Some(prefix), Some(credentials))
             .expect("Creating minio storage failed");
 
-    let containers = vec![VirtualChunkContainer {
-        name: "s3".to_string(),
-        url_prefix: "s3://".to_string(),
-        store: ObjectStoreConfig::S3Compatible(S3Options {
-            region: Some(String::from("us-east-1")),
-            endpoint_url: Some("http://localhost:9000".to_string()),
-            anonymous: false,
-            allow_http: true,
-            force_path_style: true,
-        }),
-    }];
+    let containers = vec![
+        VirtualChunkContainer::new(
+            "s3://testbucket".to_string(),
+            ObjectStoreConfig::S3Compatible(S3Options {
+                region: Some(String::from("us-east-1")),
+                endpoint_url: Some("http://localhost:9000".to_string()),
+                anonymous: false,
+                allow_http: true,
+                force_path_style: true,
+            }),
+        )
+        .unwrap(),
+    ];
 
-    let credentials = S3Credentials::Static(S3StaticCredentials {
-        access_key_id: "minio123".to_string(),
-        secret_access_key: "minio123".to_string(),
-        session_token: None,
-        expires_after: None,
-    });
+    let credentials = [(
+        "s3://testbucket".to_string(),
+        Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
+            access_key_id: "minio123".to_string(),
+            secret_access_key: "minio123".to_string(),
+            session_token: None,
+            expires_after: None,
+        }))),
+    )]
+    .into();
 
-    create_repository(storage, containers, Some(credentials)).await
+    create_repository(storage, containers, credentials).await
 }
 
 async fn write_chunks_to_local_fs(chunks: impl Iterator<Item = (String, Bytes)>) {
@@ -202,7 +246,7 @@ async fn test_repository_with_local_virtual_refs() -> Result<(), Box<dyn Error>>
     write_chunks_to_local_fs(chunks.iter().cloned()).await;
 
     let repo_dir = TempDir::new()?;
-    let repo = create_local_repository(repo_dir.path()).await;
+    let repo = create_local_repository(repo_dir.path(), Some(chunk_dir.path())).await;
     let mut ds = repo.writable_session("main").await.unwrap();
 
     let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
@@ -504,7 +548,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
 async fn test_zarr_store_virtual_refs_from_public_s3()
 -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = TempDir::new()?;
-    let repo = create_local_repository(repo_dir.path()).await;
+    let repo = create_local_repository(repo_dir.path(), None).await;
     let ds = repo.writable_session("main").await.unwrap();
 
     let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
@@ -546,7 +590,7 @@ async fn test_zarr_store_virtual_refs_from_public_s3()
 async fn test_zarr_store_virtual_refs_from_public_gcs()
 -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = TempDir::new()?;
-    let repo = create_local_repository(repo_dir.path()).await;
+    let repo = create_local_repository(repo_dir.path(), None).await;
     let ds = repo.writable_session("main").await.unwrap();
 
     let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
@@ -640,45 +684,54 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         new_s3_storage(config, "testbucket".to_string(), Some(prefix), Some(credentials))
             .expect("Creating minio storage failed");
 
+    let chunk_dir = TempDir::new()?;
+
     let containers = vec![
-        VirtualChunkContainer {
-            name: "s3".to_string(),
-            url_prefix: "s3://".to_string(),
-            store: ObjectStoreConfig::S3Compatible(S3Options {
+        VirtualChunkContainer::new(
+            "s3://testbucket".to_string(),
+            ObjectStoreConfig::S3Compatible(S3Options {
                 region: Some(String::from("us-east-1")),
                 endpoint_url: Some("http://localhost:9000".to_string()),
                 anonymous: false,
                 allow_http: true,
                 force_path_style: true,
             }),
-        },
-        VirtualChunkContainer {
-            name: "file".to_string(),
-            url_prefix: "file://".to_string(),
-            store: ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
-        },
-        VirtualChunkContainer {
-            name: "public".to_string(),
-            url_prefix: "s3://earthmover-sample-data".to_string(),
-            store: ObjectStoreConfig::S3(S3Options {
+        )
+        .unwrap(),
+        VirtualChunkContainer::new(
+            format!("file://{}", chunk_dir.path().to_str().unwrap()),
+            ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
+        )
+        .unwrap(),
+        VirtualChunkContainer::new(
+            "s3://earthmover-sample-data".to_string(),
+            ObjectStoreConfig::S3(S3Options {
                 region: Some(String::from("us-east-1")),
                 endpoint_url: None,
                 anonymous: true,
                 allow_http: false,
                 force_path_style: false,
             }),
-        },
+        )
+        .unwrap(),
     ];
 
-    let virtual_creds = HashMap::from([(
-        "s3".to_string(),
-        Credentials::S3(S3Credentials::Static(S3StaticCredentials {
-            access_key_id: "minio123".to_string(),
-            secret_access_key: "minio123".to_string(),
-            session_token: None,
-            expires_after: None,
-        })),
-    )]);
+    let virtual_creds = HashMap::from([
+        (
+            "s3://testbucket".to_string(),
+            Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
+                access_key_id: "minio123".to_string(),
+                secret_access_key: "minio123".to_string(),
+                session_token: None,
+                expires_after: None,
+            }))),
+        ),
+        (format!("file://{}", chunk_dir.path().to_str().unwrap()), None),
+        (
+            "s3://earthmover-sample-data".to_string(),
+            Some(Credentials::S3(S3Credentials::Anonymous)),
+        ),
+    ]);
 
     let mut config = RepositoryConfig::default();
     for container in containers {
@@ -745,7 +798,6 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
     store.set_virtual_ref("array/c/1/0/0", ref3, false).await?;
 
     // set virtual refs in local filesystem
-    let chunk_dir = TempDir::new()?;
     let chunk_1 = chunk_dir.path().join("chunk-1").to_str().unwrap().to_owned();
     let chunk_2 = chunk_dir.path().join("chunk-2").to_str().unwrap().to_owned();
     let chunk_3 = chunk_dir.path().join("chunk-3").to_str().unwrap().to_owned();
