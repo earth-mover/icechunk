@@ -175,4 +175,4 @@ jobs:
           pip install pytest-mypy-plugins
           pip install ../../xarray
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
+          pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
