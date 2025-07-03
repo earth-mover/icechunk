@@ -1,6 +1,5 @@
 from collections.abc import Callable
 from datetime import datetime
-import warnings
 
 from icechunk._icechunk_python import (
     GcsBearerCredential,
@@ -38,10 +37,6 @@ def local_filesystem_storage(path: str) -> Storage:
 
     This Storage instance is not recommended for production data
     """
-    warnings.warn(
-        "ObjectStoreConfig.LocalFileSystem is not safe for concurrent writes. "
-        "Use with caution, and prefer using object stores for production data."
-    )
     return Storage.new_local_filesystem(path)
 
 
