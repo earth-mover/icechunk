@@ -16,7 +16,7 @@ mamba activate icechunk-docs
 ```
 cd icechunk-python
 maturin build
-pip install "$(ls ../target/wheels/*.whl | head -n 1)[docs]"
+pip install "$(ls -t ../target/wheels/*.whl | head -n 1)[docs]"
 ```
 
 ### Install MkDocs and Plugins
