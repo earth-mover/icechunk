@@ -327,7 +327,7 @@ To configure manifest preloading, you can use the `ManifestPreloadConfig` class 
 
 ```python exec="on" session="perf" source="material-block"
 preload_config = ic.ManifestPreloadConfig(
-    preload_if=ic.ManifestPreloadCondition.name_matches("x"),  # preload all manifests that match the regex "x"
+    preload_if=ic.ManifestPreloadCondition.name_matches("^x$"),  # preload all manifests with the name "x"
 )
 
 repo_config = ic.RepositoryConfig(
@@ -354,13 +354,17 @@ This example will preload all manifests that match the regex "x" when opening a 
 ```python exec="on" session="perf" source="material-block"
 preload_config = ic.ManifestPreloadConfig(
     preload_if=ic.ManifestPreloadCondition.or_conditions(
-        ic.ManifestPreloadCondition.name_matches("x"),
+        ic.ManifestPreloadCondition.name_matches("^x$"),
         ic.ManifestPreloadCondition.path_matches("y"),
     )
 )
 ```
 
-This will preload all manifests that match the array name "x" or the array path "y".
+This will preload all manifests that match the array name "x" or where the array path contains "y".
+
+!!! important
+
+    `name_matches` and `path_matches` are regular expressions, so if you only want to match the exact string, you need to use `^x$` instead of just "x". We plan to add more explicit string matching options in the future, see [this issue](https://github.com/earth-mover/icechunk/issues/996).
 
 Preloading can also be limited to manifests that are within a limited size range. This can be useful to limit the amount of memory used by the preload cache, when some manifest may be very large. This can be configured using the `ic.RepositoryConfig.manifest.preload.num_refs` field.
 
