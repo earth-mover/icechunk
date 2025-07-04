@@ -105,6 +105,14 @@ sconfig = ManifestSplittingConfig.from_dict(
 )
 ```
 
+!!! note
+
+    Instead of using `and_conditions` and `or_conditions`, you can use `&` and `|` operators to combine conditions:
+
+    ```python
+    array_condition = ManifestSplitCondition.name_matches("temperature") | ManifestSplitCondition.name_matches("salinity")
+    ```
+
 Options for specifying how to split along a specific axis or dimension are:
 
 1. [`ManifestSplitDimCondition.Axis`](./reference.md#icechunk.ManifestSplitDimCondition.Axis) takes an integer axis;
@@ -128,7 +136,6 @@ will result in splitting manifests so that each manifest contains (3 longitude c
 !!! note
 
     Python dictionaries preserve insertion order, so the first condition encountered takes priority.
-
 
 
 ### Splitting behaviour
@@ -354,9 +361,11 @@ This example will preload all manifests that match the regex "x" when opening a 
 ```python exec="on" session="perf" source="material-block"
 preload_config = ic.ManifestPreloadConfig(
     preload_if=ic.ManifestPreloadCondition.or_conditions(
-        ic.ManifestPreloadCondition.name_matches("^x$"),
-        ic.ManifestPreloadCondition.path_matches("y"),
-    )
+        [
+            ic.ManifestPreloadCondition.name_matches("^x$"),
+            ic.ManifestPreloadCondition.path_matches("y"),
+        ]
+    ),
 )
 ```
 
@@ -371,13 +380,24 @@ Preloading can also be limited to manifests that are within a limited size range
 ```python exec="on" session="perf" source="material-block"
 preload_config = ic.ManifestPreloadConfig(
     preload_if=ic.ManifestPreloadCondition.and_conditions(
-        ic.ManifestPreloadCondition.name_matches("x"),
-        ic.ManifestPreloadCondition.num_refs(1000, 10000),
-    )
+        [
+            ic.ManifestPreloadCondition.name_matches("x"),
+            ic.ManifestPreloadCondition.num_refs(1000, 10000),
+        ]
+    ),
 )
 ```
 
 This will preload all manifests that match the array name "x" and have between 1000 and 10000 chunk references.
+
+!!! note
+
+    Like with `ManifestSplitCondition`, you can use `&` and `|` operators to combine conditions instead of `and_conditions` and `or_conditions`:
+    ```python
+    preload_config = ic.ManifestPreloadConfig(
+        preload_if=ic.ManifestPreloadCondition.name_matches("x") & ic.ManifestPreloadCondition.num_refs(1000, 10000),
+    )
+    ```
 
 Lastly, the number of total manifests that can be preloaded can be limited using the `ic.RepositoryConfig.manifest.preload.max_total_refs` field.
 
