@@ -372,7 +372,7 @@ def containers_credentials(m: Mapping[str, AnyS3Credential]) -> dict[str, Creden
     repo = ic.Repository.create(
         storage=ic.local_filesystem_storage(store_path),
         config=config,
-        virtual_chunk_credentials=credentials,
+        authorize_virtual_chunk_access=credentials,
     )
     ```
 

@@ -517,8 +517,8 @@ impl PyRepository {
     /// Reopen the repository changing its config and or virtual chunk credentials
     ///
     /// If config is None, it will use the same value as self
-    /// If virtual_chunk_credentials is None, it will use the same value as self
-    /// If virtual_chunk_credentials is Some(x), it will override with x
+    /// If authorize_virtual_chunk_access is None, it will use the same value as self
+    /// If authorize_virtual_chunk_access is Some(x), it will override with x
     #[pyo3(signature = (*, config = None, authorize_virtual_chunk_access = None::<Option<HashMap<String, Option<PyCredentials>>>>))]
     pub fn reopen(
         &self,
