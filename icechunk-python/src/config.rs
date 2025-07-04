@@ -992,6 +992,13 @@ impl PyManifestPreloadCondition {
     pub fn r#false() -> Self {
         Self::False()
     }
+
+    pub fn __and__(&self, other: &Self) -> Self {
+        Self::And(vec![self.clone(), other.clone()])
+    }
+    pub fn __or__(&self, other: &Self) -> Self {
+        Self::Or(vec![self.clone(), other.clone()])
+    }
 }
 
 impl From<&PyManifestPreloadCondition> for ManifestPreloadCondition {
