@@ -39,10 +39,6 @@ on Icechunk scalability.
     In the meantime, if you get 429 errors from your Google bucket, please lower concurrency and try
     again. Increase concurrency slowly until errors disappear.
 
-## Preloading manifests
-
-Coming Soon.
-
 ## Splitting manifests
 
 Icechunk stores chunk references in a chunk manifest file stored in `manifests/`.
@@ -60,7 +56,7 @@ downloading and rewriting the entire manifest.
 
 ### Configuring splitting
 
-To solve this issue, Icechunk lets you __split_ the manifest files by specifying a ``ManifestSplittingConfig``.
+To solve this issue, Icechunk lets you __split__ the manifest files by specifying a ``ManifestSplittingConfig``.
 ```python exec="on" session="perf" source="material-block"
 import icechunk as ic
 from icechunk import ManifestSplitCondition, ManifestSplittingConfig, ManifestSplitDimCondition
@@ -109,6 +105,14 @@ sconfig = ManifestSplittingConfig.from_dict(
 )
 ```
 
+!!! note
+
+    Instead of using `and_conditions` and `or_conditions`, you can use `&` and `|` operators to combine conditions:
+
+    ```python
+    array_condition = ManifestSplitCondition.name_matches("temperature") | ManifestSplitCondition.name_matches("salinity")
+    ```
+
 Options for specifying how to split along a specific axis or dimension are:
 
 1. [`ManifestSplitDimCondition.Axis`](./reference.md#icechunk.ManifestSplitDimCondition.Axis) takes an integer axis;
@@ -132,7 +136,6 @@ will result in splitting manifests so that each manifest contains (3 longitude c
 !!! note
 
     Python dictionaries preserve insertion order, so the first condition encountered takes priority.
-
 
 
 ### Splitting behaviour
@@ -318,3 +321,102 @@ Notice that the persisted config is restored when opening a Repository
 ```python exec="on" session="perf" source="material-block"
 print(ic.Repository.open(storage).config.manifest)
 ```
+
+## Preloading manifests
+
+While [manifest splitting](./performance.md#splitting-manifests) is a great way to control the size of manifests, it can be useful to configure the manner in which manifests are loaded. In Icechunk manifests are loaded lazily by default, meaning that when you read a chunk, Icechunk will only load the manifest for that chunk when it is needed to fetch the chunk data. While this is good for memory performance, it can increase the latency to first the first elements of an array. Once a manifest has been loaded, it will usually remain in memory for future chunks in the same manifest.
+
+To address this, Icechunk provides a way to preload manifests at the time of opening a Session, loading all manifests that match specific conditions into the cache. This means when it is time to read a chunk, the manifest will already be in the cache and the chunk can be found without having to first load the manifest from storage.
+
+### Configuring preloading
+
+To configure manifest preloading, you can use the `ManifestPreloadConfig` class to specify the `ic.RepositoryConfig.manifest.preload` field.
+
+```python exec="on" session="perf" source="material-block"
+preload_config = ic.ManifestPreloadConfig(
+    preload_if=ic.ManifestPreloadCondition.name_matches("^x$"),  # preload all manifests with the name "x"
+)
+
+repo_config = ic.RepositoryConfig(
+    manifest=ic.ManifestConfig(
+        preload=preload_config,
+    )
+)
+```
+
+Then pass the `config` to `Repository.open` or `Repository.create`
+
+```python
+repo = ic.Repository.open(..., config=repo_config)
+```
+
+This example will preload all manifests that match the regex "x" when opening a Session. While this is a simple example, you can use the `ManifestPreloadCondition` class to create more complex preload conditions using the following options:
+- `ManifestPreloadCondition.name_matches` takes a regular expression used to match an array's name;
+- `ManifestPreloadCondition.path_matches` takes a regular expression used to match an array's path;
+- `ManifestPreloadCondition.and_conditions` to combine (1), (2), and (4) together; and
+- `ManifestPreloadCondition.or_conditions` to combine (1), (2), and (3) together.
+
+`And` and `Or` may be used to combine multiple path and/or name matches. For example,
+
+```python exec="on" session="perf" source="material-block"
+preload_config = ic.ManifestPreloadConfig(
+    preload_if=ic.ManifestPreloadCondition.or_conditions(
+        [
+            ic.ManifestPreloadCondition.name_matches("^x$"),
+            ic.ManifestPreloadCondition.path_matches("y"),
+        ]
+    ),
+)
+```
+
+This will preload all manifests that match the array name "x" or where the array path contains "y".
+
+!!! important
+
+    `name_matches` and `path_matches` are regular expressions, so if you only want to match the exact string, you need to use `^x$` instead of just "x". We plan to add more explicit string matching options in the future, see [this issue](https://github.com/earth-mover/icechunk/issues/996).
+
+Preloading can also be limited to manifests that are within a limited size range. This can be useful to limit the amount of memory used by the preload cache, when some manifest may be very large. This can be configured using the `ic.RepositoryConfig.manifest.preload.num_refs` field.
+
+```python exec="on" session="perf" source="material-block"
+preload_config = ic.ManifestPreloadConfig(
+    preload_if=ic.ManifestPreloadCondition.and_conditions(
+        [
+            ic.ManifestPreloadCondition.name_matches("x"),
+            ic.ManifestPreloadCondition.num_refs(1000, 10000),
+        ]
+    ),
+)
+```
+
+This will preload all manifests that match the array name "x" and have between 1000 and 10000 chunk references.
+
+!!! note
+
+    Like with `ManifestSplitCondition`, you can use `&` and `|` operators to combine conditions instead of `and_conditions` and `or_conditions`:
+    ```python
+    preload_config = ic.ManifestPreloadConfig(
+        preload_if=ic.ManifestPreloadCondition.name_matches("x") & ic.ManifestPreloadCondition.num_refs(1000, 10000),
+    )
+    ```
+
+Lastly, the number of total manifests that can be preloaded can be limited using the `ic.RepositoryConfig.manifest.preload.max_total_refs` field.
+
+```python exec="on" session="perf" source="material-block"
+preload_config = ic.ManifestPreloadConfig(
+    preload_if=ic.ManifestPreloadCondition.name_matches("x"),
+    max_total_refs=10000,
+)
+```
+
+This will preload all manifests that match the array name "x" while the number of total chunk references that have been preloaded is less than 10000.
+
+!!! important
+
+    Once you find a preload configuration you like, remember to persist it on-disk using `repo.save_config`. The saved config can be overridden at runtime for different applications.
+
+
+#### Default preload configuration
+
+Icechunk has a default `preload_if` configuration that will preload all manifests that match [cf-xarrays coordinate axis regex](https://github.com/xarray-contrib/cf-xarray/blob/1591ff5ea7664a6bdef24055ef75e242cd5bfc8b/cf_xarray/criteria.py#L149-L160).
+
+Meanwhile, the default `max_total_refs` is set to `10_000`.
