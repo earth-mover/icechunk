@@ -219,5 +219,28 @@ def test_can_change_deep_config_values() -> None:
     )
 
 
+def test_manifest_preload_magic_methods() -> None:
+    assert (
+        icechunk.ManifestPreloadCondition.and_conditions(
+            [
+                icechunk.ManifestPreloadCondition.true(),
+                icechunk.ManifestPreloadCondition.name_matches("foo"),
+            ]
+        )
+        == icechunk.ManifestPreloadCondition.true()
+        & icechunk.ManifestPreloadCondition.name_matches("foo")
+    )
+    assert (
+        icechunk.ManifestPreloadCondition.or_conditions(
+            [
+                icechunk.ManifestPreloadCondition.true(),
+                icechunk.ManifestPreloadCondition.name_matches("foo"),
+            ]
+        )
+        == icechunk.ManifestPreloadCondition.true()
+        | icechunk.ManifestPreloadCondition.name_matches("foo")
+    )
+
+
 def test_spec_version():
     assert icechunk.spec_version() >= 1
