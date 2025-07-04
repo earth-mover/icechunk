@@ -1168,6 +1168,14 @@ impl PyManifestSplitCondition {
         self.hash(&mut hasher);
         hasher.finish() as usize
     }
+
+    fn __or__(&self, other: &Self) -> Self {
+        Self::Or(vec![self.clone(), other.clone()])
+    }
+
+    fn __and__(&self, other: &Self) -> Self {
+        Self::And(vec![self.clone(), other.clone()])
+    }
 }
 
 impl From<&PyManifestSplitCondition> for ManifestSplitCondition {
