@@ -1,5 +1,6 @@
 import datetime
 from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from typing import Any, Self, cast
 
 from icechunk._icechunk_python import (
@@ -12,6 +13,7 @@ from icechunk._icechunk_python import (
 )
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
+from icechunk.store import IcechunkStore
 
 
 class Repository:
@@ -563,6 +565,62 @@ class Repository:
             The writable session on the branch.
         """
         return Session(self._repository.writable_session(branch))
+
+    @contextmanager
+    def transaction(self, branch: str, message: str) -> Iterator["IcechunkStore"]:
+        """
+        Create a transaction on a branch.
+
+        This is a context manager that creates a writable session on the specified branch.
+        When the context is exited, the session will be committed to the branch
+        using the specified message.
+
+        Parameters
+        ----------
+        branch : str
+            The branch to create the transaction on.
+        message : str
+            The commit message to use when committing the session.
+
+        Yields
+        -------
+        store : IcechunkStore
+            A Zarr Store which can be used to interact with the data in the repository.
+        """
+        session = self.writable_session(branch)
+        yield session.store
+        session.commit(message)
+
+    @contextmanager
+    def readonly_transaction(
+        self,
+        branch: str | None = None,
+        *,
+        tag: str | None = None,
+        snapshot_id: str | None = None,
+        as_of: datetime.datetime | None = None,
+    ) -> Iterator["IcechunkStore"]:
+        """
+        Read from a specific store snapshot within a transaction.
+
+        This is a context manager that creates a read-only session on the specified branch.
+        When the context is exited, the session will be closed.
+
+        Parameters
+        ----------
+        branch : str
+            The branch to create the transaction on.
+
+        Yields
+        -------
+        store : IcechunkStore
+            A Zarr Store which can be used to interact with the data in the repository
+            in read-only mode.
+        """
+        session = self.readonly_session(
+            branch=branch, tag=tag, snapshot_id=snapshot_id, as_of=as_of
+        )
+        yield session.store
 
     def expire_snapshots(
         self,

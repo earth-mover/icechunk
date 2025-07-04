@@ -95,3 +95,16 @@ async def test_with_readonly() -> None:
 
     reader = store.with_read_only(read_only=True)
     assert reader.read_only
+
+
+async def test_transaction() -> None:
+    repo = parse_repo("memory", "test")
+    with repo.transaction("main", "initialize group") as store:
+        assert not store.read_only
+        root = zarr.group(store=store)
+        root.attrs["foo"] = "bar"
+
+    with repo.readonly_transaction("main") as store:
+        assert store.read_only
+        root = zarr.open_group(store=store, mode="r")
+        assert root.attrs["foo"] == "bar"
