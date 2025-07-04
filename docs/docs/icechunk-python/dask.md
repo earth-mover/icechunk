@@ -15,8 +15,8 @@ import tempfile
 
 # initialize the icechunk store
 storage = icechunk.local_filesystem_storage(tempfile.TemporaryDirectory().name)
-icechunk_repo = icechunk.Repository.create(storage)
-icechunk_session = icechunk_repo.writable_session("main")
+repo = icechunk.Repository.create(storage)
+session = repo.writable_session("main")
 ```
 
 ## Icechunk + Dask
@@ -38,7 +38,7 @@ Now create the Zarr array you will write to.
 import zarr
 
 zarr_chunks = (10, 10)
-group = zarr.group(store=icechunk_session.store, overwrite=True)
+group = zarr.group(store=session.store, overwrite=True)
 
 zarray = group.create_array(
     "array",
@@ -47,69 +47,34 @@ zarray = group.create_array(
     dtype="f8",
     fill_value=float("nan"),
 )
+session.commit("initialize array")
 ```
 Note that the chunks in the store are a divisor of the dask chunks. This means each individual
 write task is independent, and will not conflict. It is your responsibility to ensure that such
 conflicts are avoided.
 
-Now write
+First remember to fork the session before re-opening the Zarr array.
+`store_dask` will merge all the remote write sessions on the cluster before returning back
+a single merged `ForkSession`.
 ```python exec="on" session="dask" source="material-block" result="code"
 import icechunk.dask
 
-icechunk.dask.store_dask(
-    icechunk_session,
+session = repo.writable_session("main")
+fork = session.fork()
+zarray = zarr.open_array(fork.store, path="array")
+remote_session = icechunk.dask.store_dask(
     sources=[dask_array],
     targets=[zarray]
 )
 ```
+Merge the remote session in to the local Session
+```python exec="on" session="dask" source="material-block" result="code"
+session.merge(remote_session)
+```
 
 Finally commit your changes!
 ```python exec="on" session="dask" source="material-block"
-print(icechunk_session.commit("wrote a dask array!"))
-```
-
-
-## Distributed
-
-In distributed contexts where the Session, and Zarr Array objects are sent across the network,
-you must opt-in to successful pickling of a writable store. This will happen when you have initialized a dask
-cluster. This will be case if you have initialized a  `distributed.Client`.
-[`icechunk.dask.store_dask`](./reference.md#icechunk.dask.store_dask) takes care of the hard bit of
-merging Sessions but it is required that you opt-in to pickling prior to creating the target Zarr array objects.
-
-Here is an example:
-
-```python exec="on" session="dask" source="material-block" result="code"
-
-from distributed import Client
-client = Client()
-
-import icechunk.dask
-
-# start a new session. Old session is readonly after committing
-
-icechunk_session = icechunk_repo.writable_session("main")
-zarr_chunks = (10, 10)
-with icechunk_session.allow_pickling():
-    group = zarr.group(
-        store=icechunk_session.store,
-        overwrite=True
-    )
-
-    zarray = group.create_array(
-        "array",
-        shape=shape,
-        chunks=zarr_chunks,
-        dtype="f8",
-        fill_value=float("nan"),
-    )
-
-    icechunk.dask.store_dask(
-        icechunk_session,
-        sources=[dask_array],
-        targets=[zarray]
-    )
-print(icechunk_session.commit("wrote a dask array!"))
+print(session.commit("wrote a dask array!"))
 ```
 
 ## Icechunk + Dask + Xarray
@@ -117,37 +82,28 @@ print(icechunk_session.commit("wrote a dask array!"))
 The [`icechunk.xarray.to_icechunk`](./reference.md#icechunk.xarray.to_icechunk) is functionally identical to Xarray's
 [`Dataset.to_zarr`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_zarr.html), including many of the same keyword arguments.
 Notably the ``compute`` kwarg is not supported.
-
-!!! warning
-
-    When using Xarray, Icechunk in a Dask Distributed context, you *must* use `to_icechunk` so that the Session has a record
-    of the writes that are executed remotely. Using `to_zarr` in such cases, will result in the local Session having no
-    record of remote writes, and a meaningless commit.
-
-
 Now roundtrip an xarray dataset
 
 ```python exec="on" session="dask" source="material-block" result="code"
+import distributed
 import icechunk.xarray
 import xarray as xr
 
-icechunk_session = icechunk_repo.writable_session("main")
+client = distributed.Client()
+
+session = repo.writable_session("main")
 dataset = xr.tutorial.open_dataset(
     "rasm",
     chunks={"time": 1}).isel(time=slice(24)
     )
 
-# `to_icechunk` takes care of "allow_pickling" for you
-icechunk.xarray.to_icechunk(dataset, icechunk_session, mode="w")
+# `to_icechunk` takes care of handling the forking
+icechunk.xarray.to_icechunk(dataset, session, mode="w")
+# remember you must commit before executing a distributed read.
+print(session.commit("wrote an Xarray dataset!"))
 
-with icechunk_session.allow_pickling():
-    roundtripped = xr.open_zarr(icechunk_session.store, consolidated=False)
-    print(dataset.identical(roundtripped))
-```
-
-Finally commit your changes!
-```python exec="on" session="dask" source="material-block" result="code"
-print(icechunk_session.commit("wrote an Xarray dataset!"))
+roundtripped = xr.open_zarr(session.store, consolidated=False)
+print(dataset.identical(roundtripped))
 ```
 
 ```python exec="on" session="dask"

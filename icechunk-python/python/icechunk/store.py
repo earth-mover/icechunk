@@ -36,12 +36,12 @@ def _byte_request_to_tuple(
 
 class IcechunkStore(Store, SyncMixin):
     _store: PyStore
-    _allow_pickling: bool
+    _for_fork: bool
 
     def __init__(
         self,
         store: PyStore,
-        allow_pickling: bool,
+        for_fork: bool,
         read_only: bool | None = None,
         *args: Any,
         **kwargs: Any,
@@ -58,7 +58,7 @@ class IcechunkStore(Store, SyncMixin):
             )
         self._store = store
         self._is_open = True
-        self._allow_pickling = allow_pickling
+        self._for_fork = for_fork
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, IcechunkStore):
@@ -66,34 +66,41 @@ class IcechunkStore(Store, SyncMixin):
         return self._store == value._store
 
     def __getstate__(self) -> object:
-        # we serialize the Rust store as bytes
-        if not self._allow_pickling and not self._store.read_only:
+        # for read_only sessions we allow pickling, this allows distributed reads without forking
+        writable = not self.session.read_only
+        if writable and not self._for_fork:
             raise ValueError(
-                "You must opt in to pickling this *writable* store by using `Session.allow_pickling` context manager"
+                "You must opt-in to pickle writable sessions in a distributed context "
+                "using Session.fork(). "
+                # link to docs
+                "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
+                "please use `icechunk.xarray.to_icechunk` instead. "
             )
         d = self.__dict__.copy()
+        # we serialize the Rust store as bytes
         d["_store"] = self._store.as_bytes()
+        d["_for_fork"] = self._for_fork
         return d
 
     def __setstate__(self, state: Any) -> None:
         # we have to deserialize the bytes of the Rust store
         store_repr = state["_store"]
         state["_store"] = PyStore.from_bytes(store_repr)
-        state["_read_only"] = state["_store"].read_only
         self.__dict__ = state
 
     def with_read_only(self, read_only: bool = False) -> Store:
-        new_store = IcechunkStore(
-            store=self._store, allow_pickling=self._allow_pickling, read_only=read_only
-        )
+        new_store = IcechunkStore(store=self._store, for_fork=False, read_only=read_only)
         new_store._is_open = False
         return new_store
 
     @property
     def session(self) -> "Session":
-        from icechunk import Session
+        from icechunk.session import ForkSession, Session
 
-        return Session(self._store.session, self._allow_pickling)
+        if self._for_fork:
+            return ForkSession(self._store.session)
+        else:
+            return Session(self._store.session)
 
     async def clear(self) -> None:
         """Clear the store.

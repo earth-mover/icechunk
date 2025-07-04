@@ -86,11 +86,11 @@ async def test_distributed_writers(use_object_store: bool) -> None:
     def do_writes(branch_name: str) -> None:
         repo.create_branch(branch_name, first_snap)
         session = repo.writable_session(branch=branch_name)
-        with session.allow_pickling():
-            store = session.store
-            group = zarr.open_group(store=store)
-            zarray = cast(zarr.Array, group["array"])
-            store_dask(session, sources=[dask_array], targets=[zarray])
+        fork = session.fork()
+        group = zarr.open_group(store=fork.store)
+        zarray = cast(zarr.Array, group["array"])
+        merged_session = store_dask(sources=[dask_array], targets=[zarray])
+        session.merge(merged_session)
         commit_res = session.commit("distributed commit")
         assert commit_res
 

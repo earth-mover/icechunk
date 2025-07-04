@@ -9,6 +9,7 @@ from packaging.version import Version
 import xarray as xr
 import zarr
 from icechunk import IcechunkStore, Session
+from icechunk.session import ForkSession
 from icechunk.vendor.xarray import _choose_default_mode
 from xarray import DataArray, Dataset
 from xarray.backends.common import ArrayWriter
@@ -31,7 +32,7 @@ if Version(xr.__version__) < Version("2024.10.0"):
     )
 
 
-def is_chunked_array(x: Any) -> bool:
+def is_dask_collection(x: Any) -> bool:
     if has_dask:
         import dask
 
@@ -49,7 +50,7 @@ class LazyArrayWriter(ArrayWriter):
         self.eager_regions: list[tuple[slice, ...]] = []
 
     def add(self, source: Any, target: Any, region: Any = None) -> Any:
-        if is_chunked_array(source):
+        if is_dask_collection(source):
             self.sources.append(source)
             self.targets.append(target)
             self.regions.append(region)
@@ -156,7 +157,7 @@ class _XarrayDatasetWriter:
         self,
         chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
         split_every: int | None = None,
-    ) -> None:
+    ) -> ForkSession | None:
         """
         Write lazy arrays (e.g. dask) to store.
         """
@@ -166,7 +167,7 @@ class _XarrayDatasetWriter:
             raise ValueError("Please call `write_metadata` first.")
 
         if not self.writer.sources:
-            return
+            return None
 
         chunkmanager_store_kwargs = chunkmanager_store_kwargs or {}
         chunkmanager_store_kwargs["load_stored"] = False
@@ -177,9 +178,7 @@ class _XarrayDatasetWriter:
         stored_arrays = self.writer.sync(
             compute=False, chunkmanager_store_kwargs=chunkmanager_store_kwargs
         )  # type: ignore[no-untyped-call]
-        self.store.session.merge(
-            session_merge_reduction(stored_arrays, split_every=split_every)
-        )
+        return session_merge_reduction(stored_arrays, split_every=split_every)
 
 
 def to_icechunk(
@@ -279,18 +278,43 @@ def to_icechunk(
     """
 
     as_dataset = _make_dataset(obj)
-    with session.allow_pickling():
-        store = session.store
-        writer = _XarrayDatasetWriter(as_dataset, store=store, safe_chunks=safe_chunks)
 
-        writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
+    # This ugliness is needed so that we allow users to call `to_icechunk` with a dirty Session
+    # for _serial_ writes
+    is_dask = is_dask_collection(obj)
+    fork: Session | ForkSession
+    if is_dask:
+        if session.has_uncommitted_changes:
+            raise ValueError(
+                "Calling `to_icechunk` is not allowed on a Session with uncommitted changes. Please commit first."
+            )
+        fork = session.fork()
+    else:
+        fork = session
 
-        # write metadata
-        writer.write_metadata(encoding)
-        # write in-memory arrays
-        writer.write_eager()
-        # eagerly write dask arrays
-        writer.write_lazy(chunkmanager_store_kwargs=chunkmanager_store_kwargs)
+    writer = _XarrayDatasetWriter(as_dataset, store=fork.store, safe_chunks=safe_chunks)
+
+    writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
+
+    # write metadata
+    writer.write_metadata(encoding)
+    # write in-memory arrays
+    writer.write_eager()
+    # eagerly write dask arrays
+    maybe_fork_session = writer.write_lazy(
+        chunkmanager_store_kwargs=chunkmanager_store_kwargs
+    )
+    if is_dask:
+        if maybe_fork_session is None:
+            raise RuntimeError(
+                "Logic bug! Please open at issue at https://github.com/earth-mover/icechunk"
+            )
+        session.merge(maybe_fork_session)
+    else:
+        if maybe_fork_session is not None:
+            raise RuntimeError(
+                "Unexpected write of dask arrays! Please open at issue at https://github.com/earth-mover/icechunk"
+            )
 
 
 @overload

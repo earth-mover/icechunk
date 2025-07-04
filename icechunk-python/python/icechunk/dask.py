@@ -10,8 +10,8 @@ import dask.array
 import dask.array as da
 import zarr
 from dask.array.core import Array
-from icechunk import Session
 from icechunk.distributed import extract_session, merge_sessions
+from icechunk.session import ForkSession
 
 SimpleGraph: TypeAlias = Mapping[tuple[str, int], tuple[Any, ...]]
 
@@ -40,6 +40,12 @@ def computing_meta(func: Callable[P, R]) -> Callable[P, Any]:
     return wrapper
 
 
+def merge_sessions_array_kwargs(
+    *sessions: Any, axis: Any = None, keepdims: Any = None
+) -> ForkSession:
+    return merge_sessions(*sessions)
+
+
 def _assert_correct_dask_version() -> None:
     if Version(dask.__version__) < Version("2024.11.0"):
         raise ValueError(
@@ -48,14 +54,13 @@ def _assert_correct_dask_version() -> None:
 
 
 def store_dask(
-    session: Session,
     *,
     sources: list[Array],
     targets: list[zarr.Array],
     regions: list[tuple[slice, ...]] | None = None,
     split_every: int | None = None,
     **store_kwargs: Any,
-) -> None:
+) -> ForkSession:
     """
     A version of ``dask.array.store`` for Icechunk stores.
 
@@ -69,8 +74,6 @@ def store_dask(
 
     Parameters
     ----------
-    session: Sessions
-        Icechunk writable session
     sources: list of `dask.array.Array`
         List of dask arrays to write.
     targets : list of `zarr.Array`
@@ -94,14 +97,12 @@ def store_dask(
         lock=False,
         **store_kwargs,
     )
-    session.merge(
-        session_merge_reduction(stored_arrays, split_every=split_every, **store_kwargs)
-    )
+    return session_merge_reduction(stored_arrays, split_every=split_every, **store_kwargs)
 
 
 def session_merge_reduction(
     arrays: Array | list[Array], *, split_every: int | None, **store_kwargs: Any
-) -> Session:
+) -> ForkSession:
     if isinstance(arrays, da.Array):
         arrays = [arrays]
     # Now we tree-reduce all changesets
@@ -112,7 +113,7 @@ def session_merge_reduction(
             arr,
             name="ice-changeset",
             chunk=computing_meta(extract_session),
-            aggregate=computing_meta(merge_sessions),
+            aggregate=computing_meta(merge_sessions_array_kwargs),
             split_every=split_every,
             concatenate=False,
             keepdims=False,
