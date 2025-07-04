@@ -421,6 +421,12 @@ class ManifestPreloadCondition:
     def false() -> ManifestPreloadCondition:
         """Create a preload condition that never matches any manifests"""
         ...
+    def __and__(other: ManifestPreloadCondition) -> ManifestPreloadCondition:
+        """Create a preload condition that matches if both this condition and `other` match."""
+        ...
+    def __or__(other: ManifestPreloadCondition) -> ManifestPreloadCondition:
+        """Create a preload condition that matches if either this condition or `other` match."""
+        ...
 
 class ManifestPreloadConfig:
     """Configuration for how Icechunk manifest preload on session creation"""
