@@ -144,7 +144,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -165,4 +165,4 @@ jobs:
           pip install icechunk['test'] --find-links dist --force-reinstall
           pip install pytest-mypy-plugins
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
+          pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py

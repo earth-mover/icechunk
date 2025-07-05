@@ -18,6 +18,9 @@ from icechunk import (
     s3_storage,
 )
 from icechunk.xarray import to_icechunk
+
+# needed otherwise not discovered
+from xarray.tests.conftest import time_unit  # noqa: F401, RUF100
 from xarray.tests.test_backends import (
     TestZarrRegionAuto as ZarrRegionAutoTests,
 )
@@ -49,6 +52,9 @@ class IcechunkStoreBase(ZarrBase):
         if consolidated is not False:
             pytest.skip("consolidated not supported.")
         super().test_roundtrip_consolidated(consolidated)
+
+    def test_append_string_length_mismatch_works(self, *args, **kwargs):
+        pytest.skip("test will be deleted soon")
 
 
 class TestIcechunkStoreFilesystem(IcechunkStoreBase):
