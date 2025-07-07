@@ -110,7 +110,7 @@ There are three key points to keep in mind:
 1. The `write_task` function *must* return the `Session`. It contains a record of the changes executed by this task.
    These changes *must* be manually communicated back to the coordinating process, since each of the distributed processes
    are working with their own independent `Session` instance.
-2. Icechunk requires that users opt-in to pickling a *writable* `Session` using `Session.fork()`.
+2. Icechunk requires that users obtain a distributable *writable* `Session` using `Session.fork()`.
    This creates a new `ForkSession` object that can be pickled. Sessions can be forked _only_ when they have no uncommitted changes.
 3. The user *must* manually merge the `ForkSession` objects into the `Session` to create a meaningful commit.
 
@@ -141,11 +141,11 @@ from icechunk.distributed import merge_sessions
 
 session = repo.writable_session("main")
 with ProcessPoolExecutor() as executor:
-    # opt-in to successful pickling of a writable session
+    # obtain a writable session that can be pickled.
     fork = session.fork()
     # submit the writes
     futures = [
-        executor.submit(write_timestamp, itime=i, session=session)
+        executor.submit(write_timestamp, itime=i, session=fork)
         for i in range(ds.sizes["time"])
     ]
     # grab the Session objects from each individual write task

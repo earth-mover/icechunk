@@ -23,6 +23,8 @@ def test_session_fork() -> None:
         # forking a read-only session
         with pytest.raises(ValueError):
             session.fork()
+        # readonly sessions can be pickled
+        pickle.loads(pickle.dumps(session.fork()))
 
         session = repo.writable_session("main")
         fork = pickle.loads(pickle.dumps(session.fork()))

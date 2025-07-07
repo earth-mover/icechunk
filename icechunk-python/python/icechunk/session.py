@@ -250,7 +250,9 @@ class Session:
                 "Make a commit, create a new Session, and then fork that to execute distributed writes."
             )
         if self.read_only:
-            raise ValueError("You should not need to fork a read-only session.")
+            raise ValueError(
+                "You should not need to fork a read-only session. Read-only sessions can be pickled and transmitted directly."
+            )
         self._allow_changes = True
         return ForkSession(self._session)
 
@@ -281,7 +283,7 @@ class ForkSession(Session):
     ) -> NoReturn:
         raise TypeError(
             "Cannot commit a fork of a Session. If you are using uncooperative writes, "
-            "please communicate the Repository object to your workers, not a Session. "
+            "please send the Repository object to your workers, not a Session. "
             "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
         )
 
