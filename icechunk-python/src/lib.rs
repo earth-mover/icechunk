@@ -80,21 +80,20 @@ fn log_filters_from_env(py: Python) -> PyResult<Option<String>> {
     Ok(value)
 }
 
+fn telemetry_from_env(py: Python) -> PyResult<Option<TelemetryConfig>> {
+    let os = py.import("os")?;
+    let environ = os.getattr("environ")?;
+    let environ: &Bound<PyMapping> = environ.downcast()?;
+    let value = environ.get_item("ICECHUNK_TELEMETRY_ENDPOINT").ok().and_then(|v| v.extract().ok());
+    Ok(value)
+}
+
 #[pyfunction]
 fn initialize_logs(py: Python) -> PyResult<()> {
     if env::var("ICECHUNK_NO_LOGS").is_err() {
-<<<<<<< HEAD
         let log_filter_directive = log_filters_from_env(py)?;
-        initialize_tracing(log_filter_directive.as_deref())
-=======
-        let logs_config = Default::default();
-        let telemetry = env::var("ICECHUNK_TELEMETRY_ENDPOINT")
-            .map(|endpoint| TelemetryConfig { endpoint, ..Default::default() })
-            .ok();
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            initialize_tracing(Some(&logs_config), telemetry.as_ref()).await;
-        });
->>>>>>> 00235b9 (Add telemetry)
+        let telemetry = telemetry_from_env(py)?;
+        initialize_tracing(log_filter_directive.as_deref(), telemetry.as_ref())
     }
     Ok(())
 }
@@ -103,7 +102,8 @@ fn initialize_logs(py: Python) -> PyResult<()> {
 fn set_logs_filter(py: Python, log_filter_directive: Option<String>) -> PyResult<()> {
     let log_filter_directive =
         log_filter_directive.or_else(|| log_filters_from_env(py).ok().flatten());
-    initialize_tracing(log_filter_directive.as_deref());
+    let telemetry = telemetry_from_env(py)?;
+    initialize_tracing(log_filter_directive.as_deref(), telemetry.as_ref());
     Ok(())
 }
 
