@@ -294,3 +294,22 @@ def test_manifest_splitting_complex_config(config, expected_split_sizes):
             for nchunks, splitsize in zip(SHAPE, expected_split_sizes, strict=False)
         )
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
+
+
+def test_manifest_splitting_magic_methods():
+    assert ManifestSplitCondition.and_conditions(
+        [
+            ManifestSplitCondition.name_matches("temperature"),
+            ManifestSplitCondition.name_matches("salinity"),
+        ]
+    ) == ManifestSplitCondition.name_matches(
+        "temperature"
+    ) & ManifestSplitCondition.name_matches("salinity")
+    assert ManifestSplitCondition.or_conditions(
+        [
+            ManifestSplitCondition.name_matches("temperature"),
+            ManifestSplitCondition.name_matches("salinity"),
+        ]
+    ) == ManifestSplitCondition.name_matches(
+        "temperature"
+    ) | ManifestSplitCondition.name_matches("salinity")
