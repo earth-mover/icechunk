@@ -14,9 +14,9 @@ python ./examples/dask_write.py verify --help
 Example usage:
 
 ```
-python ./examples/dask_write.py create --url s3://my-bucket/my-icechunk-repo --t-chunks 100000 --x-chunks 4 --y-chunks 4 --chunk-x-size 112 --chunk-y-size 112
-python ./examples/dask_write.py update --url s3://my-bucket/my-icechunk-repo --t-from 0 --t-to 1500 --workers 16
-python ./examples/dask_write.py verify --url s3://my-bucket/my-icechunk-repo --t-from 0 --t-to 1500 --workers 16
+python ./examples/dask_write.py --url s3://my-bucket/my-icechunk-repo create --t-chunks 100000 --x-chunks 4 --y-chunks 4 --chunk-x-size 112 --chunk-y-size 112
+python ./examples/dask_write.py --url s3://my-bucket/my-icechunk-repo update --t-from 0 --t-to 1500 --workers 16
+python ./examples/dask_write.py --url s3://my-bucket/my-icechunk-repo verify --t-from 0 --t-to 1500 --workers 16
 ```
 
 The work is split into three different commands.
@@ -27,9 +27,7 @@ The work is split into three different commands.
   The example invocation above, will write 1,500 pancakes using 16 Dask workers.
 * `verify` can read a part of the array and check that it contains the required data.
 
-Icechunk can do distributed writes to object store, but currently, it cannot use the Dask array API
-(we are working on it, see https://github.com/earth-mover/icechunk/issues/185).
-Dask can still be used to read and write to Icechunk from multiple processes and machines, we just need to use a lower level
+Dask can be used to read and write to Icechunk from multiple processes and machines, we just need to use a lower level
 Dask API based, for example, in `map/gather`. This mechanism is what we show in this example.
 """
 
@@ -158,7 +156,7 @@ def create(args: argparse.Namespace) -> None:
     group.create_array(
         "array",
         shape=shape,
-        chunk_shape=chunk_shape,
+        chunks=chunk_shape,
         dtype="f8",
         fill_value=float("nan"),
     )
@@ -185,10 +183,11 @@ def update(args: argparse.Namespace) -> None:
     )
 
     session = repo.writable_session("main")
+    fork = session.fork()
 
     tasks = [
         Task(
-            session=session,
+            session=fork,
             time=time,
             seed=time,
         )
@@ -204,8 +203,7 @@ def update(args: argparse.Namespace) -> None:
     # we can use the current session as the commit coordinator, because it doesn't have any pending changes,
     # all changes come from the tasks, Icechunk doesn't care about where the changes come from, the only
     # important thing is to not count changes twice
-    for worker_session in worker_sessions:
-        session.merge(worker_session)
+    session.merge(*worker_sessions)
     commit_res = session.commit("distributed commit")
     assert commit_res
     print("Distributed commit done")

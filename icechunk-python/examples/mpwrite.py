@@ -5,7 +5,6 @@ from concurrent.futures import ProcessPoolExecutor
 
 import xarray as xr
 from icechunk import Repository, Session, local_filesystem_storage
-from icechunk.distributed import merge_sessions
 
 
 def write_timestamp(*, itime: int, session: Session) -> Session:
@@ -23,25 +22,29 @@ if __name__ == "__main__":
 
     chunks = {1 if dim == "time" else ds.sizes[dim] for dim in ds.Tair.dims}
     ds.to_zarr(
-        session.store, compute=False, encoding={"Tair": {"chunks": chunks}}, mode="w"
+        session.store,
+        compute=False,
+        encoding={"Tair": {"chunks": chunks}},
+        mode="w",
+        consolidated=False,
     )
     # this commit is optional, but may be useful in your workflow
     session.commit("initialize store")
 
     session = repo.writable_session("main")
+    fork = session.fork()
     with ProcessPoolExecutor() as executor:
         # opt-in to successful pickling of a writable session
-        with session.allow_pickling():
-            # submit the writes
-            futures = [
-                executor.submit(write_timestamp, itime=i, session=session)
-                for i in range(ds.sizes["time"])
-            ]
-            # grab the Session objects from each individual write task
-            sessions = [f.result() for f in futures]
+        # submit the writes
+        futures = [
+            executor.submit(write_timestamp, itime=i, session=fork)
+            for i in range(ds.sizes["time"])
+        ]
+        # grab the Session objects from each individual write task
+        fork_sessions = [f.result() for f in futures]
 
     # manually merge the remote sessions in to the local session
-    session = merge_sessions(session, *sessions)
+    session.merge(*fork_sessions)
     session.commit("finished writes")
 
     ondisk = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
