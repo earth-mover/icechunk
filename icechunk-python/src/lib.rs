@@ -84,7 +84,11 @@ fn telemetry_from_env(py: Python) -> PyResult<Option<TelemetryConfig>> {
     let os = py.import("os")?;
     let environ = os.getattr("environ")?;
     let environ: &Bound<PyMapping> = environ.downcast()?;
-    let value = environ.get_item("ICECHUNK_TELEMETRY_ENDPOINT").ok().and_then(|v| v.extract().ok());
+    let value = environ
+        .get_item("ICECHUNK_TELEMETRY_ENDPOINT")
+        .ok()
+        .and_then(|v| v.extract().ok());
+    let value = value.map(|v| TelemetryConfig { endpoint: v, ..Default::default() });
     Ok(value)
 }
 

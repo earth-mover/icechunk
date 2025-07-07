@@ -65,7 +65,10 @@ static LOG_FILTER: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
 #[cfg(feature = "logs")]
-pub fn initialize_tracing(log_filter_directive: Option<&str>, telemetry_config: Option<&TelemetryConfig>) {
+pub fn initialize_tracing(
+    log_filter_directive: Option<&str>,
+    telemetry_config: Option<&TelemetryConfig>,
+) {
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler};
@@ -108,7 +111,7 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>, telemetry_config: 
                             e
                         })
                         .ok()?;
-            
+
                     let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                         .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(1.0))))
                         // If export trace to AWS X-Ray, you can use XrayIdGenerator
@@ -116,7 +119,6 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>, telemetry_config: 
                         .with_batch_exporter(otlp_exporter)
                         .build()
                         .tracer(config.tracer_name.clone());
-            
                     Some(OpenTelemetryLayer::new(tracer))
                 });
 
@@ -128,11 +130,10 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>, telemetry_config: 
                 {
                     println!("Error initializing logs: {}", err);
                 }
-            },
-        }, 
+            }
+        },
         Err(err) => {
             println!("Error setting up logs: {}", err)
         }
-        
     }
 }
