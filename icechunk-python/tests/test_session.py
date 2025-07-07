@@ -62,3 +62,21 @@ def test_session_fork() -> None:
             name for name, _ in zarr.open_group(session.store, mode="r").groups()
         )
         assert groups == {"foo", "foo1", "foo2"}
+
+        # forking a forked session may be useful
+        session = repo.writable_session("main")
+        fork1 = pickle.loads(pickle.dumps(session.fork()))
+        fork2 = pickle.loads(pickle.dumps(fork1.fork()))
+        zarr.create_group(fork1.store, path="/foo3")
+        with pytest.raises(ValueError):
+            fork1.fork()
+        zarr.create_group(fork2.store, path="/foo4")
+
+        fork1 = pickle.loads(pickle.dumps(fork1))
+        fork2 = pickle.loads(pickle.dumps(fork2))
+        session.merge(fork1, fork2)
+
+        groups = set(
+            name for name, _ in zarr.open_group(session.store, mode="r").groups()
+        )
+        assert groups == {"foo", "foo1", "foo2", "foo3", "foo4"}
