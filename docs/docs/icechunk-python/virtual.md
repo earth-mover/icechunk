@@ -92,12 +92,12 @@ storage = icechunk.local_filesystem_storage(
 )
 
 config = icechunk.RepositoryConfig.default()
-config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("s3", "s3://", icechunk.s3_store(region="us-east-1")))
-credentials = icechunk.containers_credentials(s3=icechunk.s3_credentials(anonymous=True))
+config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("s3://mybucket/my/data/", icechunk.s3_store(region="us-east-1")))
+credentials = icechunk.containers_credentials({"s3://mybucket/my/data/": icechunk.s3_credentials(anonymous=True)})
 repo = icechunk.Repository.create(storage, config, credentials)
 ```
 
-With the repo created, lets write our virtual dataset to Icechunk with VirtualiZarr!
+With the repo created, and the virtual chunk container added, lets write our virtual dataset to Icechunk with VirtualiZarr!
 
 ```python
 session = repo.writable_session("main")
@@ -150,13 +150,17 @@ ds.sst.isel(time=26, zlev=0).plot(x='lon', y='lat', vmin=0)
 
 ![oisst](../assets/datasets/oisst.png)
 
+!!! note
+
+    Users of the repo will need to enable the virtual chunk container by passing the `credentials` argument to `Repository.open`. This way, the repo user, flags the container as authorized. `credentials` argument must be a dict using url prefixes as keys and optional credentials as values. If the container requires no credentials, `None` can be used as the value in the map. Failing to authorize a container, will generate an error when a chunk is fetched from it.
+
 ## Virtual Reference API
 
 While `VirtualiZarr` is the easiest way to create virtual datasets with Icechunk, the Store API that it uses to create the datasets in Icechunk is public. `IcechunkStore` contains a [`set_virtual_ref`](./reference.md#icechunk.IcechunkStore.set_virtual_ref) method that specifies a virtual ref for a specified chunk.
 
 ### Virtual Reference Storage Support
 
-Currently, Icechunk supports two types of storage for virtual references:
+Currently, Icechunk supports four types of storage for virtual references:
 
 #### S3 Compatible
 
@@ -167,13 +171,48 @@ References to files accessible via S3 compatible storage.
 Here is how we can set the chunk at key `c/0` to point to a file on an s3 bucket,`mybucket`, with the prefix `my/data/file.nc`:
 
 ```python
-store.set_virtual_ref('c/0', 's3://mybucket/my/data/file.nc', offset=1000, length=200)
+config = icechunk.RepositoryConfig.default()
+config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("s3://mybucket/my/data", icechunk.s3_store(region="us-east-1")))
+repo = icechunk.Repository.create(storage, config)
+session = repo.writable_session("main")
+session.store.set_virtual_ref('c/0', 's3://mybucket/my/data/file.nc', offset=1000, length=200)
 ```
 
 ##### Configuration
 
 S3 virtual references require configuring credential for the store to be able to access the specified s3 bucket. See [the configuration docs](./configuration.md#virtual-reference-storage-config) for instructions.
 
+#### GCS
+
+References to files accessible on Google Cloud Storage
+
+##### Example
+
+Here is how we can set the chunk at key `c/0` to point to a file on an s3 bucket,`mybucket`, with the prefix `my/data/file.nc`:
+
+```python
+config = icechunk.RepositoryConfig.default()
+config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("gcs://mybucket/my/data", icechunk.gcs_store(options={})))
+repo = icechunk.Repository.create(storage, config)
+session = repo.writable_session("main")
+session.store.set_virtual_ref('c/0', 'gcs://mybucket/my/data/file.nc', offset=1000, length=200)
+```
+
+#### HTTP
+
+References to files accessible via http(s) protocol
+
+##### Example
+
+Here is how we can set the chunk at key `c/0` to point to a file on `myserver`, with the prefix `my/data/file.nc`:
+
+```python
+config = icechunk.RepositoryConfig.default()
+config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("https://myserver/my/data", icechunk.http_store(options={})))
+repo = icechunk.Repository.create(storage, config)
+session = repo.writable_session("main")
+session.store.set_virtual_ref('c/0', 'https://myserver/my/data/file.nc', offset=1000, length=200)
+```
 
 #### Local Filesystem
 
@@ -184,7 +223,11 @@ References to files accessible via local filesystem. This requires any file path
 Here is how we can set the chunk at key `c/0` to point to a file on my local filesystem located at `/path/to/my/file.nc`:
 
 ```python
-store.set_virtual_ref('c/0', 'file:///path/to/my/file.nc', offset=20, length=100)
+config = icechunk.RepositoryConfig.default()
+config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("s3://mybucket/my/data", icechunk.local_filesystem_store("/path/to/my")))
+repo = icechunk.Repository.create(storage, config)
+session = repo.writable_session("main")
+session.store.set_virtual_ref('c/0', 'file:///path/to/my/file.nc', offset=20, length=100)
 ```
 
 No extra configuration is necessary for local filesystem references.

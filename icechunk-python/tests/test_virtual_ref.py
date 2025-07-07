@@ -19,6 +19,7 @@ from icechunk import (
     http_store,
     in_memory_storage,
     local_filesystem_storage,
+    local_filesystem_store,
     s3_credentials,
     s3_store,
 )
@@ -347,3 +348,67 @@ async def test_public_virtual_refs(
         dtype="float32",
     )
     assert np.allclose(year_values, actual_values)
+
+
+def test_error_on_nonexisting_virtual_chunk_container():
+    repo = Repository.open_or_create(
+        storage=in_memory_storage(),
+    )
+    session = repo.writable_session("main")
+    store = session.store
+
+    array = zarr.create_array(
+        store, shape=(1,), chunks=(1,), dtype="i4", compressors=None
+    )
+
+    store.set_virtual_refs(
+        array_path="/",
+        validate_containers=False,
+        chunks=[
+            VirtualChunkSpec(
+                index=[0],
+                location="file:///foo",
+                offset=0,
+                length=4,
+            ),
+        ],
+    )
+
+    with pytest.raises(
+        IcechunkError, match="file:///foo.* edit the repository configuration"
+    ):
+        array[0]
+
+
+def test_error_on_non_authorized_virtual_chunk_container():
+    store_config = local_filesystem_store("/foo")
+    container = VirtualChunkContainer("file:///foo", store_config)
+    config = RepositoryConfig.default()
+    config.set_virtual_chunk_container(container)
+    repo = Repository.open_or_create(
+        storage=in_memory_storage(),
+        config=config,
+    )
+
+    session = repo.writable_session("main")
+    store = session.store
+
+    array = zarr.create_array(
+        store, shape=(1,), chunks=(1,), dtype="i4", compressors=None
+    )
+
+    store.set_virtual_refs(
+        array_path="/",
+        validate_containers=False,
+        chunks=[
+            VirtualChunkSpec(
+                index=[0],
+                location="file:///foo",
+                offset=0,
+                length=4,
+            ),
+        ],
+    )
+
+    with pytest.raises(IcechunkError, match="file:///foo.*authorize"):
+        array[0]

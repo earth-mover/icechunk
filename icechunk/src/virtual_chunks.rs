@@ -703,3 +703,184 @@ impl ChunkFetcher for ObjectStoreFetcher {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+
+    use crate::{
+        ObjectStoreConfig,
+        config::S3Options,
+        format::manifest::{VirtualReferenceError, VirtualReferenceErrorKind},
+        virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
+    };
+
+    #[test]
+    fn cannot_create_container_without_prefix() {
+        assert!(
+            VirtualChunkContainer::new(
+                "s3://".to_string(),
+                ObjectStoreConfig::S3Compatible(S3Options {
+                    region: None,
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false
+                })
+            )
+            .is_err()
+        );
+        assert!(
+            VirtualChunkContainer::new(
+                "file://".to_string(),
+                ObjectStoreConfig::S3Compatible(S3Options {
+                    region: None,
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false
+                })
+            )
+            .is_err()
+        );
+        assert!(
+            VirtualChunkContainer::new(
+                "file:///".to_string(),
+                ObjectStoreConfig::S3Compatible(S3Options {
+                    region: None,
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false
+                })
+            )
+            .is_err()
+        );
+        assert!(
+            VirtualChunkContainer::new(
+                "gcs://".to_string(),
+                ObjectStoreConfig::S3Compatible(S3Options {
+                    region: None,
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false
+                })
+            )
+            .is_err()
+        );
+        assert!(
+            VirtualChunkContainer::new(
+                "http://".to_string(),
+                ObjectStoreConfig::S3Compatible(S3Options {
+                    region: None,
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false
+                })
+            )
+            .is_err()
+        );
+        assert!(
+            VirtualChunkContainer::new(
+                "https://".to_string(),
+                ObjectStoreConfig::S3Compatible(S3Options {
+                    region: None,
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false
+                })
+            )
+            .is_err()
+        );
+        assert!(
+            VirtualChunkContainer::new(
+                "custom://".to_string(),
+                ObjectStoreConfig::S3Compatible(S3Options {
+                    region: None,
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false
+                })
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cannot_resolve_for_nonexistent_container() {
+        let container = VirtualChunkContainer::new(
+            "file:///foo".to_string(),
+            ObjectStoreConfig::LocalFileSystem("/example".into()),
+        )
+        .unwrap();
+        let resolver = VirtualChunkResolver::new(
+            [container].into_iter(),
+            Default::default(),
+            Default::default(),
+        );
+
+        let path = "file:///example/foo.nc";
+        let res = resolver.fetch_chunk(path, &(0..100), None).await;
+        assert!(matches!(
+            res,
+            Err(VirtualReferenceError {
+                kind: VirtualReferenceErrorKind::NoContainerForUrl(error_path),
+                ..
+            }) if error_path.as_str() == path
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_cannot_resolve_for_unauthorized_container() {
+        let container = VirtualChunkContainer::new(
+            "file:///example".to_string(),
+            ObjectStoreConfig::LocalFileSystem("/example".into()),
+        )
+        .unwrap();
+        let resolver = VirtualChunkResolver::new(
+            [container].into_iter(),
+            Default::default(),
+            Default::default(),
+        );
+
+        let path = "file:///example/foo.nc";
+        let res = resolver.fetch_chunk(path, &(0..100), None).await;
+        assert!(matches!(
+            res,
+            Err(VirtualReferenceError {
+                kind: VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(cont),
+                ..
+            }) if cont.url_prefix() == "file:///example"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_resolver_filters_out_invalid_containers() {
+        // this may be a container manipulated on-disk to have a bad url-prefix
+        // it should get filtered out when creating the resolver
+        let container = VirtualChunkContainer {
+            name: None,
+            url_prefix: "file:///".to_string(),
+            store: ObjectStoreConfig::LocalFileSystem("/example".into()),
+        };
+        let resolver = VirtualChunkResolver::new(
+            [container].into_iter(),
+            Default::default(),
+            Default::default(),
+        );
+
+        let path = "file:///example/foo.nc";
+        let res = resolver.fetch_chunk(path, &(0..100), None).await;
+        assert!(matches!(
+            res,
+            Err(VirtualReferenceError {
+                kind: VirtualReferenceErrorKind::NoContainerForUrl(error_path),
+                ..
+            }) if error_path.as_str() == path
+        ));
+    }
+}
