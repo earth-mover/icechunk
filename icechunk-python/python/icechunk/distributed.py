@@ -40,10 +40,8 @@ def merge_sessions(
             raise TypeError(
                 "merge_sessions only accepts ForkSession objects. "
                 f"Received {type(s).__name__!r} instance instead. "
-                "First merge all your ForkSessions using `result = merge_sessions(*forked_session)`. "
-                "Then call `session.merge(result)`. "
+                "To merge _all_ your sessions, use `Session.merge(*forked_sessions)` instead. "
                 "See https://icechunk.io/en/stable/icechunk-python/parallel/#cooperative-distributed-writes."
             )
-    for other in rest:
-        session.merge(other)
+    session.merge(*rest)
     return cast(ForkSession, session)

@@ -25,8 +25,7 @@ import tqdm
 # import typer
 import zarr
 from benchmarks import lib
-from icechunk import Repository, S3Options, Session, Storage
-from icechunk.distributed import merge_sessions
+from icechunk import ForkSession, Repository, S3Options, Storage
 
 BRANCH_NAME = "main"
 
@@ -36,14 +35,14 @@ class Task:
     """A read/write task"""
 
     # The worker will use this Icechunk store to read/write to the dataset
-    session: Session
+    session: ForkSession
     # Region of the array to write to
     region: tuple[slice, ...]
 
 
 @dataclass
 class TaskResult:
-    session: Session
+    session: ForkSession
     time: timedelta
 
 
@@ -192,20 +191,20 @@ def write(
     with timer.time(op="total_write_time", **timer_context):
         # tasks =
         # print(f"submitted {len(tasks)} tasks")
-        with session.allow_pickling():
-            results = [
-                f.result(timeout=5)
-                for f in tqdm.tqdm(
-                    futures.as_completed(
-                        [
-                            executor.submit(
-                                execute_write_task, Task(session=session, region=slicer)
-                            )
-                            for slicer in lib.slices_from_chunks(shape, task_chunk_shape)
-                        ]
-                    )
+        fork = session.fork()
+        results = [
+            f.result(timeout=5)
+            for f in tqdm.tqdm(
+                futures.as_completed(
+                    [
+                        executor.submit(
+                            execute_write_task, Task(session=fork, region=slicer)
+                        )
+                        for slicer in lib.slices_from_chunks(shape, task_chunk_shape)
+                    ]
                 )
-            ]
+            )
+        ]
 
     timer.diagnostics.append(
         {"op": "write_task", "runtime": tuple(r.time for r in results)}
@@ -214,7 +213,7 @@ def write(
     # TODO: record time & byte size?
     with timer.time(op="merge_changeset", **timer_context):
         if not isinstance(executor, futures.ThreadPoolExecutor):
-            session = merge_sessions(session, *(res.session for res in results))
+            session.merge(*(res.session for res in results))
     assert session.has_uncommitted_changes
 
     with timer.time(op="commit", **timer_context):

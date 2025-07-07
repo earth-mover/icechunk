@@ -5,7 +5,6 @@ from concurrent.futures import ProcessPoolExecutor
 
 import xarray as xr
 from icechunk import Repository, Session, local_filesystem_storage
-from icechunk.distributed import merge_sessions
 
 
 def write_timestamp(*, itime: int, session: Session) -> Session:
@@ -45,8 +44,7 @@ if __name__ == "__main__":
         fork_sessions = [f.result() for f in futures]
 
     # manually merge the remote sessions in to the local session
-    merged_forks = merge_sessions(*fork_sessions)
-    session.merge(merged_forks)
+    session.merge(*fork_sessions)
     session.commit("finished writes")
 
     ondisk = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)

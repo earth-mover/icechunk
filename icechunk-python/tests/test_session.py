@@ -23,8 +23,10 @@ def test_session_fork() -> None:
         # forking a read-only session
         with pytest.raises(ValueError):
             session.fork()
-        # readonly sessions can be pickled
-        pickle.loads(pickle.dumps(session.fork()))
+        # readonly sessions can be pickled directly
+        with pytest.raises(ValueError, match="can be pickled"):
+            pickle.loads(pickle.dumps(session.fork()))
+        pickle.loads(pickle.dumps(session))
 
         session = repo.writable_session("main")
         fork = pickle.loads(pickle.dumps(session.fork()))
@@ -48,9 +50,11 @@ def test_session_fork() -> None:
         fork1 = pickle.loads(pickle.dumps(fork1))
         fork2 = pickle.loads(pickle.dumps(fork2))
 
+        # this is wrong
         with pytest.raises(TypeError, match="Received 'Session'"):
             merge_sessions(session, fork1, fork2)
-        session.merge(merge_sessions(fork1, fork2))
+        # this is right
+        session.merge(fork1, fork2)
         session.commit("all done")
 
         groups = set(

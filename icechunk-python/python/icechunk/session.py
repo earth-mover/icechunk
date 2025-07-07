@@ -162,21 +162,22 @@ class Session:
             for coord in batch:
                 yield tuple(coord)
 
-    def merge(self, other: "ForkSession") -> None:
+    def merge(self, *others: "ForkSession") -> None:
         """
         Merge the changes for this session with the changes from another session.
 
         Parameters
         ----------
-        other : Self
-            The other session to merge changes from.
+        others : ForkSession
+            The forked sessions to merge changes from.
         """
-        if not isinstance(other, ForkSession):
-            raise ValueError(
-                "Sessions can only be merged with a ForkSession created with Session.fork(). "
-                f"Received {type(other).__name__} instead."
-            )
-        self._session.merge(other._session)
+        for other in others:
+            if not isinstance(other, ForkSession):
+                raise ValueError(
+                    "Sessions can only be merged with a ForkSession created with Session.fork(). "
+                    f"Received {type(other).__name__} instead."
+                )
+            self._session.merge(other._session)
         self._allow_changes = False
 
     def commit(
@@ -267,12 +268,13 @@ class ForkSession(Session):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
 
-    def merge(self, other: Self) -> None:
-        if not isinstance(other, ForkSession):
-            raise TypeError(
-                f"A ForkSession can only be merged with another ForkSession. Received {type(other)} instead."
-            )
-        self._session.merge(other._session)
+    def merge(self, *others: Self) -> None:
+        for other in others:
+            if not isinstance(other, ForkSession):
+                raise TypeError(
+                    f"A ForkSession can only be merged with another ForkSession. Received {type(other)} instead."
+                )
+            self._session.merge(other._session)
 
     def commit(
         self,

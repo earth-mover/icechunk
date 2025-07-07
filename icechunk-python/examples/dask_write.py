@@ -42,7 +42,6 @@ import icechunk
 import zarr
 from dask.distributed import Client
 from dask.distributed import print as dprint
-from icechunk.distributed import merge_sessions
 
 
 @dataclass
@@ -204,8 +203,7 @@ def update(args: argparse.Namespace) -> None:
     # we can use the current session as the commit coordinator, because it doesn't have any pending changes,
     # all changes come from the tasks, Icechunk doesn't care about where the changes come from, the only
     # important thing is to not count changes twice
-    merged = merge_sessions(*worker_sessions)
-    session.merge(merged)
+    session.merge(*worker_sessions)
     commit_res = session.commit("distributed commit")
     assert commit_res
     print("Distributed commit done")

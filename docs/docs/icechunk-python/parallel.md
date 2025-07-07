@@ -128,16 +128,15 @@ def write_timestamp(*, itime: int, session: ForkSession) -> ForkSession:
     return session
 ```
 
-Now we issue write tasks after
-1. forking the Session with `Session.fork`,
+The steps for making a distribute write are as follows:
+
+1. fork the Session with `Session.fork`,
 2. gather the ForkSessions from individual tasks,
-3. merge the gathered ForkSessions with [`icechunk.distributed.merge_sessions`](./reference.md#icechunk.distributed.merge_sessions),
-4. merge the `Session` with the merged `ForkSession`, and finally
-5. make a successful commit.
+3. merge the `Session` with the gathered ForkSessions using [`Session.merge`](./reference.md#icechunk.Session.merge), and finally
+4. make a successful commit using [`Session.commit`](./reference.md#icechunk.Session.commit).
 
 ```python
 from concurrent.futures import ProcessPoolExecutor
-from icechunk.distributed import merge_sessions
 
 session = repo.writable_session("main")
 with ProcessPoolExecutor() as executor:
@@ -152,8 +151,7 @@ with ProcessPoolExecutor() as executor:
     remote_sessions = [f.result() for f in futures]
 
 # manually merge the remote sessions in to the local session
-merged = merge_sessions(*remote_sessions)
-session.merge(merged)
+session.merge(*remote_sessions)
 print(session.commit("finished writes"))
 ```
 
