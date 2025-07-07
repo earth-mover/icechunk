@@ -221,6 +221,7 @@ class Session:
                 "Committing a session after forking, and without merging will not work. "
                 "Merge back in the remote changes first using Session.merge().",
                 UserWarning,
+                stacklevel=2,
             )
         return self._session.commit(
             message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
