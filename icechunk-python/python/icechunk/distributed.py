@@ -27,6 +27,22 @@ def _flatten(seq: Iterable[Any], container: type = list) -> Generator[Any, None,
 def extract_session(
     zarray: zarr.Array, axis: Any = None, keepdims: Any = None
 ) -> Session:
+    """
+    Extract Icechunk Session from a zarr Array, useful for distributed array computing frameworks.
+
+    Parameters
+    ----------
+    zarray: zarr.Array
+        ForkSessions to merge.
+    axis: Any
+       Ignored, only present to satisfy API.
+    keepdims: Any
+       Ignored, only present to satisfy API.
+
+    Returns
+    -------
+    Session
+    """
     store = cast(IcechunkStore, zarray.store)
     return store.session
 
@@ -34,6 +50,18 @@ def extract_session(
 def merge_sessions(
     *sessions: ForkSession | list[ForkSession] | list[list[ForkSession]],
 ) -> ForkSession:
+    """
+    Merge fork sessions, useful for distributed array computing frameworks.
+
+    Parameters
+    ----------
+    sessions: ForkSession
+        ForkSessions to merge.
+
+    Returns
+    -------
+    ForkSession
+    """
     session, *rest = list(_flatten(sessions))
     for s in (session, *rest):
         if not isinstance(s, ForkSession):
