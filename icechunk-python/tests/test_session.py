@@ -4,7 +4,7 @@ import tempfile
 import pytest
 
 import zarr
-from icechunk import Repository, local_filesystem_storage
+from icechunk import IcechunkError, Repository, local_filesystem_storage
 from icechunk.distributed import merge_sessions
 
 
@@ -33,8 +33,9 @@ def test_session_fork() -> None:
         zarr.create_group(fork.store, path="/foo")
         assert not session.has_uncommitted_changes
         assert fork.has_uncommitted_changes
-        with pytest.raises(ValueError, match="without merging"):
-            session.commit("foo")
+        with pytest.warns(UserWarning):
+            with pytest.raises(IcechunkError, match="cannot commit"):
+                session.commit("foo")
         session.merge(fork)
         session.commit("foo")
 

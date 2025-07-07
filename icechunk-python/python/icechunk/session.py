@@ -1,4 +1,5 @@
 import contextlib
+import warnings
 from collections.abc import AsyncIterator, Generator
 from typing import Any, NoReturn, Self
 
@@ -173,7 +174,7 @@ class Session:
         """
         for other in others:
             if not isinstance(other, ForkSession):
-                raise ValueError(
+                raise TypeError(
                     "Sessions can only be merged with a ForkSession created with Session.fork(). "
                     f"Received {type(other).__name__} instead."
                 )
@@ -216,9 +217,10 @@ class Session:
             If the session is out of date and a conflict occurs.
         """
         if self._allow_changes:
-            raise ValueError(
-                "Committing a session after forking, and without merging is not allowed. "
-                "Merge back in the remote changes first using Session.merge()."
+            warnings.warn(
+                "Committing a session after forking, and without merging will not work. "
+                "Merge back in the remote changes first using Session.merge().",
+                UserWarning,
             )
         return self._session.commit(
             message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
