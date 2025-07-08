@@ -48,11 +48,6 @@ As with all things in technology, the benefits of Icechunk come with some tradeo
 - The on-disk format is less transparent than regular Zarr.
 - The process for distributed writes is more complex to coordinate.
 
-!!! warning
-    Another downside of Icechunk in its current state is its immaturity.
-    The library is very new, likely contains bugs, and is not recommended
-    for production usage at this point in time.
-
 
 ## What is Icechunk's relationship to Zarr?
 
@@ -125,23 +120,21 @@ We welcome contributions from folks interested in developing Icechunk bindings f
 
 ## Is Icechunk stable?
 
-The Icechunk library is reasonably well-tested and performant.
-The Rust-based core library provides a solid foundation of correctness, safety, and speed.
+Yes! Icechunk 1.0, released in July 2025, is a stable release suitable for production use.
+Data written by Icechunk 1.0 and greater will forever be readable by future Icechunk versions.
 
-However, the actual on disk format is still evolving and may change from one alpha release to the next.
-Until Icechunk reaches v1.0, we can't commit to long-term stability of the on-disk format.
-This means Icechunk can't yet be used for production uses which require long-term persistence of data.
+## What is the backwards compatibility policy for the Icechunk format?
 
-😅 Don't worry! We are working as fast as we can and aim to release v1.0 soon!
+Any data written by Icechunk v1.0 or great will be readable forever by future Icechunk release (backwards compatible).
+Any data written in a _greater major version_ are not guaranteed to be compatible with a _lesser major version_ (e.g. data written by v2.2 are not guaranteed compatible with v1.1 libraries).
 
 ## Is Icechunk fast?
 
-We have not yet begun the process of optimizing Icechunk for performance.
-Our focus so far has been on correctness and delivering the features needed for full interoperability with Zarr and Xarray.
-
-However, preliminary investigations indicate that Icechunk is at least as fast as the existing Zarr / Dask / fsspec stack
+Icechunk is at least as fast as the existing Zarr / Dask / fsspec stack
 and in many cases achieves significantly lower latency and higher throughput.
 Furthermore, Icechunk achieves this without using Dask, by implementing its own asynchronous multithreaded I/O pipeline.
+For a demonstration of Icechunk's performance, see the blog post
+[Solving NASA’s Cloud Data Dilemma: How Icechunk Revolutionizes Earth Data Access](https://earthmover.io/blog/nasa-icechunk)
 
 ## How does Icechunk compare to X?
 
