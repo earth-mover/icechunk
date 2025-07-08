@@ -591,37 +591,6 @@ class Repository:
         yield session.store
         session.commit(message)
 
-    @contextmanager
-    def readonly_transaction(
-        self,
-        branch: str | None = None,
-        *,
-        tag: str | None = None,
-        snapshot_id: str | None = None,
-        as_of: datetime.datetime | None = None,
-    ) -> Iterator["IcechunkStore"]:
-        """
-        Read from a specific store snapshot within a transaction.
-
-        This is a context manager that creates a read-only session on the specified branch.
-        When the context is exited, the session will be closed.
-
-        Parameters
-        ----------
-        branch : str
-            The branch to create the transaction on.
-
-        Yields
-        -------
-        store : IcechunkStore
-            A Zarr Store which can be used to interact with the data in the repository
-            in read-only mode.
-        """
-        session = self.readonly_session(
-            branch=branch, tag=tag, snapshot_id=snapshot_id, as_of=as_of
-        )
-        yield session.store
-
     def expire_snapshots(
         self,
         older_than: datetime.datetime,

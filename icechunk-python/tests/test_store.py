@@ -107,11 +107,6 @@ async def test_transaction() -> None:
     cid2 = repo.lookup_branch("main")
     assert cid1 != cid2, "Transaction did not commit changes"
 
-    with repo.readonly_transaction("main") as store:
-        assert store.read_only
-        root = zarr.open_group(store=store, mode="r")
-        assert root.attrs["foo"] == "bar"
-
 
 async def test_transaction_failed_no_commit() -> None:
     repo = parse_repo("memory", "test")
