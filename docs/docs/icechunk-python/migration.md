@@ -80,14 +80,14 @@ container = VirtualChunkContainer("s3://testbucket", store_config)
 config = RepositoryConfig.default()
 config.set_virtual_chunk_container(container)
 
-# we set crodentials for the virtual chunk container
+# we set credentials for the virtual chunk container
 # repo readers will also need this to be able to resolve the virtual chunks
 credentials = containers_credentials(
     {
         # we identify for which container we are passing credentials
         # by using its url_prefx
         # If the value in the map is None, Icechunk will use the "natural" credential
-        # type, usually fetching them from the process enviroment
+        # type, usually fetching them from the process environment
         "s3://testbucket": s3_credentials(
             access_key_id="abcd", secret_access_key="0123"
         )
