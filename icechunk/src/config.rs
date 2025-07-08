@@ -8,15 +8,12 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use itertools::Either;
 pub use object_store::gcp::GcpCredential;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    format::Path,
-    storage,
-    virtual_chunks::{ContainerName, VirtualChunkContainer, mk_default_containers},
-};
+use crate::{format::Path, storage, virtual_chunks::VirtualChunkContainer};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct S3Options {
@@ -362,16 +359,17 @@ pub struct RepositoryConfig {
     // If not set it will use the Storage implementation default
     pub storage: Option<storage::Settings>,
 
-    pub virtual_chunk_containers: Option<HashMap<ContainerName, VirtualChunkContainer>>,
+    // Compatibility note:
+    // The key is this hashmap used to be the ContainerName, which
+    // we have eliminated. We maintain the types for compatibility
+    // with persisted configurations
+    pub virtual_chunk_containers: Option<HashMap<String, VirtualChunkContainer>>,
 
     pub manifest: Option<ManifestConfig>,
 }
 
 static DEFAULT_COMPRESSION: OnceLock<CompressionConfig> = OnceLock::new();
 static DEFAULT_CACHING: OnceLock<CachingConfig> = OnceLock::new();
-static DEFAULT_VIRTUAL_CHUNK_CONTAINERS: OnceLock<
-    HashMap<ContainerName, VirtualChunkContainer>,
-> = OnceLock::new();
 static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
 
 impl RepositoryConfig {
@@ -453,39 +451,25 @@ impl RepositoryConfig {
 
 impl RepositoryConfig {
     pub fn set_virtual_chunk_container(&mut self, cont: VirtualChunkContainer) {
-        if self.virtual_chunk_containers.is_none() {
-            self.virtual_chunk_containers = Some(
-                self.virtual_chunk_containers()
-                    .map(|cont| (cont.name.clone(), cont.clone()))
-                    .collect(),
-            )
-        }
-        self.virtual_chunk_containers
-            .as_mut()
-            .map(|map| map.insert(cont.name.clone(), cont));
+        let mut before = self.virtual_chunk_containers.clone().unwrap_or_default();
+        before.insert(cont.url_prefix().to_string(), cont);
+        self.virtual_chunk_containers = Some(before);
     }
 
     pub fn get_virtual_chunk_container(
         &self,
-        cont_name: &str,
+        url_prefix: &str,
     ) -> Option<&VirtualChunkContainer> {
-        self.virtual_chunk_containers
-            .as_ref()
-            .unwrap_or_else(|| {
-                DEFAULT_VIRTUAL_CHUNK_CONTAINERS.get_or_init(mk_default_containers)
-            })
-            .get(cont_name)
+        self.virtual_chunk_containers.as_ref().and_then(|h| h.get(url_prefix))
     }
 
     pub fn virtual_chunk_containers(
         &self,
     ) -> impl Iterator<Item = &VirtualChunkContainer> {
-        self.virtual_chunk_containers
-            .as_ref()
-            .unwrap_or_else(|| {
-                DEFAULT_VIRTUAL_CHUNK_CONTAINERS.get_or_init(mk_default_containers)
-            })
-            .values()
+        match self.virtual_chunk_containers.as_ref() {
+            Some(h) => Either::Left(h.values()),
+            None => Either::Right(std::iter::empty()),
+        }
     }
 
     pub fn clear_virtual_chunk_containers(&mut self) {

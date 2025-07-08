@@ -1237,7 +1237,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open(
@@ -1245,7 +1245,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open_or_create(
@@ -1253,7 +1253,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
     ) -> PyRepository: ...
     @staticmethod
     def exists(storage: Storage) -> bool: ...

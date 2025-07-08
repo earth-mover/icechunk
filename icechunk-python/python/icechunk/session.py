@@ -1,6 +1,7 @@
 import contextlib
+import warnings
 from collections.abc import AsyncIterator, Generator
-from typing import Any, Self
+from typing import Any, NoReturn, Self
 
 from icechunk import (
     ConflictSolver,
@@ -14,11 +15,11 @@ class Session:
     """A session object that allows for reading and writing data from an Icechunk repository."""
 
     _session: PySession
-    _allow_pickling: bool
+    _allow_changes: bool
 
-    def __init__(self, session: PySession, _allow_pickling: bool = False):
+    def __init__(self, session: PySession):
         self._session = session
-        self._allow_pickling = _allow_pickling
+        self._allow_changes = False
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Session):
@@ -26,17 +27,17 @@ class Session:
         return self._session == value._session
 
     def __getstate__(self) -> object:
-        if not self._allow_pickling and not self.read_only:
+        if not self.read_only:
             raise ValueError(
                 "You must opt-in to pickle writable sessions in a distributed context "
-                "using the `Session.allow_pickling` context manager. "
+                "using Session.fork(). "
                 # link to docs
-                "If you are using xarray's `Dataset.to_zarr` method with dask arrays, "
-                "please consider `icechunk.xarray.to_icechunk` instead."
+                "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
+                "please use `icechunk.xarray.to_icechunk` instead. "
             )
         state = {
             "_session": self._session.as_bytes(),
-            "_allow_pickling": self._allow_pickling,
+            "_allow_changes": self._allow_changes,
         }
         return state
 
@@ -44,21 +45,19 @@ class Session:
         if not isinstance(state, dict):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
-        self._allow_pickling = state["_allow_pickling"]
+        self._allow_changes = state["_allow_changes"]
 
     @contextlib.contextmanager
     def allow_pickling(self) -> Generator[None, None, None]:
         """
         Context manager to allow unpickling this store if writable.
         """
-        # While this property can only be changed by this context manager,
-        # it can be nested (sometimes unintentionally since `to_icechunk` does it)
-        current = self._allow_pickling
-        try:
-            self._allow_pickling = True
-            yield
-        finally:
-            self._allow_pickling = current
+        raise RuntimeError(
+            "The allow_pickling context manager has been removed. "
+            "Use the new `Session.fork` API instead. "
+            # FIXME: Add link to docs
+            "Better yet, use `to_icechunk` if that will fit your needs."
+        )
 
     @property
     def read_only(self) -> bool:
@@ -135,7 +134,7 @@ class Session:
         IcechunkStore
             A zarr Store object for reading and writing data from the repository.
         """
-        return IcechunkStore(self._session.store, self._allow_pickling)
+        return IcechunkStore(self._session.store, for_fork=False)
 
     def all_virtual_chunk_locations(self) -> list[str]:
         """
@@ -164,16 +163,23 @@ class Session:
             for coord in batch:
                 yield tuple(coord)
 
-    def merge(self, other: Self) -> None:
+    def merge(self, *others: "ForkSession") -> None:
         """
         Merge the changes for this session with the changes from another session.
 
         Parameters
         ----------
-        other : Self
-            The other session to merge changes from.
+        others : ForkSession
+            The forked sessions to merge changes from.
         """
-        self._session.merge(other._session)
+        for other in others:
+            if not isinstance(other, ForkSession):
+                raise TypeError(
+                    "Sessions can only be merged with a ForkSession created with Session.fork(). "
+                    f"Received {type(other).__name__} instead."
+                )
+            self._session.merge(other._session)
+        self._allow_changes = False
 
     def commit(
         self,
@@ -207,9 +213,16 @@ class Session:
 
         Raises
         ------
-        ConflictError
+        icechunk.ConflictError
             If the session is out of date and a conflict occurs.
         """
+        if self._allow_changes:
+            warnings.warn(
+                "Committing a session after forking, and without merging will not work. "
+                "Merge back in the remote changes first using Session.merge().",
+                UserWarning,
+                stacklevel=2,
+            )
         return self._session.commit(
             message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
         )
@@ -233,3 +246,60 @@ class Session:
             When a conflict is detected and the solver fails to resolve it.
         """
         self._session.rebase(solver)
+
+    def fork(self) -> "ForkSession":
+        if self.has_uncommitted_changes:
+            raise ValueError(
+                "Cannot fork a Session with uncommitted changes. "
+                "Make a commit, create a new Session, and then fork that to execute distributed writes."
+            )
+        if self.read_only:
+            raise ValueError(
+                "You should not need to fork a read-only session. Read-only sessions can be pickled and transmitted directly."
+            )
+        self._allow_changes = True
+        return ForkSession(self._session)
+
+
+class ForkSession(Session):
+    def __getstate__(self) -> object:
+        state = {"_session": self._session.as_bytes()}
+        return state
+
+    def __setstate__(self, state: object) -> None:
+        if not isinstance(state, dict):
+            raise ValueError("Invalid state")
+        self._session = PySession.from_bytes(state["_session"])
+
+    def merge(self, *others: Self) -> None:
+        for other in others:
+            if not isinstance(other, ForkSession):
+                raise TypeError(
+                    f"A ForkSession can only be merged with another ForkSession. Received {type(other)} instead."
+                )
+            self._session.merge(other._session)
+
+    def commit(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        rebase_with: ConflictSolver | None = None,
+        rebase_tries: int = 1_000,
+    ) -> NoReturn:
+        raise TypeError(
+            "Cannot commit a fork of a Session. If you are using uncooperative writes, "
+            "please send the Repository object to your workers, not a Session. "
+            "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
+        )
+
+    @property
+    def store(self) -> IcechunkStore:
+        """
+        Get a zarr Store object for reading and writing data from the repository using zarr python.
+
+        Returns
+        -------
+        IcechunkStore
+            A zarr Store object for reading and writing data from the repository.
+        """
+        return IcechunkStore(self._session.store, for_fork=True)

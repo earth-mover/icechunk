@@ -110,16 +110,17 @@ There are three key points to keep in mind:
 1. The `write_task` function *must* return the `Session`. It contains a record of the changes executed by this task.
    These changes *must* be manually communicated back to the coordinating process, since each of the distributed processes
    are working with their own independent `Session` instance.
-2. Icechunk requires that users opt-in to pickling a *writable* `Session` using the `Session.allow_pickling()` context manager,
-   to remind the user that distributed writes with Icechunk require care.
-3. The user *must* manually merge the Session objects to create a meaningful commit.
+2. Icechunk requires that users obtain a distributable *writable* `Session` using `Session.fork()`.
+   This creates a new `ForkSession` object that can be pickled. Sessions can be forked _only_ when they have no uncommitted changes.
+3. The user *must* manually merge the `ForkSession` objects into the `Session` to create a meaningful commit.
 
 First we modify `write_task` to return the `Session`:
 
 ```python
 from icechunk import Session
+from icechunk.session import ForkSession
 
-def write_timestamp(*, itime: int, session: Session) -> Session:
+def write_timestamp(*, itime: int, session: ForkSession) -> ForkSession:
     # pass a list to isel to preserve the time dimension
     ds = xr.tutorial.open_dataset("rasm").isel(time=[itime])
     # region="auto" tells Xarray to infer which "region" of the output arrays to write to.
@@ -127,27 +128,30 @@ def write_timestamp(*, itime: int, session: Session) -> Session:
     return session
 ```
 
-Now we issue write tasks within the [`session.allow_pickling()`](reference.md#icechunk.Session.allow_pickling) context, gather the Sessions from individual tasks,
-merge them, and make a successful commit.
+The steps for making a distribute write are as follows:
+
+1. fork the Session with `Session.fork`,
+2. gather the ForkSessions from individual tasks,
+3. merge the `Session` with the gathered ForkSessions using [`Session.merge`](./reference.md#icechunk.Session.merge), and finally
+4. make a successful commit using [`Session.commit`](./reference.md#icechunk.Session.commit).
 
 ```python
 from concurrent.futures import ProcessPoolExecutor
-from icechunk.distributed import merge_sessions
 
 session = repo.writable_session("main")
 with ProcessPoolExecutor() as executor:
-    # opt-in to successful pickling of a writable session
-    with session.allow_pickling():
-        # submit the writes
-        futures = [
-            executor.submit(write_timestamp, itime=i, session=session)
-            for i in range(ds.sizes["time"])
-        ]
-        # grab the Session objects from each individual write task
-        sessions = [f.result() for f in futures]
+    # obtain a writable session that can be pickled.
+    fork = session.fork()
+    # submit the writes
+    futures = [
+        executor.submit(write_timestamp, itime=i, session=fork)
+        for i in range(ds.sizes["time"])
+    ]
+    # grab the Session objects from each individual write task
+    remote_sessions = [f.result() for f in futures]
 
 # manually merge the remote sessions in to the local session
-session = merge_sessions(session, *sessions)
+session.merge(*remote_sessions)
 print(session.commit("finished writes"))
 ```
 

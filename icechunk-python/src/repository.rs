@@ -413,22 +413,25 @@ pub struct PyRepository(Arc<RwLock<Repository>>);
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, virtual_chunk_credentials = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
     fn create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
-        virtual_chunk_credentials: Option<HashMap<String, PyCredentials>>,
+        authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             let repository =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                    let config = config
+                        .map(|c| c.try_into().map_err(PyValueError::new_err))
+                        .transpose()?;
                     Repository::create(
-                        config.map(|c| c.into()),
+                        config,
                         storage.0,
-                        map_credentials(virtual_chunk_credentials),
+                        map_credentials(authorize_virtual_chunk_access),
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
@@ -439,22 +442,25 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, virtual_chunk_credentials = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
     fn open(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
-        virtual_chunk_credentials: Option<HashMap<String, PyCredentials>>,
+        authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             let repository =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                    let config = config
+                        .map(|c| c.try_into().map_err(PyValueError::new_err))
+                        .transpose()?;
                     Repository::open(
-                        config.map(|c| c.into()),
+                        config,
                         storage.0,
-                        map_credentials(virtual_chunk_credentials),
+                        map_credentials(authorize_virtual_chunk_access),
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
@@ -465,23 +471,26 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, virtual_chunk_credentials = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
     fn open_or_create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
-        virtual_chunk_credentials: Option<HashMap<String, PyCredentials>>,
+        authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             let repository =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                    let config = config
+                        .map(|c| c.try_into().map_err(PyValueError::new_err))
+                        .transpose()?;
                     Ok::<_, PyErr>(
                         Repository::open_or_create(
-                            config.map(|c| c.into()),
+                            config,
                             storage.0,
-                            map_credentials(virtual_chunk_credentials),
+                            map_credentials(authorize_virtual_chunk_access),
                         )
                         .await
                         .map_err(PyIcechunkStoreError::RepositoryError)?,
@@ -508,23 +517,25 @@ impl PyRepository {
     /// Reopen the repository changing its config and or virtual chunk credentials
     ///
     /// If config is None, it will use the same value as self
-    /// If virtual_chunk_credentials is None, it will use the same value as self
-    /// If virtual_chunk_credentials is Some(x), it will override with x
-    #[pyo3(signature = (*, config = None, virtual_chunk_credentials = None::<Option<HashMap<String, PyCredentials>>>))]
+    /// If authorize_virtual_chunk_access is None, it will use the same value as self
+    /// If authorize_virtual_chunk_access is Some(x), it will override with x
+    #[pyo3(signature = (*, config = None, authorize_virtual_chunk_access = None::<Option<HashMap<String, Option<PyCredentials>>>>))]
     pub fn reopen(
         &self,
         py: Python<'_>,
         config: Option<&PyRepositoryConfig>,
-        virtual_chunk_credentials: Option<Option<HashMap<String, PyCredentials>>>,
+        authorize_virtual_chunk_access: Option<
+            Option<HashMap<String, Option<PyCredentials>>>,
+        >,
     ) -> PyResult<Self> {
         py.allow_threads(move || {
+            let config = config
+                .map(|c| c.try_into().map_err(PyValueError::new_err))
+                .transpose()?;
             Ok(Self(Arc::new(RwLock::new(
                 self.0
                     .blocking_read()
-                    .reopen(
-                        config.map(|c| c.into()),
-                        virtual_chunk_credentials.map(map_credentials),
-                    )
+                    .reopen(config, authorize_virtual_chunk_access.map(map_credentials))
                     .map_err(PyIcechunkStoreError::RepositoryError)?,
             ))))
         })
@@ -1066,10 +1077,10 @@ impl PyRepository {
 }
 
 fn map_credentials(
-    cred: Option<HashMap<String, PyCredentials>>,
-) -> HashMap<String, Credentials> {
+    cred: Option<HashMap<String, Option<PyCredentials>>>,
+) -> HashMap<String, Option<Credentials>> {
     cred.map(|cred| {
-        cred.iter().map(|(name, cred)| (name.clone(), cred.clone().into())).collect()
+        cred.into_iter().map(|(name, cred)| (name, cred.map(|c| c.into()))).collect()
     })
     .unwrap_or_default()
 }

@@ -69,11 +69,11 @@ config.storage = icechunk.StorageSettings(
 
 ### [`virtual_chunk_containers`](./reference.md#icechunk.RepositoryConfig.virtual_chunk_containers)
 
-Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for referencing these virtual chunks, you can configure the `virtual_chunk_containers` parameter to specify the storage locations and configurations for any virtual chunks. Each virtual chunk container is specified by a [`VirtualChunkContainer`](./reference.md#icechunk.VirtualChunkContainer) object which contains a name, a url prefix, and a storage configuration. When a container is added to the settings, any virtual chunks with a url that starts with the configured prefix will use the storage configuration for that matching container.
+Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for referencing these virtual chunks, you must configure the `virtual_chunk_containers` parameter to specify the storage locations and configurations for any virtual chunks. Each virtual chunk container is specified by a [`VirtualChunkContainer`](./reference.md#icechunk.VirtualChunkContainer) object which contains a url prefix, and a storage configuration. When a container is added to the settings, any virtual chunks with a url that starts with the configured prefix will use the storage configuration for that matching container.
 
 !!! note
 
-    Currently only `s3` compatible storage and `local_filesystem` storage are supported for virtual chunk containers. Other storage backends such as `gcs`, `azure`, and `https` are on the roadmap.
+    Currently only `s3` compatible storage, `gcs`, `local_filesystem` and `http[s]` storages are supported for virtual chunk containers. Other storage backends such as `azure` are on the roadmap.
 
 #### Example
 
@@ -82,7 +82,6 @@ For example, if we wanted to configure an icechunk repo to be able to contain vi
 ```python
 config.virtual_chunk_containers = [
     icechunk.VirtualChunkContainer(
-        name="my-s3-bucket",
         url_prefix="s3://my-s3-bucket/",
         storage=icechunk.StorageSettings(
             storage=icechunk.s3_storage(bucket="my-s3-bucket", region="us-east-1"),
@@ -96,7 +95,6 @@ If we also wanted to configure the repo to be able to contain virtual chunks fro
 ```python
 config.set_virtual_chunk_container(
     icechunk.VirtualChunkContainer(
-        name="my-other-s3-bucket",
         url_prefix="s3://my-other-s3-bucket/",
         storage=icechunk.StorageSettings(
             storage=icechunk.s3_storage(bucket="my-other-s3-bucket", region="us-west-2"),
@@ -105,11 +103,11 @@ config.set_virtual_chunk_container(
 )
 ```
 
-Now at read time, if icechunk encounters a virtual chunk url that starts with `s3://my-other-s3-bucket/`, it will use the storage configuration for the `my-other-s3-bucket` container.
+Now at read time, if Icechunk encounters a virtual chunk url that starts with `s3://my-other-s3-bucket/`, it will use the storage configuration for the `my-other-s3-bucket` container.
 
 !!! note
 
-    While virtual chunk containers specify the storage configuration for any virtual chunks, they do not contain any authentication information. The credentials must also be specified when opening the repository using the [`virtual_chunk_credentials`](./reference.md#icechunk.Repository.open) parameter. See the [Virtual Chunk Credentials](#virtual-chunk-credentials) section for more information.
+    While virtual chunk containers specify the storage configuration for any virtual chunks, they do not contain any authentication information. The credentials must also be specified when opening the repository using the [`authorize_virtual_chunk_access`](./reference.md#icechunk.Repository.open) parameter. This parameter also serves as a way for the user to authorize the access to the virtual chunk containers, containers that are not explicitly allowed with `authorize_virtual_chunk_access` won't be able to fetch their chunks. See the [Virtual Chunk Credentials](#virtual-chunk-credentials) section for more information.
 
 ### [`manifest`](./reference.md#icechunk.RepositoryConfig.manifest)
 
@@ -269,7 +267,7 @@ The next time this repo is opened, the persisted config will be loaded by defaul
 
 ## Virtual Chunk Credentials
 
-When using virtual chunk containers, the credentials for the storage backend must also be specified. This is done using the [`virtual_chunk_credentials`](./reference.md#icechunk.Repository.open) parameter when creating or opening the repo. Credentials are specified as a dictionary of container names mapping to credential objects. A helper function, [`containers_credentials`](./reference.md#icechunk.containers_credentials), is provided to make it easier to specify credentials for multiple containers.
+When using virtual chunk containers, the containers must be authorized by the repo user, and the credentials for the storage backend must be specified. This is done using the [`authorize_virtual_chunk_access`](./reference.md#icechunk.Repository.open) parameter when creating or opening the repo. Credentials are specified as a dictionary of container url prefixes mapping to credential objects or `None`. A `None` credential will fetch credentials from the process environment or it will use anonymous credentials if the container allows it. A helper function, [`containers_credentials`](./reference.md#icechunk.containers_credentials), is provided to make it easier to specify credentials for multiple containers.
 
 ### Example
 
@@ -277,13 +275,14 @@ Expanding on the example from the [Virtual Chunk Containers](#virtual-chunk-cont
 
 ```python
 credentials = icechunk.containers_credentials(
-    my_s3_bucket=icechunk.s3_credentials(bucket="my-s3-bucket", region="us-east-1"),
-    my_other_s3_bucket=icechunk.s3_credentials(bucket="my-other-s3-bucket", region="us-west-2"),
+    { "s3://my_s3_bucket": icechunk.s3_credentials(bucket="my-s3-bucket", region="us-east-1"),
+      "s3://my_other_s3_bucket": icechunk.s3_credentials(bucket="my-other-s3-bucket", region="us-west-2"),
+    }
 )
 
 repo = icechunk.Repository.open(
     storage=storage,
     config=config,
-    virtual_chunk_credentials=credentials,
+    authorize_virtual_chunk_access=credentials,
 )
 ```
