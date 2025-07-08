@@ -1,6 +1,7 @@
 import pickle
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from typing import cast
 
 from icechunk._icechunk_python import (
     AzureCredentials,
@@ -340,12 +341,14 @@ def azure_credentials(
     raise ValueError("Conflicting arguments to azure_credentials function")
 
 
-def containers_credentials(m: Mapping[str, AnyS3Credential]) -> dict[str, Credentials.S3]:
+def containers_credentials(
+    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential | None],
+) -> dict[str, AnyCredential | None]:
     """Build a map of credentials for virtual chunk containers.
 
     Parameters
     ----------
-    m: Mapping[str, AnyS3Credential]
+    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential ]
         A mapping from container url prefixes to credentials.
 
     Examples
@@ -377,10 +380,22 @@ def containers_credentials(m: Mapping[str, AnyS3Credential]) -> dict[str, Creden
     ```
 
     """
-    res = {}
+    res: dict[str, AnyCredential | None] = {}
     for name, cred in m.items():
-        if isinstance(cred, AnyS3Credential):
+        if cred is None:
+            res[name] = None
+        elif isinstance(cred, AnyS3Credential):
             res[name] = Credentials.S3(cred)
+        elif (
+            isinstance(cred, GcsCredentials.FromEnv)
+            or isinstance(cred, GcsCredentials.Static)
+            or isinstance(cred, GcsCredentials.Refreshable)
+        ):
+            res[name] = Credentials.Gcs(cast(GcsCredentials, cred))
+        elif isinstance(cred, AzureCredentials.FromEnv) or isinstance(
+            cred, AzureCredentials.Static
+        ):
+            res[name] = Credentials.Azure(cast(AzureCredentials, cred))
         else:
             raise ValueError(f"Unknown credential type {type(cred)}")
     return res

@@ -55,7 +55,7 @@ def http_store(
 
 def local_filesystem_store(
     path: str,
-) -> ObjectStoreConfig.Http:
+) -> ObjectStoreConfig.LocalFileSystem:
     """Build an ObjectStoreConfig instance for local file stores.
 
     Parameters
