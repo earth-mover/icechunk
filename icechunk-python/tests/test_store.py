@@ -100,6 +100,7 @@ async def test_with_readonly() -> None:
 async def test_transaction() -> None:
     repo = parse_repo("memory", "test")
     cid1 = repo.lookup_branch("main")
+    # TODO: test metadata, rebase_with, and rebase_tries kwargs
     with repo.transaction("main", message="initialize group") as store:
         assert not store.read_only
         root = zarr.group(store=store)

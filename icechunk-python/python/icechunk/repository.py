@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from typing import Any, Self, cast
 
+from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
     Diff,
     GCSummary,
@@ -567,7 +568,15 @@ class Repository:
         return Session(self._repository.writable_session(branch))
 
     @contextmanager
-    def transaction(self, branch: str, *, message: str) -> Iterator[IcechunkStore]:
+    def transaction(
+        self,
+        branch: str,
+        *,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        rebase_with: ConflictSolver | None = None,
+        rebase_tries: int = 1_000,
+    ) -> Iterator[IcechunkStore]:
         """
         Create a transaction on a branch.
 
@@ -581,6 +590,12 @@ class Repository:
             The branch to create the transaction on.
         message : str
             The commit message to use when committing the session.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+        rebase_with : ConflictSolver | None, optional
+            If other session committed while the current session was writing, use Session.rebase with this solver.
+        rebase_tries : int, optional
+            If other session committed while the current session was writing, use Session.rebase up to this many times in a loop.
 
         Yields
         -------
@@ -589,7 +604,12 @@ class Repository:
         """
         session = self.writable_session(branch)
         yield session.store
-        session.commit(message)
+        session.commit(
+            message=message,
+            metadata=metadata,
+            rebase_with=rebase_with,
+            rebase_tries=rebase_tries,
+        )
 
     def expire_snapshots(
         self,
