@@ -1,7 +1,7 @@
 let
   # Pinned nixpkgs, deterministic. Last updated to nixpkgs-unstable as of: 2025-05-22
   pkgs = import (fetchTarball
-    "https://github.com/NixOS/nixpkgs/archive/fe51d34885f7b5e3e7b59572796e1bcb427eccb1.tar.gz")
+    "https://github.com/NixOS/nixpkgs/archive/9b008d60392981ad674e04016d25619281550a9d.tar.gz")
     { };
 
   # Rolling updates, not deterministic.

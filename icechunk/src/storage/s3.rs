@@ -283,7 +283,7 @@ impl S3Storage {
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let client = self.get_client(settings).await;
         let b = client.get_object().bucket(self.bucket.as_str()).key(key);
-        Ok(Box::new(b.send().await?.body.into_async_read()))
+        Ok(Box::new(b.send().await.map_err(Box::new)?.body.into_async_read()))
     }
 
     async fn put_object_single<
@@ -321,7 +321,7 @@ impl S3Storage {
             b = b.storage_class(klass);
         }
 
-        b.body(bytes.into()).send().await?;
+        b.body(bytes.into()).send().await.map_err(Box::new)?;
         Ok(())
     }
 
@@ -360,7 +360,7 @@ impl S3Storage {
             multi = multi.storage_class(klass);
         }
 
-        let create_res = multi.send().await?;
+        let create_res = multi.send().await.map_err(Box::new)?;
         let upload_id =
             create_res.upload_id().ok_or(StorageError::from(StorageErrorKind::Other(
                 "No upload_id in create multipart upload result".to_string(),
@@ -401,7 +401,8 @@ impl S3Storage {
                 CompletedPart::builder().e_tag(etag).part_number(idx).build()
             })
             .try_collect::<Vec<_>>()
-            .await?;
+            .await
+            .map_err(Box::new)?;
 
         let completed_parts =
             CompletedMultipartUpload::builder().set_parts(Some(completed_parts)).build();
@@ -415,7 +416,8 @@ impl S3Storage {
             //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
             .multipart_upload(completed_parts)
             .send()
-            .await?;
+            .await
+            .map_err(Box::new)?;
 
         Ok(())
     }
@@ -494,7 +496,7 @@ impl Storage for S3Storage {
         match res {
             Ok(output) => match output.e_tag {
                 Some(etag) => Ok(FetchConfigResult::Found {
-                    bytes: output.body.collect().await?.into_bytes(),
+                    bytes: output.body.collect().await.map_err(Box::new)?.into_bytes(),
                     version: VersionInfo::from_etag_only(etag),
                 }),
                 None => Ok(FetchConfigResult::NotFound),
@@ -512,7 +514,7 @@ impl Storage for S3Storage {
                     // the status code.
                     Ok(FetchConfigResult::NotFound)
                 }
-                _ => Err(sdk_err.into()),
+                _ => Err(Box::new(sdk_err).into()),
             },
         }
     }
@@ -569,7 +571,9 @@ impl Storage for S3Storage {
                 if err.err().meta().code() == Some("PreconditionFailed") {
                     Ok(UpdateConfigResult::NotOnLatestVersion)
                 } else {
-                    Err(StorageError::from(SdkError::<PutObjectError>::ServiceError(err)))
+                    Err(StorageError::from(Box::new(
+                        SdkError::<PutObjectError>::ServiceError(err),
+                    )))
                 }
             }
             // S3 API documents this
@@ -579,12 +583,12 @@ impl Storage for S3Storage {
                 if status == 409 || status == 412 {
                     Ok(UpdateConfigResult::NotOnLatestVersion)
                 } else {
-                    Err(StorageError::from(SdkError::<PutObjectError>::ResponseError(
-                        err,
+                    Err(StorageError::from(Box::new(
+                        SdkError::<PutObjectError>::ResponseError(err),
                     )))
                 }
             }
-            Err(err) => Err(err.into()),
+            Err(err) => Err(Box::new(err).into()),
         }
     }
 
@@ -741,7 +745,7 @@ impl Storage for S3Storage {
 
         match res {
             Ok(res) => {
-                let bytes = res.body.collect().await?.into_bytes();
+                let bytes = res.body.collect().await.map_err(Box::new)?.into_bytes();
                 if let Some(version) = res.e_tag.map(VersionInfo::from_etag_only) {
                     Ok(GetRefResult::Found { bytes, version })
                 } else {
@@ -756,7 +760,7 @@ impl Storage for S3Storage {
             {
                 Ok(GetRefResult::NotFound)
             }
-            Err(err) => Err(err.into()),
+            Err(err) => Err(Box::new(err).into()),
         }
     }
 
@@ -774,7 +778,7 @@ impl Storage for S3Storage {
 
         let mut res = Vec::new();
 
-        while let Some(page) = paginator.try_next().await? {
+        while let Some(page) = paginator.try_next().await.map_err(Box::new)? {
             for obj in page.contents.unwrap_or_else(Vec::new) {
                 let name = self.get_ref_name(obj.key());
                 if let Some(name) = name {
@@ -833,7 +837,7 @@ impl Storage for S3Storage {
                 {
                     Ok(WriteRefResult::WontOverwrite)
                 } else {
-                    Err(err.into())
+                    Err(Box::new(err).into())
                 }
             }
         }
@@ -855,6 +859,7 @@ impl Storage for S3Storage {
             .into_paginator()
             .send()
             .into_stream_03x()
+            .map_err(Box::new)
             .try_filter_map(|page| {
                 let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
                 ready(Ok(contents))
@@ -900,7 +905,8 @@ impl Storage for S3Storage {
             .bucket(self.bucket.clone())
             .delete(delete)
             .send()
-            .await?;
+            .await
+            .map_err(Box::new)?;
 
         if let Some(err) = res.errors.as_ref().and_then(|e| e.first()) {
             tracing::error!(
@@ -936,7 +942,8 @@ impl Storage for S3Storage {
             .bucket(self.bucket.clone())
             .key(key)
             .send()
-            .await?;
+            .await
+            .map_err(Box::new)?;
 
         let res = res.last_modified.ok_or(StorageErrorKind::Other(
             "Object has no last_modified field".to_string(),
@@ -962,7 +969,9 @@ impl Storage for S3Storage {
             .bucket(self.bucket.clone())
             .key(key)
             .range(range_to_header(range));
-        Ok(Box::new(b.send().await?.body.collect().await?))
+        Ok(Box::new(
+            b.send().await.map_err(Box::new)?.body.collect().await.map_err(Box::new)?,
+        ))
     }
 
     #[instrument(skip(self))]
@@ -1024,7 +1033,7 @@ async fn get_object_range(
     range: &Range<ChunkOffset>,
 ) -> StorageResult<impl AsyncRead + use<>> {
     let b = client.get_object().bucket(bucket).key(key).range(range_to_header(range));
-    Ok(b.send().await?.body.into_async_read())
+    Ok(b.send().await.map_err(Box::new)?.body.into_async_read())
 }
 
 #[cfg(test)]
