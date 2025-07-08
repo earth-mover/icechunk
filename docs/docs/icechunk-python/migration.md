@@ -3,17 +3,18 @@
 ## Parallel Writes
 
 Icechunk is a stateful store and requires care when executing distributed writes.
-Icechunk 1.0 introduces new API for safe distributed writes:
-1. Use [`Session.fork`](./reference.md#icechunk.Session.fork) instead of [`Session.allow_pickling`](./reference.md#icechunk.Session.allow_pickling).
-2. [`Session.merge`](./reference.md#icechunk.Session.merge) can now merge multiple sessions, so the use of [`merge_sessions`](./reference.md#icechunk.distributed.merge_sessions) is discouraged.
+Icechunk 1.0 introduces new API for safe _coordinated_ distributed writes where a Session is distributed to remote workers:
 
-```{important}
-Code that uses `to_icechunk` does _not_ need changes.
-```
+1. Create a [`ForkSession`](./reference.md#icechunk.session.ForkSession) using [`Session.fork`](./reference.md#icechunk.Session.fork) instead of the [`Session.allow_pickling`](./reference.md#icechunk.Session.allow_pickling) context manager. ForkSessions can be pickled and written to in remote distributed workers.
+1. Only Sessions with _no_ changes can be forked. You may need to insert commits in your current workflows.
+1. [`Session.merge`](./reference.md#icechunk.Session.merge) can now merge multiple sessions, so the use of [`merge_sessions`](./reference.md#icechunk.distributed.merge_sessions) is discouraged.
 
-=== After
 
-    ```python {hl_lines="5 7 16"}
+The tabs below highlight typical code changes required:
+
+=== "After"
+
+    ```python {hl_lines="6 9 16"}
     from concurrent.futures import ProcessPoolExecutor
 
     session = repo.writable_session("main")
@@ -33,9 +34,9 @@ Code that uses `to_icechunk` does _not_ need changes.
     session.commit("finished writes")
     ```
 
-=== Before
+=== "Before"
 
-    ```python {hl_lines="5 7 16"}
+    ```python {hl_lines="6 9 16"}
     from concurrent.futures import ProcessPoolExecutor
     from icechunk.distributed import merge_sessions
 
