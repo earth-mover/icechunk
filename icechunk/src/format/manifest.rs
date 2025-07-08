@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::format::flatbuffers::generated;
+use crate::{format::flatbuffers::generated, virtual_chunks::VirtualChunkContainer};
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
@@ -211,12 +211,16 @@ pub fn uniform_manifest_split_edges(num_chunks: u32, split_size: &u32) -> Vec<u3
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum VirtualReferenceErrorKind {
-    #[error("no virtual chunk container can handle the chunk location ({0})")]
+    #[error(
+        "no virtual chunk container can handle the chunk location ({0}), edit the repository configuration adding a virtual chunk container for the chunk references, see https://icechunk.io/en/stable/icechunk-python/virtual/"
+    )]
     NoContainerForUrl(String),
     #[error("error parsing virtual ref URL")]
     CannotParseUrl(#[from] url::ParseError),
     #[error("invalid credentials for virtual reference of type {0}")]
     InvalidCredentials(String),
+    #[error("a virtual chunk in this repository resolves to the url prefix {url}, to be able to fetch the chunk you need to authorize the virtual chunk container when you open/create the repository, see https://icechunk.io/en/stable/icechunk-python/virtual/", url = .0.url_prefix())]
+    UnauthorizedVirtualChunkContainer(Box<VirtualChunkContainer>),
     #[error("virtual reference has no path segments {0}")]
     NoPathSegments(String),
     #[error("unsupported scheme for virtual chunk refs: {0}")]

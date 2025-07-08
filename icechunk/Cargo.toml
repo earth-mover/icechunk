@@ -28,9 +28,9 @@ rand = "0.9.1"
 thiserror = "2.0.12"
 serde_json = "1.0.140"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
-serde_with = { version = "3.13.0", features = ["hex"] }
-tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros"] }
-test-strategy = "0.4.1"
+serde_with = { version = "3.14.0", features = ["hex"] }
+tokio = { version = "1.46.1", features = ["rt-multi-thread", "macros"] }
+test-strategy = "0.4.3"
 proptest = "1.7.0"
 quick_cache = "0.6.14"
 base32 = "0.5.1"
@@ -72,7 +72,7 @@ icechunk-macros = { path = "../icechunk-macros", version = "0.1.0" }
 pretty_assertions = "1.4.1"
 proptest-state-machine = "0.4.0"
 tempfile = "3.20.0"
-test-log = { version = "0.2.17", default-features = false, features = [
+test-log = { version = "0.2.18", default-features = false, features = [
   "trace",
   "color",
   "unstable",

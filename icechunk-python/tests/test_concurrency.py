@@ -123,11 +123,15 @@ async def test_thread_concurrency() -> None:
         force_path_style=True,
         s3_compatible=True,
     )
-    container = icechunk.VirtualChunkContainer("s3", "s3://", store_config)
+    container = icechunk.VirtualChunkContainer("s3://testbucket", store_config)
     config.set_virtual_chunk_container(container)
     config.inline_chunk_threshold_bytes = 0
     credentials = icechunk.containers_credentials(
-        s3=icechunk.s3_credentials(access_key_id="minio123", secret_access_key="minio123")
+        {
+            "s3://testbucket": icechunk.s3_credentials(
+                access_key_id="minio123", secret_access_key="minio123"
+            )
+        }
     )
 
     storage = icechunk.s3_storage(
@@ -145,7 +149,7 @@ async def test_thread_concurrency() -> None:
     repo = icechunk.Repository.create(
         storage=storage,
         config=config,
-        virtual_chunk_credentials=credentials,
+        authorize_virtual_chunk_access=credentials,
     )
 
     session = repo.writable_session("main")

@@ -1,6 +1,7 @@
 import pickle
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from typing import cast
 
 from icechunk._icechunk_python import (
     AzureCredentials,
@@ -341,14 +342,14 @@ def azure_credentials(
 
 
 def containers_credentials(
-    m: Mapping[str, AnyS3Credential] = {}, **kwargs: AnyS3Credential
-) -> dict[str, Credentials.S3]:
+    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential | None],
+) -> dict[str, AnyCredential | None]:
     """Build a map of credentials for virtual chunk containers.
 
     Parameters
     ----------
-    m: Mapping[str, AnyS3Credential]
-        A mapping from container name to credentials.
+    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential ]
+        A mapping from container url prefixes to credentials.
 
     Examples
     --------
@@ -365,24 +366,36 @@ def containers_credentials(
         s3_compatible=True,
         force_path_style=True,
     )
-    container = ic.VirtualChunkContainer("s3", "s3://", virtual_store_config)
+    container = ic.VirtualChunkContainer("s3://somebucket", virtual_store_config)
     config.set_virtual_chunk_container(container)
     credentials = ic.containers_credentials(
-        s3=ic.s3_credentials(access_key_id="ACCESS_KEY", secret_access_key="SECRET")
+        {"s3://somebucket": ic.s3_credentials(access_key_id="ACCESS_KEY", secret_access_key="SECRET"}
     )
 
     repo = ic.Repository.create(
         storage=ic.local_filesystem_storage(store_path),
         config=config,
-        virtual_chunk_credentials=credentials,
+        authorize_virtual_chunk_access=credentials,
     )
     ```
 
     """
-    res = {}
-    for name, cred in {**m, **kwargs}.items():
-        if isinstance(cred, AnyS3Credential):
+    res: dict[str, AnyCredential | None] = {}
+    for name, cred in m.items():
+        if cred is None:
+            res[name] = None
+        elif isinstance(cred, AnyS3Credential):
             res[name] = Credentials.S3(cred)
+        elif (
+            isinstance(cred, GcsCredentials.FromEnv)
+            or isinstance(cred, GcsCredentials.Static)
+            or isinstance(cred, GcsCredentials.Refreshable)
+        ):
+            res[name] = Credentials.Gcs(cast(GcsCredentials, cred))
+        elif isinstance(cred, AzureCredentials.FromEnv) or isinstance(
+            cred, AzureCredentials.Static
+        ):
+            res[name] = Credentials.Azure(cast(AzureCredentials, cred))
         else:
             raise ValueError(f"Unknown credential type {type(cred)}")
     return res

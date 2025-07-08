@@ -30,7 +30,7 @@ class Repository:
         cls,
         storage: Storage,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
     ) -> Self:
         """
         Create a new Icechunk repository.
@@ -46,8 +46,13 @@ class Repository:
             The storage configuration for the repository.
         config : RepositoryConfig, optional
             The repository configuration. If not provided, a default configuration will be used.
-        virtual_chunk_credentials : dict[str, AnyCredential], optional
-            Credentials for virtual chunks.
+        authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
+            Authorize Icechunk to access virtual chunks in these containers. A mapping
+            from container url_prefix to the credentials to use to access chunks in
+            that container. If credential is `None`, they will be fetched from the
+            environment, or anonymous credentials will be used if the container allows it.
+            As a security measure, Icechunk will block access to virtual chunks if the
+            container is not authorized using this argument.
 
         Returns
         -------
@@ -58,7 +63,7 @@ class Repository:
             PyRepository.create(
                 storage,
                 config=config,
-                virtual_chunk_credentials=virtual_chunk_credentials,
+                authorize_virtual_chunk_access=authorize_virtual_chunk_access,
             )
         )
 
@@ -67,7 +72,7 @@ class Repository:
         cls,
         storage: Storage,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository.
@@ -85,8 +90,13 @@ class Repository:
         config : RepositoryConfig, optional
             The repository settings. If not provided, a default configuration will be
             loaded from the repository.
-        virtual_chunk_credentials : dict[str, AnyCredential], optional
-            Credentials for virtual chunks.
+        authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
+            Authorize Icechunk to access virtual chunks in these containers. A mapping
+            from container url_prefix to the credentials to use to access chunks in
+            that container. If credential is `None`, they will be fetched from the
+            environment, or anonymous credentials will be used if the container allows it.
+            As a security measure, Icechunk will block access to virtual chunks if the
+            container is not authorized using this argument.
 
         Returns
         -------
@@ -97,7 +107,7 @@ class Repository:
             PyRepository.open(
                 storage,
                 config=config,
-                virtual_chunk_credentials=virtual_chunk_credentials,
+                authorize_virtual_chunk_access=authorize_virtual_chunk_access,
             )
         )
 
@@ -106,7 +116,7 @@ class Repository:
         cls,
         storage: Storage,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist.
@@ -125,8 +135,13 @@ class Repository:
         config : RepositoryConfig, optional
             The repository settings. If not provided, a default configuration will be
             loaded from the repository.
-        virtual_chunk_credentials : dict[str, AnyCredential], optional
-            Credentials for virtual chunks.
+        authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
+            Authorize Icechunk to access virtual chunks in these containers. A mapping
+            from container url_prefix to the credentials to use to access chunks in
+            that container. If credential is `None`, they will be fetched from the
+            environment, or anonymous credentials will be used if the container allows it.
+            As a security measure, Icechunk will block access to virtual chunks if the
+            container is not authorized using this argument.
 
         Returns
         -------
@@ -137,7 +152,7 @@ class Repository:
             PyRepository.open_or_create(
                 storage,
                 config=config,
-                virtual_chunk_credentials=virtual_chunk_credentials,
+                authorize_virtual_chunk_access=authorize_virtual_chunk_access,
             )
         )
 
