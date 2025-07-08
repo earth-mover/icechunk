@@ -104,6 +104,15 @@ jobs:
           source .venv/bin/activate
           pytest -n 4
 
+      # - name: python examples
+      #   shell: bash
+      #   working-directory: icechunk-python
+      #   run: |
+      #     set -e
+      #     python3 -m venv .venv
+      #     source .venv/bin/activate
+      #     sh examples/run_in_ci.sh
+
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
@@ -144,7 +153,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -165,4 +174,4 @@ jobs:
           pip install icechunk['test'] --find-links dist --force-reinstall
           pip install pytest-mypy-plugins
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py
+          pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py

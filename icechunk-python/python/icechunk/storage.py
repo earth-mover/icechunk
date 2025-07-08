@@ -53,6 +53,19 @@ def http_store(
     return ObjectStoreConfig.Http(opts)
 
 
+def local_filesystem_store(
+    path: str,
+) -> ObjectStoreConfig.LocalFileSystem:
+    """Build an ObjectStoreConfig instance for local file stores.
+
+    Parameters
+    ----------
+    path: str
+        The root directory for the store.
+    """
+    return ObjectStoreConfig.LocalFileSystem(path)
+
+
 def s3_store(
     region: str | None = None,
     endpoint_url: str | None = None,

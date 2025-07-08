@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, TimeDelta, Timelike, Utc};
 use icechunk::storage::RetriesSettings;
+use itertools::Itertools;
+use pyo3::exceptions::PyValueError;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use std::{
@@ -512,7 +514,7 @@ impl From<ObjectStoreConfig> for PyObjectStoreConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyVirtualChunkContainer {
     #[pyo3(get, set)]
-    pub name: String,
+    pub name: Option<String>,
     #[pyo3(get, set)]
     pub url_prefix: String,
     #[pyo3(get, set)]
@@ -522,24 +524,25 @@ pub struct PyVirtualChunkContainer {
 #[pymethods]
 impl PyVirtualChunkContainer {
     #[new]
-    pub fn new(name: String, url_prefix: String, store: PyObjectStoreConfig) -> Self {
-        Self { name, url_prefix, store }
+    pub fn new(url_prefix: String, store: PyObjectStoreConfig) -> Self {
+        Self { name: None, url_prefix, store }
     }
 }
 
-impl From<&PyVirtualChunkContainer> for VirtualChunkContainer {
-    fn from(value: &PyVirtualChunkContainer) -> Self {
-        Self {
-            name: value.name.clone(),
-            url_prefix: value.url_prefix.clone(),
-            store: (&value.store).into(),
-        }
+impl TryFrom<&PyVirtualChunkContainer> for VirtualChunkContainer {
+    type Error = String;
+
+    fn try_from(value: &PyVirtualChunkContainer) -> Result<Self, Self::Error> {
+        let cont =
+            VirtualChunkContainer::new(value.url_prefix.clone(), (&value.store).into())?;
+        Ok(cont)
     }
 }
 
 impl From<VirtualChunkContainer> for PyVirtualChunkContainer {
     fn from(value: VirtualChunkContainer) -> Self {
-        Self { name: value.name, url_prefix: value.url_prefix, store: value.store.into() }
+        let url = value.url_prefix().to_string();
+        Self { name: value.name, url_prefix: url, store: value.store.into() }
     }
 }
 
@@ -992,6 +995,13 @@ impl PyManifestPreloadCondition {
     pub fn r#false() -> Self {
         Self::False()
     }
+
+    pub fn __and__(&self, other: &Self) -> Self {
+        Self::And(vec![self.clone(), other.clone()])
+    }
+    pub fn __or__(&self, other: &Self) -> Self {
+        Self::Or(vec![self.clone(), other.clone()])
+    }
 }
 
 impl From<&PyManifestPreloadCondition> for ManifestPreloadCondition {
@@ -1160,6 +1170,14 @@ impl PyManifestSplitCondition {
         let mut hasher = DefaultHasher::new();
         self.hash(&mut hasher);
         hasher.finish() as usize
+    }
+
+    fn __or__(&self, other: &Self) -> Self {
+        Self::Or(vec![self.clone(), other.clone()])
+    }
+
+    fn __and__(&self, other: &Self) -> Self {
+        Self::And(vec![self.clone(), other.clone()])
     }
 }
 
@@ -1412,24 +1430,35 @@ pub struct PyRepositoryConfig {
 
 impl PartialEq for PyRepositoryConfig {
     fn eq(&self, other: &Self) -> bool {
-        let x: RepositoryConfig = self.into();
-        let y: RepositoryConfig = other.into();
+        let x: Result<RepositoryConfig, _> = self.try_into();
+        let y: Result<RepositoryConfig, _> = other.try_into();
         x == y
     }
 }
 
-impl From<&PyRepositoryConfig> for RepositoryConfig {
-    fn from(value: &PyRepositoryConfig) -> Self {
-        Python::with_gil(|py| Self {
-            inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
-            get_partial_values_concurrency: value.get_partial_values_concurrency,
-            compression: value.compression.as_ref().map(|c| (&*c.borrow(py)).into()),
-            caching: value.caching.as_ref().map(|c| (&*c.borrow(py)).into()),
-            storage: value.storage.as_ref().map(|s| (&*s.borrow(py)).into()),
-            virtual_chunk_containers: value.virtual_chunk_containers.as_ref().map(|c| {
-                c.iter().map(|(name, cont)| (name.clone(), cont.into())).collect()
-            }),
-            manifest: value.manifest.as_ref().map(|c| (&*c.borrow(py)).into()),
+impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
+    type Error = String;
+
+    fn try_from(value: &PyRepositoryConfig) -> Result<Self, Self::Error> {
+        let cont = value
+            .virtual_chunk_containers
+            .as_ref()
+            .map(|c| {
+                c.iter()
+                    .map(|(name, cont)| cont.try_into().map(|cont| (name.clone(), cont)))
+                    .try_collect()
+            })
+            .transpose()?;
+        Python::with_gil(|py| {
+            Ok(Self {
+                inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
+                get_partial_values_concurrency: value.get_partial_values_concurrency,
+                compression: value.compression.as_ref().map(|c| (&*c.borrow(py)).into()),
+                caching: value.caching.as_ref().map(|c| (&*c.borrow(py)).into()),
+                storage: value.storage.as_ref().map(|s| (&*s.borrow(py)).into()),
+                virtual_chunk_containers: cont,
+                manifest: value.manifest.as_ref().map(|c| (&*c.borrow(py)).into()),
+            })
         })
     }
 }
@@ -1495,31 +1524,36 @@ impl PyRepositoryConfig {
         }
     }
 
-    pub fn set_virtual_chunk_container(&mut self, cont: PyVirtualChunkContainer) {
+    pub fn set_virtual_chunk_container(
+        &mut self,
+        cont: PyVirtualChunkContainer,
+    ) -> PyResult<()> {
         // TODO: this is a very ugly way to do it but, it avoids duplicating logic
         let this: &PyRepositoryConfig = &*self;
-        let mut c: RepositoryConfig = this.into();
-        c.set_virtual_chunk_container((&cont).into());
+        let mut c: RepositoryConfig = this.try_into().map_err(PyValueError::new_err)?;
+        c.set_virtual_chunk_container((&cont).try_into().map_err(PyValueError::new_err)?);
         self.virtual_chunk_containers = c
             .virtual_chunk_containers
             .map(|c| c.into_iter().map(|(s, c)| (s, c.into())).collect());
+        Ok(())
     }
 
-    pub fn clear_virtual_chunk_containers(&mut self) {
+    pub fn clear_virtual_chunk_containers(&mut self) -> PyResult<()> {
         let this: &PyRepositoryConfig = &*self;
-        let mut c: RepositoryConfig = this.into();
+        let mut c: RepositoryConfig = this.try_into().map_err(PyValueError::new_err)?;
         c.clear_virtual_chunk_containers();
         self.virtual_chunk_containers = c
             .virtual_chunk_containers
             .map(|c| c.into_iter().map(|(s, c)| (s, c.into())).collect());
+        Ok(())
     }
 
     pub fn get_virtual_chunk_container(
         &self,
         name: &str,
-    ) -> Option<PyVirtualChunkContainer> {
-        let c: RepositoryConfig = self.into();
-        c.get_virtual_chunk_container(name).map(|c| c.clone().into())
+    ) -> PyResult<Option<PyVirtualChunkContainer>> {
+        let c: RepositoryConfig = self.try_into().map_err(PyValueError::new_err)?;
+        Ok(c.get_virtual_chunk_container(name).map(|c| c.clone().into()))
     }
 
     pub fn __repr__(&self) -> String {

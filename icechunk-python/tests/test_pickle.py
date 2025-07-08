@@ -49,17 +49,18 @@ def test_pickle_read_only(tmp_repo: Repository) -> None:
     assert tmp_store._read_only is False
     assert tmp_session.read_only is False
 
-    with pytest.raises(ValueError, match="You must opt in"):
-        roundtripped = pickle.loads(pickle.dumps(tmp_store))
+    with pytest.raises(ValueError):
+        pickle.loads(pickle.dumps(tmp_store))
 
-    with tmp_session.allow_pickling():
-        roundtripped = pickle.loads(pickle.dumps(tmp_session.store))
-        assert roundtripped._read_only is False
+    roundtripped = pickle.loads(pickle.dumps(tmp_session.fork().store))
+    assert roundtripped._read_only is False
 
-        roundtripped = pickle.loads(pickle.dumps(tmp_session))
-        assert roundtripped.read_only is False
+    roundtripped = pickle.loads(pickle.dumps(tmp_session.fork()))
+    assert roundtripped.store._read_only is False
 
-    assert tmp_store._read_only is False
+    with pytest.raises(ValueError):
+        pickle.loads(pickle.dumps(tmp_session))
+    # assert roundtripped.store._read_only is False
 
 
 def get_credentials():

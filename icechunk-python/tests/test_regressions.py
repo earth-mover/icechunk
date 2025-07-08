@@ -41,16 +41,20 @@ async def test_issue_418() -> None:
         s3_compatible=True,
         force_path_style=True,
     )
-    container = VirtualChunkContainer("s3", "s3://", store_config)
+    container = VirtualChunkContainer("s3://testbucket", store_config)
     config.set_virtual_chunk_container(container)
     credentials = containers_credentials(
-        s3=s3_credentials(access_key_id="minio123", secret_access_key="minio123")
+        {
+            "s3://testbucket": s3_credentials(
+                access_key_id="minio123", secret_access_key="minio123"
+            )
+        }
     )
 
     repo = Repository.create(
         storage=in_memory_storage(),
         config=config,
-        virtual_chunk_credentials=credentials,
+        authorize_virtual_chunk_access=credentials,
     )
     session = repo.writable_session("main")
     store = session.store

@@ -215,7 +215,7 @@ def concurrent_transfers(
 def main() -> None:
     multiprocessing.set_start_method("forkserver")
     num_accounts = 50
-    num_transfers = 100
+    num_transfers = 50
 
     repo = create_repo(num_accounts)
     total_balance = initial_balances(MAX_INITIAL_BALANCE, repo)

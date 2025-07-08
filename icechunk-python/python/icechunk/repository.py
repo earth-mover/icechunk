@@ -1,7 +1,9 @@
 import datetime
 from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from typing import Any, Self, cast
 
+from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
     Diff,
     GCSummary,
@@ -12,6 +14,7 @@ from icechunk._icechunk_python import (
 )
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
+from icechunk.store import IcechunkStore
 
 
 class Repository:
@@ -27,7 +30,7 @@ class Repository:
         cls,
         storage: Storage,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
     ) -> Self:
         """
         Create a new Icechunk repository.
@@ -43,8 +46,13 @@ class Repository:
             The storage configuration for the repository.
         config : RepositoryConfig, optional
             The repository configuration. If not provided, a default configuration will be used.
-        virtual_chunk_credentials : dict[str, AnyCredential], optional
-            Credentials for virtual chunks.
+        authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
+            Authorize Icechunk to access virtual chunks in these containers. A mapping
+            from container url_prefix to the credentials to use to access chunks in
+            that container. If credential is `None`, they will be fetched from the
+            environment, or anonymous credentials will be used if the container allows it.
+            As a security measure, Icechunk will block access to virtual chunks if the
+            container is not authorized using this argument.
 
         Returns
         -------
@@ -55,7 +63,7 @@ class Repository:
             PyRepository.create(
                 storage,
                 config=config,
-                virtual_chunk_credentials=virtual_chunk_credentials,
+                authorize_virtual_chunk_access=authorize_virtual_chunk_access,
             )
         )
 
@@ -64,7 +72,7 @@ class Repository:
         cls,
         storage: Storage,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository.
@@ -82,8 +90,13 @@ class Repository:
         config : RepositoryConfig, optional
             The repository settings. If not provided, a default configuration will be
             loaded from the repository.
-        virtual_chunk_credentials : dict[str, AnyCredential], optional
-            Credentials for virtual chunks.
+        authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
+            Authorize Icechunk to access virtual chunks in these containers. A mapping
+            from container url_prefix to the credentials to use to access chunks in
+            that container. If credential is `None`, they will be fetched from the
+            environment, or anonymous credentials will be used if the container allows it.
+            As a security measure, Icechunk will block access to virtual chunks if the
+            container is not authorized using this argument.
 
         Returns
         -------
@@ -94,7 +107,7 @@ class Repository:
             PyRepository.open(
                 storage,
                 config=config,
-                virtual_chunk_credentials=virtual_chunk_credentials,
+                authorize_virtual_chunk_access=authorize_virtual_chunk_access,
             )
         )
 
@@ -103,7 +116,7 @@ class Repository:
         cls,
         storage: Storage,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist.
@@ -122,8 +135,13 @@ class Repository:
         config : RepositoryConfig, optional
             The repository settings. If not provided, a default configuration will be
             loaded from the repository.
-        virtual_chunk_credentials : dict[str, AnyCredential], optional
-            Credentials for virtual chunks.
+        authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
+            Authorize Icechunk to access virtual chunks in these containers. A mapping
+            from container url_prefix to the credentials to use to access chunks in
+            that container. If credential is `None`, they will be fetched from the
+            environment, or anonymous credentials will be used if the container allows it.
+            As a security measure, Icechunk will block access to virtual chunks if the
+            container is not authorized using this argument.
 
         Returns
         -------
@@ -134,7 +152,7 @@ class Repository:
             PyRepository.open_or_create(
                 storage,
                 config=config,
-                virtual_chunk_credentials=virtual_chunk_credentials,
+                authorize_virtual_chunk_access=authorize_virtual_chunk_access,
             )
         )
 
@@ -563,6 +581,50 @@ class Repository:
             The writable session on the branch.
         """
         return Session(self._repository.writable_session(branch))
+
+    @contextmanager
+    def transaction(
+        self,
+        branch: str,
+        *,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        rebase_with: ConflictSolver | None = None,
+        rebase_tries: int = 1_000,
+    ) -> Iterator[IcechunkStore]:
+        """
+        Create a transaction on a branch.
+
+        This is a context manager that creates a writable session on the specified branch.
+        When the context is exited, the session will be committed to the branch
+        using the specified message.
+
+        Parameters
+        ----------
+        branch : str
+            The branch to create the transaction on.
+        message : str
+            The commit message to use when committing the session.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+        rebase_with : ConflictSolver | None, optional
+            If other session committed while the current session was writing, use Session.rebase with this solver.
+        rebase_tries : int, optional
+            If other session committed while the current session was writing, use Session.rebase up to this many times in a loop.
+
+        Yields
+        -------
+        store : IcechunkStore
+            A Zarr Store which can be used to interact with the data in the repository.
+        """
+        session = self.writable_session(branch)
+        yield session.store
+        session.commit(
+            message=message,
+            metadata=metadata,
+            rebase_with=rebase_with,
+            rebase_tries=rebase_tries,
+        )
 
     def expire_snapshots(
         self,

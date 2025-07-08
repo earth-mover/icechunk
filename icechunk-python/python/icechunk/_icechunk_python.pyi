@@ -421,6 +421,12 @@ class ManifestPreloadCondition:
     def false() -> ManifestPreloadCondition:
         """Create a preload condition that never matches any manifests"""
         ...
+    def __and__(other: ManifestPreloadCondition) -> ManifestPreloadCondition:
+        """Create a preload condition that matches if both this condition and `other` match."""
+        ...
+    def __or__(other: ManifestPreloadCondition) -> ManifestPreloadCondition:
+        """Create a preload condition that matches if either this condition or `other` match."""
+        ...
 
 class ManifestPreloadConfig:
     """Configuration for how Icechunk manifest preload on session creation"""
@@ -522,6 +528,14 @@ class ManifestSplitCondition:
     @staticmethod
     def AnyArray() -> ManifestSplitCondition:
         """Create a splitting condition that matches any array."""
+        ...
+
+    def __or__(self, other: ManifestSplitCondition) -> ManifestSplitCondition:
+        """Create a splitting condition that matches if either this condition or `other` matches"""
+        ...
+
+    def __and__(self, other: ManifestSplitCondition) -> ManifestSplitCondition:
+        """Create a splitting condition that matches if both this condition and `other` match"""
         ...
 
 class ManifestSplitDimCondition:
@@ -1223,7 +1237,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open(
@@ -1231,7 +1245,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open_or_create(
@@ -1239,7 +1253,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        virtual_chunk_credentials: dict[str, AnyCredential] | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
     ) -> PyRepository: ...
     @staticmethod
     def exists(storage: Storage) -> bool: ...
