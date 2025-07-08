@@ -103,6 +103,11 @@ fn spec_version() -> u8 {
     SpecVersionBin::current() as u8
 }
 
+fn pep440_version() -> String {
+    let cargo_version = env!("CARGO_PKG_VERSION");
+    cargo_version.replace("-rc.", "rc").replace("-alpha.", "a").replace("-beta.", "b")
+}
+
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
 fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -148,6 +153,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
+    m.add("__version__", pep440_version())?;
 
     // Exceptions
     m.add("IcechunkError", py.get_type::<IcechunkError>())?;

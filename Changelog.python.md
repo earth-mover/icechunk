@@ -1,5 +1,29 @@
 # Changelog
 
+## Python Icechunk Library 1.0.0rc0
+
+This is a release candidate for Icechunk 1.0
+
+This version has some minor API changes but it is on-disk format compatible with any versions in the 0.2.x series. Repositories written with previous 0.2.x versions are fully compatible, with repositories
+written with this release candidate.
+
+Changes to code may be needed for users that are using distributed coordinated sessions or virtual datasets.
+Please refer to our [migration guide](https://icechunk.io/en/latest/icechunk-python/migration/).
+
+### Features
+
+- New [`Repository.transaction`](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.Repository.transaction)
+helper function creates and commits write sessions automatically.
+- Easier manifest preload and split configuration, combining conditions with `|` and `&` magic methods.
+- More secure and explicit control over virtual chunk resolution. This improvement motivated the changes
+in API for [`Repository.open`](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.Repository.open) and
+[`Repository.create`](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.Repository.create) for virtual datasets.
+
+### Fixes
+
+- Data loss under certain conditions when distributed sessions are started with a "dirty" session.
+This issue motivated the change on API introducing `Session.fork`.
+
 ## Python Icechunk Library 0.2.18
 
 ### Features
