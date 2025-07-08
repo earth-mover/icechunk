@@ -567,7 +567,7 @@ class Repository:
         return Session(self._repository.writable_session(branch))
 
     @contextmanager
-    def transaction(self, branch: str, message: str) -> Iterator["IcechunkStore"]:
+    def transaction(self, branch: str, *, message: str) -> Iterator[IcechunkStore]:
         """
         Create a transaction on a branch.
 

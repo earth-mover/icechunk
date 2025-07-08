@@ -99,12 +99,30 @@ async def test_with_readonly() -> None:
 
 async def test_transaction() -> None:
     repo = parse_repo("memory", "test")
-    with repo.transaction("main", "initialize group") as store:
+    cid1 = repo.lookup_branch("main")
+    with repo.transaction("main", message="initialize group") as store:
         assert not store.read_only
         root = zarr.group(store=store)
         root.attrs["foo"] = "bar"
+    cid2 = repo.lookup_branch("main")
+    assert cid1 != cid2, "Transaction did not commit changes"
 
     with repo.readonly_transaction("main") as store:
         assert store.read_only
         root = zarr.open_group(store=store, mode="r")
         assert root.attrs["foo"] == "bar"
+
+
+async def test_transaction_failed_no_commit() -> None:
+    repo = parse_repo("memory", "test")
+    cid1 = repo.lookup_branch("main")
+    try:
+        with repo.transaction("main", message="initialize group") as store:
+            assert not store.read_only
+            root = zarr.group(store=store)
+            root.attrs["foo"] = "bar"
+            raise RuntimeError("Simulating an error to prevent commit")
+    except RuntimeError:
+        pass
+    cid2 = repo.lookup_branch("main")
+    assert cid1 == cid2, "Transaction committed changes despite error"
