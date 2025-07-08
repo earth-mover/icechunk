@@ -125,8 +125,8 @@ Data written by Icechunk 1.0 and greater will forever be readable by future Icec
 
 ## What is the backwards compatibility policy for the Icechunk format?
 
-Any data written by Icechunk v1.0 or great will be readable forever by future Icechunk release (backwards compatible).
-Any data written in a _greater major version_ are not guaranteed to be compatible with a _lesser major version_ (e.g. data written by v2.2 are not guaranteed compatible with v1.1 libraries).
+Any data written by Icechunk v1.0 or greater will be readable forever by future Icechunk releases (backwards compatible).
+Any data written in a _greater major version_ are not guaranteed to be compatible with a _lesser major version_ (e.g. data written by v2.2 are not guaranteed to be readable with v1.1 libraries).
 
 ## Is Icechunk fast?
 
