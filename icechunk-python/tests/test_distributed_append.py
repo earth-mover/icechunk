@@ -17,7 +17,7 @@ PLOT = False
 SPLIT_EVERY = 128
 DIMS = ("x", "y")
 IC_STORAGE = ic.local_filesystem_storage(
-    f"tmp/test/icechunk_data_corrupted/{str(datetime.datetime.now()).split(' ')[-1]}",
+    f"/tmp/test/icechunk_data_corrupted/{str(datetime.datetime.now()).split(' ')[-1]}",
 )
 
 

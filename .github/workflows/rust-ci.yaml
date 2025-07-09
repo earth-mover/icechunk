@@ -38,7 +38,7 @@ jobs:
       #pull-requests: read
     env:
       #CC: deny_c
-      RUST_CHANNEL: '1.86.0'
+      RUST_CHANNEL: '1.87.0'
 
     strategy:
       fail-fast: false

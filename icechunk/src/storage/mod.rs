@@ -57,31 +57,31 @@ use crate::{
 #[derive(Debug, Error)]
 pub enum StorageErrorKind {
     #[error("object store error {0}")]
-    ObjectStore(#[from] ::object_store::Error),
+    ObjectStore(#[from] Box<::object_store::Error>),
     #[error("bad object store prefix {0:?}")]
     BadPrefix(OsString),
     #[error("error getting object from object store {0}")]
-    S3GetObjectError(#[from] SdkError<GetObjectError, HttpResponse>),
+    S3GetObjectError(#[from] Box<SdkError<GetObjectError, HttpResponse>>),
     #[error("error writing object to object store {0}")]
-    S3PutObjectError(#[from] SdkError<PutObjectError, HttpResponse>),
+    S3PutObjectError(#[from] Box<SdkError<PutObjectError, HttpResponse>>),
     #[error("error creating multipart upload {0}")]
     S3CreateMultipartUploadError(
-        #[from] SdkError<CreateMultipartUploadError, HttpResponse>,
+        #[from] Box<SdkError<CreateMultipartUploadError, HttpResponse>>,
     ),
     #[error("error uploading multipart part {0}")]
-    S3UploadPartError(#[from] SdkError<UploadPartError, HttpResponse>),
+    S3UploadPartError(#[from] Box<SdkError<UploadPartError, HttpResponse>>),
     #[error("error completing multipart upload {0}")]
     S3CompleteMultipartUploadError(
-        #[from] SdkError<CompleteMultipartUploadError, HttpResponse>,
+        #[from] Box<SdkError<CompleteMultipartUploadError, HttpResponse>>,
     ),
     #[error("error getting object metadata from object store {0}")]
-    S3HeadObjectError(#[from] SdkError<HeadObjectError, HttpResponse>),
+    S3HeadObjectError(#[from] Box<SdkError<HeadObjectError, HttpResponse>>),
     #[error("error listing objects in object store {0}")]
-    S3ListObjectError(#[from] SdkError<ListObjectsV2Error, HttpResponse>),
+    S3ListObjectError(#[from] Box<SdkError<ListObjectsV2Error, HttpResponse>>),
     #[error("error deleting objects in object store {0}")]
-    S3DeleteObjectError(#[from] SdkError<DeleteObjectsError, HttpResponse>),
+    S3DeleteObjectError(#[from] Box<SdkError<DeleteObjectsError, HttpResponse>>),
     #[error("error streaming bytes from object store {0}")]
-    S3StreamError(#[from] ByteStreamError),
+    S3StreamError(#[from] Box<ByteStreamError>),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
     #[error("storage configuration error: {0}")]

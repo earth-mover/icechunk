@@ -412,14 +412,14 @@ impl ChangeSet {
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
     pub fn export_to_bytes(&self) -> SessionResult<Vec<u8>> {
-        Ok(rmp_serde::to_vec(self)?)
+        Ok(rmp_serde::to_vec(self).map_err(Box::new)?)
     }
 
     /// Deserialize a ChangeSet
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
     pub fn import_from_bytes(bytes: &[u8]) -> SessionResult<Self> {
-        Ok(rmp_serde::from_slice(bytes)?)
+        Ok(rmp_serde::from_slice(bytes).map_err(Box::new)?)
     }
 
     pub fn update_existing_chunks<'a, E>(

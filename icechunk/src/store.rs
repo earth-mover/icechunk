@@ -77,9 +77,9 @@ pub enum StoreErrorKind {
     #[error("bad metadata")]
     BadMetadata(#[from] serde_json::Error),
     #[error("deserialization error")]
-    DeserializationError(#[from] rmp_serde::decode::Error),
+    DeserializationError(#[from] Box<rmp_serde::decode::Error>),
     #[error("serialization error")]
-    SerializationError(#[from] rmp_serde::encode::Error),
+    SerializationError(#[from] Box<rmp_serde::encode::Error>),
     #[error("store method `{0}` is not implemented by Icechunk")]
     Unimplemented(&'static str),
     #[error("bad key prefix: `{0}`")]
@@ -160,7 +160,8 @@ impl Store {
 
     #[instrument(skip_all)]
     pub fn from_bytes(bytes: Bytes) -> StoreResult<Self> {
-        let session: Session = rmp_serde::from_slice(&bytes).map_err(StoreError::from)?;
+        let session: Session =
+            rmp_serde::from_slice(&bytes).map_err(Box::new).map_err(StoreError::from)?;
         let conc = session.config().get_partial_values_concurrency();
         Ok(Self::from_session_and_config(Arc::new(RwLock::new(session)), conc))
     }
@@ -168,7 +169,9 @@ impl Store {
     #[instrument(skip_all)]
     pub async fn as_bytes(&self) -> StoreResult<Bytes> {
         let session = self.session.write().await;
-        let bytes = rmp_serde::to_vec(session.deref()).map_err(StoreError::from)?;
+        let bytes = rmp_serde::to_vec(session.deref())
+            .map_err(Box::new)
+            .map_err(StoreError::from)?;
         Ok(Bytes::from(bytes))
     }
 

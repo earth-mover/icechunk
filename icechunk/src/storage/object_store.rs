@@ -163,7 +163,8 @@ impl ObjectStorage {
             .list(None)
             .map_ok(|obj| obj.location.to_string())
             .try_collect()
-            .await?)
+            .await
+            .map_err(Box::new)?)
     }
 
     fn get_path_str(&self, file_prefix: &str, id: &str) -> ObjectPath {
@@ -218,7 +219,8 @@ impl ObjectStorage {
             .get_client(settings)
             .await
             .get(path)
-            .await?
+            .await
+            .map_err(Box::new)?
             .into_stream()
             .err_into()
             .into_async_read()
@@ -305,10 +307,13 @@ impl Storage for ObjectStorage {
                     generation: result.meta.version.as_ref().cloned().map(Generation),
                 };
 
-                Ok(FetchConfigResult::Found { bytes: result.bytes().await?, version })
+                Ok(FetchConfigResult::Found {
+                    bytes: result.bytes().await.map_err(Box::new)?,
+                    version,
+                })
             }
             Err(object_store::Error::NotFound { .. }) => Ok(FetchConfigResult::NotFound),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(Box::new(err).into()),
         }
     }
     #[instrument(skip(self, settings, config))]
@@ -344,7 +349,7 @@ impl Storage for ObjectStorage {
             Err(object_store::Error::Precondition { .. }) => {
                 Ok(UpdateConfigResult::NotOnLatestVersion)
             }
-            Err(err) => Err(err.into()),
+            Err(err) => Err(Box::new(err).into()),
         }
     }
 
@@ -401,7 +406,11 @@ impl Storage for ObjectStorage {
         let attributes = self.metadata_to_attributes(settings, metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
-        self.get_client(settings).await.put_opts(&path, bytes.into(), options).await?;
+        self.get_client(settings)
+            .await
+            .put_opts(&path, bytes.into(), options)
+            .await
+            .map_err(Box::new)?;
         Ok(())
     }
 
@@ -417,7 +426,11 @@ impl Storage for ObjectStorage {
         let attributes = self.metadata_to_attributes(settings, metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
-        self.get_client(settings).await.put_opts(&path, bytes.into(), options).await?;
+        self.get_client(settings)
+            .await
+            .put_opts(&path, bytes.into(), options)
+            .await
+            .map_err(Box::new)?;
         Ok(())
     }
 
@@ -433,7 +446,11 @@ impl Storage for ObjectStorage {
         let attributes = self.metadata_to_attributes(settings, metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
-        self.get_client(settings).await.put_opts(&path, bytes.into(), options).await?;
+        self.get_client(settings)
+            .await
+            .put_opts(&path, bytes.into(), options)
+            .await
+            .map_err(Box::new)?;
         Ok(())
     }
 
@@ -459,7 +476,11 @@ impl Storage for ObjectStorage {
         bytes: Bytes,
     ) -> Result<(), StorageError> {
         let path = self.get_chunk_path(&id);
-        self.get_client(settings).await.put(&path, bytes.into()).await?;
+        self.get_client(settings)
+            .await
+            .put(&path, bytes.into())
+            .await
+            .map_err(Box::new)?;
         Ok(())
     }
 
@@ -475,12 +496,12 @@ impl Storage for ObjectStorage {
                 let etag = res.meta.e_tag.clone().map(ETag);
                 let generation = res.meta.version.clone().map(Generation);
                 Ok(GetRefResult::Found {
-                    bytes: res.bytes().await?,
+                    bytes: res.bytes().await.map_err(Box::new)?,
                     version: VersionInfo { etag, generation },
                 })
             }
             Err(object_store::Error::NotFound { .. }) => Ok(GetRefResult::NotFound),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(Box::new(err).into()),
         }
     }
 
@@ -500,7 +521,8 @@ impl Storage for ObjectStorage {
                 Ok(name)
             })
             .try_collect()
-            .await?)
+            .await
+            .map_err(Box::new)?)
     }
 
     #[instrument(skip(self, settings, bytes))]
@@ -526,7 +548,7 @@ impl Storage for ObjectStorage {
             | Err(object_store::Error::AlreadyExists { .. }) => {
                 Ok(WriteRefResult::WontOverwrite)
             }
-            Err(err) => Err(err.into()),
+            Err(err) => Err(Box::new(err).into()),
         }
     }
 
@@ -549,6 +571,7 @@ impl Storage for ObjectStorage {
                 }
                 Ok(info)
             })
+            .map_err(Box::new)
             .err_into();
         Ok(stream.boxed())
     }
@@ -595,7 +618,7 @@ impl Storage for ObjectStorage {
         snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>> {
         let path = self.get_snapshot_path(snapshot);
-        let res = self.get_client(settings).await.head(&path).await?;
+        let res = self.get_client(settings).await.head(&path).await.map_err(Box::new)?;
         Ok(res.last_modified)
     }
 
@@ -611,7 +634,14 @@ impl Storage for ObjectStorage {
         let range = Some(usize_range.into());
         let opts = GetOptions { range, ..Default::default() };
         Ok(Box::new(
-            self.get_client(settings).await.get_opts(&path, opts).await?.bytes().await?,
+            self.get_client(settings)
+                .await
+                .get_opts(&path, opts)
+                .await
+                .map_err(Box::new)?
+                .bytes()
+                .await
+                .map_err(Box::new)?,
         ))
     }
 
@@ -630,7 +660,8 @@ impl Storage for ObjectStorage {
             self.get_client(settings)
                 .await
                 .get_opts(&path, opts)
-                .await?
+                .await
+                .map_err(Box::new)?
                 .into_stream()
                 .err_into()
                 .into_async_read()

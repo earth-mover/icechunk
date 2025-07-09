@@ -70,11 +70,11 @@ pub enum SessionErrorKind {
     #[error("node not found at `{path}`: {message}")]
     NodeNotFound { path: Path, message: String },
     #[error("there is not an array at `{node:?}`: {message}")]
-    NotAnArray { node: NodeSnapshot, message: String },
+    NotAnArray { node: Box<NodeSnapshot>, message: String },
     #[error("there is not a group at `{node:?}`: {message}")]
-    NotAGroup { node: NodeSnapshot, message: String },
+    NotAGroup { node: Box<NodeSnapshot>, message: String },
     #[error("node already exists at `{node:?}`: {message}")]
-    AlreadyExists { node: NodeSnapshot, message: String },
+    AlreadyExists { node: Box<NodeSnapshot>, message: String },
     #[error("cannot commit, no changes made to the session")]
     NoChangesToCommit,
     #[error("invalid snapshot timestamp ordering. parent: `{parent}`, child: `{child}` ")]
@@ -97,9 +97,9 @@ pub enum SessionErrorKind {
     #[error("error in serializing config to JSON")]
     JsonSerializationError(#[from] serde_json::Error),
     #[error("error in session serialization")]
-    SerializationError(#[from] rmp_serde::encode::Error),
+    SerializationError(#[from] Box<rmp_serde::encode::Error>),
     #[error("error in session deserialization")]
-    DeserializationError(#[from] rmp_serde::decode::Error),
+    DeserializationError(#[from] Box<rmp_serde::decode::Error>),
     #[error(
         "error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`"
     )]
@@ -273,12 +273,12 @@ impl Session {
 
     #[instrument(skip(bytes))]
     pub fn from_bytes(bytes: Vec<u8>) -> SessionResult<Self> {
-        rmp_serde::from_slice(&bytes).err_into()
+        rmp_serde::from_slice(&bytes).map_err(Box::new).err_into()
     }
 
     #[instrument(skip(self))]
     pub fn as_bytes(&self) -> SessionResult<Vec<u8>> {
-        rmp_serde::to_vec(self).err_into()
+        rmp_serde::to_vec(self).map_err(Box::new).err_into()
     }
 
     pub fn branch(&self) -> Option<&str> {
@@ -345,7 +345,7 @@ impl Session {
                 Ok(())
             }
             Ok(node) => Err(SessionErrorKind::AlreadyExists {
-                node,
+                node: Box::new(node),
                 message: "trying to add group".to_string(),
             }
             .into()),
@@ -416,7 +416,7 @@ impl Session {
                 Ok(())
             }
             Ok(node) => Err(SessionErrorKind::AlreadyExists {
-                node,
+                node: Box::new(node),
                 message: "trying to add array".to_string(),
             }
             .into()),
@@ -566,7 +566,7 @@ impl Session {
             }
         } else {
             Err(SessionErrorKind::NotAnArray {
-                node: node.clone(),
+                node: Box::new(node.clone()),
                 message: "getting an array".to_string(),
             }
             .into())
@@ -599,7 +599,7 @@ impl Session {
         match self.get_node(path).await {
             res @ Ok(NodeSnapshot { node_data: NodeData::Array { .. }, .. }) => res,
             Ok(node @ NodeSnapshot { .. }) => Err(SessionErrorKind::NotAnArray {
-                node,
+                node: Box::new(node),
                 message: "getting an array".to_string(),
             }
             .into()),
@@ -611,7 +611,7 @@ impl Session {
         match self.get_node(path).await {
             res @ Ok(NodeSnapshot { node_data: NodeData::Group, .. }) => res,
             Ok(node @ NodeSnapshot { .. }) => Err(SessionErrorKind::NotAGroup {
-                node,
+                node: Box::new(node),
                 message: "getting a group".to_string(),
             }
             .into()),
@@ -645,7 +645,7 @@ impl Session {
         // get_array should return the array data, not a node
         match node.node_data {
             NodeData::Group => Err(SessionErrorKind::NotAnArray {
-                node,
+                node: Box::new(node),
                 message: "getting chunk reference".to_string(),
             }
             .into()),
@@ -2531,7 +2531,7 @@ mod tests {
             .await?;
 
         let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
-        for idx in vec![0, 2] {
+        for idx in [0, 2] {
             let payload = session.get_chunk_writer()(bytes.clone()).await?;
             session
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
