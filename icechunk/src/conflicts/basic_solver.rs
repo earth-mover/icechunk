@@ -127,7 +127,7 @@ impl BasicConflictSolver {
                 // we can panic here because we have returned from the function if there
                 // were any unsolvable conflicts
                 #[allow(clippy::panic)]
-                _ => panic!("bug in conflict resolution, conflict: {:?}", conflict),
+                _ => panic!("bug in conflict resolution, conflict: {conflict:?}"),
             }
         }
 

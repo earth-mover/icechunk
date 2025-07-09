@@ -140,7 +140,7 @@ async fn get_storage(
         RepositoryDefinition::LocalFileSystem { path, .. } => {
             let storage = new_local_filesystem_storage(path)
                 .await
-                .context(format!("Failed to create storage at {:?}", path))?;
+                .context(format!("Failed to create storage at {path:?}"))?;
             Ok(storage)
         }
         RepositoryDefinition::S3 {
@@ -406,7 +406,7 @@ fn add_repo_to_config(
 
 async fn config_list(config: &CliConfig, mut writer: impl std::io::Write) -> Result<()> {
     let serialized = serde_yaml_ng::to_string(&config)?;
-    writeln!(writer, "{}", serialized)?;
+    writeln!(writer, "{serialized}")?;
 
     Ok(())
 }

@@ -125,7 +125,7 @@ log_cli_level = "INFO"
 xfail_strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers"]
 markers = [
-  "gpu",  # need this to run the zarr tests
+  "gpu", # need this to run the zarr tests
 ]
 filterwarnings = [
   "error",

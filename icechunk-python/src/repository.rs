@@ -292,14 +292,14 @@ impl PyDiff {
         if !self.new_groups.is_empty() {
             res.push_str("Groups created:\n");
             for g in self.new_groups.iter() {
-                writeln!(res, "    {}", g).unwrap();
+                writeln!(res, "    {g}").unwrap();
             }
             res.push('\n');
         }
         if !self.new_arrays.is_empty() {
             res.push_str("Arrays created:\n");
             for g in self.new_arrays.iter() {
-                writeln!(res, "    {}", g).unwrap();
+                writeln!(res, "    {g}").unwrap();
             }
             res.push('\n');
         }
@@ -307,7 +307,7 @@ impl PyDiff {
         if !self.updated_groups.is_empty() {
             res.push_str("Group definitions updated:\n");
             for g in self.updated_groups.iter() {
-                writeln!(res, "    {}", g).unwrap();
+                writeln!(res, "    {g}").unwrap();
             }
             res.push('\n');
         }
@@ -315,7 +315,7 @@ impl PyDiff {
         if !self.updated_arrays.is_empty() {
             res.push_str("Array definitions updated:\n");
             for g in self.updated_arrays.iter() {
-                writeln!(res, "    {}", g).unwrap();
+                writeln!(res, "    {g}").unwrap();
             }
             res.push('\n');
         }
@@ -323,7 +323,7 @@ impl PyDiff {
         if !self.deleted_groups.is_empty() {
             res.push_str("Groups deleted:\n");
             for g in self.deleted_groups.iter() {
-                writeln!(res, "    {}", g).unwrap();
+                writeln!(res, "    {g}").unwrap();
             }
             res.push('\n');
         }
@@ -331,7 +331,7 @@ impl PyDiff {
         if !self.deleted_arrays.is_empty() {
             res.push_str("Arrays deleted:\n");
             for g in self.deleted_arrays.iter() {
-                writeln!(res, "    {}", g).unwrap();
+                writeln!(res, "    {g}").unwrap();
             }
             res.push('\n');
         }
@@ -339,7 +339,7 @@ impl PyDiff {
         if !self.updated_chunks.is_empty() {
             res.push_str("Chunks updated:\n");
             for (path, chunks) in self.updated_chunks.iter() {
-                writeln!(res, "    {}:", path).unwrap();
+                writeln!(res, "    {path}:").unwrap();
                 let coords = chunks
                     .iter()
                     .map(|idx| format!("        [{}]", idx.iter().join(", ")))

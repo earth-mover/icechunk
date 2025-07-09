@@ -47,17 +47,17 @@ fn cli_entrypoint(py: Python) -> PyResult<()> {
     match IcechunkCLI::try_parse_from(args.to_vec()) {
         Ok(cli_args) => pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             if let Err(e) = run_cli(cli_args).await {
-                eprintln!("{}", e);
+                eprintln!("{e}");
                 std::process::exit(1);
             }
             Ok(())
         }),
         Err(e) => {
             if e.use_stderr() {
-                eprintln!("{}", e);
+                eprintln!("{e}");
                 std::process::exit(e.exit_code());
             } else {
-                println!("{}", e);
+                println!("{e}");
                 Ok(())
             }
         }
@@ -101,6 +101,11 @@ fn set_logs_filter(py: Python, log_filter_directive: Option<String>) -> PyResult
 /// uses to write metadata files
 fn spec_version() -> u8 {
     SpecVersionBin::current() as u8
+}
+
+fn pep440_version() -> String {
+    let cargo_version = env!("CARGO_PKG_VERSION");
+    cargo_version.replace("-rc.", "rc").replace("-alpha.", "a").replace("-beta.", "b")
 }
 
 /// The icechunk Python module implemented in Rust.
@@ -148,6 +153,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
+    m.add("__version__", pep440_version())?;
 
     // Exceptions
     m.add("IcechunkError", py.get_type::<IcechunkError>())?;
