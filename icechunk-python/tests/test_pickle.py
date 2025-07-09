@@ -63,7 +63,7 @@ def test_pickle_read_only(tmp_repo: Repository) -> None:
     # assert roundtripped.store._read_only is False
 
 
-def get_credentials():
+def get_credentials() -> S3StaticCredentials:
     return S3StaticCredentials("minio123", "minio123")
 
 

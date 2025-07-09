@@ -144,7 +144,7 @@ async def write_a_split_repo() -> None:
     session.commit("write data again with more splits")
 
 
-async def test_icechunk_can_read_old_repo_with_manifest_splitting():
+async def test_icechunk_can_read_old_repo_with_manifest_splitting() -> None:
     repo = mk_repo(create=False, store_path="./tests/data/split-repo")
     ancestry = list(repo.ancestry(branch="main"))[::-1]
 
@@ -164,6 +164,7 @@ async def test_icechunk_can_read_old_repo_with_manifest_splitting():
     assert snapshot.message == "write data again with more splits"
     assert len(snapshot.manifests) == 17
 
+    assert repo.config.manifest
     assert repo.config.manifest.splitting == UPDATED_SPLITTING_CONFIG
 
 
@@ -224,6 +225,7 @@ async def write_a_test_repo() -> None:
     # We need to know its size
     buffer_prototype = zarr.core.buffer.default_buffer_prototype()
     chunk = await store.get("group1/big_chunks/c/0/1", prototype=buffer_prototype)
+    assert chunk
     virtual_chunk_data_size = len(chunk.to_bytes())
 
     store.set_virtual_ref(

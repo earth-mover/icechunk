@@ -257,9 +257,9 @@ pub enum IcechunkFormatErrorKind {
     #[error("Invalid Icechunk metadata file")]
     InvalidFlatBuffer(#[from] InvalidFlatbuffer),
     #[error("error during metadata file deserialization")]
-    DeserializationError(#[from] rmp_serde::decode::Error),
+    DeserializationError(#[from] Box<rmp_serde::decode::Error>),
     #[error("error during metadata file serialization")]
-    SerializationError(#[from] rmp_serde::encode::Error),
+    SerializationError(#[from] Box<rmp_serde::encode::Error>),
     #[error("I/O error")]
     IO(#[from] std::io::Error),
     #[error("path error")]

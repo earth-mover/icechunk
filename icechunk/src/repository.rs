@@ -72,9 +72,9 @@ pub enum RepositoryErrorKind {
     #[error("the repository doesn't exist")]
     RepositoryDoesntExist,
     #[error("error in repository serialization")]
-    SerializationError(#[from] rmp_serde::encode::Error),
+    SerializationError(#[from] Box<rmp_serde::encode::Error>),
     #[error("error in repository deserialization")]
-    DeserializationError(#[from] rmp_serde::decode::Error),
+    DeserializationError(#[from] Box<rmp_serde::decode::Error>),
     #[error(
         "error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`"
     )]
@@ -349,12 +349,12 @@ impl Repository {
 
     #[instrument(skip(bytes))]
     pub fn from_bytes(bytes: Vec<u8>) -> RepositoryResult<Self> {
-        rmp_serde::from_slice(&bytes).err_into()
+        rmp_serde::from_slice(&bytes).map_err(Box::new).err_into()
     }
 
     #[instrument(skip(self))]
     pub fn as_bytes(&self) -> RepositoryResult<Vec<u8>> {
-        rmp_serde::to_vec(self).err_into()
+        rmp_serde::to_vec(self).map_err(Box::new).err_into()
     }
 
     #[instrument(skip_all)]
@@ -961,7 +961,7 @@ mod tests {
 
     use super::*;
 
-    fn ravel_multi_index<'a>(index: &[u32], shape: &[u32]) -> u32 {
+    fn ravel_multi_index(index: &[u32], shape: &[u32]) -> u32 {
         index
             .iter()
             .zip(shape.iter())
@@ -1346,7 +1346,7 @@ mod tests {
                     session
                         .get_chunk_reader(
                             &array_path,
-                            &ChunkIndices(vec![idx.clone(), 0, 0]),
+                            &ChunkIndices(vec![idx, 0, 0]),
                             &ByteRange::ALL,
                         )
                         .await
@@ -1891,7 +1891,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
-                .expect(&format!("getting chunk ref failed for {:?}", &ic));
+                .unwrap_or_else(|| panic!("getting chunk ref failed for {:?}", &ic));
                 let expected_value =
                     ravel_multi_index(ic.as_slice(), array_shape.as_slice());
                 let expected =
@@ -1937,7 +1937,7 @@ mod tests {
             session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
             assert_manifest_count(&backend, total_manifests).await;
 
-            verify_data(ax.clone(), &session).await;
+            verify_data(ax, &session).await;
         }
         verify_all_data(&repository).await;
 
@@ -1968,7 +1968,7 @@ mod tests {
         // the first split in the `t`-axis. Since the other splits
         // are not modified we preserve all the old manifests
         total_manifests += 1;
-        session.commit(format!("finished time again").as_ref(), None).await?;
+        session.commit("finished time again".to_string().as_ref(), None).await?;
         assert_manifest_count(&backend, total_manifests).await;
         verify_all_data(&repository).await;
 
@@ -1987,7 +1987,7 @@ mod tests {
         }
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
-        session.commit(format!("finished time again").as_ref(), None).await?;
+        session.commit("finished time again".to_string().as_ref(), None).await?;
         assert_manifest_count(&backend, total_manifests).await;
         verify_all_data(&repository).await;
 
@@ -2004,7 +2004,7 @@ mod tests {
             .await?;
         // Important: now we rewrite one split per dimension
         total_manifests += 3;
-        session.commit(format!("finished time again").as_ref(), None).await?;
+        session.commit("finished time again".to_string().as_ref(), None).await?;
         assert_manifest_count(&backend, total_manifests).await;
         verify_all_data(&repo_clone).await;
         verify_all_data(&repository).await;
@@ -2023,7 +2023,7 @@ mod tests {
         }
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
-        session.commit(format!("finished time again").as_ref(), None).await?;
+        session.commit("finished time again".to_string().as_ref(), None).await?;
         assert_manifest_count(&backend, total_manifests).await;
         verify_all_data(&repo_clone).await;
 
@@ -2041,14 +2041,14 @@ mod tests {
         }
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
-        session.commit(format!("finished time again").as_ref(), None).await?;
+        session.commit("finished time again".to_string().as_ref(), None).await?;
         assert_manifest_count(&backend, total_manifests).await;
         for idx in [0, 12, 24] {
             let actual = get_chunk(
                 session
                     .get_chunk_reader(
                         &temp_path,
-                        &ChunkIndices(vec![idx.clone(), 0, 0, 0]),
+                        &ChunkIndices(vec![idx, 0, 0, 0]),
                         &ByteRange::ALL,
                     )
                     .await
@@ -2089,7 +2089,7 @@ mod tests {
         .await?;
 
         let indices =
-            vec![vec![0, 0, 1, 0], vec![0, 0, 0, 0], vec![0, 2, 0, 0], vec![0, 2, 0, 1]];
+            [vec![0, 0, 1, 0], vec![0, 0, 0, 0], vec![0, 2, 0, 0], vec![0, 2, 0, 1]];
 
         let mut session1 = repository.writable_session("main").await?;
         let node_id = session1.get_node(&temp_path).await?.id;
@@ -2180,7 +2180,7 @@ mod tests {
             )
             .await
             .unwrap()
-            .expect(&format!("getting chunk ref failed for {:?}", &idx));
+            .unwrap_or_else(|| panic!("getting chunk ref failed for {:?}", &idx));
             let expected = Bytes::copy_from_slice(format!("{0}", val).as_bytes());
             assert_eq!(actual, expected);
         }
@@ -2210,7 +2210,7 @@ mod tests {
             .await?;
 
         session1.merge(session2).await?;
-        let expected = vec![Some(3), Some(4), None, None];
+        let expected = [Some(3), Some(4), None, None];
         for (expect, idx) in zip(expected.iter(), indices.iter()) {
             let actual = get_chunk(
                 session1
@@ -2259,7 +2259,7 @@ mod tests {
         .await?;
 
         let indices =
-            vec![vec![0, 0, 1, 0], vec![0, 0, 0, 0], vec![0, 2, 0, 0], vec![0, 2, 0, 1]];
+            [vec![0, 0, 1, 0], vec![0, 0, 0, 0], vec![0, 2, 0, 0], vec![0, 2, 0, 1]];
 
         let mut session1 = repository.writable_session("main").await?;
         session1
@@ -2336,7 +2336,7 @@ mod tests {
             )
             .await
             .unwrap()
-            .expect(&format!("getting chunk ref failed for {:?}", &idx));
+            .unwrap_or_else(|| panic!("getting chunk ref failed for {:?}", &idx));
             let expected = Bytes::copy_from_slice(format!("{0}", val).as_bytes());
             assert_eq!(actual, expected);
         }

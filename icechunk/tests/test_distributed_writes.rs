@@ -187,7 +187,7 @@ where
 
     // Merge the changesets into the first repo
     for session in sessions {
-        ds1.merge(session.into()).await?;
+        ds1.merge(session).await?;
     }
 
     // Distributed commit now, using arbitrarily one of the repos as base and the others as extra

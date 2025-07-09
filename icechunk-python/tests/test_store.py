@@ -63,9 +63,9 @@ async def test_support_dimension_names_null() -> None:
     root.create_array(
         name="0", shape=(1, 3, 5, 1), chunks=(1, 3, 2, 1), fill_value=-1, dtype=np.int64
     )
-    meta = json.loads(
-        (await store.get("0/zarr.json", prototype=default_buffer_prototype())).to_bytes()
-    )
+    value = await store.get("0/zarr.json", prototype=default_buffer_prototype())
+    assert value
+    meta = json.loads(value.to_bytes())
     assert "dimension_names" not in meta
 
 
