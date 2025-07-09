@@ -148,7 +148,7 @@ Finally, let's make a plot of the sea surface temperature!
 ds.sst.isel(time=26, zlev=0).plot(x='lon', y='lat', vmin=0)
 ```
 
-![oisst](../assets/datasets/oisst.png)
+![oisst](assets/datasets/oisst.png)
 
 !!! note
 

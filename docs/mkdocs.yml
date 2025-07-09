@@ -127,8 +127,6 @@ plugins:
       minify_html: true
   - awesome-pages:
       collapse_single_pages: true
-  - macros:
-      module_name: macros
   - git-revision-date-localized:
   - mkdocstrings:
       default_handler: python
