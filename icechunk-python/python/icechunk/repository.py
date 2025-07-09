@@ -1,7 +1,9 @@
 import datetime
 from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from typing import Any, Self, cast
 
+from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
     Diff,
     GCSummary,
@@ -12,6 +14,7 @@ from icechunk._icechunk_python import (
 )
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
+from icechunk.store import IcechunkStore
 
 
 class Repository:
@@ -578,6 +581,50 @@ class Repository:
             The writable session on the branch.
         """
         return Session(self._repository.writable_session(branch))
+
+    @contextmanager
+    def transaction(
+        self,
+        branch: str,
+        *,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        rebase_with: ConflictSolver | None = None,
+        rebase_tries: int = 1_000,
+    ) -> Iterator[IcechunkStore]:
+        """
+        Create a transaction on a branch.
+
+        This is a context manager that creates a writable session on the specified branch.
+        When the context is exited, the session will be committed to the branch
+        using the specified message.
+
+        Parameters
+        ----------
+        branch : str
+            The branch to create the transaction on.
+        message : str
+            The commit message to use when committing the session.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+        rebase_with : ConflictSolver | None, optional
+            If other session committed while the current session was writing, use Session.rebase with this solver.
+        rebase_tries : int, optional
+            If other session committed while the current session was writing, use Session.rebase up to this many times in a loop.
+
+        Yields
+        -------
+        store : IcechunkStore
+            A Zarr Store which can be used to interact with the data in the repository.
+        """
+        session = self.writable_session(branch)
+        yield session.store
+        session.commit(
+            message=message,
+            metadata=metadata,
+            rebase_with=rebase_with,
+            rebase_tries=rebase_tries,
+        )
 
     def expire_snapshots(
         self,

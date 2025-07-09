@@ -143,6 +143,8 @@ plugins:
             show_symbol_type_toc: true
             show_root_heading: true
             summary: true
+            # Fix for cyclic alias issues on macOS
+            allow_inspection: false
           paths: [../icechunk-python/python]
   - mkdocs-jupyter:
       include_source: True
@@ -186,6 +188,7 @@ nav:
   - FAQ: faq.md
   - Icechunk Python:
     - Quickstart: icechunk-python/quickstart.md
+    - Migrate to 1.0: icechunk-python/migration.md
     - Configuration: icechunk-python/configuration.md
     - Storage: icechunk-python/storage.md
     - Performance: icechunk-python/performance.md
