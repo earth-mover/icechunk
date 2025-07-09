@@ -238,7 +238,7 @@ impl<'a> TryFrom<generated::NodeSnapshot<'a>> for NodeSnapshot {
             generated::NodeData::Group => {
                 value.node_data_as_group().expect("Bug in flatbuffers library").into()
             }
-            x => panic!("Invalid node data type in flatbuffers file {:?}", x),
+            x => panic!("Invalid node data type in flatbuffers file {x:?}"),
         };
         let res = NodeSnapshot {
             id: value.id().into(),

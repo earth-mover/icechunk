@@ -121,7 +121,7 @@ fn format_bool(b: bool) -> &'static str {
 }
 
 fn format_str(s: &str) -> String {
-    format!(r#""{}""#, s)
+    format!(r#""{s}""#)
 }
 
 pub(crate) fn datetime_repr(d: &DateTime<Utc>) -> String {
@@ -1160,8 +1160,8 @@ impl PyManifestSplitCondition {
                 res.push(')');
                 res
             }
-            PathMatches { regex } => format!("PathMatches('{}')", regex),
-            NameMatches { regex } => format!("NameMatches('{}')", regex),
+            PathMatches { regex } => format!("PathMatches('{regex}')"),
+            NameMatches { regex } => format!("NameMatches('{regex}')"),
             AnyArray() => "AnyArray".to_string(),
         }
     }
@@ -1220,8 +1220,8 @@ impl PyManifestSplitDimCondition {
     pub fn __repr__(&self) -> String {
         use PyManifestSplitDimCondition::*;
         match self {
-            Axis(axis) => format!("Axis({})", axis),
-            DimensionName(name) => format!(r#"DimensionName("{}")"#, name),
+            Axis(axis) => format!("Axis({axis})"),
+            DimensionName(name) => format!(r#"DimensionName("{name}")"#),
             Any() => "Any".to_string(),
         }
     }
@@ -1277,11 +1277,11 @@ impl PyManifestSplittingConfig {
                 let reprs: Vec<String> = split_sizes
                     .iter()
                     .map(|(condition, dims)| {
-                        let condition_repr = format!("{:?}", condition); // Using Debug for PyManifestSplitCondition
+                        let condition_repr = format!("{condition:?}"); // Using Debug for PyManifestSplitCondition
                         let dims_repr: Vec<String> = dims
                             .iter()
                             .map(|(dim_condition, num)| {
-                                format!("({:?}, {})", dim_condition, num)
+                                format!("({dim_condition:?}, {num})")
                             })
                             .collect();
                         format!("({}, [{}])", condition_repr, dims_repr.join(", "))

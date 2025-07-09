@@ -65,7 +65,7 @@ impl From<StoreError> for PyIcechunkStoreError {
                         message: _,
                     }),
                 ..
-            } => PyIcechunkStoreError::PyKeyError(format!("{}", path)),
+            } => PyIcechunkStoreError::PyKeyError(format!("{path}")),
             _ => PyIcechunkStoreError::StoreError(error),
         }
     }
@@ -77,7 +77,7 @@ impl From<SessionError> for PyIcechunkStoreError {
             SessionError {
                 kind: SessionErrorKind::NodeNotFound { path, message: _ },
                 ..
-            } => PyIcechunkStoreError::PyKeyError(format!("{}", path)),
+            } => PyIcechunkStoreError::PyKeyError(format!("{path}")),
             _ => PyIcechunkStoreError::SessionError(error),
         }
     }
