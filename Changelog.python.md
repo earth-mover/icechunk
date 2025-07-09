@@ -13,7 +13,7 @@ Please refer to our [migration guide](https://icechunk.io/en/latest/icechunk-pyt
 ### Features
 
 - New [`Repository.transaction`](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.Repository.transaction)
-helper function creates and commits write sessions automatically.
+context manager creates and commits write sessions upon exit.
 - Easier manifest preload and split configuration, combining conditions with `|` and `&` magic methods.
 - More secure and explicit control over virtual chunk resolution. This improvement motivated the changes
 in API for [`Repository.open`](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.Repository.open) and
