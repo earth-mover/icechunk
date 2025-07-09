@@ -18,6 +18,7 @@ To get started, we can create a new `Repository`.
 
     This example uses an in-memory storage backend, but you can also use any other storage backend instead.
 
+
 ```python exec="on" session="version" source="material-block"
 import icechunk
 

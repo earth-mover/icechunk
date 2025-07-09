@@ -147,6 +147,7 @@ plugins:
   - mkdocs-jupyter:
       include_source: True
       # include: ["*.ipynb"] # Default: ["*.py", "*.ipynb"]
+  - markdown-exec
 
 markdown_extensions:
   - admonition
