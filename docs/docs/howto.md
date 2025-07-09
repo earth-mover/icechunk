@@ -1,169 +1,269 @@
-# Icechunk for Git Users
+# How To: Common Icechunk Operations
 
-While Icechunk does not work the same way as [git](https://git-scm.com/), it borrows from a lot of the same concepts. This guide will talk through the version control features of Icechunk from the perspective of a user that is familiar with git.
+This page gathers common Icechunk operations into one compact how-to guide.
+It is not intended as a deep explanation of how Icechunk works.
 
-## Repositories
+## Creating and Opening Repos
 
-The main primitive in Icechunk is the [repository](reference.md#icechunk.Repository). Similar to git, the repository is the entry point for all operations and the source of truth for the data. However there are many important differences.
+Creating and opening repos requires creating a `Storage` object.
+See the [Storage guide](storage.md) for all the details.
 
-When developing with git, you will commonly have a local and remote copy of the repository. The local copy is where you do all of your work. The remote copy is where you push your changes when you are ready to share them with others. In Icechunk, there is not local or remote repository, but a single repository that typically exists in a cloud storage bucket. This means that every transaction is saved to the same repository that others may be working on. Icechunk uses the consistency guarantees from storage systems to provide strong consistency even when multiple users are working on the same repository.
-
-## Working with branches
-
-Icechunk has [branches](version-control.md#branches) similar to git.
-
-### Creating a branch
-
-In practice, this means the workflow is different from git. For instance, I wanted to make a new branch based on the `main` branch on my existing git repository and then commit my changes in git this is how I would do it:
-
-```bash
-# Assume currently on main branch
-# create branch
-git checkout -b my-new-branch
-# stage changes
-git add myfile.txt
-# commit changes
-git commit -m "My new branch"
-# push to remote
-git push origin -u my-new-branch
-```
-
-In Icechunk, you would do the following:
+### Create a New Repo
 
 ```python
-# We create the branch
-repo.create_branch("my-new-branch", repo.lookup_branch("main"))
-# create a writable session
-session = repo.writable_session("my-new-branch")
-...  # make some changes
-# commit the changes
-session.commit("My new branch")
+storage = icechunk.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
+repo = icechunk.Repository.create(storage)
 ```
 
-Two things to note:
-
-1. When we create a branch, the branch is now available for any other instance of this `Repository` object. It is not a local branch, it is created in the repositories storage backend.
-2. When we commit the changes are immediately visible to other users of the repository. There is not concept of a local commit, all snapshots happen in the storage backend.
-
-### Checking out a branch
-
-In git, you can check out a branch by using the `git checkout` command. Icechunk does not have the concept of checking out a branch, instead you create [`Session`s](reference.md#icechunk.Session) that are based on the tip of a branch.
-
-We can either check out a branch for [read-only access](reference.md#icechunk.Repository.readonly_session) or for [read-write access](reference.md#icechunk.Repository.writable_session).
+### Open an Existing Repo
 
 ```python
-# check out a branch for read-only access
-session = repo.readonly_session(branch="my-new-branch")
-# readonly_session accepts a branch name by default
-session = repo.readonly_session("my-new-branch")
-# check out a branch for read-write access
-session = repo.writable_session("my-new-branch")
+repo = icechunk.Repository.open(storage)
 ```
 
-Once we have checked out a session, the [`store`](reference.md#icechunk.Session.store) method will return a [`Store`](reference.md#icechunk.Store) object that we can use to read and write data to the repository with `zarr`.
+### Specify Custom Config when Opening a Repo
 
-### Resetting a branch
-
-In git, you can reset a branch to previous commit. Similarly, in Icechunk you can [reset a branch to a previous snapshot](reference.md#icechunk.Repository.reset_branch).
+There are many configuration options available to control the behavior of the repository and the storage backend.
+See [Configuration](configuration.md) for all the details.
 
 ```python
-# reset the branch to the previous snapshot
-repo.reset_branch("my-new-branch", "198273178639187")
+config = icechunk.RepositoryConfig.default()
+config.caching = icechunk.CachingConfig(num_bytes_chunks=100_000_000)
+repo = icechunk.Repository.open(storage, config=config)
 ```
 
-!!! warning
-    This is a destructive operation. It will overwrite the branch reference with the snapshot immediately. It can only be undone by resetting the branch again.
+### Deleting a Repo
 
-At this point, the tip of the branch is now the snapshot `198273178639187` and any changes made to the branch will be based on this snapshot. This also means the history of the branch is now same as the ancestry of this snapshot.
+Icechunk doesn't provide a way to delete a repo once it has been created.
+If you need to delete a repo, just go to the underlying storage and remove the directory where you created the repo.
 
-### Branch History
+## Reading, Writing, and Modifying Data with Zarr
 
-In Icechunk, you can view the history of a branch by using the [`repo.ancestry()`](reference.md#icechunk.Repository.ancestry) command, similar to the `git log` command.
+Read and write operations occur within the context of a [transaction](transactions.md).
+The general pattern is
 
 ```python
-[ancestor for ancestor in repo.ancestry(branch="my-new-branch")]
-
-#[Snapshot(id='198273178639187', ...), ...]
+session = repo.writable_session(branch="main")
+# interact with the repo via session.store
+# ...
+session.commit(message="wrote some data")
 ```
 
-### Listing branches
-
-We can also [list all branches](reference.md#icechunk.Repository.list_branches) in the repository.
+You can also use the `.transaction` function as a context manager,
+which automatically commits when the context exits.
 
 ```python
-repo.list_branches()
-
-# ['main', 'my-new-branch']
+with repo.transaction(branch="main", message="wrote some data") as store:
+    # interact with the repo via store
 ```
 
-You can also view the snapshot that a branch is based on by using the [`repo.lookup_branch()`](reference.md#icechunk.Repository.lookup_branch) command.
+In the examples below, we just show the interaction with the `store` object.
+Keep in mind that all sessions need to be concluded with a `.commit()`.
+
+### Create a Group
 
 ```python
-repo.lookup_branch("my-new-branch")
-
-# '198273178639187'
+group = zarr.create_group(session.store, path="my-group", zarr_format=3)
 ```
 
-### Deleting a branch
-
-You can delete a branch by using the [`repo.delete_branch()`](reference.md#icechunk.Repository.delete_branch) command.
+### Create an Array
 
 ```python
-repo.delete_branch("my-new-branch")
+array = group.create("my_array", shape=(10, 20), dtype='int32')
 ```
 
-## Working with tags
-
-Icechunk [tags](version-control.md#tags) are also similar to git tags.
-
-### Creating a tag
-
-We [create a tag](reference.md#icechunk.Repository.create_tag) by providing a name and a snapshot id, similar to the `git tag` command.
+### Write Data to an Array
 
 ```python
-repo.create_tag("my-new-tag", "198273178639187")
+array[2:5, :10] = 1
 ```
 
-Just like git tags, Icechunk tags are immutable and cannot be modified. They can however be [deleted like git tags](reference.md#icechunk.Repository.delete_tag):
+### Read Data from an Array
 
 ```python
-repo.delete_tag("my-new-tag")
+data = array[:5, :10]
 ```
 
-However, unlike git tags once a tag is deleted it cannot be recreated. This will now raise an error:
+### Resize an Array
 
 ```python
-repo.create_tag("my-new-tag", "198273178639187")
-
-# IcechunkError: Tag with name 'my-new-tag' already exists
+array.resize((20, 30))
 ```
 
-### Listing tags
-
-We can also [list all tags](reference.md#icechunk.Repository.list_tags) in the repository.
+### Add or Modify Array / Group Attributes
 
 ```python
-repo.list_tags()
-
-# ['my-new-tag']
+array.attrs["standard_name"] = "time"
 ```
 
-### Viewing tag history
-
-We can also view the history of a tag by using the [`repo.ancestry()`](reference.md#icechunk.Repository.ancestry) command.
+### View Array / Group Attributes
 
 ```python
-repo.ancestry(tag="my-new-tag")
+dict(array.attrs)
 ```
 
-This will return an iterator of snapshots that are ancestors of the tag. Similar to branches we can lookup the snapshot that a tag is based on by using the [`repo.lookup_tag()`](reference.md#icechunk.Repository.lookup_tag) command.
+### Delete a Group
 
 ```python
-repo.lookup_tag("my-new-tag")
-
-# '198273178639187'
+del group["subgroup"]
 ```
 
-## Merging and Rebasing
+### Delete an Array
 
-Git supports merging and rebasing branches together. Icechunk currently does not support merging and rebasing branches together. It does support [rebasing sessions that share the same branch](version-control.md#conflict-resolution).
+```python
+del group["array"]
+```
+
+## Reading and Writing Data with Xarray
+
+### Write an in-memory Xarray Dataset
+
+```python
+ds.to_zarr(session.store, group="my-group", zarr_format=3, consolidated=False)
+```
+
+
+### Append to an existing datast
+
+```python
+ds.to_zarr(session.store, group="my-group", append_dim='time', consolidated=False)
+```
+
+### Write an Xarray dataset with Dask
+
+Writing with Dask or any other parallel execution framework requires special care.
+See [Parallel writes](parallel.md) and [Xarray](xarray.md) for more detail.
+
+```python
+from icechunk.xarray import to_icechunk
+to_icechunk(ds, session)
+```
+
+
+### Read a dataset with Xarray
+
+Reading can be done with a read-only session.
+
+```python
+session = repo.readonly_session("main")
+ds = xr.open_zarr(session.store, group="my-group", zarr_format=3, consolidated=False)
+```
+
+## Transactions and Version Control
+
+For more depth, see [Transactions](transactions.md) and [Data Version Control](version-control.md).
+
+### Create a Snapshot via a Transaction
+
+```python
+snapshot_id = session.commit("commit message")
+```
+
+### Resolve a Commit Conflict
+
+The case of no actual conflicts:
+
+```python
+try:
+    session.commit("commit message")
+except icechunk.ConflictError:
+    session.rebase(icechunk.ConflictDetector())
+    session.commit("committed after rebasing")
+```
+
+Or if you have conflicts between different commits and want to overwrite the other changes:
+
+```python
+try:
+    session.commit("commit message")
+except icechunk.ConflictError:
+    session.rebase(icechunk.BasicConflictSolver(on_chunk_conflict=icechunk.VersionSelection.UseOurs))
+    session.commit("committed after rebasing")
+```
+
+### Commit with Automatic Rebasing
+
+This will automatically retry the commit until it succeeds
+
+```python
+session.commit("commit message", rebase_with=icechunk.ConflictDetector())
+```
+
+### List Snapshots
+
+```python
+for snapshot in repo.ancestry(branch="main"):
+    print(snapshot)
+```
+
+### Check out a Snapshot
+
+```python
+session = repo.readonly_session(snapshot_id=snapshot_id)
+```
+
+### Create a Branch
+
+```python
+repo.create_branch("dev", snapshot_id=snapshot_id)
+```
+
+### List all Branches
+
+```python
+branches = repo.list_branches()
+```
+
+### Check out a Branch
+
+```python
+session = repo.writable_session("dev")
+```
+
+### Reset a Branch to a Different Snapshot
+
+```python
+repo.reset_branch("dev", snapshot_id=snapshot_id)
+```
+
+### Create a Tag
+
+```python
+repo.create_tag("v1.0.0", snapshot_id=snapshot_id)
+```
+
+### List all Tags
+
+```python
+tags = repo.list_tags()
+```
+
+### Check out a Tag
+
+```python
+session = repo.readonly_session(tag="v1.0.0")
+```
+
+### Delete a Tag
+
+```python
+repo.delete_tag("v1.0.0")
+```
+
+## Repo Maintenance
+
+For more depth, see [Data Expiration](expiration.md).
+
+### Run Snapshot Expiration
+
+```python
+from datetime import datetime, timedelta
+expiry_time = datetime.now() - timedelta(days=10)
+expired = repo.expire_snapshots(older_than=expiry_time)
+```
+
+### Run Garbage Collection
+
+```python
+results = repo.garbage_collect(expiry_time)
+```

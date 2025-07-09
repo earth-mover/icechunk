@@ -52,7 +52,8 @@ theme:
     - navigation.tracking
     - navigation.indexes
     - navigation.footer
-    - navigation.tabs
+    # - navigation.tabs
+    - navigation.sections
     - navigation.tabs.sticky
     - navigation.top
     #- navigation.expand
@@ -197,6 +198,7 @@ nav:
     - Tuning Performance: performance.md
     - Migrate to 1.0: migration.md
     - Virtual Datasets: virtual.md
+    - Icechunk for Git Users: icechunk-for-git-users.md
     - Creating Icechunk Datasets:
       - Global Raster Data cube: ingestion/glad-ingest.ipynb
   - Reference:
