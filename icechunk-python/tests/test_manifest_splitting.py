@@ -23,7 +23,7 @@ DIMS = ("time", "latitude", "longitude")
 
 
 @given(data=st.data())
-def test_splitting_config_dict_roundtrip(data):
+def test_splitting_config_dict_roundtrip(data) -> None:
     arrays = data.draw(
         st.lists(
             zarr_arrays(compressors=st.none(), attrs=st.none(), zarr_formats=st.just(3))
@@ -33,7 +33,7 @@ def test_splitting_config_dict_roundtrip(data):
     assert ic.ManifestSplittingConfig.from_dict(config.to_dict()) == config
 
 
-def test_manifest_splitting_appends():
+def test_manifest_splitting_appends() -> None:
     array_condition = ManifestSplitCondition.or_conditions(
         [
             ManifestSplitCondition.name_matches("temperature"),
@@ -50,6 +50,7 @@ def test_manifest_splitting_appends():
         ### simple create repo with manifest splitting
         storage = ic.local_filesystem_storage(tmpdir)
         repo = ic.Repository.create(storage, config=config)
+        assert repo.config.manifest
         assert repo.config.manifest.splitting is not None
 
         ds = xr.Dataset(
@@ -81,6 +82,7 @@ def test_manifest_splitting_appends():
         #### check that config is persisted and used when writing after re-open
         ### append along time - no splitting specified along this dimension
         repo = ic.Repository.open(storage)
+        assert repo.config.manifest
         assert repo.config.manifest.splitting is not None
         session = repo.writable_session("main")
         with zarr.config.set({"array.write_empty_chunks": True}):
@@ -104,6 +106,7 @@ def test_manifest_splitting_appends():
             }
         )
         repo = ic.Repository.open(storage)
+        assert repo.config.manifest
         assert repo.config.manifest.splitting is not None
         session = repo.writable_session("main")
         with zarr.config.set({"array.write_empty_chunks": True}):
@@ -123,7 +126,7 @@ def test_manifest_splitting_appends():
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
 
-def test_manifest_overwrite_splitting_config_on_read():
+def test_manifest_overwrite_splitting_config_on_read() -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {
             ManifestSplitCondition.name_matches("temperature"): {
@@ -186,7 +189,7 @@ def test_manifest_overwrite_splitting_config_on_read():
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
 
-def test_manifest_splitting_sparse_regions():
+def test_manifest_splitting_sparse_regions() -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {
             ManifestSplitCondition.name_matches("temperature"): {
@@ -201,6 +204,7 @@ def test_manifest_splitting_sparse_regions():
         ### simple create repo with manifest splitting
         storage = ic.local_filesystem_storage(tmpdir)
         repo = ic.Repository.create(storage, config=config)
+        assert repo.config.manifest
         assert repo.config.manifest.splitting is not None
 
         ds = xr.Dataset(
@@ -266,7 +270,7 @@ def test_manifest_splitting_sparse_regions():
         ),
     ],
 )
-def test_manifest_splitting_complex_config(config, expected_split_sizes):
+def test_manifest_splitting_complex_config(config, expected_split_sizes) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {ManifestSplitCondition.AnyArray(): config}
     )
@@ -277,6 +281,7 @@ def test_manifest_splitting_complex_config(config, expected_split_sizes):
         ### simple create repo with manifest splitting
         storage = ic.local_filesystem_storage(tmpdir)
         repo = ic.Repository.create(storage, config=config)
+        assert repo.config.manifest
         assert repo.config.manifest.splitting is not None
 
         ds = xr.Dataset(
@@ -296,7 +301,7 @@ def test_manifest_splitting_complex_config(config, expected_split_sizes):
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
 
-def test_manifest_splitting_magic_methods():
+def test_manifest_splitting_magic_methods() -> None:
     assert ManifestSplitCondition.and_conditions(
         [
             ManifestSplitCondition.name_matches("temperature"),

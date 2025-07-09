@@ -158,7 +158,7 @@ async def test_thread_concurrency() -> None:
     group = zarr.group(store=store, overwrite=True)
     group.create_array("array", shape=(1_000,), chunks=(1,), dtype="i4", compressors=None)
 
-    def do_virtual_writes(start, stop):
+    def do_virtual_writes(start, stop) -> int:
         n = 0
         start.wait()
         while not stop.is_set():
@@ -173,8 +173,8 @@ async def test_thread_concurrency() -> None:
             n += 1
         return n
 
-    def do_native_writes(start, stop):
-        async def do():
+    def do_native_writes(start, stop) -> int:
+        async def do() -> int:
             n = 0
             while not stop.is_set():
                 i = randrange(1_000)
@@ -188,10 +188,10 @@ async def test_thread_concurrency() -> None:
         start.wait()
         return asyncio.run(do())
 
-    def do_reads(start, stop):
+    def do_reads(start, stop) -> int:
         buffer_prototype = zarr.core.buffer.default_buffer_prototype()
 
-        async def do():
+        async def do() -> int:
             n = 0
             while not stop.is_set():
                 i = randrange(1_000)
@@ -203,8 +203,8 @@ async def test_thread_concurrency() -> None:
         start.wait()
         return asyncio.run(do())
 
-    def do_deletes(start, stop):
-        async def do():
+    def do_deletes(start, stop) -> int:
+        async def do() -> int:
             n = 0
             while not stop.is_set():
                 i = randrange(1_000)
@@ -216,8 +216,8 @@ async def test_thread_concurrency() -> None:
         start.wait()
         return asyncio.run(do())
 
-    def do_lists(start, stop):
-        async def do():
+    def do_lists(start, stop) -> int:
+        async def do() -> int:
             n = 0
             while not stop.is_set():
                 _ = [k async for k in store.list_prefix("")]
@@ -249,19 +249,19 @@ async def test_thread_concurrency() -> None:
         time.sleep(SECONDS_TO_RUN)
         stop.set()
 
-        virtual_writes = sum(future.result() for future in virtual_writes)
-        native_writes = sum(future.result() for future in native_writes)
-        deletes = sum(future.result() for future in deletes)
-        reads = sum(future.result() for future in reads)
-        lists = sum(future.result() for future in lists)
+        virtual_writes_count = sum(future.result() for future in virtual_writes)
+        native_writes_count = sum(future.result() for future in native_writes)
+        deletes_count = sum(future.result() for future in deletes)
+        reads_count = sum(future.result() for future in reads)
+        lists_count = sum(future.result() for future in lists)
 
     print()
     print(
-        f"virtual writes: {virtual_writes}, native writes: {native_writes}, deletes: {deletes}, reads: {reads}, lists: {lists}"
+        f"virtual writes: {virtual_writes_count}, native writes: {native_writes_count}, deletes: {deletes_count}, reads: {reads_count}, lists: {lists_count}"
     )
 
-    assert virtual_writes > 2
-    assert native_writes > 2
-    assert deletes > 2
-    assert reads > 2
-    assert lists > 2
+    assert virtual_writes_count > 2
+    assert native_writes_count > 2
+    assert deletes_count > 2
+    assert reads_count > 2
+    assert lists_count > 2

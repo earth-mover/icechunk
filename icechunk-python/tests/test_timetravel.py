@@ -11,7 +11,9 @@ import zarr.core.array
 import zarr.core.buffer
 
 
-async def async_ancestry(repo: ic.Repository, **kwargs) -> list[ic.SnapshotInfo]:
+async def async_ancestry(
+    repo: ic.Repository, **kwargs: str | None
+) -> list[ic.SnapshotInfo]:
     return [parent async for parent in repo.async_ancestry(**kwargs)]
 
 

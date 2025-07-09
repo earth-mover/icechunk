@@ -12,7 +12,15 @@ from zarr.core.metadata import ArrayV3Metadata
 def splitting_configs(
     draw: st.DrawFn, *, arrays: Iterable[zarr.Array]
 ) -> ic.ManifestSplittingConfig:
-    config_dict = {}
+    config_dict: dict[
+        ic.ManifestSplitCondition,
+        dict[
+            ic.ManifestSplitDimCondition.Axis
+            | ic.ManifestSplitDimCondition.DimensionName
+            | ic.ManifestSplitDimCondition.Any,
+            int,
+        ],
+    ] = {}
     for array in arrays:
         if draw(st.booleans()):
             array_condition = ic.ManifestSplitCondition.name_matches(
@@ -40,4 +48,4 @@ def splitting_configs(
             config_dict[array_condition] = {
                 key: draw(st.integers(min_value=1, max_value=size + 10))
             }
-    return ic.ManifestSplittingConfig.from_dict(config_dict)  # type: ignore[attr-defined, no-any-return]
+    return ic.ManifestSplittingConfig.from_dict(config_dict)
