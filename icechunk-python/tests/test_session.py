@@ -1,10 +1,11 @@
 import pickle
 import tempfile
+from typing import cast
 
 import pytest
 
 import zarr
-from icechunk import IcechunkError, Repository, local_filesystem_storage
+from icechunk import ForkSession, IcechunkError, Repository, local_filesystem_storage
 from icechunk.distributed import merge_sessions
 
 
@@ -53,7 +54,7 @@ def test_session_fork() -> None:
 
         # this is wrong
         with pytest.raises(TypeError, match="Received 'Session'"):
-            merge_sessions(session, fork1, fork2)
+            merge_sessions(cast(ForkSession, session), fork1, fork2)
         # this is right
         session.merge(fork1, fork2)
         session.commit("all done")

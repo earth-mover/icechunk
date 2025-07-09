@@ -38,7 +38,7 @@ def do_test(scheduler) -> None:
         dX = 1
         dY = 1
 
-    def plot():
+    def plot() -> None:
         if not PLOT:
             return
         import matplotlib.pyplot as plt
@@ -124,7 +124,7 @@ def do_test(scheduler) -> None:
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_dask_distributed_appends(scheduler):
+def test_dask_distributed_appends(scheduler) -> None:
     do_test(scheduler)
 
 

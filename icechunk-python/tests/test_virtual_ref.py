@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Sized
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -269,6 +270,7 @@ async def test_public_virtual_refs(
     assert "year/c/0" in nodes
 
     year_values = year[:]
+    assert isinstance(year_values, Sized)
     assert len(year_values) == 72
     actual_values = np.array(
         [
@@ -350,7 +352,7 @@ async def test_public_virtual_refs(
     assert np.allclose(year_values, actual_values)
 
 
-def test_error_on_nonexisting_virtual_chunk_container():
+def test_error_on_nonexisting_virtual_chunk_container() -> None:
     repo = Repository.open_or_create(
         storage=in_memory_storage(),
     )
@@ -380,7 +382,7 @@ def test_error_on_nonexisting_virtual_chunk_container():
         array[0]
 
 
-def test_error_on_non_authorized_virtual_chunk_container():
+def test_error_on_non_authorized_virtual_chunk_container() -> None:
     store_config = local_filesystem_store("/foo")
     container = VirtualChunkContainer("file:///foo", store_config)
     config = RepositoryConfig.default()
