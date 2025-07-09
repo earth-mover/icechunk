@@ -877,7 +877,7 @@ pub fn new_r2_storage(
         region: config.region.or(Some("auto".to_string())),
         endpoint_url: config
             .endpoint_url
-            .or(account_id.map(|x| format!("https://{0}.r2.cloudflarestorage.com", x))),
+            .or(account_id.map(|x| format!("https://{x}.r2.cloudflarestorage.com"))),
         force_path_style: true,
         ..config
     };

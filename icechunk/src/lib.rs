@@ -81,7 +81,7 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
         Ok(mut guard) => match guard.as_ref() {
             Some(handle) => {
                 if let Err(err) = handle.reload(filter) {
-                    println!("Error reloading log settings: {}", err)
+                    println!("Error reloading log settings: {err}")
                 }
             }
             None => {
@@ -97,12 +97,12 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
                     .with(stdout_layer)
                     .try_init()
                 {
-                    println!("Error initializing logs: {}", err);
+                    println!("Error initializing logs: {err}");
                 }
             }
         },
         Err(err) => {
-            println!("Error setting up logs: {}", err)
+            println!("Error setting up logs: {err}")
         }
     }
 }

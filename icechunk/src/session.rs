@@ -3801,7 +3801,7 @@ mod tests {
             }) => {
                 assert!(conflicts.contains(conflict));
             }
-            other => panic!("test failed, expected conflict, got {:?}", other),
+            other => panic!("test failed, expected conflict, got {other:?}"),
         }
     }
 
@@ -4294,7 +4294,7 @@ mod tests {
                 Some(ChunkPayload::Inline("repo 1".into())),
             )
             .await?;
-            ds1.commit(format!("update chunk {}", coord).as_str(), None).await?;
+            ds1.commit(format!("update chunk {coord}").as_str(), None).await?;
         }
 
         // write the same chunks with repo 2

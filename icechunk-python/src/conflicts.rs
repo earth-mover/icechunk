@@ -49,18 +49,18 @@ impl Display for PyConflictType {
             PyConflictType::DeleteOfUpdatedArray => "Delete of updated array",
             PyConflictType::DeleteOfUpdatedGroup => "Delete of updated group",
         };
-        write!(f, "{}", variant_str)
+        write!(f, "{variant_str}")
     }
 }
 
 #[pymethods]
 impl PyConflictType {
     fn __repr__(&self) -> String {
-        format!("{:?}", self)
+        format!("{self:?}")
     }
 
     fn __str__(&self) -> String {
-        format!("{}", self)
+        format!("{self}")
     }
 }
 

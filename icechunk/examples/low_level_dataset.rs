@@ -244,6 +244,6 @@ async fn print_nodes(ds: &Session) -> Result<(), SessionError> {
         .map(|node| format!("|{:10?}|{:15}\n", node.node_type(), node.path.to_string(),))
         .format("");
 
-    println!("{}", rows);
+    println!("{rows}");
     Ok(())
 }

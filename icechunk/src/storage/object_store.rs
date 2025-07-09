@@ -202,7 +202,7 @@ impl ObjectStorage {
     }
 
     fn drop_prefix(&self, prefix: &ObjectPath, path: &ObjectPath) -> Option<ObjectPath> {
-        path.prefix_match(&ObjectPath::from(format!("{}", prefix))).map(|it| it.collect())
+        path.prefix_match(&ObjectPath::from(format!("{prefix}"))).map(|it| it.collect())
     }
 
     fn ref_key(&self, ref_key: &str) -> ObjectPath {
@@ -811,7 +811,7 @@ impl fmt::Display for HttpObjectStoreBackend {
                 .as_ref()
                 .map(|c| c
                     .iter()
-                    .map(|(k, v)| format!("{:?}={}", k, v))
+                    .map(|(k, v)| format!("{k:?}={v}"))
                     .collect::<Vec<_>>()
                     .join(", "))
                 .unwrap_or("None".to_string())
