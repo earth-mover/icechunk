@@ -137,7 +137,7 @@ impl PySession {
         let session = self.0.clone();
         let res = try_stream! {
             let session = session.read_owned().await;
-            let array_path = array_path.try_into().map_err(|e| PyIcechunkStoreError::PyValueError(format!("Invalid path: {}", e)))?;
+            let array_path = array_path.try_into().map_err(|e| PyIcechunkStoreError::PyValueError(format!("Invalid path: {e}")))?;
 
             let stream = session
                 .chunk_coordinates(&array_path)

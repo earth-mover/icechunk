@@ -984,8 +984,7 @@ mod tests {
             .await;
         assert_eq!(
             total_manifests, expected,
-            "Mismatch in manifest count: expected {}, but got {}",
-            expected, total_manifests,
+            "Mismatch in manifest count: expected {expected}, but got {total_manifests}",
         );
     }
 
@@ -1367,7 +1366,7 @@ mod tests {
                 .set_chunk_ref(
                     array_path.clone(),
                     ChunkIndices(vec![i, 0, 0]),
-                    Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                    Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
                 .await?
         }
@@ -1448,7 +1447,7 @@ mod tests {
                 .set_chunk_ref(
                     temp_path.clone(),
                     ChunkIndices(vec![i]),
-                    Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                    Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
                 .await?
         }
@@ -1477,7 +1476,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-                assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
+                assert_eq!(val, Bytes::copy_from_slice(format!("{i}").as_bytes()));
             }
         };
 
@@ -1585,7 +1584,7 @@ mod tests {
                 .set_chunk_ref(
                     temp_path.clone(),
                     ChunkIndices(vec![i, 0, 0]),
-                    Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                    Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
                 .await?
         }
@@ -1600,7 +1599,7 @@ mod tests {
             .set_chunk_ref(
                 temp_path.clone(),
                 ChunkIndices(vec![last_chunk, 0, 0]),
-                Some(ChunkPayload::Inline(format!("{0}", last_chunk).into())),
+                Some(ChunkPayload::Inline(format!("{last_chunk}").into())),
             )
             .await?;
         session.commit("last split", None).await?;
@@ -1665,7 +1664,7 @@ mod tests {
                 .set_chunk_ref(
                     temp_path.clone(),
                     ChunkIndices(vec![i, 0, 0]),
-                    Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                    Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
                 .await?
         }
@@ -1678,7 +1677,7 @@ mod tests {
                 .set_chunk_ref(
                     temp_path.clone(),
                     ChunkIndices(vec![i, 0, 0]),
-                    Some(ChunkPayload::Inline(format!("{0}", i).into())),
+                    Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
                 .await?
         }
@@ -1703,7 +1702,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-            assert_eq!(val, Bytes::copy_from_slice(format!("{0}", i).as_bytes()));
+            assert_eq!(val, Bytes::copy_from_slice(format!("{i}").as_bytes()));
         }
 
         // delete all chunks
@@ -1895,11 +1894,10 @@ mod tests {
                 let expected_value =
                     ravel_multi_index(ic.as_slice(), array_shape.as_slice());
                 let expected =
-                    Bytes::copy_from_slice(format!("{0}", expected_value).as_bytes());
+                    Bytes::copy_from_slice(format!("{expected_value}").as_bytes());
                 assert_eq!(
                     val, expected,
-                    "For chunk {:?}, received {:?}, expected {:?}",
-                    ic, val, expected
+                    "For chunk {ic:?}, received {val:?}, expected {expected:?}"
                 );
             }
         };
@@ -1927,14 +1925,14 @@ mod tests {
                     .set_chunk_ref(
                         temp_path.clone(),
                         ChunkIndices(index),
-                        Some(ChunkPayload::Inline(format!("{0}", value).into())),
+                        Some(ChunkPayload::Inline(format!("{value}").into())),
                     )
                     .await?
             }
 
             total_manifests +=
                 (axis_size as u32).div_ceil(expected_split_sizes[ax]) as usize;
-            session.commit(format!("finished axis {0}", ax).as_ref(), None).await?;
+            session.commit(format!("finished axis {ax}").as_ref(), None).await?;
             assert_manifest_count(&backend, total_manifests).await;
 
             verify_data(ax, &session).await;
@@ -1961,7 +1959,7 @@ mod tests {
             .set_chunk_ref(
                 temp_path.clone(),
                 ChunkIndices(index),
-                Some(ChunkPayload::Inline(format!("{0}", value).into())),
+                Some(ChunkPayload::Inline(format!("{value}").into())),
             )
             .await?;
         // Important: we only create one new manifest in this case for
@@ -1981,7 +1979,7 @@ mod tests {
                 .set_chunk_ref(
                     temp_path.clone(),
                     ChunkIndices(index),
-                    Some(ChunkPayload::Inline(format!("{0}", value).into())),
+                    Some(ChunkPayload::Inline(format!("{value}").into())),
                 )
                 .await?;
         }
@@ -2017,7 +2015,7 @@ mod tests {
                 .set_chunk_ref(
                     temp_path.clone(),
                     ChunkIndices(index),
-                    Some(ChunkPayload::Inline(format!("{0}", value).into())),
+                    Some(ChunkPayload::Inline(format!("{value}").into())),
                 )
                 .await?;
         }
@@ -2181,7 +2179,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap_or_else(|| panic!("getting chunk ref failed for {:?}", &idx));
-            let expected = Bytes::copy_from_slice(format!("{0}", val).as_bytes());
+            let expected = Bytes::copy_from_slice(format!("{val}").as_bytes());
             assert_eq!(actual, expected);
         }
 
@@ -2225,7 +2223,7 @@ mod tests {
             .await
             .unwrap();
             let expected_value =
-                expect.map(|val| Bytes::copy_from_slice(format!("{0}", val).as_bytes()));
+                expect.map(|val| Bytes::copy_from_slice(format!("{val}").as_bytes()));
             assert_eq!(actual, expected_value);
         }
 
@@ -2337,7 +2335,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap_or_else(|| panic!("getting chunk ref failed for {:?}", &idx));
-            let expected = Bytes::copy_from_slice(format!("{0}", val).as_bytes());
+            let expected = Bytes::copy_from_slice(format!("{val}").as_bytes());
             assert_eq!(actual, expected);
         }
 
