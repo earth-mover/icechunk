@@ -70,7 +70,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          uv pip install --group upstream
+          uv pip install --group upstream --pre
           uv pip install icechunk --no-deps --find-links dist --force-reinstall --pre
           uv pip list
 
