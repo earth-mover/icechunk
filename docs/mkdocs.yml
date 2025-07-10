@@ -46,9 +46,11 @@ theme:
         name: Switch to light mode
 
   features:
-    - navigation.instant
-    - navigation.instant.prefetch
-    - navigation.instant.progress
+    # instant causes duplicated version dropdown
+    # see: https://github.com/readthedocs/readthedocs.org/issues/12032
+    # - navigation.instant
+    # - navigation.instant.prefetch
+    # - navigation.instant.progress
     - navigation.tracking
     - navigation.indexes
     - navigation.footer
