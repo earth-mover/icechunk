@@ -91,6 +91,7 @@ Even is Tigris is API-compatible with S3, this function is needed because Tigris
 #### Cloudflare R2
 
 Icechunk can use Cloudflare R2's S3-compatible API. You will need to:
+
 1. provide either the account ID or set the [endpoint URL](https://developers.cloudflare.com/r2/api/s3/api/) specific to your bucket: `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`;
 2. [create an API token](https://developers.cloudflare.com/r2/api/s3/tokens/) to generate a secret access key and access key ID; and
 
@@ -105,13 +106,13 @@ icechunk.r2_storage(
 ```
 
 For buckets with public access,
+
 ```python
 icechunk.r2_storage(
     prefix="icechunk-test/quickstart-demo-1",
     endpoint_url="https://public-url,
 )
 ```
-
 
 #### Minio
 
@@ -137,6 +138,29 @@ A few things to note:
 1. The `endpoint_url` parameter is set to the URL of the Minio server.
 2. If the Minio server is running over HTTP and not HTTPS, the `allow_http` parameter must be set to `True`.
 3. Even though this is running on a local server, the `region` parameter must still be set to a valid region. [By default use `us-east-1`](https://github.com/minio/minio/discussions/15063).
+
+#### Object stores lacking conditional writes
+
+Some object stores don't have support for conditional writes, so they don't work with Icechunk out of the box. This is changing rapidly since AWS added support for these operations, and most major object store have had support for a long time.
+
+If you are trying to use one of these object stores, like [JASMIN](https://help.jasmin.ac.uk/docs/short-term-project-storage/using-the-jasmin-object-store/) for example, you'll need to accept some trade-offs.
+Icechunk can work on them, but you'll lose the consistency guarantee in the presence of multiple concurrent committers. If two sessions commit at the same time, one of them could get lost. If you decide
+to accept this risk, you can configure Icechunk like so:
+
+```python
+storage = icechunk.s3_storage(...)
+storage_config = icechunk.StorageSettings(
+    unsafe_use_conditional_update=False,
+    unsafe_use_conditional_create=False,
+)
+config = icechunk.RepositoryConfig(
+    storage = storage_config
+)
+repo = icechunk.Repository.create(
+    storage=storage,
+    config= config
+)
+```
 
 ### Google Cloud Storage
 
@@ -274,6 +298,9 @@ Icechunk can also be used on a [local filesystem](./reference.md#icechunk.local_
     ```
 
 #### Limitations
+
+!!! warning
+    File system Storage is not safe in the presence of concurrent commits. If two sessions are trying to commit at the same time, both operations may return successfully but one of the commits can be lost. Don't use file system storage in production if there is the possibility of concurrent commits.
 
 - Icechunk currently does not work with a local filesystem storage backend on Windows. See [this issue](https://github.com/earth-mover/icechunk/issues/665) for more discussion. To work around, try using [WSL](https://learn.microsoft.com/en-us/windows/wsl/about) or a cloud storage backend.
 
