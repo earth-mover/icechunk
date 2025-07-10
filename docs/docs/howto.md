@@ -49,7 +49,13 @@ session = repo.writable_session(branch="main")
 session.commit(message="wrote some data")
 ```
 
-You can also use the `.transaction` function as a context manager,
+
+!!! info
+
+    In the examples below, we just show the interaction with the `store` object.
+    Keep in mind that all sessions need to be concluded with a `.commit()`.
+
+Alternatively, you can also use the `.transaction` function as a context manager,
 which automatically commits when the context exits.
 
 ```python
@@ -57,8 +63,6 @@ with repo.transaction(branch="main", message="wrote some data") as store:
     # interact with the repo via store
 ```
 
-In the examples below, we just show the interaction with the `store` object.
-Keep in mind that all sessions need to be concluded with a `.commit()`.
 
 ### Create a Group
 

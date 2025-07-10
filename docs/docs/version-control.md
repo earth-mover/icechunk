@@ -40,7 +40,7 @@ We get back an iterator of [`SnapshotInfo`](../reference/#icechunk.SnapshotInfo)
 
 ## Creating a snapshot
 
-Now that we have a `Repository` with a `main` branch, we can modify the data in the repository and create a new snapshot. First we need to create a writable from the `main` branch.
+Now that we have a `Repository` with a `main` branch, we can modify the data in the repository and create a new snapshot. First we need to create a writable Session from the `main` branch.
 
 !!! note
 
@@ -89,9 +89,21 @@ gitGraph
 """.format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
 ```
 
+## Transaction Context Manager
+
+To simplify the process of updating a repo, Icechunk provides a `transaction` context manager which yields an `IcechunkStore` object directly:
+
+```python exec="on" session="version" source="material-block"
+with repo.transaction("main", message="updated from context manager") as store:
+    root = zarr.open_group(store)
+    root.attrs["foo"] = "qux"
+```
+
+The context manager creates as `Session` in the background and automatically commits it (provided there are no errors within the context).
+
 ## Time Travel
 
-Now that we've created a new snapshot, we can time-travel back to the previous snapshot using the snapshot ID.
+Now that we've created a few snapshots, we can time-travel back to the previous snapshot using the snapshot ID.
 
 !!! note
 
@@ -296,7 +308,7 @@ To update the second session so it is based off the tip of the `main` branch, we
 First, we can try to rebase, without merging any conflicting changes:
 
 ```python
-session2.rebase(icechunk.ConflictDetector())
+session2.rebase(rebase_with=icechunk.ConflictDetector())
 
 # ---------------------------------------------------------------------------
 # RebaseFailedError                         Traceback (most recent call last)

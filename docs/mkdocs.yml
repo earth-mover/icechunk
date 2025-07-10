@@ -53,7 +53,7 @@ theme:
     - navigation.indexes
     - navigation.footer
     # - navigation.tabs
-    - navigation.sections
+    # - navigation.sections
     - navigation.tabs.sticky
     - navigation.top
     #- navigation.expand
@@ -180,7 +180,6 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Overview: overview.md
-  - FAQ: faq.md
   - Getting Started:
     - Quickstart: quickstart.md
     - How To: howto.md
@@ -195,7 +194,6 @@ nav:
     - Dask: dask.md
     - Xarray: xarray.md
     - Tuning Performance: performance.md
-    - Migrate to 1.0: migration.md
     - Virtual Datasets: virtual.md
     - Icechunk for Git Users: icechunk-for-git-users.md
     - Creating Icechunk Datasets:
@@ -205,3 +203,4 @@ nav:
     - Python API Reference: reference.md
     - Icechunk Rust: icechunk-rust.md
     - Contributing: contributing.md
+    - Migrate to 1.0: migration.md
