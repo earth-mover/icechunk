@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library 1.0.0
+
+Icechunk 1.0 is here! This version represents our commitment to stability, performance, and reliability.
+
+Whether you're processing satellite imagery, running ML pipelines on massive datasets, or building the next generation of scientific computing applications, Icechunk provides the transactional, versioned, cloud-native storage layer you need.
+
 ## Python Icechunk Library 1.0.0rc0
 
 This is a release candidate for Icechunk 1.0
