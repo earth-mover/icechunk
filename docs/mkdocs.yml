@@ -185,8 +185,7 @@ nav:
     - Quickstart: quickstart.md
     - How To: howto.md
   - Understanding Icechunk:
-    - Transactions: transactions.md
-    - Data Version Control: version-control.md
+    - Transactions and Version Control: version-control.md
     - Data Expiration and Garbage Collection: expiration.md
     - Parallel / Distributed Writing: parallel.md
     - FAQ: faq.md

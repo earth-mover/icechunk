@@ -7,17 +7,6 @@ Icechunk is an open-source (Apache 2.0), transactional storage engine for tensor
 Icechunk works together with **[Zarr](https://zarr.dev/)**, augmenting the Zarr core data model with features
 that enhance performance, collaboration, and safety in a cloud-computing context.
 
-## Docs Organization
-
-This is the Icechunk documentation. It's organized into the following parts.
-
-- This page: a general overview of the project's goals and components.
-- [Frequently Asked Questions](./faq.md)
-- Documentation for [Icechunk Python](quickstart.md), the main user-facing
-  library
-- Documentation for the [Icechunk Rust Crate](./icechunk-rust.md)
-- The [Icechunk Spec](./spec.md)
-
 ## Icechunk Overview
 
 Let's break down what "transactional storage engine for Zarr" actually means:

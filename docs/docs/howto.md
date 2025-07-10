@@ -39,7 +39,7 @@ If you need to delete a repo, just go to the underlying storage and remove the d
 
 ## Reading, Writing, and Modifying Data with Zarr
 
-Read and write operations occur within the context of a [transaction](transactions.md).
+Read and write operations occur within the context of a [transaction](version-control.md).
 The general pattern is
 
 ```python
@@ -151,7 +151,7 @@ ds = xr.open_zarr(session.store, group="my-group", zarr_format=3, consolidated=F
 
 ## Transactions and Version Control
 
-For more depth, see [Transactions](transactions.md) and [Data Version Control](version-control.md).
+For more depth, see [Transactions and Version Control](version-control.md).
 
 ### Create a Snapshot via a Transaction
 

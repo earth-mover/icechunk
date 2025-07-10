@@ -162,6 +162,5 @@ assert array[0] == 1
 ---
 
 That's it! You now know how to use Icechunk!
-For your next step, dig deeper into [configuration](./configuration.md),
-explore the [version control system](./version-control.md), or learn how to
-[use Icechunk with Xarray](./xarray.md).
+
+For an overview of all of the important operations, check out the [How-to guide](howto.md).

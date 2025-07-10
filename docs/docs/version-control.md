@@ -1,4 +1,4 @@
-# Version Control
+# Transactions and Version Control
 
 Icechunk carries over concepts from other version control software (e.g. Git) to multidimensional arrays. Doing so helps ease the burden of managing multiple versions of your data, and helps you be precise about which version of your dataset is being used for downstream purposes.
 
