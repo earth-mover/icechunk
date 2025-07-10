@@ -108,36 +108,29 @@ print(snapshot_id_1)
 !!! note
 
     Once a writable `Session` has been successfully committed to, it becomes read only to ensure that all writing is done explicitly.
+    If you need to write more data, you have to start a new session.
 
 ## Make a second commit
 
 At this point, we have already committed using our session, so we need to get a new session and store to make more changes.
+Here we will use an alternative syntax, using the `transaction` context manager.
+In this update, we put some new data into our array, overwriting the first five elements.
 
 ```python exec="on" session="quickstart" source="material-block"
-session_2 = repo.writable_session("main")
-store_2 = session_2.store
-group = zarr.open_group(store_2)
-array = group["my_array"]
+with repo.transaction("main", message="overwrite some values") as store:
+    group = zarr.open_group(store)
+    array = group["my_array"]
+    array[:5] = 2
 ```
 
-Let's now put some new data into our array, overwriting the first five elements.
-
-```python exec="on" session="quickstart" source="material-block"
-array[:5] = 2
-```
-
-...and commit the changes
-
-```python exec="on" session="quickstart" source="material-block"
-snapshot_id_2 = session_2.commit("overwrite some values")
-```
+The transaction is automatically committed when the context exits.
 
 ## Explore version history
 
 We can see the full version history of our repo:
 
 ```python exec="on" session="quickstart" source="material-block" result="code"
-hist = repo.ancestry(snapshot_id=snapshot_id_2)
+hist = repo.ancestry(branch="main")
 for ancestor in hist:
     print(ancestor.id, ancestor.message, ancestor.written_at)
 ```
@@ -162,6 +155,5 @@ assert array[0] == 1
 ---
 
 That's it! You now know how to use Icechunk!
-For your next step, dig deeper into [configuration](./configuration.md),
-explore the [version control system](./version-control.md), or learn how to
-[use Icechunk with Xarray](./xarray.md).
+
+For an overview of all of the important operations, check out the [How-to guide](howto.md).

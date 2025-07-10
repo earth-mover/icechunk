@@ -7,17 +7,6 @@ Icechunk is an open-source (Apache 2.0), transactional storage engine for tensor
 Icechunk works together with **[Zarr](https://zarr.dev/)**, augmenting the Zarr core data model with features
 that enhance performance, collaboration, and safety in a cloud-computing context.
 
-## Docs Organization
-
-This is the Icechunk documentation. It's organized into the following parts.
-
-- This page: a general overview of the project's goals and components.
-- [Frequently Asked Questions](./faq.md)
-- Documentation for [Icechunk Python](./icechunk-python/quickstart.md), the main user-facing
-  library
-- Documentation for the [Icechunk Rust Crate](./icechunk-rust.md)
-- The [Icechunk Spec](./spec.md)
-
 ## Icechunk Overview
 
 Let's break down what "transactional storage engine for Zarr" actually means:
@@ -45,7 +34,7 @@ Icechunk supports the following core requirements:
 1. **Object storage** - the format is designed around the consistency features and performance characteristics available in modern cloud object storage. No external database or catalog is required to maintain a repo.
 (It also works with file storage.)
 1. **Serializable isolation** - Reads are isolated from concurrent writes and always use a committed snapshot of a repo. Writes are committed atomically and are never partially visible. No locks are required for reading.
-1. **Time travel** - Previous snapshots of a repo remain accessible after new ones have been written.
+1. **Time travel** - Previous snapshots of a repo remain accessible while and after new snapshots are written.
 1. **Data version control** - Repos support both _tags_ (immutable references to snapshots) and _branches_ (mutable references to snapshots).
 1. **Chunk shardings** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding).
 1. **Chunk references** - Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
@@ -91,20 +80,20 @@ Readers can only see and use committed snapshots.
 
 ### Branches and Tags
 
-Additionally, snapshots occur in a specific linear (i.e. serializable) order within  **branch**.
-A branch is a mutable reference to a snapshot--a pointer that maps the branch name to a snapshot ID.
+Additionally, snapshots occur in a specific linear (i.e. serializable) order within a  **branch**.
+A branch is a mutable reference to a snapshot: a pointer that maps the branch name to a snapshot ID.
 The default branch is `main`.
 Every commit to the main branch updates this reference.
 Icechunk's design protects against the race condition in which two uncoordinated sessions attempt to update the branch at the same time; only one can succeed.
 
-Icechunk also defines **tags**--_immutable_ references to snapshot.
+Icechunk also defines **tags**--_immutable_ references to a snapshot.
 Tags are appropriate for publishing specific releases of a repository or for any application which requires a persistent, immutable identifier to the store state.
 
 ### Chunk References
 
 Chunk references are "pointers" to chunks that exist in other files--HDF5, NetCDF, GRIB, etc.
 Icechunk can store these references alongside native Zarr chunks as "virtual datasets".
-You can then can update these virtual datasets incrementally (overwrite chunks, change metadata, etc.) without touching the underlying files.
+You can then update these virtual datasets incrementally (overwrite chunks, change metadata, etc.) without touching the underlying files.
 
 ## How Does It Work?
 

@@ -52,7 +52,8 @@ theme:
     - navigation.tracking
     - navigation.indexes
     - navigation.footer
-    - navigation.tabs
+    # - navigation.tabs
+    # - navigation.sections
     - navigation.tabs.sticky
     - navigation.top
     #- navigation.expand
@@ -127,8 +128,6 @@ plugins:
       minify_html: true
   - awesome-pages:
       collapse_single_pages: true
-  - macros:
-      module_name: macros
   - git-revision-date-localized:
   - mkdocstrings:
       default_handler: python
@@ -150,10 +149,6 @@ plugins:
       include_source: True
       # include: ["*.ipynb"] # Default: ["*.py", "*.ipynb"]
   - markdown-exec
-      #  - "icechunk-python/docs/**/*.ipynb"
-      #  - "icechunk-python/docs/docs/icechunk-python/*.ipynb"
-      #  - "icechunk-python/notebooks/*.ipynb"
-      #  - "icechunk-python/examples/*.py"
 
 markdown_extensions:
   - admonition
@@ -185,30 +180,27 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Overview: overview.md
-  - FAQ: faq.md
-  - Icechunk Python:
-    - Quickstart: icechunk-python/quickstart.md
-    - Migrate to 1.0: icechunk-python/migration.md
-    - Configuration: icechunk-python/configuration.md
-    - Storage: icechunk-python/storage.md
-    - Performance: icechunk-python/performance.md
-    - FAQ: icechunk-python/faq.md
-    - Xarray: icechunk-python/xarray.md
-    - Parallel Writes: icechunk-python/parallel.md
-    - Dask: icechunk-python/dask.md
-    - Version Control: icechunk-python/version-control.md
-    - Expiring Data: icechunk-python/expiration.md
-    - Virtual Datasets: icechunk-python/virtual.md
-    - API Reference: icechunk-python/reference.md
-    - Ingestion Workflows:
-      - Global Raster Data cube: icechunk-python/ingestion/glad-ingest.ipynb
-    - Cheatsheets:
-      - Icechunk for Git Users: icechunk-python/cheatsheets/git-users.md
-#    - Examples:
-#      - ... | flat | icechunk-python/examples/*.py
-    # - Notebooks:
-    #   - ... | flat | icechunk-python/notebooks/*.ipynb
-  - Icechunk Rust: icechunk-rust.md
-  - Contributing: contributing.md
-  - Sample Datasets: sample-datasets.md
-  - Spec: spec.md
+  - Getting Started:
+    - Quickstart: quickstart.md
+    - How To: howto.md
+  - Understanding Icechunk:
+    - Transactions and Version Control: version-control.md
+    - Data Expiration and Garbage Collection: expiration.md
+    - Parallel / Distributed Writing: parallel.md
+    - FAQ: faq.md
+  - Guides:
+    - Configuration: configuration.md
+    - Storage: storage.md
+    - Dask: dask.md
+    - Xarray: xarray.md
+    - Tuning Performance: performance.md
+    - Virtual Datasets: virtual.md
+    - Icechunk for Git Users: icechunk-for-git-users.md
+    - Creating Icechunk Datasets:
+      - Global Raster Data cube: ingestion/glad-ingest.ipynb
+  - Reference:
+    - Spec: spec.md
+    - Python API Reference: reference.md
+    - Icechunk Rust: icechunk-rust.md
+    - Contributing: contributing.md
+    - Migrate to 1.0: migration.md

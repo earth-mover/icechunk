@@ -229,7 +229,6 @@ Icechunk can be used with [Google Cloud Storage](https://cloud.google.com/storag
 
 - The consistency guarantees for GCS function differently than S3. Specifically, GCS uses the [generation](https://cloud.google.com/storage/docs/request-preconditions#compose-preconditions) instead of etag for `if-match` `put` requests. Icechunk has not wired this through yet and thus [configuration updating](https://github.com/earth-mover/icechunk/issues/533) is potentially unsafe. This is not a problem for most use cases that are not frequently updating the configuration.
 - GCS does not yet support [`bearer` tokens and auth refreshing](https://github.com/earth-mover/icechunk/issues/637). This means currently auth is limited to service account files.
-- The GCS storage config does not yet support anonymous access.
 
 ### Azure Blob Storage
 
