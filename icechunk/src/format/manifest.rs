@@ -280,7 +280,7 @@ impl VirtualChunkLocation {
             );
         };
 
-        let location = format!("{}://{}/{}", scheme, host, new_path,);
+        let location = format!("{scheme}://{host}/{new_path}",);
 
         Ok(VirtualChunkLocation(location))
     }

@@ -610,7 +610,7 @@ pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
     let out = client
         .list_objects_v2()
         .bucket(common::get_aws_integration_bucket()?)
-        .prefix(format!("{}/chunks", prefix))
+        .prefix(format!("{prefix}/chunks"))
         .into_paginator()
         .send()
         .collect::<Vec<_>>()
@@ -656,7 +656,7 @@ pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
     let out = client
         .list_objects_v2()
         .bucket(common::get_aws_integration_bucket()?)
-        .prefix(format!("{}/chunks", prefix))
+        .prefix(format!("{prefix}/chunks"))
         .into_paginator()
         .send()
         .collect::<Vec<_>>()

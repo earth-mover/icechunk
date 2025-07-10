@@ -112,8 +112,7 @@ impl PyStore {
             let bytes = Bytes::from(bytes);
             let store = Store::from_bytes(bytes).map_err(|e| {
                 PyValueError::new_err(format!(
-                    "Failed to deserialize store from bytes: {}",
-                    e
+                    "Failed to deserialize store from bytes: {e}"
                 ))
             })?;
             Ok(Self(Arc::new(store)))
@@ -360,13 +359,13 @@ impl PyStore {
                 });
 
                 let array_path = if !array_path.starts_with("/") {
-                    format!("/{}", array_path)
+                    format!("/{array_path}")
                 } else {
                     array_path.to_string()
                 };
 
                 let path = Path::try_from(array_path).map_err(|e| {
-                    PyValueError::new_err(format!("Invalid array path: {}", e))
+                    PyValueError::new_err(format!("Invalid array path: {e}"))
                 })?;
 
                 let res = store

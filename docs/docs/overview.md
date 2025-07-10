@@ -70,6 +70,7 @@ Arbitrary JSON-style key-value metadata can be attached to both arrays and group
 Every update to an Icechunk store creates a new **snapshot** with a unique ID.
 Icechunk users must organize their updates into groups of related operations called **transactions**.
 For example, appending a new time slice to multiple arrays should be done as a single transaction, comprising the following steps
+
 1. Update the array metadata to resize the array to accommodate the new elements.
 2. Write new chunks for each array in the group.
 

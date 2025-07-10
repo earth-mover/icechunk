@@ -128,7 +128,7 @@ fn tag_key(tag_name: &str) -> RefResult<String> {
         return Err(RefErrorKind::InvalidRefName(tag_name.to_string()).into());
     }
 
-    Ok(format!("tag.{}/{}", tag_name, REF_KEY_NAME))
+    Ok(format!("tag.{tag_name}/{REF_KEY_NAME}"))
 }
 
 fn tag_delete_marker_key(tag_name: &str) -> RefResult<String> {
@@ -136,14 +136,14 @@ fn tag_delete_marker_key(tag_name: &str) -> RefResult<String> {
         return Err(RefErrorKind::InvalidRefName(tag_name.to_string()).into());
     }
 
-    Ok(format!("tag.{}/{}", tag_name, TAG_DELETE_MARKER_KEY_NAME))
+    Ok(format!("tag.{tag_name}/{TAG_DELETE_MARKER_KEY_NAME}"))
 }
 
 fn branch_key(branch_name: &str) -> RefResult<String> {
     if branch_name.contains('/') {
         return Err(RefErrorKind::InvalidRefName(branch_name.to_string()).into());
     }
-    Ok(format!("branch.{}/{}", branch_name, REF_KEY_NAME))
+    Ok(format!("branch.{branch_name}/{REF_KEY_NAME}"))
 }
 
 #[instrument(skip(storage, storage_settings))]

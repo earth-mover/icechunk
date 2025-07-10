@@ -3,7 +3,8 @@ title: Specification
 ---
 # Icechunk Specification
 
-**!!! Note:**
+!!! Note
+
     The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119.html).
 
 ## Introduction
@@ -91,12 +92,12 @@ flowchart TD
     snapshot1[Snapshot File 1]
     snapshot2[Snapshot File 2]
     end
-    end
     subgraph manifests[Manifests]
     manifestA[Chunk Manifest A]
     manifestB[Chunk Manifest B]
     end
     end
+
     subgraph data
     chunk1[Chunk File 1]
     chunk2[Chunk File 2]
@@ -129,7 +130,7 @@ All data and metadata files are stored within a root directory (typically a pref
 
 ### File Formats
 
-### Reference Files
+#### Reference Files
 
 Similar to Git, Icechunk supports the concept of _branches_ and _tags_.
 These references point to a specific snapshot of the repository.
@@ -158,7 +159,7 @@ Here is an example of a JSON file corresponding to a tag or branch:
 {"snapshot":"VY76P925PRY57WFEK410"}
 ```
 
-#### Creating and Updating Branches
+##### Creating and Updating Branches
 
 The process of creating and updating branches is designed to use the limited consistency guarantees offered by object storage to ensure transactional consistency.
 When a client checks out a branch, it obtains a specific snapshot ID and uses this snapshot as the basis for any changes it creates during its session.
@@ -181,7 +182,7 @@ Branch names may not contain the `/` character.
 
 Branch are deleted simply eliminating their ref file.
 
-#### Tags
+##### Tags
 
 Tags are immutable. Their files follow the pattern `refs/tag.$TAG_NAME/ref.json`.
 
@@ -196,7 +197,7 @@ result in an observable mutation of the tag. To solve this issue, we don't allow
 When a tag is deleted, its reference file is not deleted, but a new tombstone file is created in the path:
 `refs/tags.$TAG_NAME/ref.json.deleted`.
 
-### Snapshot Files
+#### Snapshot Files
 
 The snapshot file fully describes the schema of the repository, including all arrays and groups.
 
@@ -232,7 +233,7 @@ and a range of coordinates contained in the manifest for each array dimension.
 Finally, a `ManifestFileInfo` is also a pointer to a manifest file, but it includes information about all the chunks
 held in the manifest.
 
-### Chunk Manifest Files
+#### Chunk Manifest Files
 
 A chunk manifest file stores chunk references.
 Chunk references from multiple arrays can be stored in the same chunk manifest.
@@ -258,7 +259,7 @@ of the array and a list of `ChunkRef` sorted by the chunk coordinate.
 
 These three types of chunks references are encoded in the same flatbuffers table, using optional fields.
 
-### Chunk Files
+#### Chunk Files
 
 Chunk files contain the compressed binary chunks of a Zarr array.
 Icechunk permits quite a bit of flexibility about how chunks are stored.
@@ -271,7 +272,7 @@ Chunk files can be:
 
 Applications may choose to arrange chunks within files in different ways to optimize I/O patterns.
 
-### Transaction logs
+#### Transaction logs
 
 Transaction logs keep track of the operations done in a commit. They are not used to read objects
 from the repo, but they are useful for features such as commit diff and conflict resolution.
