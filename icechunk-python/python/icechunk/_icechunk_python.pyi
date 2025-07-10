@@ -1929,41 +1929,37 @@ class ConflictError(Exception):
 __version__: str
 
 class ConflictType(Enum):
-    """Type of conflict detected
-
-    Attributes:
-        NewNodeConflictsWithExistingNode: int
-            A new node conflicts with an existing node
-        NewNodeInInvalidGroup: tuple[int]
-            A new node is in an invalid group
-        ZarrMetadataDoubleUpdate: tuple[int]
-            A zarr metadata update conflicts with an existing zarr metadata update
-        ZarrMetadataUpdateOfDeletedArray: tuple[int]
-            A zarr metadata update is attempted on a deleted array
-        ZarrMetadataUpdateOfDeletedGroup: tuple[int]
-            A zarr metadata update is attempted on a deleted group
-        ChunkDoubleUpdate: tuple[int]
-            A chunk update conflicts with an existing chunk update
-        ChunksUpdatedInDeletedArray: tuple[int]
-            Chunks are updated in a deleted array
-        ChunksUpdatedInUpdatedArray: tuple[int]
-            Chunks are updated in an updated array
-        DeleteOfUpdatedArray: tuple[int]
-            A delete is attempted on an updated array
-        DeleteOfUpdatedGroup: tuple[int]
-            A delete is attempted on an updated group
-    """
+    """Type of conflict detected"""
 
     NewNodeConflictsWithExistingNode = (1,)
+    """A new node conflicts with an existing node"""
+
     NewNodeInInvalidGroup = (2,)
+    """A new node is in an invalid group"""
+
     ZarrMetadataDoubleUpdate = (3,)
+    """A zarr metadata update conflicts with an existing zarr metadata update"""
+
     ZarrMetadataUpdateOfDeletedArray = (4,)
+    """A zarr metadata update is attempted on a deleted array"""
+
     ZarrMetadataUpdateOfDeletedGroup = (5,)
+    """A zarr metadata update is attempted on a deleted group"""
+
     ChunkDoubleUpdate = (6,)
+    """A chunk update conflicts with an existing chunk update"""
+
     ChunksUpdatedInDeletedArray = (7,)
+    """Chunks are updated in a deleted array"""
+
     ChunksUpdatedInUpdatedArray = (8,)
+    """Chunks are updated in an updated array"""
+
     DeleteOfUpdatedArray = (9,)
+    """A delete is attempted on an updated array"""
+
     DeleteOfUpdatedGroup = (10,)
+    """A delete is attempted on an updated group"""
 
 class Conflict:
     """A conflict detected between snapshots"""
