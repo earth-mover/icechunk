@@ -403,3 +403,132 @@ root["data"][:,:]
 #### Limitations
 
 At the moment, the rebase functionality is limited to resolving conflicts with chunks in arrays. Other types of conflicts are not able to be resolved by icechunk yet and must be resolved manually.
+
+## Use Cases
+
+### Testing commited changes before adding them to main branch
+
+Version control can be used to run custom tests on updates on a dataset before exposing it to users. To achieve this we can commit data to a dataset on a new branch, run the tests, and add the snapshot to the main branch only when the tests have passed.
+
+For this example we are creating a synthetic xarray dataset, and commit only a portion of it to the main branch at first, then add the rest and run our tests, before exposing the data on the main branch.
+
+```python
+import xarray as xr
+import icechunk as ic
+import numpy as np
+
+# create test xarray dataset with random values
+nx,ny,nt = (3,4,7)
+ds = xr.Dataset(
+    {
+        'a':xr.DataArray(np.random.rand(nx, ny, nt), dims=['x','y', 'time']),
+        'b':xr.DataArray(np.random.rand(nx, ny, nt), dims=['x','y', 'time']),
+    }
+)
+ds
+```
+
+```
+
+
+<xarray.Dataset> Size: 1kB
+Dimensions:  (x: 3, y: 4, time: 7)
+Dimensions without coordinates: x, y, time
+Data variables:
+    a        (x, y, time) float64 672B 0.2686 0.9632 0.08406 ... 0.6148 0.9757
+    b        (x, y, time) float64 672B 0.8701 0.2753 0.1478 ... 0.5651 0.6018
+```
+
+Now lets set up an in memory icechunk repo and write and commit a subset of the data (the first 5 timesteps) to the main branch.
+
+```python
+repo = ic.Repository.create(ic.in_memory_storage())
+session = repo.writable_session("main")
+
+# write only a part of the data to the store first
+ds.isel(time=slice(0,5)).to_zarr(session.store, consolidated=False, mode='w')
+session.commit(message='initial data')
+```
+```
+'1PX30836HX6E6WM0DXWG'
+```
+
+Now we can create a new branch, add the rest of the data and commit
+
+```python
+# add a new branch and commit data to the branch
+repo.create_branch(
+    'add_time', 
+    snapshot_id=repo.lookup_branch("main") #branches of the lates commit to main!
+)
+session = repo.writable_session('add_time')
+ds.isel(time=slice(5,None)).to_zarr(session.store, mode='a-', append_dim='time', consolidated=False)
+session.commit('added new time steps')
+```
+
+We can now run our tests on the entire dataset on the new branch
+
+```
+# now open the store on the add_time branch and compare to full dataset
+ds_branch = xr.open_zarr(session.store, consolidated=False)
+xr.testing.assert_allclose(ds_branch, ds)
+```
+
+!!! note
+    The test here is just for demonstration purposes, but you can implement any custom test on the data that suits your needs (check time consistency, range checks, summary statistics) all without exposing the data to the user yet.
+
+Lets just check quickly that these tests do not yet pass on the main branch
+
+```python
+# for comparison the data on the main branch does not pass the test yet! There are missing time steps (as expected). 
+session = repo.writable_session('main')
+# now open the store on the add_time branch and compare to full dataset
+ds_branch = xr.open_zarr(session.store, consolidated=False)
+xr.testing.assert_allclose(ds_branch, ds)
+```
+```
+---------------------------------------------------------------------------
+AssertionError                            Traceback (most recent call last)
+Cell In[9], line 6
+      4 # now open the store on the add_time branch and compare to full dataset
+      5 ds_branch = xr.open_zarr(session.store, consolidated=False)
+----> 6 xr.testing.assert_allclose(ds_branch, ds)
+
+    [... skipping hidden 1 frame]
+
+File /srv/conda/envs/notebook/lib/python3.12/site-packages/xarray/testing/assertions.py:242, in assert_allclose(a, b, rtol, atol, decode_bytes, check_dim_order)
+    238 elif isinstance(a, Dataset):
+    239     allclose = a._coord_names == b._coord_names and utils.dict_equiv(
+    240         a.variables, b.variables, compat=compat_variable
+    241     )
+--> 242     assert allclose, formatting.diff_dataset_repr(a, b, compat=equiv)
+    243 elif isinstance(a, Coordinates):
+    244     allclose = utils.dict_equiv(a.variables, b.variables, compat=compat_variable)
+
+AssertionError: Left and right Dataset objects are not close
+Differing dimensions:
+    (x: 3, y: 4, time: 5) != (x: 3, y: 4, time: 7)
+Differing data variables:
+L   a        (x, y, time) float64 480B dask.array<chunksize=(3, 4, 5), meta=np.ndarray>
+R   a        (x, y, time) float64 672B 0.2686 0.9632 0.08406 ... 0.6148 0.9757
+L   b        (x, y, time) float64 480B dask.array<chunksize=(3, 4, 5), meta=np.ndarray>
+R   b        (x, y, time) float64 672B 0.8701 0.2753 0.1478 ... 0.5651 0.6018
+```
+
+To finish we will reset the main branch to the snapshot created on the development branch and delete the development branch (this step is optional).
+
+```python
+# append branch commit to main branch and delete test branch
+repo.reset_branch('main', repo.lookup_branch('add_time'))
+repo.delete_branch('add_time')
+```
+
+Now that the changes are on the main branch the tests pass, and the data is visible to other users on the main branch
+
+```python
+# confirm that the main branch now has the full dataset!
+session = repo.writable_session('main')
+# now open the store on the add_time branch and compare to full dataset
+ds_branch = xr.open_zarr(session.store, consolidated=False)
+xr.testing.assert_allclose(ds_branch, ds)
+```
