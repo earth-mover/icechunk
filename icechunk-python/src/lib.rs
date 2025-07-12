@@ -26,6 +26,7 @@ use conflicts::{
     PyConflictType, PyVersionSelection,
 };
 use errors::{IcechunkError, PyConflictError, PyRebaseFailedError};
+use icechunk::TelemetryConfig;
 use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
 use pyo3::types::PyMapping;
@@ -79,11 +80,24 @@ fn log_filters_from_env(py: Python) -> PyResult<Option<String>> {
     Ok(value)
 }
 
+fn telemetry_from_env(py: Python) -> PyResult<Option<TelemetryConfig>> {
+    let os = py.import("os")?;
+    let environ = os.getattr("environ")?;
+    let environ: &Bound<PyMapping> = environ.downcast()?;
+    let value = environ
+        .get_item("ICECHUNK_TELEMETRY_ENDPOINT")
+        .ok()
+        .and_then(|v| v.extract().ok());
+    let value = value.map(|v| TelemetryConfig { endpoint: v, ..Default::default() });
+    Ok(value)
+}
+
 #[pyfunction]
 fn initialize_logs(py: Python) -> PyResult<()> {
     if env::var("ICECHUNK_NO_LOGS").is_err() {
         let log_filter_directive = log_filters_from_env(py)?;
-        initialize_tracing(log_filter_directive.as_deref())
+        let telemetry = telemetry_from_env(py)?;
+        initialize_tracing(log_filter_directive.as_deref(), telemetry.as_ref())
     }
     Ok(())
 }
@@ -92,7 +106,8 @@ fn initialize_logs(py: Python) -> PyResult<()> {
 fn set_logs_filter(py: Python, log_filter_directive: Option<String>) -> PyResult<()> {
     let log_filter_directive =
         log_filter_directive.or_else(|| log_filters_from_env(py).ok().flatten());
-    initialize_tracing(log_filter_directive.as_deref());
+    let telemetry = telemetry_from_env(py)?;
+    initialize_tracing(log_filter_directive.as_deref(), telemetry.as_ref());
     Ok(())
 }
 
