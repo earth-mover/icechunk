@@ -443,6 +443,29 @@ impl PyRepository {
 
     #[classmethod]
     #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    fn create_async<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        storage: PyStorage,
+        config: Option<&PyRepositoryConfig>,
+        authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let config =
+            config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
+        let authorize_virtual_chunk_access =
+            map_credentials(authorize_virtual_chunk_access);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository =
+                Repository::create(config, storage.0, authorize_virtual_chunk_access)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+
+            Ok(Self(Arc::new(RwLock::new(repository))))
+        })
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
     fn open(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -466,6 +489,28 @@ impl PyRepository {
                     .map_err(PyIcechunkStoreError::RepositoryError)
                 })?;
 
+            Ok(Self(Arc::new(RwLock::new(repository))))
+        })
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    fn open_async<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        storage: PyStorage,
+        config: Option<&PyRepositoryConfig>,
+        authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let config =
+            config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
+        let authorize_virtual_chunk_access =
+            map_credentials(authorize_virtual_chunk_access);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository =
+                Repository::open(config, storage.0, authorize_virtual_chunk_access)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(Self(Arc::new(RwLock::new(repository))))
         })
     }
@@ -501,6 +546,31 @@ impl PyRepository {
         })
     }
 
+    #[classmethod]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    fn open_or_create_async<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        storage: PyStorage,
+        config: Option<&PyRepositoryConfig>,
+        authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let config =
+            config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
+        let authorize_virtual_chunk_access =
+            map_credentials(authorize_virtual_chunk_access);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = Repository::open_or_create(
+                config,
+                storage.0,
+                authorize_virtual_chunk_access,
+            )
+            .await
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(Self(Arc::new(RwLock::new(repository))))
+        })
+    }
+
     #[staticmethod]
     fn exists(py: Python<'_>, storage: PyStorage) -> PyResult<bool> {
         // This function calls block_on, so we need to allow other thread python to make progress
@@ -511,6 +581,20 @@ impl PyRepository {
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(exists)
             })
+        })
+    }
+
+    #[staticmethod]
+    fn exists_async<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        storage: PyStorage,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let exists = Repository::exists(storage.0.as_ref())
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(exists)
         })
     }
 
@@ -541,6 +625,30 @@ impl PyRepository {
         })
     }
 
+    #[pyo3(signature = (*, config = None, authorize_virtual_chunk_access = None::<Option<HashMap<String, Option<PyCredentials>>>>))]
+    fn reopen_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        config: Option<&PyRepositoryConfig>,
+        authorize_virtual_chunk_access: Option<
+            Option<HashMap<String, Option<PyCredentials>>>,
+        >,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let existing_repository = self.0.clone();
+        let config =
+            config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
+        let authorize_virtual_chunk_access =
+            authorize_virtual_chunk_access.map(|x| map_credentials(x));
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = existing_repository
+                .read()
+                .await
+                .reopen(config, authorize_virtual_chunk_access)
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(Self(Arc::new(RwLock::new(repository))))
+        })
+    }
+
     #[classmethod]
     fn from_bytes(
         _cls: Bound<'_, PyType>,
@@ -549,6 +657,19 @@ impl PyRepository {
     ) -> PyResult<Self> {
         // This is a compute intensive task, we need to release the Gil
         py.allow_threads(move || {
+            let repository = Repository::from_bytes(bytes)
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(Self(Arc::new(RwLock::new(repository))))
+        })
+    }
+
+    #[classmethod]
+    fn from_bytes_async<'py>(
+        _cls: Bound<'_, PyType>,
+        py: Python<'py>,
+        bytes: Vec<u8>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let repository = Repository::from_bytes(bytes)
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(Self(Arc::new(RwLock::new(repository))))
@@ -564,6 +685,16 @@ impl PyRepository {
                 .as_bytes()
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(Cow::Owned(bytes))
+        })
+    }
+
+    fn as_bytes_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = repository.read().await;
+            let bytes =
+                repository.as_bytes().map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(bytes)
         })
     }
 
@@ -583,6 +714,23 @@ impl PyRepository {
         })
     }
 
+    #[staticmethod]
+    fn fetch_config_async<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        storage: PyStorage,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        pyo3_async_runtimes::tokio::future_into_py::<_, Option<PyRepositoryConfig>>(
+            py,
+            async move {
+                let res = Repository::fetch_config(storage.0.as_ref())
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(res.map(|res| res.0.into()))
+            },
+        )
+    }
+
     fn save_config(&self, py: Python<'_>) -> PyResult<()> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
@@ -599,16 +747,61 @@ impl PyRepository {
         })
     }
 
+    fn save_config_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = repository.read().await;
+            repository
+                .save_config()
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(())
+        })
+    }
+
     pub fn config(&self) -> PyRepositoryConfig {
         self.0.blocking_read().config().clone().into()
+    }
+
+    fn config_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, PyRepositoryConfig>(
+            py,
+            async move {
+                let repository = repository.read().await;
+                Ok(repository.config().clone().into())
+            },
+        )
     }
 
     pub fn storage_settings(&self) -> PyStorageSettings {
         self.0.blocking_read().storage_settings().clone().into()
     }
 
+    fn storage_settings_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, PyStorageSettings>(
+            py,
+            async move {
+                let repository = repository.read().await;
+                Ok(repository.storage_settings().clone().into())
+            },
+        )
+    }
+
     pub fn storage(&self) -> PyStorage {
         PyStorage(Arc::clone(self.0.blocking_read().storage()))
+    }
+
+    fn storage_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, PyStorage>(py, async move {
+            let repository = repository.read().await;
+            Ok(PyStorage(Arc::clone(repository.storage())))
+        })
     }
 
     pub fn set_default_commit_metadata(
@@ -622,11 +815,38 @@ impl PyRepository {
         })
     }
 
+    fn set_default_commit_metadata_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        metadata: PySnapshotProperties,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut repository = repository.write().await;
+            repository.set_default_commit_metadata(metadata.into());
+            Ok(())
+        })
+    }
+
     pub fn default_commit_metadata(&self, py: Python<'_>) -> PySnapshotProperties {
         py.allow_threads(move || {
             let metadata = self.0.blocking_read().default_commit_metadata().clone();
             metadata.into()
         })
+    }
+
+    fn default_commit_metadata_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, PySnapshotProperties>(
+            py,
+            async move {
+                let repository = repository.read().await;
+                Ok(repository.default_commit_metadata().clone().into())
+            },
+        )
     }
 
     /// Returns an object that is both a sync and an async iterator
@@ -693,6 +913,30 @@ impl PyRepository {
         })
     }
 
+    fn create_branch_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        branch_name: &str,
+        snapshot_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        let branch_name = branch_name.to_owned();
+        let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
+            PyIcechunkStoreError::RepositoryError(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+            )
+        })?;
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = repository.read().await;
+            repository
+                .create_branch(&branch_name, &snapshot_id)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(())
+        })
+    }
+
     pub fn list_branches(&self, py: Python<'_>) -> PyResult<BTreeSet<String>> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
@@ -725,6 +969,23 @@ impl PyRepository {
         })
     }
 
+    fn lookup_branch_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        branch_name: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        let branch_name = branch_name.to_owned();
+        pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
+            let repository = repository.read().await;
+            let tip = repository
+                .lookup_branch(&branch_name)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(tip.to_string())
+        })
+    }
+
     pub fn lookup_snapshot(
         &self,
         py: Python<'_>,
@@ -747,6 +1008,27 @@ impl PyRepository {
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(res.into())
             })
+        })
+    }
+
+    fn lookup_snapshot_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        snapshot_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
+            PyIcechunkStoreError::RepositoryError(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+            )
+        })?;
+        pyo3_async_runtimes::tokio::future_into_py::<_, PySnapshotInfo>(py, async move {
+            let repository = repository.read().await;
+            let res = repository
+                .lookup_snapshot(&snapshot_id)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(res.into())
         })
     }
 
@@ -776,6 +1058,30 @@ impl PyRepository {
         })
     }
 
+    fn reset_branch_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        branch_name: &str,
+        snapshot_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        let branch_name = branch_name.to_owned();
+        let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
+            PyIcechunkStoreError::RepositoryError(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+            )
+        })?;
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = repository.read().await;
+            repository
+                .reset_branch(&branch_name, &snapshot_id)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(())
+        })
+    }
+
     pub fn delete_branch(&self, py: Python<'_>, branch: &str) -> PyResult<()> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
@@ -788,6 +1094,23 @@ impl PyRepository {
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(())
             })
+        })
+    }
+
+    fn delete_branch_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        branch: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        let branch = branch.to_owned();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = repository.read().await;
+            repository
+                .delete_branch(&branch)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(())
         })
     }
 
