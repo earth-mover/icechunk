@@ -14,7 +14,7 @@ config = icechunk.RepositoryConfig.default()
 
 or it can be optionally loaded from an existing repository:
 
-```python exec="on" session="config" source="material-block"
+```python
 config = icechunk.Repository.fetch_config(storage)
 ```
 
