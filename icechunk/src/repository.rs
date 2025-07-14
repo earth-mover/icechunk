@@ -93,6 +93,8 @@ pub enum RepositoryErrorKind {
     CannotDeleteMain,
     #[error("the storage used by this Icechunk repository is read-only: {0}")]
     ReadonlyStorage(String),
+    #[error("unexpected error: {0}")]
+    Other(String),
 }
 
 pub type RepositoryError = ICError<RepositoryErrorKind>;
@@ -437,7 +439,7 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_ + use<'_>>
     {
-        Arc::clone(&self.asset_manager).snapshot_ancestry(snapshot_id).await
+        Arc::clone(&self.asset_manager).snapshot_info_ancestry(snapshot_id).await
     }
 
     #[instrument(skip(self))]
@@ -446,7 +448,7 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + use<>>
     {
-        Arc::clone(&self.asset_manager).snapshot_ancestry(snapshot_id).await
+        Arc::clone(&self.asset_manager).snapshot_info_ancestry(snapshot_id).await
     }
 
     /// Returns the sequence of parents of the snapshot pointed by the given version

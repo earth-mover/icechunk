@@ -728,7 +728,9 @@ class Repository:
             message, branch=branch, metadata=metadata
         )
 
-    def total_chunks_storage(self) -> int:
+    def total_chunks_storage(
+        self, process_manifests_concurrently: int | None = None
+    ) -> int:
         """Calculate the total storage used for chunks, in bytes .
 
         It reports the storage needed to store all snapshots in the repository that
@@ -738,6 +740,11 @@ class Repository:
         `garbage_collection`.
 
         The result includes only native chunks, not adding virtual or inline chunks.
+
+        Parameters
+        ----------
+        process_manifests_concurrently : int | None
+            Process this many manifests concurrently. Defaults to 10.
         """
 
-        return self._repository.total_chunks_storage()
+        return self._repository.total_chunks_storage(process_manifests_concurrently)
