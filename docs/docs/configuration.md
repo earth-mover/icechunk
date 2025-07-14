@@ -86,7 +86,7 @@ config.virtual_chunk_containers = [
     icechunk.VirtualChunkContainer(
         url_prefix="s3://my-s3-bucket/",
         storage=icechunk.StorageSettings(
-            storage=icechunk.s3_storage(bucket="my-s3-bucket", region="us-east-1"),
+            storage=icechunk.s3_storage(bucket="my-s3-bucket", prefix="foo", region="us-east-1"),
         ),
     ),
 ]
@@ -99,7 +99,7 @@ config.set_virtual_chunk_container(
     icechunk.VirtualChunkContainer(
         url_prefix="s3://my-other-s3-bucket/",
         storage=icechunk.StorageSettings(
-            storage=icechunk.s3_storage(bucket="my-other-s3-bucket", region="us-west-2"),
+            storage=icechunk.s3_storage(bucket="my-other-s3-bucket", prefix="other-foo", region="us-west-2"),
         ),
     ),
 )
