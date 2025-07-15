@@ -25,7 +25,6 @@ from zarr.testing.strategies import (
     basic_indices,
     node_names,
     np_array_and_chunks,
-    numpy_arrays,
     orthogonal_indices,
 )
 
@@ -194,9 +193,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @rule(
         data=st.data(),
         name=node_names,
-        array_and_chunks=np_array_and_chunks(
-            arrays=numpy_arrays(zarr_formats=st.just(3))
-        ),
+        array_and_chunks=np_array_and_chunks(),
     )
     def add_array(
         self,
