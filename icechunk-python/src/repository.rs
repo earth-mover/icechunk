@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    num::NonZeroU16,
+    num::{NonZeroU16, NonZeroUsize},
     sync::Arc,
 };
 
@@ -1053,7 +1053,8 @@ impl PyRepository {
     pub fn total_chunks_storage(
         &self,
         py: Python<'_>,
-        process_manifests_concurrently: Option<NonZeroU16>,
+        max_manifest_mem_bytes: Option<NonZeroUsize>,
+        max_concurrent_manifest_fetches: Option<NonZeroU16>,
     ) -> PyResult<u64> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
@@ -1071,8 +1072,12 @@ impl PyRepository {
                         storage.as_ref(),
                         &storage_settings,
                         asset_manager,
-                        process_manifests_concurrently.unwrap_or(
-                            NonZeroU16::try_from(10).unwrap_or(NonZeroU16::MIN),
+                        max_manifest_mem_bytes.unwrap_or(
+                            NonZeroUsize::try_from(512 * 1020 * 1024)
+                                .unwrap_or(NonZeroUsize::MIN),
+                        ),
+                        max_concurrent_manifest_fetches.unwrap_or(
+                            NonZeroU16::try_from(500).unwrap_or(NonZeroU16::MIN),
                         ),
                     )
                     .await

@@ -12,7 +12,7 @@ use crate::{
         ChunkId, IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, SnapshotId,
         manifest::ChunkPayload,
     },
-    ops::pointed_snapshot_ids,
+    ops::pointed_snapshots,
     refs::{Ref, RefError, delete_branch, delete_tag, list_refs},
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{self, DeleteObjectsResult, ListInfo},
@@ -174,7 +174,7 @@ pub async fn garbage_collect(
     }
 
     tracing::info!("Finding GC roots");
-    let all_snaps = pointed_snapshot_ids(
+    let all_snaps = pointed_snapshots(
         storage,
         storage_settings,
         Arc::clone(&asset_manager),
@@ -182,15 +182,14 @@ pub async fn garbage_collect(
     )
     .await?;
 
-    // FIXME: add attribute files
     let mut keep_chunks = HashSet::new();
     let mut keep_manifests = HashSet::new();
     let mut keep_snapshots = HashSet::new();
 
     tracing::info!("Calculating retained objects");
     pin!(all_snaps);
-    while let Some(snap_id) = all_snaps.try_next().await? {
-        let snap = asset_manager.fetch_snapshot(&snap_id).await?;
+    while let Some(snap) = all_snaps.try_next().await? {
+        let snap_id = snap.id();
         if config.deletes_snapshots() && keep_snapshots.insert(snap_id.clone()) {
             tracing::trace!("Adding snapshot to keep list: {}", &snap_id);
         }
@@ -239,6 +238,8 @@ pub async fn garbage_collect(
     }
 
     let mut summary = GCSummary::default();
+
+    tracing::info!("Starting deletes");
 
     if config.deletes_snapshots() {
         let res = gc_snapshots(
