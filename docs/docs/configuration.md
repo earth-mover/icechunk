@@ -6,7 +6,9 @@ When creating and opening Icechunk repositories, there are many configuration op
 
 The `RepositoryConfig` object is used to configure the repository. For convenience, this can be constructed using some sane defaults:
 
-```python
+```python exec="on" session="config" source="material-block"
+import icechunk
+
 config = icechunk.RepositoryConfig.default()
 ```
 
@@ -30,7 +32,7 @@ The number of concurrent requests to make when getting partial values from stora
 
 Icechunk uses Zstd compression to compress its metadata files. [`CompressionConfig`](./reference.md#icechunk.CompressionConfig) allows you to configure the [compression level](./reference.md#icechunk.CompressionConfig.level) and [algorithm](./reference.md#icechunk.CompressionConfig.algorithm). Currently, the only algorithm available is [`Zstd`](https://facebook.github.io/zstd/).
 
-```python
+```python exec="on" session="config" source="material-block"
 config.compression = icechunk.CompressionConfig(
     level=3,
     algorithm=icechunk.CompressionAlgorithm.Zstd,
@@ -41,13 +43,13 @@ config.compression = icechunk.CompressionConfig(
 
 Icechunk caches files (metadata and chunks) to speed up common operations. [`CachingConfig`](./reference.md#icechunk.CachingConfig) allows you to configure the caching behavior for the repository.
 
-```python
+```python exec="on" session="config" source="material-block"
 config.caching = icechunk.CachingConfig(
     num_snapshot_nodes=100,
     num_chunk_refs=100,
     num_transaction_changes=100,
-    num_bytes_attributes=1e4,
-    num_bytes_chunks=1e6,
+    num_bytes_attributes=10_000,
+    num_bytes_chunks=1_000_000,
 )
 ```
 
@@ -55,11 +57,11 @@ config.caching = icechunk.CachingConfig(
 
 This configures how Icechunk loads data from the storage backend. [`StorageSettings`](./reference.md#icechunk.StorageSettings) allows you to configure the storage settings.
 
-```python
+```python exec="on" session="config" source="material-block"
 config.storage = icechunk.StorageSettings(
     concurrency=icechunk.StorageConcurrencySettings(
         max_concurrent_requests_for_object=10,
-        ideal_concurrent_request_size=1e6,
+        ideal_concurrent_request_size=1_000_000,
     ),
     storage_class="STANDARD",
     metadata_storage_class="STANDARD_IA",
@@ -79,12 +81,12 @@ Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for re
 
 For example, if we wanted to configure an icechunk repo to be able to contain virtual chunks from an `s3` bucket called `my-s3-bucket` in `us-east-1`, we would do the following:
 
-```python
+```python exec="on" session="config" source="material-block"
 config.virtual_chunk_containers = [
     icechunk.VirtualChunkContainer(
         url_prefix="s3://my-s3-bucket/",
         storage=icechunk.StorageSettings(
-            storage=icechunk.s3_storage(bucket="my-s3-bucket", region="us-east-1"),
+            storage=icechunk.s3_storage(bucket="my-s3-bucket", prefix="foo", region="us-east-1"),
         ),
     ),
 ]
@@ -92,12 +94,12 @@ config.virtual_chunk_containers = [
 
 If we also wanted to configure the repo to be able to contain virtual chunks from another `s3` bucket called `my-other-s3-bucket` in `us-west-2`, we would do the following:
 
-```python
+```python exec="on" session="config" source="material-block"
 config.set_virtual_chunk_container(
     icechunk.VirtualChunkContainer(
         url_prefix="s3://my-other-s3-bucket/",
         storage=icechunk.StorageSettings(
-            storage=icechunk.s3_storage(bucket="my-other-s3-bucket", region="us-west-2"),
+            storage=icechunk.s3_storage(bucket="my-other-s3-bucket", prefix="other-foo", region="us-west-2"),
         ),
     ),
 )
@@ -117,10 +119,10 @@ The manifest configuration for the repository. [`ManifestConfig`](./reference.md
 
 For example, if we have a repo which contains data that we plan to open as an [`Xarray`](./xarray.md) dataset, we may want to configure the manifest preload to only preload manifests that contain arrays that are coordinates, in our case `time`, `latitude`, and `longitude`.
 
-```python
+```python exec="on" session="config" source="material-block"
 config.manifest = icechunk.ManifestConfig(
     preload=icechunk.ManifestPreloadConfig(
-        max_total_refs=1e8,
+        max_total_refs=100_000_000,
         preload_if=icechunk.ManifestPreloadCondition.name_matches(".*time|.*latitude|.*longitude"),
     ),
 )
