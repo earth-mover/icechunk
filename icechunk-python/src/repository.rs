@@ -955,6 +955,18 @@ impl PyRepository {
         })
     }
 
+    fn list_branches_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, BTreeSet<String>>(py, async move {
+            let repository = repository.read().await;
+            let branches = repository
+                .list_branches()
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(branches)
+        })
+    }
+
     pub fn lookup_branch(&self, py: Python<'_>, branch_name: &str) -> PyResult<String> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
