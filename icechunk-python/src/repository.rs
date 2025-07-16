@@ -640,7 +640,7 @@ impl PyRepository {
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
         let authorize_virtual_chunk_access =
-            authorize_virtual_chunk_access.map(|x| map_credentials(x));
+            authorize_virtual_chunk_access.map(map_credentials);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let repository = existing_repository
                 .read()
