@@ -8,7 +8,7 @@ use tracing::instrument;
 use crate::{
     Storage,
     asset_manager::AssetManager,
-    format::SnapshotId,
+    format::{SnapshotId, snapshot::Snapshot},
     refs::{RefResult, list_refs},
     repository::{RepositoryError, RepositoryResult},
     storage,
@@ -33,12 +33,25 @@ pub async fn all_roots<'a>(
 }
 
 #[instrument(skip(storage, storage_settings, asset_manager))]
-pub async fn pointed_snapshots<'a>(
+pub async fn pointed_snapshot_ids<'a>(
     storage: &'a (dyn Storage + Send + Sync),
     storage_settings: &'a storage::Settings,
     asset_manager: Arc<AssetManager>,
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotId>> + 'a> {
+    let res = pointed_snapshots(storage, storage_settings, asset_manager, extra_roots)
+        .await?
+        .map_ok(|snap| snap.id());
+    Ok(res)
+}
+
+#[instrument(skip(storage, storage_settings, asset_manager))]
+pub async fn pointed_snapshots<'a>(
+    storage: &'a (dyn Storage + Send + Sync),
+    storage_settings: &'a storage::Settings,
+    asset_manager: Arc<AssetManager>,
+    extra_roots: &'a HashSet<SnapshotId>,
+) -> RepositoryResult<impl Stream<Item = RepositoryResult<Arc<Snapshot>>> + 'a> {
     let mut seen: HashSet<SnapshotId> = HashSet::new();
     let res = try_stream! {
         let roots = all_roots(storage, storage_settings, extra_roots)
@@ -47,14 +60,14 @@ pub async fn pointed_snapshots<'a>(
         pin!(roots);
 
         while let Some(pointed_snap_id) = roots.try_next().await? {
-            let asset_manager = Arc::clone(&asset_manager.clone());
             if ! seen.contains(&pointed_snap_id) {
-                let parents = asset_manager.snapshot_ancestry(&pointed_snap_id).await?;
+                let parents = Arc::clone(&asset_manager).snapshot_ancestry(&pointed_snap_id).await?;
                 for await parent in parents {
-                    let snap_id = parent?.id;
-                    if seen.insert(snap_id.clone()) {
+                    let parent = parent?;
+                    let snap_id = parent.id();
+                    if seen.insert(snap_id) {
                         // it's a new snapshot
-                        yield snap_id
+                        yield parent
                     } else {
                         // as soon as we find a repeated snapshot
                         // there is no point in continuing to retrieve

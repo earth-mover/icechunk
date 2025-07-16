@@ -1356,7 +1356,9 @@ class PyRepository:
     def rewrite_manifests(
         self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
     ) -> str: ...
-    def total_chunks_storage(self) -> int: ...
+    def total_chunks_storage(
+        self, process_manifests_concurrently: int | None = None
+    ) -> int: ...
 
 class PySession:
     @classmethod
