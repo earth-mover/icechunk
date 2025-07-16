@@ -1189,6 +1189,23 @@ impl PyRepository {
         })
     }
 
+    fn lookup_tag_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        tag: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        let tag_name = tag.to_owned();
+        pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
+            let repository = repository.read().await;
+            let tip = repository
+                .lookup_tag(&tag_name)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(tip.to_string())
+        })
+    }
+
     #[pyo3(signature = (*, from_branch=None, from_tag=None, from_snapshot_id=None, to_branch=None, to_tag=None, to_snapshot_id=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn diff(

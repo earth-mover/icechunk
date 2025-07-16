@@ -342,7 +342,7 @@ pub async fn fetch_tag(
     let ref_path = tag_key(name)?;
     let delete_marker_path = tag_delete_marker_key(name)?;
 
-    let fut1: Pin<Box<dyn Future<Output = RefResult<Bytes>>>> = async move {
+    let fut1: Pin<Box<dyn Future<Output = RefResult<Bytes>> + Send>> = async move {
         match storage.get_ref(storage_settings, ref_path.as_str()).await {
             Ok(GetRefResult::Found { bytes, .. }) => Ok(bytes),
             Ok(GetRefResult::NotFound) => {
@@ -375,7 +375,7 @@ pub async fn fetch_tag(
                 let data = serde_json::from_slice(content?.as_ref())?;
                 Ok(data)
             }
-            Err(err) => Err(err),
+            Err(err) => Err(err.into()),
         }
     } else {
         Err(RefErrorKind::RefNotFound(name.to_string()).into())
