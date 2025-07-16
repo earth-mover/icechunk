@@ -1131,6 +1131,23 @@ impl PyRepository {
         })
     }
 
+    fn delete_tag_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        tag: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        let tag = tag.to_owned();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = repository.read().await;
+            repository
+                .delete_tag(&tag)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(())
+        })
+    }
+
     pub fn create_tag(
         &self,
         py: Python<'_>,
@@ -1157,6 +1174,30 @@ impl PyRepository {
         })
     }
 
+    fn create_tag_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        tag_name: &str,
+        snapshot_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        let tag_name = tag_name.to_owned();
+        let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
+            PyIcechunkStoreError::RepositoryError(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+            )
+        })?;
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = repository.read().await;
+            repository
+                .create_tag(&tag_name, &snapshot_id)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(())
+        })
+    }
+
     pub fn list_tags(&self, py: Python<'_>) -> PyResult<BTreeSet<String>> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
@@ -1171,6 +1212,21 @@ impl PyRepository {
                 Ok(tags)
             })
         })
+    }
+
+    fn list_tags_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, BTreeSet<String>>(
+            py,
+            async move {
+                let repository = repository.read().await;
+                let tags = repository
+                    .list_tags()
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(tags)
+            },
+        )
     }
 
     pub fn lookup_tag(&self, py: Python<'_>, tag: &str) -> PyResult<String> {
