@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    num::NonZeroU16,
     sync::Arc,
 };
 
@@ -222,6 +223,7 @@ impl PySnapshotInfo {
             id = self.id,
             parent = format_option_to_string(self.parent_id.as_ref()),
             at = datetime_repr(&self.written_at),
+            // TODO: what would be a better default here?
             message = self.message.chars().take(10).collect::<String>() + "...",
         )
     }
@@ -870,7 +872,7 @@ impl PyRepository {
                             Arc::clone(lock.asset_manager()),
                         )
                     };
-                    asset_manager.snapshot_ancestry(&snapshot_id).await
+                    asset_manager.snapshot_info_ancestry(&snapshot_id).await
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?
                 .map_err(PyIcechunkStoreError::RepositoryError);
@@ -1371,7 +1373,11 @@ impl PyRepository {
         })
     }
 
-    pub fn total_chunks_storage(&self, py: Python<'_>) -> PyResult<u64> {
+    pub fn total_chunks_storage(
+        &self,
+        py: Python<'_>,
+        process_manifests_concurrently: Option<NonZeroU16>,
+    ) -> PyResult<u64> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             let result =
@@ -1388,6 +1394,9 @@ impl PyRepository {
                         storage.as_ref(),
                         &storage_settings,
                         asset_manager,
+                        process_manifests_concurrently.unwrap_or(
+                            NonZeroU16::try_from(10).unwrap_or(NonZeroU16::MIN),
+                        ),
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;

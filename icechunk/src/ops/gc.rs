@@ -12,7 +12,7 @@ use crate::{
         ChunkId, IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, SnapshotId,
         manifest::ChunkPayload,
     },
-    ops::pointed_snapshots,
+    ops::pointed_snapshot_ids,
     refs::{Ref, RefError, delete_branch, delete_tag, list_refs},
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{self, DeleteObjectsResult, ListInfo},
@@ -174,7 +174,7 @@ pub async fn garbage_collect(
     }
 
     tracing::info!("Finding GC roots");
-    let all_snaps = pointed_snapshots(
+    let all_snaps = pointed_snapshot_ids(
         storage,
         storage_settings,
         Arc::clone(&asset_manager),
@@ -448,7 +448,7 @@ pub async fn expire_ref(
     // here we'll populate the results of every expired snapshot
     let mut released = HashSet::new();
     let ancestry =
-        Arc::clone(&asset_manager).snapshot_ancestry(&snap_id).await?.peekable();
+        Arc::clone(&asset_manager).snapshot_info_ancestry(&snap_id).await?.peekable();
 
     pin!(ancestry);
 
