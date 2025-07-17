@@ -375,7 +375,7 @@ pub async fn fetch_tag(
                 let data = serde_json::from_slice(content?.as_ref())?;
                 Ok(data)
             }
-            Err(err) => Err(err.into()),
+            Err(err) => Err(err),
         }
     } else {
         Err(RefErrorKind::RefNotFound(name.to_string()).into())
