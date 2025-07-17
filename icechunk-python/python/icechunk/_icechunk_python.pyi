@@ -1357,7 +1357,9 @@ class PyRepository:
         self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
     ) -> str: ...
     def total_chunks_storage(
-        self, process_manifests_concurrently: int | None = None
+        self,
+        max_manifest_mem_bytes: int | None = None,
+        max_concurrent_manifest_fetches: int | None = None,
     ) -> int: ...
 
 class PySession:

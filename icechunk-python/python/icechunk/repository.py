@@ -729,7 +729,9 @@ class Repository:
         )
 
     def total_chunks_storage(
-        self, process_manifests_concurrently: int | None = None
+        self,
+        max_manifest_mem_bytes: int | None = None,
+        max_concurrent_manifest_fetches: int | None = None,
     ) -> int:
         """Calculate the total storage used for chunks, in bytes .
 
@@ -743,8 +745,12 @@ class Repository:
 
         Parameters
         ----------
-        process_manifests_concurrently : int | None
-            Process this many manifests concurrently. Defaults to 10.
+        max_manifest_mem_bytes : int | None
+            Don't use more than this memory to store in-flight manifests. Defaults to 512 MB.
+        max_concurrent_manifest_fetches : int | None
+            Don't run more than this many concurrent manifest fetches. Defaults to 500.
         """
 
-        return self._repository.total_chunks_storage(process_manifests_concurrently)
+        return self._repository.total_chunks_storage(
+            max_manifest_mem_bytes, max_concurrent_manifest_fetches
+        )
