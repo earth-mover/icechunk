@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 
 import zarr
 from tests.conftest import parse_repo
@@ -101,10 +102,18 @@ async def test_transaction() -> None:
     repo = parse_repo("memory", "test")
     cid1 = repo.lookup_branch("main")
     # TODO: test metadata, rebase_with, and rebase_tries kwargs
-    with repo.transaction("main", message="initialize group") as store:
+    with pytest.warns(DeprecationWarning, match="zarr_transaction"):
+        with repo.transaction("main", message="initialize group") as store:
+            assert not store.read_only
+            root = zarr.group(store=store)
+            root.attrs["foo"] = "bar"
+    cid2 = repo.lookup_branch("main")
+    assert cid1 != cid2, "Transaction did not commit changes"
+
+    with repo.zarr_transaction("main", message="initialize group") as store:
         assert not store.read_only
         root = zarr.group(store=store)
-        root.attrs["foo"] = "bar"
+        root.attrs["foo"] = "bar2"
     cid2 = repo.lookup_branch("main")
     assert cid1 != cid2, "Transaction did not commit changes"
 
@@ -113,7 +122,7 @@ async def test_transaction_failed_no_commit() -> None:
     repo = parse_repo("memory", "test")
     cid1 = repo.lookup_branch("main")
     try:
-        with repo.transaction("main", message="initialize group") as store:
+        with repo.zarr_transaction("main", message="initialize group") as store:
             assert not store.read_only
             root = zarr.group(store=store)
             root.attrs["foo"] = "bar"
