@@ -1440,6 +1440,27 @@ impl PyRepository {
         })
     }
 
+    #[pyo3(signature = (message, branch, metadata=None))]
+    fn rewrite_manifests_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        message: &str,
+        branch: &str,
+        metadata: Option<PySnapshotProperties>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        let message = message.to_owned();
+        let branch = branch.to_owned();
+        let metadata = metadata.map(|m| m.into());
+        pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
+            let repository = repository.read().await;
+            let result = rewrite_manifests(&repository, &branch, &message, metadata)
+                .await
+                .map_err(PyIcechunkStoreError::ManifestOpsError)?;
+            Ok(result.to_string())
+        })
+    }
+
     #[pyo3(signature = (older_than, *, delete_expired_branches = false, delete_expired_tags = false))]
     pub fn expire_snapshots(
         &self,
