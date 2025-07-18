@@ -1513,6 +1513,47 @@ impl PyRepository {
         })
     }
 
+    #[pyo3(signature = (older_than, *, delete_expired_branches = false, delete_expired_tags = false))]
+    fn expire_snapshots_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        older_than: DateTime<Utc>,
+        delete_expired_branches: bool,
+        delete_expired_tags: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, HashSet<String>>(py, async move {
+            let (storage, storage_settings, asset_manager) = {
+                let lock = repository.read().await;
+                (
+                    Arc::clone(lock.storage()),
+                    lock.storage_settings().clone(),
+                    Arc::clone(lock.asset_manager()),
+                )
+            };
+
+            let result = expire(
+                storage.as_ref(),
+                &storage_settings,
+                asset_manager,
+                older_than,
+                if delete_expired_branches {
+                    ExpiredRefAction::Delete
+                } else {
+                    ExpiredRefAction::Ignore
+                },
+                if delete_expired_tags {
+                    ExpiredRefAction::Delete
+                } else {
+                    ExpiredRefAction::Ignore
+                },
+            )
+            .await
+            .map_err(PyIcechunkStoreError::GCError)?;
+            Ok(result.released_snapshots.iter().map(|id| id.to_string()).collect())
+        })
+    }
+
     pub fn garbage_collect(
         &self,
         py: Python<'_>,
