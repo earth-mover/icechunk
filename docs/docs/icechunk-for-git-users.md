@@ -4,7 +4,7 @@ While Icechunk does not work the same way as [git](https://git-scm.com/), it bor
 
 ## Repositories
 
-The main primitive in Icechunk is the [repository](reference.md#icechunk.Repository). Similar to git, the repository is the entry point for all operations and the source of truth for the data. However there are many important differences.
+The main primitive in Icechunk is the [repository](./reference.md#icechunk.Repository). Similar to git, the repository is the entry point for all operations and the source of truth for the data. However there are many important differences.
 
 When developing with git, you will commonly have a local and remote copy of the repository. The local copy is where you do all of your work. The remote copy is where you push your changes when you are ready to share them with others. In Icechunk, there is not local or remote repository, but a single repository that typically exists in a cloud storage bucket. This means that every transaction is saved to the same repository that others may be working on. Icechunk uses the consistency guarantees from storage systems to provide strong consistency even when multiple users are working on the same repository.
 
@@ -60,7 +60,7 @@ session = repo.readonly_session("my-new-branch")
 session = repo.writable_session("my-new-branch")
 ```
 
-Once we have checked out a session, the [`store`](reference.md#icechunk.Session.store) method will return a [`Store`](reference.md#icechunk.Store) object that we can use to read and write data to the repository with `zarr`.
+Once we have checked out a session, the [`store`](reference.md#icechunk.Session.store) method will return a [`Store`](reference.md#icechunk.IcechunkStore) object that we can use to read and write data to the repository with `zarr`.
 
 ### Resetting a branch
 

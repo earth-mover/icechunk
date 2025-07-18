@@ -25,7 +25,7 @@ import icechunk
 repo = icechunk.Repository.create(icechunk.in_memory_storage())
 ```
 
-On creating a new [`Repository`](../reference/#icechunk.Repository), it will automatically create a `main` branch with an initial snapshot. We can take a look at the ancestry of the `main` branch to confirm this.
+On creating a new [`Repository`](./reference.md#icechunk.Repository), it will automatically create a `main` branch with an initial snapshot. We can take a look at the ancestry of the `main` branch to confirm this.
 
 ```python
 for ancestor in repo.ancestry(branch="main"):
@@ -34,9 +34,9 @@ for ancestor in repo.ancestry(branch="main"):
 
 !!! note
 
-    The [`ancestry`](./reference/#icechunk.Repository.ancestry) method can be used to inspect the ancestry of any branch, snapshot, or tag.
+    The [`ancestry`](./reference.md#icechunk.Repository.ancestry) method can be used to inspect the ancestry of any branch, snapshot, or tag.
 
-We get back an iterator of [`SnapshotInfo`](../reference/#icechunk.SnapshotInfo) objects, which contain information about the snapshot, including its ID, the ID of its parent snapshot, and the time it was written.
+We get back an iterator of [`SnapshotInfo`](./reference.md#icechunk.SnapshotInfo) objects, which contain information about the snapshot, including its ID, the ID of its parent snapshot, and the time it was written.
 
 ## Creating a snapshot
 
@@ -117,7 +117,7 @@ print(root.attrs["foo"])
 
 ## Branches
 
-If we want to modify the data from a previous snapshot, we can create a new branch from that snapshot with [`create_branch`](../reference/#icechunk.Repository.create_branch).
+If we want to modify the data from a previous snapshot, we can create a new branch from that snapshot with [`create_branch`](./reference.md#icechunk.Repository.create_branch).
 
 ```python exec="on" session="version" source="material-block"
 main_branch_snapshot_id = repo.lookup_branch("main")
@@ -170,25 +170,25 @@ gitGraph
 )
 ```
 
-We can also [list all branches](../reference/#icechunk.Repository.list_branches) in the repository.
+We can also [list all branches](./reference.md#icechunk.Repository.list_branches) in the repository.
 
 ```python exec="on" session="version" source="material-block" result="code"
 print(repo.list_branches())
 ```
 
-If we need to find the snapshot that a branch is based on, we can use the [`lookup_branch`](../reference/#icechunk.Repository.lookup_branch) method.
+If we need to find the snapshot that a branch is based on, we can use the [`lookup_branch`](./reference.md#icechunk.Repository.lookup_branch) method.
 
 ```python exec="on" session="version" source="material-block" result="code"
 print(repo.lookup_branch("feature"))
 ```
 
-We can also [delete a branch](../reference/#icechunk.Repository.delete_branch) with [`delete_branch`](../reference/#icechunk.Repository.delete_branch).
+We can also [delete a branch](./reference.md#icechunk.Repository.delete_branch) with [`delete_branch`](./reference.md#icechunk.Repository.delete_branch).
 
 ```python exec="on" session="version" source="material-block"
 repo.delete_branch("feature")
 ```
 
-Finally, we can [reset a branch](../reference/#icechunk.Repository.reset_branch) to a previous snapshot with [`reset_branch`](../reference/#icechunk.Repository.reset_branch). This immediately modifies the branch tip to the specified snapshot, changing the history of the branch.
+Finally, we can [reset a branch](./reference.md#icechunk.Repository.reset_branch) to a previous snapshot with [`reset_branch`](./reference.md#icechunk.Repository.reset_branch). This immediately modifies the branch tip to the specified snapshot, changing the history of the branch.
 
 ```python exec="on" session="version" source="material-block"
 repo.reset_branch("dev", snapshot_id=main_branch_snapshot_id)
@@ -196,7 +196,7 @@ repo.reset_branch("dev", snapshot_id=main_branch_snapshot_id)
 
 ## Tags
 
-Tags are immutable references to a snapshot. They are created with [`create_tag`](../reference/#icechunk.Repository.create_tag).
+Tags are immutable references to a snapshot. They are created with [`create_tag`](./reference.md#icechunk.Repository.create_tag).
 
 For example to tag the second commit in `main`'s history:
 
@@ -222,19 +222,19 @@ gitGraph
 """.format(*[snap.id[:6] for snap in repo.ancestry(branch="main")]))
 ```
 
-We can also [list all tags](../reference/#icechunk.Repository.list_tags) in the repository.
+We can also [list all tags](./reference.md#icechunk.Repository.list_tags) in the repository.
 
 ```python exec="on" session="version" source="material-block" result="code"
 print(repo.list_tags())
 ```
 
-and we can look up the snapshot that a tag is based on with [`lookup_tag`](../reference/#icechunk.Repository.lookup_tag).
+and we can look up the snapshot that a tag is based on with [`lookup_tag`](./reference.md#icechunk.Repository.lookup_tag).
 
 ```python exec="on" session="version" source="material-block" result="code"
 print(repo.lookup_tag("v1.0.0"))
 ```
 
-And then finally delete a tag with [`delete_tag`](../reference/#icechunk.Repository.delete_tag).
+And then finally delete a tag with [`delete_tag`](./reference.md#icechunk.Repository.delete_tag).
 
 !!! note
     Tags are immutable and once a tag is deleted, it can never be recreated.
@@ -297,13 +297,13 @@ print(session2.commit(message="Update first row of data array"))
 # ConflictError: Failed to commit, expected parent: Some("BG0W943WSNFMMVD1FXJ0"), actual parent: Some("AE9XS2ZWXT861KD2JGHG")
 ```
 
-The first session was able to commit successfully, but the second session failed with a [`ConflictError`](../reference/#icechunk.ConflictError). When the second session was created, the changes made were relative to the tip of the `main` branch, but the tip of the `main` branch had been modified by the first session.
+The first session was able to commit successfully, but the second session failed with a [`ConflictError`](./reference.md#icechunk.ConflictError). When the second session was created, the changes made were relative to the tip of the `main` branch, but the tip of the `main` branch had been modified by the first session.
 
-To resolve this conflict, we can use the [`rebase`](../reference/#icechunk.Session.rebase) functionality.
+To resolve this conflict, we can use the [`rebase`](./reference.md#icechunk.Session.rebase) functionality.
 
 ### Rebasing
 
-To update the second session so it is based off the tip of the `main` branch, we can use the [`rebase`](../reference/#icechunk.Session.rebase) method.
+To update the second session so it is based off the tip of the `main` branch, we can use the [`rebase`](./reference.md#icechunk.Session.rebase) method.
 
 First, we can try to rebase, without merging any conflicting changes:
 
@@ -335,7 +335,7 @@ except icechunk.RebaseFailedError as e:
 # Conflict at /data: [[0, 0]]
 ```
 
-We get a clear indication of the conflict, and the chunks that are conflicting. In this case we have decided that the first session's changes are correct, so we can again use the [`BasicConflictSolver`](../reference/#icechunk.BasicConflictSolver) to resolve the conflict.
+We get a clear indication of the conflict, and the chunks that are conflicting. In this case we have decided that the first session's changes are correct, so we can again use the [`BasicConflictSolver`](./reference.md#icechunk.BasicConflictSolver) to resolve the conflict.
 
 ```python
 session1.rebase(icechunk.BasicConflictSolver(on_chunk_conflict=icechunk.VersionSelection.UseOurs))

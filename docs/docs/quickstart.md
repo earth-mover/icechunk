@@ -156,4 +156,4 @@ assert array[0] == 1
 
 That's it! You now know how to use Icechunk!
 
-For an overview of all of the important operations, check out the [How-to guide](howto.md).
+For an overview of all of the important operations, check out the [How-to guide](./howto.md).

@@ -6,7 +6,7 @@ It is not intended as a deep explanation of how Icechunk works.
 ## Creating and Opening Repos
 
 Creating and opening repos requires creating a `Storage` object.
-See the [Storage guide](storage.md) for all the details.
+See the [Storage guide](./storage.md) for all the details.
 
 ### Create a New Repo
 
@@ -24,7 +24,7 @@ repo = icechunk.Repository.open(storage)
 ### Specify Custom Config when Opening a Repo
 
 There are many configuration options available to control the behavior of the repository and the storage backend.
-See [Configuration](configuration.md) for all the details.
+See [Configuration](./configuration.md) for all the details.
 
 ```python
 config = icechunk.RepositoryConfig.default()
@@ -39,7 +39,7 @@ If you need to delete a repo, just go to the underlying storage and remove the d
 
 ## Reading, Writing, and Modifying Data with Zarr
 
-Read and write operations occur within the context of a [transaction](version-control.md).
+Read and write operations occur within the context of a [transaction](./version-control.md).
 The general pattern is
 
 ```python
@@ -136,7 +136,7 @@ ds.to_zarr(session.store, group="my-group", append_dim='time', consolidated=Fals
 ### Write an Xarray dataset with Dask
 
 Writing with Dask or any other parallel execution framework requires special care.
-See [Parallel writes](parallel.md) and [Xarray](xarray.md) for more detail.
+See [Parallel writes](./parallel.md) and [Xarray](./xarray.md) for more detail.
 
 ```python
 from icechunk.xarray import to_icechunk
@@ -155,7 +155,7 @@ ds = xr.open_zarr(session.store, group="my-group", zarr_format=3, consolidated=F
 
 ## Transactions and Version Control
 
-For more depth, see [Transactions and Version Control](version-control.md).
+For more depth, see [Transactions and Version Control](./version-control.md).
 
 ### Create a Snapshot via a Transaction
 
@@ -256,7 +256,7 @@ repo.delete_tag("v1.0.0")
 
 ## Repo Maintenance
 
-For more depth, see [Data Expiration](expiration.md).
+For more depth, see [Data Expiration](./expiration.md).
 
 ### Run Snapshot Expiration
 
