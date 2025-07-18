@@ -81,7 +81,8 @@ Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for re
 
 For example, if we wanted to configure an icechunk repo to be able to contain virtual chunks from an `s3` bucket called `my-s3-bucket` in `us-east-1`, we would do the following:
 
-```python exec="on" session="config" source="material-block"
+```python
+
 config.virtual_chunk_containers = [
     icechunk.VirtualChunkContainer(
         url_prefix="s3://my-s3-bucket/",
@@ -94,7 +95,7 @@ config.virtual_chunk_containers = [
 
 If we also wanted to configure the repo to be able to contain virtual chunks from another `s3` bucket called `my-other-s3-bucket` in `us-west-2`, we would do the following:
 
-```python exec="on" session="config" source="material-block"
+```python
 config.set_virtual_chunk_container(
     icechunk.VirtualChunkContainer(
         url_prefix="s3://my-other-s3-bucket/",
