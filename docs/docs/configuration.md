@@ -114,7 +114,7 @@ Now at read time, if Icechunk encounters a virtual chunk url that starts with `s
 
 ### [`manifest`](./reference.md#icechunk.RepositoryConfig.manifest)
 
-The manifest configuration for the repository. [`ManifestConfig`](./reference.md#icechunk.ManifestConfig) allows you to configure behavior for how manifests are loaded. in particular, the `preload` parameter allows you to configure the preload behavior of the manifest using a [`ManifestPreloadConfig`](./reference.md#icechunk.ManifestPreloadConfig). This allows you to control the number of references that are loaded into memory when a session is created, along with which manifests are available to be preloaded.
+The manifest configuration for the repository. [`ManifestConfig`](./reference.md#icechunk.ManifestConfig) allows you to configure behavior for how manifests are loaded. In particular, the `preload` parameter allows you to configure the preload behavior of the manifest using a [`ManifestPreloadConfig`](./reference.md#icechunk.ManifestPreloadConfig). This allows you to control the number of references that are loaded into memory when a session is created, along with which manifests are available to be preloaded.
 
 #### Example
 
