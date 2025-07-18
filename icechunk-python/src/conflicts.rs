@@ -177,8 +177,8 @@ impl_pickle!(PyVersionSelection);
 #[derive(Clone)]
 pub struct PyConflictSolver(Arc<dyn ConflictSolver + Send + Sync>);
 
-impl<'a> AsRef<dyn ConflictSolver + 'a> for PyConflictSolver {
-    fn as_ref(&self) -> &(dyn ConflictSolver + 'a) {
+impl<'a> AsRef<dyn ConflictSolver + 'a + Send + Sync> for PyConflictSolver {
+    fn as_ref(&self) -> &(dyn ConflictSolver + 'a + Send + Sync) {
         &*self.0
     }
 }
