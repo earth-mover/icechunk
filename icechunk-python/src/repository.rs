@@ -1591,6 +1591,38 @@ impl PyRepository {
         })
     }
 
+    fn garbage_collect_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        delete_object_older_than: DateTime<Utc>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, PyGCSummary>(py, async move {
+            let gc_config = GCConfig::clean_all(
+                delete_object_older_than,
+                delete_object_older_than,
+                Default::default(),
+            );
+            let (storage, storage_settings, asset_manager) = {
+                let lock = repository.read().await;
+                (
+                    Arc::clone(lock.storage()),
+                    lock.storage_settings().clone(),
+                    Arc::clone(lock.asset_manager()),
+                )
+            };
+            let result = garbage_collect(
+                storage.as_ref(),
+                &storage_settings,
+                asset_manager,
+                &gc_config,
+            )
+            .await
+            .map_err(PyIcechunkStoreError::GCError)?;
+            Ok(result.into())
+        })
+    }
+
     pub fn total_chunks_storage(
         &self,
         py: Python<'_>,
