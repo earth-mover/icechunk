@@ -16,13 +16,14 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
 
 We are going to create a virtual dataset pointing to all of the [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) data for August 2024. This data is distributed publicly as netCDF files on AWS S3, with one netCDF file containing the Sea Surface Temperature (SST) data for each day of the month. We are going to use `VirtualiZarr` to combine all of these files into a single virtual dataset spanning the entire month, then write that dataset to Icechunk for use in analysis.
 
-Before we get started, we need to install `virtualizarr`, and `icechunk`. We also need to install `fsspec` and `s3fs` for working with data on s3.
+Before we get started, we need to install `virtualizarr` (this notebook uses VirtualiZarr v2.0.0), and `icechunk`. We also need to install `fsspec`, `s3fs`, and `obstore` for working with data on s3.
 
 ```shell
-pip install virtualizarr icechunk fsspec s3fs
+pip install virtualizarr icechunk fsspec s3fs obstore
 ```
 
-First, we need to find all of the files we are interested in, we will do this with fsspec using a `glob` expression to find every netcdf file in the August 2024 folder in the bucket:
+First, we need to find all of the files we are interested in. 
+We can do this with fsspec using a `glob` expression to find every netcdf file in the August 2024 folder in the bucket:
 
 ```python
 import fsspec
@@ -40,13 +41,27 @@ oisst_files = sorted(['s3://'+f for f in oisst_files])
 #]
 ```
 
+These are netCDF4 files, which are really HDF5 files, so we need to user virtualizarr's `HDFParser`.
+
+We also need to give the parser a way to access our files. We do this by creating a `ObjectStoreRegistry` containing an obstore `S3Store` for that bucket.
+
 Now that we have the filenames of the data we need, we can create virtual datasets with `VirtualiZarr`. This may take a minute.
 
 ```python
 from virtualizarr import open_virtual_dataset
+from virtualizarr.parsers import HDFParser
+from virtualizarr.registry import ObjectStoreRegistry
+
+bucket = "noaa-cdr-sea-surface-temp-optimum-interpolation-pds/"
+store = S3Store(
+    bucket=bucket,
+    region="us-west-2",
+    skip_signature=True
+)
+registry = ObjectStoreRegistry({f"s3://{bucket}": store})
 
 virtual_datasets =[
-    open_virtual_dataset(url, indexes={})
+    open_virtual_dataset(url, registry=registry, parser=HDFParser())
     for url in oisst_files
 ]
 ```
@@ -101,7 +116,7 @@ With the repo created, and the virtual chunk container added, lets write our vir
 
 ```python
 session = repo.writable_session("main")
-virtual_ds.virtualize.to_icechunk(session.store)
+virtual_ds.vz.to_icechunk(session.store)
 ```
 
 The refs are written so lets save our progress by committing to the store.
@@ -234,7 +249,9 @@ No extra configuration is necessary for local filesystem references.
 
 ### Virtual Reference File Format Support
 
-Currently, Icechunk supports `HDF5`, `netcdf4`, and `netcdf3` files for use in virtual references with `VirtualiZarr`. Support for other filetypes is under development in the VirtualiZarr project. Below are some relevant issues:
+Icechunk supports storing virtual references to any format that VirtualiZarr can parse. VirtualiZarr ships with parsers for a range of formats, including `HDF5`, `netcdf4`, and `netcdf3`. You can also write your own [custom parser](https://virtualizarr.readthedocs.io/en/latest/custom_parsers.html) for virtualizing other file formats.
+
+Support for other common filetypes is under development within the VirtualiZarr project. Below are some relevant issues:
 
 - [meta issue for file format support](https://github.com/zarr-developers/VirtualiZarr/issues/218)
 - [Support for GRIB2 files](https://github.com/zarr-developers/VirtualiZarr/issues/312)
