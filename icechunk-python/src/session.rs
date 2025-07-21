@@ -36,6 +36,19 @@ impl PySession {
         })
     }
 
+    #[classmethod]
+    fn from_bytes_async<'py>(
+        _cls: Bound<'_, PyType>,
+        py: Python<'py>,
+        bytes: Vec<u8>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let session =
+                Session::from_bytes(bytes).map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(Self(Arc::new(RwLock::new(session))))
+        })
+    }
+
     fn __eq__(&self, other: &PySession) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
@@ -49,10 +62,32 @@ impl PySession {
         })
     }
 
+    pub fn as_bytes_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let session = session.read().await;
+            Ok(session.as_bytes().map_err(PyIcechunkStoreError::from)?)
+        })
+    }
+
     #[getter]
     pub fn read_only(&self, py: Python<'_>) -> bool {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || self.0.blocking_read().read_only())
+    }
+
+    pub fn read_only_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let session = session.read().await;
+            Ok(session.read_only())
+        })
     }
 
     #[getter]
@@ -61,16 +96,46 @@ impl PySession {
         py.allow_threads(move || self.0.blocking_read().snapshot_id().to_string())
     }
 
+    pub fn snapshot_id_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let session = session.read().await;
+            Ok(session.snapshot_id().to_string())
+        })
+    }
+
     #[getter]
     pub fn branch(&self, py: Python<'_>) -> Option<String> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || self.0.blocking_read().branch().map(|b| b.to_string()))
     }
 
+    pub fn branch_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let session = session.read().await;
+            Ok(session.branch().map(|b| b.to_string()))
+        })
+    }
+
     #[getter]
     pub fn has_uncommitted_changes(&self, py: Python<'_>) -> bool {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || self.0.blocking_read().has_uncommitted_changes())
+    }
+
+    pub fn has_uncommitted_changes_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let session = session.read().await;
+            Ok(session.has_uncommitted_changes())
+        })
     }
 
     pub fn status(&self, py: Python<'_>) -> PyResult<PyDiff> {
@@ -86,10 +151,34 @@ impl PySession {
         })
     }
 
+    pub fn status_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py::<_, PyDiff>(py, async move {
+            let session = session.read().await;
+            let res =
+                session.status().await.map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(res.into())
+        })
+    }
+
     pub fn discard_changes(&self, py: Python<'_>) {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
             self.0.blocking_write().discard_changes();
+        })
+    }
+
+    pub fn discard_changes_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut session = session.write().await;
+            session.discard_changes();
+            Ok(())
         })
     }
 
@@ -100,6 +189,19 @@ impl PySession {
             let session = self.0.blocking_read();
             let conc = session.config().get_partial_values_concurrency();
             let store = Store::from_session_and_config(self.0.clone(), conc);
+
+            let store = Arc::new(store);
+            Ok(PyStore(store))
+        })
+    }
+
+    pub fn store_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        let session_lock = session.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let session_lock = session_lock.read().await;
+            let conc = session_lock.config().get_partial_values_concurrency();
+            let store = Store::from_session_and_config(session, conc);
 
             let store = Arc::new(store);
             Ok(PyStore(store))
@@ -122,6 +224,25 @@ impl PySession {
 
                 Ok(res)
             })
+        })
+    }
+
+    pub fn all_virtual_chunk_locations_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, Vec<String>>(py, async move {
+            let session = session.read().await;
+            let res = session
+                .all_virtual_chunk_locations()
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?
+                .try_collect()
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+
+            Ok(res)
         })
     }
 
@@ -162,6 +283,42 @@ impl PySession {
         Ok(PyAsyncGenerator::new(prepared_list))
     }
 
+    pub fn chunk_coordinates_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        array_path: String,
+        batch_size: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let res = try_stream! {
+                let session = session.read_owned().await;
+                let array_path = array_path.try_into().map_err(|e| PyIcechunkStoreError::PyValueError(format!("Invalid path: {e}")))?;
+
+                let stream = session
+                    .chunk_coordinates(&array_path)
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?
+                    .map_err(PyIcechunkStoreError::SessionError)
+                    .chunks(batch_size as usize);
+
+                #[allow(unused_braces, deprecated)]
+                { for await coords_vec in stream {
+                    let vec = coords_vec
+                        .into_iter()
+                        .map(|maybe_coord| maybe_coord.map(|coord| Python::with_gil(|py| coord.0.to_object(py))))
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    let vec = Python::with_gil(|py| vec.to_object(py));
+                    yield vec
+                } }
+            };
+
+            let prepared_list = Arc::new(Mutex::new(res.boxed()));
+            Ok(PyAsyncGenerator::new(prepared_list))
+        })
+    }
+
     pub fn merge(&self, other: &PySession, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
@@ -177,6 +334,22 @@ impl PySession {
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(())
             })
+        })
+    }
+
+    pub fn merge_async<'py>(
+        &'py self,
+        other: &PySession,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        let other = other.0.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut session = session.write().await;
+            let other = other.read().await.deref().clone();
+            session.merge(other).await.map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(())
         })
     }
 
@@ -214,6 +387,39 @@ impl PySession {
         })
     }
 
+    pub fn commit_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        message: &str,
+        metadata: Option<PySnapshotProperties>,
+        rebase_with: Option<PyConflictSolver>,
+        rebase_tries: Option<u16>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        let message = message.to_owned();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let metadata = metadata.map(|m| m.into());
+            let mut session = session.write().await;
+            let snapshot_id = if let Some(solver) = rebase_with {
+                session
+                    .commit_rebasing(
+                        solver.as_ref(),
+                        rebase_tries.unwrap_or(1_000),
+                        &message,
+                        metadata,
+                        |_| async {},
+                        |_| async {},
+                    )
+                    .await
+            } else {
+                session.commit(&message, metadata).await
+            }
+            .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(snapshot_id.to_string())
+        })
+    }
+
     pub fn rebase(&self, solver: PyConflictSolver, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
@@ -227,6 +433,21 @@ impl PySession {
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(())
             })
+        })
+    }
+
+    pub fn rebase_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        solver: PyConflictSolver,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut session = session.write().await;
+            let solver = solver.as_ref();
+            session.rebase(solver).await.map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(())
         })
     }
 }
