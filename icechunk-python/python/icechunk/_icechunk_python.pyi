@@ -1356,6 +1356,7 @@ class PyRepository:
     def garbage_collect(
         self,
         delete_object_older_than: datetime.datetime,
+        *,
         dry_run: bool = False,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
@@ -1363,6 +1364,7 @@ class PyRepository:
     ) -> GCSummary: ...
     def total_chunks_storage(
         self,
+        *,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
