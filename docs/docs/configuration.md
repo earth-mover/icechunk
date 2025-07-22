@@ -82,30 +82,26 @@ Icechunk allows repos to contain [virtual chunks](./virtual.md). To allow for re
 For example, if we wanted to configure an icechunk repo to be able to contain virtual chunks from an `s3` bucket called `my-s3-bucket` in `us-east-1`, we would do the following:
 
 ```python exec="on" session="config" source="material-block"
-config.virtual_chunk_containers = [
+config.set_virtual_chunk_container(
     icechunk.VirtualChunkContainer(
-        url_prefix="s3://my-s3-bucket/",
-        storage=icechunk.StorageSettings(
-            storage=icechunk.s3_storage(bucket="my-s3-bucket", prefix="foo", region="us-east-1"),
-        ),
+        "s3://my-s3-bucket/",
+        store=icechunk.s3_store(region="us-east-1"),
     ),
-]
+)
 ```
 
 If we also wanted to configure the repo to be able to contain virtual chunks from another `s3` bucket called `my-other-s3-bucket` in `us-west-2`, we would do the following:
 
 ```python exec="on" session="config" source="material-block"
 config.set_virtual_chunk_container(
-    icechunk.VirtualChunkContainer(
-        url_prefix="s3://my-other-s3-bucket/",
-        storage=icechunk.StorageSettings(
-            storage=icechunk.s3_storage(bucket="my-other-s3-bucket", prefix="other-foo", region="us-west-2"),
-        ),
-    ),
+  icechunk.VirtualChunkContainer(
+      "s3://my-other-s3-bucket/",
+      store=icechunk.s3_store(region="us-west-2")
+  )
 )
 ```
 
-Now at read time, if Icechunk encounters a virtual chunk url that starts with `s3://my-other-s3-bucket/`, it will use the storage configuration for the `my-other-s3-bucket` container.
+This will add a second `VirtualChunkContainer` but not overwrite the first one that was added because they have different url prefixes.  Now at read time, if Icechunk encounters a virtual chunk url that starts with `s3://my-other-s3-bucket/`, it will use the storage configuration for the `my-other-s3-bucket` container.
 
 !!! note
 
@@ -113,7 +109,7 @@ Now at read time, if Icechunk encounters a virtual chunk url that starts with `s
 
 ### [`manifest`](./reference.md#icechunk.RepositoryConfig.manifest)
 
-The manifest configuration for the repository. [`ManifestConfig`](./reference.md#icechunk.ManifestConfig) allows you to configure behavior for how manifests are loaded. in particular, the `preload` parameter allows you to configure the preload behavior of the manifest using a [`ManifestPreloadConfig`](./reference.md#icechunk.ManifestPreloadConfig). This allows you to control the number of references that are loaded into memory when a session is created, along with which manifests are available to be preloaded.
+The manifest configuration for the repository. [`ManifestConfig`](./reference.md#icechunk.ManifestConfig) allows you to configure behavior for how manifests are loaded. In particular, the `preload` parameter allows you to configure the preload behavior of the manifest using a [`ManifestPreloadConfig`](./reference.md#icechunk.ManifestPreloadConfig). This allows you to control the number of references that are loaded into memory when a session is created, along with which manifests are available to be preloaded.
 
 #### Example
 
