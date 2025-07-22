@@ -1,26 +1,31 @@
-use futures::{TryStream, TryStreamExt as _, future::ready, stream};
+use futures::{StreamExt, TryStream, TryStreamExt, future::ready, stream};
 use std::{
     collections::HashSet,
-    num::NonZeroU16,
+    num::{NonZeroU16, NonZeroUsize},
     sync::{Arc, Mutex},
 };
+use tokio::task;
+use tracing::trace;
 
 use crate::{
     Storage,
     asset_manager::AssetManager,
-    format::{ChunkId, ManifestId, manifest::ChunkPayload},
+    format::{
+        ChunkId, SnapshotId,
+        manifest::{ChunkPayload, Manifest},
+        snapshot::ManifestFileInfo,
+    },
     ops::pointed_snapshots,
-    repository::{RepositoryErrorKind, RepositoryResult},
+    repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage,
+    stream_utils::{StreamLimiter, try_unique_stream},
 };
 
-async fn manifest_chunks_storage(
-    manifest_id: ManifestId,
-    manifest_size: u64,
-    asset_manager: Arc<AssetManager>,
+fn calculate_manifest_storage(
+    manifest: Arc<Manifest>,
     seen_chunks: Arc<Mutex<HashSet<ChunkId>>>,
 ) -> RepositoryResult<u64> {
-    let manifest = asset_manager.fetch_manifest(&manifest_id, manifest_size).await?;
+    trace!(manifest_id = %manifest.id(), "Processing manifest");
     let mut size = 0;
     for payload in manifest.chunk_payloads() {
         match payload {
@@ -47,27 +52,34 @@ async fn manifest_chunks_storage(
             }
         }
     }
+    trace!(manifest_id = %manifest.id(), "Manifest done");
     Ok(size)
 }
 
-pub fn try_unique_stream<S, T, E, F, V>(
-    f: F,
-    stream: S,
-) -> impl TryStream<Ok = T, Error = E>
-where
-    F: Fn(&S::Ok) -> V,
-    S: TryStream<Ok = T, Error = E>,
-    V: Eq + std::hash::Hash,
+async fn unique_manifest_infos<'a>(
+    storage: &'a (dyn Storage + Send + Sync),
+    storage_settings: &'a storage::Settings,
+    asset_manager: Arc<AssetManager>,
+    extra_roots: &'a HashSet<SnapshotId>,
+    max_snapshots_in_memory: NonZeroU16,
+) -> RepositoryResult<impl TryStream<Ok = ManifestFileInfo, Error = RepositoryError> + 'a>
 {
-    let mut seen = HashSet::new();
-    stream.try_filter(move |item| {
-        let v = f(item);
-        if seen.insert(v) {
-            futures::future::ready(true)
-        } else {
-            futures::future::ready(false)
-        }
-    })
+    let all_snaps =
+        pointed_snapshots(storage, storage_settings, asset_manager, extra_roots)
+            .await?
+            .map(ready)
+            .buffer_unordered(max_snapshots_in_memory.get() as usize);
+    let all_manifest_infos = all_snaps
+        // this could be slightly optimized by not collecting all manifest info records into a vec
+        // but we don't expect too many, and they are small anyway
+        .map_ok(|snap| {
+            stream::iter(
+                snap.manifest_files().map(Ok::<_, RepositoryError>).collect::<Vec<_>>(),
+            )
+        })
+        .try_flatten();
+    let res = try_unique_stream(|mi| mi.id.clone(), all_manifest_infos);
+    Ok(res)
 }
 
 /// Compute the total size in bytes of all committed repo chunks.
@@ -76,41 +88,60 @@ pub async fn repo_chunks_storage(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     asset_manager: Arc<AssetManager>,
-    process_manifests_concurrently: NonZeroU16,
+    max_snapshots_in_memory: NonZeroU16,
+    max_compressed_manifest_mem_bytes: NonZeroUsize,
+    max_concurrent_manifest_fetches: NonZeroU16,
 ) -> RepositoryResult<u64> {
     let extra_roots = Default::default();
-    let all_snaps = pointed_snapshots(
+    let manifest_infos = unique_manifest_infos(
         storage,
         storage_settings,
-        Arc::clone(&asset_manager),
+        asset_manager.clone(),
         &extra_roots,
+        max_snapshots_in_memory,
     )
     .await?;
 
-    let all_manifest_infos = all_snaps
-        // this could be slightly optimized by not collecting all manifest info records into a vec
-        // but we don't expect too many, and they are small anyway
-        .map_ok(|snap| stream::iter(snap.manifest_files().map(Ok).collect::<Vec<_>>()))
-        .try_flatten();
-    let unique_manifest_infos = try_unique_stream(|mi| mi.id.clone(), all_manifest_infos);
+    // we want to fetch many manifests in parallel, but not more than memory allows
+    // for this we use the StreamLimiter using the manifest size in bytes for usage
+    let limiter = &Arc::new(StreamLimiter::new(
+        "repo_chunks_storage".to_string(),
+        max_compressed_manifest_mem_bytes.get(),
+    ));
+
+    // We rate limit the stream of manifests to make sure we don't blow up memory
+    let rate_limited_manifests =
+        limiter.limit_stream(manifest_infos, |minfo| minfo.size_bytes as usize);
 
     let seen_chunks = &Arc::new(Mutex::new(HashSet::new()));
     let asset_manager = &asset_manager;
 
-    let res = unique_manifest_infos
-        .map_ok(|manifest_info| async move {
-            let manifest_size = manifest_info.size_bytes;
-            manifest_chunks_storage(
-                manifest_info.id,
-                manifest_size,
-                Arc::clone(asset_manager),
-                Arc::clone(seen_chunks),
-            )
-            .await
+    let compute_stream = rate_limited_manifests
+        .map_ok(|m| async move {
+            let manifest =
+                Arc::clone(asset_manager).fetch_manifest(&m.id, m.size_bytes).await?;
+            Ok((manifest, m))
         })
-        .try_buffered(process_manifests_concurrently.get() as usize)
-        .try_fold(0, |total, partial| ready(Ok(total + partial)))
+        // Now we can buffer a bunch of fetch_manifest operations. Because we are using
+        // StreamLimiter we know memory is not going to blow up
+        .try_buffer_unordered(max_concurrent_manifest_fetches.get() as usize)
+        .and_then(|(manifest, minfo)| async move {
+            let seen_chunks = Arc::clone(seen_chunks);
+            let size = task::spawn_blocking(|| {
+                calculate_manifest_storage(manifest, seen_chunks)
+            })
+            .await??;
+            Ok((size, minfo))
+        });
+    let (_, res) = limiter
+        .unlimit_stream(compute_stream, |(_, minfo)| minfo.size_bytes as usize)
+        .try_fold((0u64, 0), |(processed, total_size), (partial, _)| {
+            //info!("Processed {processed} manifests");
+            ready(Ok((processed + 1, total_size + partial)))
+        })
         .await?;
+
+    debug_assert_eq!(limiter.current_usage(), 0);
 
     Ok(res)
 }

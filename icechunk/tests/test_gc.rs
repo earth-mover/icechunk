@@ -1,6 +1,10 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    num::{NonZeroU16, NonZeroUsize},
+    sync::Arc,
+};
 
 use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -127,7 +131,15 @@ pub async fn do_test_gc(
 
     // verify doing gc without dangling objects doesn't change the repo
     let now = Utc::now();
-    let gc_config = GCConfig::clean_all(now, now, None);
+    let gc_config = GCConfig::clean_all(
+        now,
+        now,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
     let summary = garbage_collect(
         storage.as_ref(),
         &storage_settings,
@@ -650,7 +662,15 @@ pub async fn do_test_expire_and_garbage_collect(
     );
 
     let now = Utc::now();
-    let gc_config = GCConfig::clean_all(now, now, None);
+    let gc_config = GCConfig::clean_all(
+        now,
+        now,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
     let asset_manager = Arc::new(AssetManager::new_no_cache(
         storage.clone(),
         storage_settings.clone(),
@@ -737,7 +757,15 @@ pub async fn test_expire_and_garbage_collect_deliting_expired_refs()
     assert_eq!(result.deleted_refs.len(), 2);
 
     let now = Utc::now();
-    let gc_config = GCConfig::clean_all(now, now, None);
+    let gc_config = GCConfig::clean_all(
+        now,
+        now,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
     let summary = garbage_collect(
         storage.as_ref(),
         &storage_settings,

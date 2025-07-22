@@ -151,6 +151,23 @@ plugins:
       include_source: True
       # include: ["*.ipynb"] # Default: ["*.py", "*.ipynb"]
   - markdown-exec
+  - redirects:
+      redirect_maps:
+        # Redirects from icechunk-python subdirectory to root docs (post-reorganization)
+        # These redirects work with use_directory_urls: true (default)
+        'icechunk-python/quickstart/index.md': 'quickstart.md'
+        'icechunk-python/reference/index.md': 'reference.md'
+        'icechunk-python/configuration/index.md': 'configuration.md'
+        'icechunk-python/storage/index.md': 'storage.md'
+        'icechunk-python/version-control/index.md': 'version-control.md'
+        'icechunk-python/expiration/index.md': 'expiration.md'
+        'icechunk-python/dask/index.md': 'dask.md'
+        'icechunk-python/xarray/index.md': 'xarray.md'
+        'icechunk-python/virtual/index.md': 'virtual.md'
+        'icechunk-python/concurrency/index.md': 'concurrency.md'
+        'icechunk-python/parallel/index.md': 'parallel.md'
+        'icechunk-python/performance/index.md': 'performance.md'
+        'icechunk-python/cheatsheets/git-users/index.md': 'icechunk-for-git-users.md'
 
 markdown_extensions:
   - admonition
