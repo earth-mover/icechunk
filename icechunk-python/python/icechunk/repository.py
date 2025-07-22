@@ -673,9 +673,42 @@ class Repository:
             delete_expired_tags=delete_expired_tags,
         )
 
+    def rewrite_manifests(
+        self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
+    ) -> str:
+        """
+        Rewrite manifests for all arrays.
+
+        This method will start a new writable session on the specified branch,
+        rewrite manifests for all arrays, and then commits with the specifeid ``message``
+        and ``metadata``.
+
+        A JSON representation of the currently active splitting configuration will be
+        stored in the commit's metadata under the key `"splitting_config"`.
+
+        Parameters
+        ----------
+        message : str
+            The message to write with the commit.
+        branch: str
+            The branch to commit to.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+
+        Returns
+        -------
+        str
+            The snapshot ID of the new commit.
+
+        """
+        return self._repository.rewrite_manifests(
+            message, branch=branch, metadata=metadata
+        )
+
     def garbage_collect(
         self,
         delete_object_older_than: datetime.datetime,
+        *,
         dry_run: bool = False,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
@@ -717,40 +750,9 @@ class Repository:
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
 
-    def rewrite_manifests(
-        self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
-    ) -> str:
-        """
-        Rewrite manifests for all arrays.
-
-        This method will start a new writable session on the specified branch,
-        rewrite manifests for all arrays, and then commits with the specifeid ``message``
-        and ``metadata``.
-
-        A JSON representation of the currently active splitting configuration will be
-        stored in the commit's metadata under the key `"splitting_config"`.
-
-        Parameters
-        ----------
-        message : str
-            The message to write with the commit.
-        branch: str
-            The branch to commit to.
-        metadata : dict[str, Any] | None, optional
-            Additional metadata to store with the commit snapshot.
-
-        Returns
-        -------
-        str
-            The snapshot ID of the new commit.
-
-        """
-        return self._repository.rewrite_manifests(
-            message, branch=branch, metadata=metadata
-        )
-
     def total_chunks_storage(
         self,
+        *,
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
