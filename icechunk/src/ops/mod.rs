@@ -33,19 +33,6 @@ pub async fn all_roots<'a>(
 }
 
 #[instrument(skip(storage, storage_settings, asset_manager))]
-pub async fn pointed_snapshot_ids<'a>(
-    storage: &'a (dyn Storage + Send + Sync),
-    storage_settings: &'a storage::Settings,
-    asset_manager: Arc<AssetManager>,
-    extra_roots: &'a HashSet<SnapshotId>,
-) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotId>> + 'a> {
-    let res = pointed_snapshots(storage, storage_settings, asset_manager, extra_roots)
-        .await?
-        .map_ok(|snap| snap.id());
-    Ok(res)
-}
-
-#[instrument(skip(storage, storage_settings, asset_manager))]
 pub async fn pointed_snapshots<'a>(
     storage: &'a (dyn Storage + Send + Sync),
     storage_settings: &'a storage::Settings,

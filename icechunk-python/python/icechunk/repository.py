@@ -673,7 +673,14 @@ class Repository:
             delete_expired_tags=delete_expired_tags,
         )
 
-    def garbage_collect(self, delete_object_older_than: datetime.datetime) -> GCSummary:
+    def garbage_collect(
+        self,
+        delete_object_older_than: datetime.datetime,
+        dry_run: bool = False,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags.
 
         Danger
@@ -687,6 +694,14 @@ class Repository:
         ----------
         delete_object_older_than: datetime.datetime
             Delete objects older than this time.
+        dry_run: bool : bool
+            Report results but don't delete any objects
+        max_snapshots_in_memory : int
+            Don't prefetch more than this many Snapshots to memory.
+        max_compressed_manifest_mem_bytes : int
+            Don't use more than this memory to store compressed in-flight manifests.
+        max_concurrent_manifest_fetches : int
+            Don't run more than this many concurrent manifest fetches.
 
         Returns
         -------
@@ -694,7 +709,13 @@ class Repository:
             Summary of objects deleted.
         """
 
-        return self._repository.garbage_collect(delete_object_older_than)
+        return self._repository.garbage_collect(
+            delete_object_older_than,
+            dry_run=dry_run,
+            max_snapshots_in_memory=max_snapshots_in_memory,
+            max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
+        )
 
     def rewrite_manifests(
         self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
@@ -730,8 +751,9 @@ class Repository:
 
     def total_chunks_storage(
         self,
-        max_manifest_mem_bytes: int | None = None,
-        max_concurrent_manifest_fetches: int | None = None,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
     ) -> int:
         """Calculate the total storage used for chunks, in bytes .
 
@@ -745,12 +767,16 @@ class Repository:
 
         Parameters
         ----------
-        max_manifest_mem_bytes : int | None
-            Don't use more than this memory to store in-flight manifests. Defaults to 512 MB.
-        max_concurrent_manifest_fetches : int | None
-            Don't run more than this many concurrent manifest fetches. Defaults to 500.
+        max_snapshots_in_memory: int
+            Don't prefetch more than this many Snapshots to memory.
+        max_compressed_manifest_mem_bytes : int
+            Don't use more than this memory to store compressed in-flight manifests.
+        max_concurrent_manifest_fetches : int
+            Don't run more than this many concurrent manifest fetches.
         """
 
         return self._repository.total_chunks_storage(
-            max_manifest_mem_bytes, max_concurrent_manifest_fetches
+            max_snapshots_in_memory=max_snapshots_in_memory,
+            max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )

@@ -16,7 +16,7 @@ use futures::{
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::task::JoinError;
+use tokio::{task::JoinError, try_join};
 use tracing::{Instrument, debug, error, instrument, trace};
 
 use crate::{
@@ -173,55 +173,49 @@ impl Repository {
             return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
         }
 
-        let handle1 = tokio::spawn(
-            async move {
-                // TODO: we could cache this first snapshot
-                let asset_manager = AssetManager::new_no_cache(
-                    Arc::clone(&storage_c),
-                    storage_settings.clone(),
-                    compression,
-                );
-                // On create we need to create the default branch
-                let new_snapshot = Arc::new(Snapshot::initial()?);
-                asset_manager.write_snapshot(Arc::clone(&new_snapshot)).await?;
+        let create_branch = async move {
+            // TODO: we could cache this first snapshot
+            let asset_manager = AssetManager::new_no_cache(
+                Arc::clone(&storage_c),
+                storage_settings.clone(),
+                compression,
+            );
+            // On create we need to create the default branch
+            let new_snapshot = Arc::new(Snapshot::initial()?);
+            asset_manager.write_snapshot(Arc::clone(&new_snapshot)).await?;
 
-                update_branch(
-                    storage_c.as_ref(),
-                    &storage_settings,
-                    Ref::DEFAULT_BRANCH,
-                    new_snapshot.id().clone(),
-                    None,
-                )
-                .await?;
-                Ok::<(), RepositoryError>(())
-            }
-            .in_current_span(),
-        );
+            update_branch(
+                storage_c.as_ref(),
+                &storage_settings,
+                Ref::DEFAULT_BRANCH,
+                new_snapshot.id().clone(),
+                None,
+            )
+            .await?;
+            Ok::<(), RepositoryError>(())
+        }
+        .in_current_span();
 
         let storage_c = Arc::clone(&storage);
         let config_c = config.clone();
-        let handle2 = tokio::spawn(
-            async move {
-                if has_overriden_config {
-                    let version = Repository::store_config(
-                        storage_c.as_ref(),
-                        &config_c,
-                        &storage::VersionInfo::for_creation(),
-                    )
-                    .await?;
-                    Ok::<_, RepositoryError>(version)
-                } else {
-                    Ok(storage::VersionInfo::for_creation())
-                }
+        let update_config = async move {
+            if has_overriden_config {
+                let version = Repository::store_config(
+                    storage_c.as_ref(),
+                    &config_c,
+                    &storage::VersionInfo::for_creation(),
+                )
+                .await?;
+                Ok::<_, RepositoryError>(version)
+            } else {
+                Ok(storage::VersionInfo::for_creation())
             }
-            .in_current_span(),
-        );
+        }
+        .in_current_span();
 
-        handle1.await??;
-        let config_version = handle2.await??;
+        let (_, config_version) = try_join!(create_branch, update_config)?;
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
-
         Self::new(config, config_version, storage, authorize_virtual_chunk_access)
     }
 
