@@ -108,6 +108,25 @@ def test_expire_and_gc() -> None:
     for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}")["Contents"]:
         space_before += obj["Size"]
 
+    # let's run GC using dry_run = True
+    gc_result = repo.garbage_collect(old, dry_run=True)
+    space_after = 0
+    for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}")["Contents"]:
+        space_after += obj["Size"]
+
+    assert space_before == space_after
+    # there were 21 chunks, and we need 3 alive (for indexes 0..20 and 999)
+    assert gc_result.chunks_deleted == 18
+    # there were 23 snapshots, we need the initial one and the latest version only
+    assert gc_result.snapshots_deleted == 21
+    # there were 21 manifests, we need only 1
+    assert gc_result.manifests_deleted == 20
+    # not implemented yet
+    assert gc_result.attributes_deleted == 0
+    # same number as snapshots
+    assert gc_result.transaction_logs_deleted == 21
+
+    # now let's run real GC, no dry_run
     gc_result = repo.garbage_collect(old)
 
     space_after = 0
