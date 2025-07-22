@@ -33,7 +33,7 @@ to it, and append data a second block of data using Icechunk's version control f
 
 ## Create a new repo
 
-Similar to the example in [quickstart](/icechunk-python/quickstart/), we'll create an
+Similar to the example in [quickstart](./quickstart.md), we'll create an
 Icechunk repo in S3 or a local file system. You will need to replace the `StorageConfig`
 with a bucket or file path that you have access to.
 

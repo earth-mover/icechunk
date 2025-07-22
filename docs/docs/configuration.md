@@ -269,7 +269,7 @@ When using virtual chunk containers, the containers must be authorized by the re
 
 ### Example
 
-Expanding on the example from the [Virtual Chunk Containers](#virtual-chunk-containers) section, we can configure the repo to use the credentials for the `my-s3-bucket` and `my-other-s3-bucket` containers.
+Expanding on the example from the [Virtual Chunk Containers](#virtual_chunk_containers) section, we can configure the repo to use the credentials for the `my-s3-bucket` and `my-other-s3-bucket` containers.
 
 ```python
 credentials = icechunk.containers_credentials(

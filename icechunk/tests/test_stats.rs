@@ -127,6 +127,7 @@ pub async fn do_test_repo_chunks_storage(
         storage.as_ref(),
         &storage_settings,
         Arc::clone(&asset_manager),
+        NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MIN,
         NonZeroU16::try_from(10).unwrap(),
     )
@@ -140,6 +141,7 @@ pub async fn do_test_repo_chunks_storage(
         storage.as_ref(),
         &storage_settings,
         Arc::clone(&asset_manager),
+        NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MAX,
         NonZeroU16::try_from(10).unwrap(),
     )
@@ -165,6 +167,7 @@ pub async fn do_test_repo_chunks_storage(
         storage.as_ref(),
         &storage_settings,
         Arc::clone(&asset_manager),
+        NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MIN,
         NonZeroU16::try_from(10).unwrap(),
     )
@@ -197,6 +200,7 @@ pub async fn do_test_repo_chunks_storage(
         storage.as_ref(),
         &storage_settings,
         Arc::clone(&asset_manager),
+        NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MAX,
         NonZeroU16::try_from(10).unwrap(),
     )

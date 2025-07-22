@@ -1350,16 +1350,24 @@ class PyRepository:
         delete_expired_branches: bool = False,
         delete_expired_tags: bool = False,
     ) -> set[str]: ...
-    def garbage_collect(
-        self, delete_object_older_than: datetime.datetime
-    ) -> GCSummary: ...
     def rewrite_manifests(
         self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
     ) -> str: ...
+    def garbage_collect(
+        self,
+        delete_object_older_than: datetime.datetime,
+        *,
+        dry_run: bool = False,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> GCSummary: ...
     def total_chunks_storage(
         self,
-        max_manifest_mem_bytes: int | None = None,
-        max_concurrent_manifest_fetches: int | None = None,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
     ) -> int: ...
 
 class PySession:

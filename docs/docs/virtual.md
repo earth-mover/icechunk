@@ -180,7 +180,7 @@ session.store.set_virtual_ref('c/0', 's3://mybucket/my/data/file.nc', offset=100
 
 ##### Configuration
 
-S3 virtual references require configuring credential for the store to be able to access the specified s3 bucket. See [the configuration docs](./configuration.md#virtual-reference-storage-config) for instructions.
+S3 virtual references require configuring credential for the store to be able to access the specified s3 bucket. See [the configuration docs](./configuration.md#virtual-chunk-credentials) for instructions.
 
 #### GCS
 
