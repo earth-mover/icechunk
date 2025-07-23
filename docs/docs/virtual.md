@@ -41,9 +41,7 @@ oisst_files = sorted(['s3://'+f for f in oisst_files])
 #]
 ```
 
-These are netCDF4 files, which are really HDF5 files, so we need to user virtualizarr's `HDFParser`.
-
-We also need to give the parser a way to access our files. We do this by creating an `ObjectStoreRegistry` containing an obstore `S3Store` for that bucket.
+VirtualiZarr uses [`obstore`](https://developmentseed.org/obstore/latest/) to access remote files, and we need to create an `ObjectStoreRegistry` containing an obstore `S3Store` for this bucket.
 
 ```python
 from obstore.store import S3Store
@@ -58,11 +56,16 @@ store = S3Store(
 registry = ObjectStoreRegistry({f"s3://{bucket}": store})
 ```
 
-Now that we have the filenames of the data we need, and a way to access them, we can create virtual datasets with `VirtualiZarr`. This may take a minute.
+These are netCDF4 files, which are really HDF5 files, so we need to user virtualizarr's `HDFParser`.
+
+```python
+from virtualizarr.parsers import HDFParser
+```
+
+Now that we have the filenames of the data we need, a way to access them, and a way to parse their contents, we can create virtual datasets with `VirtualiZarr`. This may take a minute, as it needs to fetch all the metadata from all the files.
 
 ```python
 from virtualizarr import open_virtual_dataset
-from virtualizarr.parsers import HDFParser
 
 virtual_datasets =[
     open_virtual_dataset(url, registry=registry, parser=HDFParser())
