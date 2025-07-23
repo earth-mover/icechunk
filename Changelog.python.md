@@ -1,5 +1,16 @@
 # Changelog
 
+## Python Icechunk Library 1.0.2
+
+### Performance
+
+- Significantly improved write performance in low-latency object stores,
+  for single-threaded concurrent tasks.
+
+### Fixes
+
+- Fix issue where some GCS and Azure credentials could not be pickled
+
 ## Python Icechunk Library 1.0.1
 
 ### Features
