@@ -1789,6 +1789,7 @@ dependencies = [
  "miette",
  "pyo3",
  "pyo3-async-runtimes",
+ "pyo3-bytes",
  "rand 0.9.2",
  "rmp-serde",
  "serde",
@@ -2539,6 +2540,16 @@ checksum = "99636d423fa2ca130fa5acde3059308006d46f98caac629418e53f7ebb1e9999"
 dependencies = [
  "once_cell",
  "target-lexicon",
+]
+
+[[package]]
+name = "pyo3-bytes"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "781c3168801c4ae94f1e642e6d41b7a1db67b62ab1bf6138e0771f76d29529b3"
+dependencies = [
+ "bytes",
+ "pyo3",
 ]
 
 [[package]]
