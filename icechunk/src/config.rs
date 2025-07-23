@@ -503,7 +503,7 @@ pub enum S3Credentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "gcs_static_credential_type")]
+#[serde(tag = "gcs_static_credential_type", content = "__field0")]
 #[serde(rename_all = "snake_case")]
 pub enum GcsStaticCredentials {
     ServiceAccount(PathBuf),
