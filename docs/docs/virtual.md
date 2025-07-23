@@ -48,6 +48,8 @@ We also need to give the parser a way to access our files. We do this by creatin
 Now that we have the filenames of the data we need, we can create virtual datasets with `VirtualiZarr`. This may take a minute.
 
 ```python
+from obstore.store import S3Store
+
 from virtualizarr import open_virtual_dataset
 from virtualizarr.parsers import HDFParser
 from virtualizarr.registry import ObjectStoreRegistry
