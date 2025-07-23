@@ -542,7 +542,7 @@ pub enum GcsCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "az_static_credential_type")]
+#[serde(tag = "az_static_credential_type", content = "__field0")]
 #[serde(rename_all = "snake_case")]
 pub enum AzureStaticCredentials {
     AccessKey(String),
