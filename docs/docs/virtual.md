@@ -43,15 +43,10 @@ oisst_files = sorted(['s3://'+f for f in oisst_files])
 
 These are netCDF4 files, which are really HDF5 files, so we need to user virtualizarr's `HDFParser`.
 
-We also need to give the parser a way to access our files. We do this by creating a `ObjectStoreRegistry` containing an obstore `S3Store` for that bucket.
-
-Now that we have the filenames of the data we need, we can create virtual datasets with `VirtualiZarr`. This may take a minute.
+We also need to give the parser a way to access our files. We do this by creating an `ObjectStoreRegistry` containing an obstore `S3Store` for that bucket.
 
 ```python
 from obstore.store import S3Store
-
-from virtualizarr import open_virtual_dataset
-from virtualizarr.parsers import HDFParser
 from virtualizarr.registry import ObjectStoreRegistry
 
 bucket = "noaa-cdr-sea-surface-temp-optimum-interpolation-pds/"
@@ -61,6 +56,13 @@ store = S3Store(
     skip_signature=True
 )
 registry = ObjectStoreRegistry({f"s3://{bucket}": store})
+```
+
+Now that we have the filenames of the data we need, and a way to access them, we can create virtual datasets with `VirtualiZarr`. This may take a minute.
+
+```python
+from virtualizarr import open_virtual_dataset
+from virtualizarr.parsers import HDFParser
 
 virtual_datasets =[
     open_virtual_dataset(url, registry=registry, parser=HDFParser())
