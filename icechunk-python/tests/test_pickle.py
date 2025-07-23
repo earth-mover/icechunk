@@ -2,6 +2,7 @@ import pickle
 import time
 from pathlib import Path
 
+from icechunk.credentials import gcs_static_credentials
 import pytest
 
 import zarr
@@ -117,3 +118,14 @@ def test_pickle_error() -> None:
     pickled = pickle.dumps(error)
     roundtripped = pickle.loads(pickled)
     assert error.message == roundtripped.message
+
+
+def test_pickle_gcs_static_credentials() -> None:
+    from icechunk.credentials import gcs_static_credentials
+
+    credentials = gcs_static_credentials(
+        service_account_file="/home/user/service_account.json",
+    )
+    pickled = pickle.dumps(credentials)
+    # There are no accessors on the credentials, we just need to know if pickle throws
+    _roundtripped = pickle.loads(pickled)
