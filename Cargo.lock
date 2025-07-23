@@ -1714,7 +1714,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "assert_fs",
@@ -1776,7 +1776,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk-python"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "async-stream",
  "async-trait",
