@@ -725,7 +725,7 @@ impl Session {
             }
             Some(ChunkPayload::Inline(bytes)) => {
                 let byte_range =
-                    construct_valid_byte_range(&byte_range, 0, bytes.len() as u64);
+                    construct_valid_byte_range(byte_range, 0, bytes.len() as u64);
                 trace!("fetching inline chunk for range {:?}.", &byte_range);
                 Ok(Some(
                     ready(Ok(
