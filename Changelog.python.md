@@ -1,5 +1,43 @@
 # Changelog
 
+## Python Icechunk Library 1.0.3
+
+### Fixes
+
+- Bad byte range addressing for inlined chunks in sharded arrays.
+
+## Python Icechunk Library 1.0.2
+
+### Performance
+
+- Significantly improved write performance in low-latency object stores,
+  for single-threaded concurrent tasks.
+
+### Fixes
+
+- Fix issue where some GCS and Azure credentials could not be pickled
+
+## Python Icechunk Library 1.0.1
+
+### Features
+
+- Garbage collection can now be executed in dry run mode with
+  `Repository.garbage_collection(..., dry_run=True)`.
+- Support for Ceph Object Gateway.
+- Better request retries for GCS object store.
+
+### Fixes
+
+- Better error message when local clock has drifted too far.
+- Various documentation improvements and fixes.
+
+### Performance
+
+- Significant improvements to performance of `Repository.garbage_collection` and
+  `Repository.total_chunks_storage`. Both methods now accept optional arguments for
+  parallelization. Performance has improved 30x for some real world datasets
+  with many manifests.
+
 ## Python Icechunk Library 1.0.0
 
 Icechunk 1.0 is here! This version represents our commitment to stability, performance, and reliability.

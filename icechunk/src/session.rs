@@ -724,7 +724,15 @@ impl Session {
                 ))
             }
             Some(ChunkPayload::Inline(bytes)) => {
-                Ok(Some(ready(Ok(byte_range.slice(bytes))).boxed()))
+                let byte_range =
+                    construct_valid_byte_range(byte_range, 0, bytes.len() as u64);
+                trace!("fetching inline chunk for range {:?}.", &byte_range);
+                Ok(Some(
+                    ready(Ok(
+                        bytes.slice(byte_range.start as usize..byte_range.end as usize)
+                    ))
+                    .boxed(),
+                ))
             }
             Some(ChunkPayload::Virtual(VirtualChunkRef {
                 location,
@@ -1439,6 +1447,7 @@ async fn new_materialized_chunk(
 }
 
 fn new_inline_chunk(data: Bytes) -> ChunkPayload {
+    trace!("Setting inline chunk of size {}", data.len());
     ChunkPayload::Inline(data)
 }
 

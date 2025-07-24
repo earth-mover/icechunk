@@ -1,21 +1,31 @@
-use std::{collections::HashSet, future::ready, sync::Arc};
+use std::{
+    collections::HashSet,
+    future::ready,
+    num::{NonZeroU16, NonZeroUsize},
+    sync::{Arc, Mutex},
+};
 
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt, stream};
-use tokio::pin;
+use futures::{Stream, StreamExt, TryStream, TryStreamExt, stream};
+use tokio::{
+    pin,
+    task::{self},
+};
 use tracing::instrument;
 
 use crate::{
     Storage, StorageError,
     asset_manager::AssetManager,
     format::{
-        ChunkId, IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, SnapshotId,
-        manifest::ChunkPayload,
+        ChunkId, FileTypeTag, IcechunkFormatError, ManifestId, ObjectId, SnapshotId,
+        manifest::{ChunkPayload, Manifest},
+        snapshot::{ManifestFileInfo, Snapshot},
     },
     ops::pointed_snapshots,
     refs::{Ref, RefError, delete_branch, delete_tag, list_refs},
-    repository::{RepositoryError, RepositoryErrorKind},
+    repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, DeleteObjectsResult, ListInfo},
+    stream_utils::{StreamLimiter, try_unique_stream},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -32,9 +42,16 @@ pub struct GCConfig {
     dangling_attributes: Action,
     dangling_transaction_logs: Action,
     dangling_snapshots: Action,
+
+    max_snapshots_in_memory: NonZeroU16,
+    max_compressed_manifest_mem_bytes: NonZeroUsize,
+    max_concurrent_manifest_fetches: NonZeroU16,
+
+    dry_run: bool,
 }
 
 impl GCConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         extra_roots: HashSet<SnapshotId>,
         dangling_chunks: Action,
@@ -42,6 +59,10 @@ impl GCConfig {
         dangling_attributes: Action,
         dangling_transaction_logs: Action,
         dangling_snapshots: Action,
+        max_snapshots_in_memory: NonZeroU16,
+        max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_concurrent_manifest_fetches: NonZeroU16,
+        dry_run: bool,
     ) -> Self {
         GCConfig {
             extra_roots,
@@ -50,12 +71,20 @@ impl GCConfig {
             dangling_attributes,
             dangling_transaction_logs,
             dangling_snapshots,
+            max_snapshots_in_memory,
+            max_compressed_manifest_mem_bytes,
+            max_concurrent_manifest_fetches,
+            dry_run,
         }
     }
     pub fn clean_all(
         chunks_age: DateTime<Utc>,
         metadata_age: DateTime<Utc>,
         extra_roots: Option<HashSet<SnapshotId>>,
+        max_snapshots_in_memory: NonZeroU16,
+        max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_concurrent_manifest_fetches: NonZeroU16,
+        dry_run: bool,
     ) -> Self {
         use Action::DeleteIfCreatedBefore as D;
         Self::new(
@@ -65,6 +94,10 @@ impl GCConfig {
             D(metadata_age),
             D(metadata_age),
             D(metadata_age),
+            max_snapshots_in_memory,
+            max_compressed_manifest_mem_bytes,
+            max_concurrent_manifest_fetches,
+            dry_run,
         )
     }
 
@@ -153,7 +186,144 @@ pub enum GCError {
 
 pub type GCResult<A> = Result<A, GCError>;
 
-#[instrument(skip(asset_manager, storage))]
+async fn snapshot_retained(
+    keep_snapshots: Arc<Mutex<HashSet<SnapshotId>>>,
+    snap: Arc<Snapshot>,
+) -> RepositoryResult<impl TryStream<Ok = ManifestFileInfo, Error = RepositoryError>> {
+    // TODO: this could be slightly optimized by not collecting all manifest info records into a vec
+    // but we don't expect too many, and they are small anyway
+    keep_snapshots
+        .lock()
+        .map_err(|_| {
+            RepositoryError::from(RepositoryErrorKind::Other(
+                "can't lock retained snapshots mutex".to_string(),
+            ))
+        })?
+        .insert(snap.id());
+    Ok(stream::iter(
+        snap.manifest_files().map(Ok::<_, RepositoryError>).collect::<Vec<_>>(),
+    ))
+}
+
+async fn manifest_retained(
+    keep_manifests: Arc<Mutex<HashSet<ManifestId>>>,
+    asset_manager: Arc<AssetManager>,
+    minfo: ManifestFileInfo,
+) -> RepositoryResult<(Arc<Manifest>, ManifestFileInfo)> {
+    keep_manifests
+        .lock()
+        .map_err(|_| {
+            RepositoryError::from(RepositoryErrorKind::Other(
+                "can't lock retained manifests mutex".to_string(),
+            ))
+        })?
+        .insert(minfo.id.clone());
+    let manifest = asset_manager.fetch_manifest(&minfo.id, minfo.size_bytes).await?;
+    Ok((manifest, minfo))
+}
+
+async fn chunks_retained(
+    keep_chunks: Arc<Mutex<HashSet<ChunkId>>>,
+    manifest: Arc<Manifest>,
+    minfo: ManifestFileInfo,
+) -> RepositoryResult<ManifestFileInfo> {
+    task::spawn_blocking(move || {
+        let chunk_ids = manifest.chunk_payloads().filter_map(|payload| match payload {
+            Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
+            Ok(_) => None,
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    "Error in chunk payload iterator"
+                );
+                None
+            }
+        });
+        keep_chunks
+            .lock()
+            .map_err(|_| {
+                RepositoryError::from(RepositoryErrorKind::Other(
+                    "can't lock retained chunks mutex".to_string(),
+                ))
+            })?
+            .extend(chunk_ids);
+        Ok::<_, RepositoryError>(())
+    })
+    .await??;
+    Ok(minfo)
+}
+
+#[instrument(skip_all)]
+async fn find_retained(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    asset_manager: Arc<AssetManager>,
+    config: &GCConfig,
+) -> GCResult<(HashSet<ChunkId>, HashSet<ManifestId>, HashSet<SnapshotId>)> {
+    let all_snaps = pointed_snapshots(
+        storage,
+        storage_settings,
+        Arc::clone(&asset_manager),
+        &config.extra_roots,
+    )
+    .await?;
+
+    let keep_chunks = Arc::new(Mutex::new(HashSet::new()));
+    let keep_manifests = Arc::new(Mutex::new(HashSet::new()));
+    let keep_snapshots = Arc::new(Mutex::new(HashSet::new()));
+
+    let all_manifest_infos = all_snaps
+        .map(ready)
+        .buffer_unordered(config.max_snapshots_in_memory.get() as usize)
+        .and_then(|snap| snapshot_retained(Arc::clone(&keep_snapshots), snap))
+        .try_flatten();
+
+    let manifest_infos = try_unique_stream(|mi| mi.id.clone(), all_manifest_infos);
+
+    // we want to fetch many manifests in parallel, but not more than memory allows
+    // for this we use the StreamLimiter using the manifest size in bytes for usage
+    let limiter = &Arc::new(StreamLimiter::new(
+        "garbage_collect".to_string(),
+        config.max_compressed_manifest_mem_bytes.get(),
+    ));
+
+    let keep_chunks_ref = &keep_chunks;
+    let compute_stream = limiter
+        .limit_stream(manifest_infos, |minfo| minfo.size_bytes as usize)
+        .map_ok(|m| {
+            manifest_retained(Arc::clone(&keep_manifests), Arc::clone(&asset_manager), m)
+        })
+        // Now we can buffer a bunch of fetch_manifest operations. Because we are using
+        // StreamLimiter we know memory is not going to blow up
+        .try_buffer_unordered(config.max_concurrent_manifest_fetches.get() as usize)
+        .and_then(move |(manifest, minfo)| {
+            chunks_retained(Arc::clone(keep_chunks_ref), manifest, minfo)
+        });
+
+    limiter
+        .unlimit_stream(compute_stream, |minfo| minfo.size_bytes as usize)
+        .try_for_each(|_| ready(Ok(())))
+        .await?;
+
+    debug_assert_eq!(limiter.current_usage(), 0);
+
+    #[allow(clippy::expect_used)]
+    Ok((
+        Arc::try_unwrap(keep_chunks)
+            .expect("Logic error: multiple owners to retained chunks")
+            .into_inner()
+            .expect("Logic error: multiple owners to retained chunks"),
+        Arc::try_unwrap(keep_manifests)
+            .expect("Logic error: multiple owners to retained manifests")
+            .into_inner()
+            .expect("Logic error: multiple owners to retained manifests"),
+        Arc::try_unwrap(keep_snapshots)
+            .expect("Logic error: multiple owners to retained chunks")
+            .into_inner()
+            .expect("Logic error: multiple owners to retained chunks"),
+    ))
+}
+
 pub async fn garbage_collect(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -174,73 +344,24 @@ pub async fn garbage_collect(
     }
 
     tracing::info!("Finding GC roots");
-    let all_snaps = pointed_snapshots(
-        storage,
-        storage_settings,
-        Arc::clone(&asset_manager),
-        &config.extra_roots,
-    )
-    .await?;
+    let (keep_chunks, keep_manifests, keep_snapshots) =
+        find_retained(storage, storage_settings, Arc::clone(&asset_manager), config)
+            .await?;
 
-    let mut keep_chunks = HashSet::new();
-    let mut keep_manifests = HashSet::new();
-    let mut keep_snapshots = HashSet::new();
-
-    tracing::info!("Calculating retained objects");
-    pin!(all_snaps);
-    while let Some(snap) = all_snaps.try_next().await? {
-        let snap_id = snap.id();
-        if config.deletes_snapshots() && keep_snapshots.insert(snap_id.clone()) {
-            tracing::trace!("Adding snapshot to keep list: {}", &snap_id);
-        }
-
-        if config.deletes_manifests() {
-            let manifests = snap.manifest_files().map(|mf| mf.id);
-            for mf in manifests {
-                if keep_manifests.insert(mf.clone()) {
-                    tracing::trace!("Adding manifest to keep list: {}", &mf);
-                }
-            }
-        }
-
-        if config.deletes_chunks() {
-            for manifest_id in snap.manifest_files().map(|mf| mf.id) {
-                let manifest_info =
-                    snap.manifest_info(&manifest_id).ok_or_else(|| {
-                        IcechunkFormatError::from(
-                            IcechunkFormatErrorKind::ManifestInfoNotFound {
-                                manifest_id: manifest_id.clone(),
-                            },
-                        )
-                    })?;
-                let manifest = asset_manager
-                    .fetch_manifest(&manifest_id, manifest_info.size_bytes)
-                    .await?;
-                let chunk_ids =
-                    manifest.chunk_payloads().filter_map(|payload| match payload {
-                        Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
-                        Ok(_) => None,
-                        Err(err) => {
-                            tracing::error!(
-                                error = %err,
-                                "Error in chunk payload iterator"
-                            );
-                            None
-                        }
-                    });
-                for chunk in chunk_ids {
-                    if keep_chunks.insert(chunk.clone()) {
-                        tracing::trace!("Adding chunk to keep list: {}", &chunk);
-                    }
-                }
-            }
-        }
-    }
+    tracing::info!(
+        snapshots = keep_snapshots.len(),
+        manifests = keep_manifests.len(),
+        chunks = keep_chunks.len(),
+        "Retained objects collected"
+    );
 
     let mut summary = GCSummary::default();
 
     tracing::info!("Starting deletes");
 
+    // TODO: this could use more parallelization.
+    // The trivial approach of parallelizing the deletes of the different types of objects doesn't
+    // work: we want to dolete snapshots before deleting chunks, etc
     if config.deletes_snapshots() {
         let res = gc_snapshots(
             asset_manager.as_ref(),
@@ -287,6 +408,18 @@ pub async fn garbage_collect(
     Ok(summary)
 }
 
+async fn fake_delete_result<const SIZE: usize, T: FileTypeTag>(
+    to_delete: impl Stream<Item = (ObjectId<SIZE, T>, u64)>,
+) -> DeleteObjectsResult {
+    to_delete
+        .fold(DeleteObjectsResult::default(), |mut res, (_, size)| {
+            res.deleted_objects += 1;
+            res.deleted_bytes += size;
+            ready(res)
+        })
+        .await
+}
+
 #[instrument(skip(storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_chunks(
     storage: &(dyn Storage + Send + Sync),
@@ -294,6 +427,7 @@ async fn gc_chunks(
     config: &GCConfig,
     keep_ids: &HashSet<ChunkId>,
 ) -> GCResult<DeleteObjectsResult> {
+    tracing::info!("Deleting chunks");
     let to_delete = storage
         .list_chunks(storage_settings)
         .await?
@@ -308,7 +442,11 @@ async fn gc_chunks(
             }))
         })
         .boxed();
-    Ok(storage.delete_chunks(storage_settings, to_delete).await?)
+    if config.dry_run {
+        Ok(fake_delete_result(to_delete).await)
+    } else {
+        Ok(storage.delete_chunks(storage_settings, to_delete).await?)
+    }
 }
 
 #[instrument(skip(asset_manager, storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
@@ -319,6 +457,7 @@ async fn gc_manifests(
     config: &GCConfig,
     keep_ids: &HashSet<ManifestId>,
 ) -> GCResult<DeleteObjectsResult> {
+    tracing::info!("Deleting manifests");
     let to_delete = storage
         .list_manifests(storage_settings)
         .await?
@@ -336,7 +475,11 @@ async fn gc_manifests(
             }))
         })
         .boxed();
-    Ok(storage.delete_manifests(storage_settings, to_delete).await?)
+    if config.dry_run {
+        Ok(fake_delete_result(to_delete).await)
+    } else {
+        Ok(storage.delete_manifests(storage_settings, to_delete).await?)
+    }
 }
 
 #[instrument(skip(asset_manager, storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
@@ -347,6 +490,7 @@ async fn gc_snapshots(
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
 ) -> GCResult<DeleteObjectsResult> {
+    tracing::info!("Deleting snapshots");
     let to_delete = storage
         .list_snapshots(storage_settings)
         .await?
@@ -364,7 +508,11 @@ async fn gc_snapshots(
             }))
         })
         .boxed();
-    Ok(storage.delete_snapshots(storage_settings, to_delete).await?)
+    if config.dry_run {
+        Ok(fake_delete_result(to_delete).await)
+    } else {
+        Ok(storage.delete_snapshots(storage_settings, to_delete).await?)
+    }
 }
 
 #[instrument(skip(asset_manager, storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
@@ -375,6 +523,7 @@ async fn gc_transaction_logs(
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
 ) -> GCResult<DeleteObjectsResult> {
+    tracing::info!("Deleting transaction logs");
     let to_delete = storage
         .list_transaction_logs(storage_settings)
         .await?
@@ -390,7 +539,11 @@ async fn gc_transaction_logs(
             }))
         })
         .boxed();
-    Ok(storage.delete_transaction_logs(storage_settings, to_delete).await?)
+    if config.dry_run {
+        Ok(fake_delete_result(to_delete).await)
+    } else {
+        Ok(storage.delete_transaction_logs(storage_settings, to_delete).await?)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

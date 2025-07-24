@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 
+import icechunk as ic
 import zarr
 from tests.conftest import parse_repo
 from zarr.core.buffer import cpu, default_buffer_prototype
@@ -122,3 +123,22 @@ async def test_transaction_failed_no_commit() -> None:
         pass
     cid2 = repo.lookup_branch("main")
     assert cid1 == cid2, "Transaction committed changes despite error"
+
+
+def test_shards():
+    # regression test for GH1019
+    storage = ic.in_memory_storage()
+    repo = ic.Repository.create(storage=storage)
+    session = repo.writable_session("main")
+    N = 11
+    zarr.config.set({"async.concurrency": 1})
+    data = np.linspace(35, 70, N)
+    foo = zarr.create_array(
+        name="foo",
+        store=session.store,
+        chunks=(2,),
+        shards=(10,),
+        data=data,
+        fill_value=-1,
+    )
+    np.testing.assert_array_equal(foo[:], data)

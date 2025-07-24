@@ -503,7 +503,8 @@ pub enum S3Credentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "gcs_static_credential_type")]
+// We need to adjacently tag because we more than one variant with matching inner types https://github.com/serde-rs/serde/issues/1307
+#[serde(tag = "gcs_static_credential_type", content = "__field0")]
 #[serde(rename_all = "snake_case")]
 pub enum GcsStaticCredentials {
     ServiceAccount(PathBuf),
@@ -542,7 +543,8 @@ pub enum GcsCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "az_static_credential_type")]
+// We need to adjacently tag because we more than one variant with matching inner types https://github.com/serde-rs/serde/issues/1307
+#[serde(tag = "az_static_credential_type", content = "__field0")]
 #[serde(rename_all = "snake_case")]
 pub enum AzureStaticCredentials {
     AccessKey(String),
