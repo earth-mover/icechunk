@@ -131,6 +131,7 @@ def test_shards():
     repo = ic.Repository.create(storage=storage)
     session = repo.writable_session("main")
     N = 11
+    zarr.config.set({"async.concurrency": 1})
     data = np.linspace(35, 70, N)
     foo = zarr.create_array(
         name="foo",
