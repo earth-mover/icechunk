@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library 1.0.3
+
+### Fixes
+
+- Bad byte range addressing for inlined chunks in sharded arrays.
+
 ## Python Icechunk Library 1.0.2
 
 ### Performance
