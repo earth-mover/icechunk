@@ -1,4 +1,5 @@
 import datetime
+import warnings
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from typing import Any, Self, cast
@@ -583,7 +584,7 @@ class Repository:
         return Session(self._repository.writable_session(branch))
 
     @contextmanager
-    def transaction(
+    def zarr_transaction(
         self,
         branch: str,
         *,
@@ -625,6 +626,57 @@ class Repository:
             rebase_with=rebase_with,
             rebase_tries=rebase_tries,
         )
+
+    @contextmanager
+    def transaction(
+        self,
+        branch: str,
+        *,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        rebase_with: ConflictSolver | None = None,
+        rebase_tries: int = 1_000,
+    ) -> Iterator[IcechunkStore]:
+        """
+        Create a transaction on a branch.
+
+        This is a context manager that creates a writable session on the specified branch.
+        When the context is exited, the session will be committed to the branch
+        using the specified message.
+
+        Parameters
+        ----------
+        branch : str
+            The branch to create the transaction on.
+        message : str
+            The commit message to use when committing the session.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+        rebase_with : ConflictSolver | None, optional
+            If other session committed while the current session was writing, use Session.rebase with this solver.
+        rebase_tries : int, optional
+            If other session committed while the current session was writing, use Session.rebase up to this many times in a loop.
+
+        Yields
+        -------
+        store : IcechunkStore
+            A Zarr Store which can be used to interact with the data in the repository.
+        """
+        warnings.warn(
+            "Repository.transaction will return a writable session instead of a Zarr store "
+            "in the next Icechunk release. "
+            "Please use Repository.zarr_transaction instead. ",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        with self.zarr_transaction(
+            branch=branch,
+            message=message,
+            metadata=metadata,
+            rebase_with=rebase_with,
+            rebase_tries=rebase_tries,
+        ) as store:
+            yield store
 
     def expire_snapshots(
         self,
