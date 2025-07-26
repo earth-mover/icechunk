@@ -1674,6 +1674,37 @@ impl PyRepository {
             Ok(result)
         })
     }
+
+    fn total_chunks_storage_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        max_snapshots_in_memory: NonZeroU16,
+        max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_concurrent_manifest_fetches: NonZeroU16,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, u64>(py, async move {
+            let (storage, storage_settings, asset_manager) = {
+                let lock = repository.read().await;
+                (
+                    Arc::clone(lock.storage()),
+                    lock.storage_settings().clone(),
+                    Arc::clone(lock.asset_manager()),
+                )
+            };
+            let result = repo_chunks_storage(
+                storage.as_ref(),
+                &storage_settings,
+                asset_manager,
+                max_snapshots_in_memory,
+                max_compressed_manifest_mem_bytes,
+                max_concurrent_manifest_fetches,
+            )
+            .await
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(result)
+        })
+    }
 }
 
 fn map_credentials(
