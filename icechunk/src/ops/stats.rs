@@ -1,16 +1,17 @@
-use futures::{TryStreamExt, future::ready, stream};
+use futures::{StreamExt, TryStream, TryStreamExt, future::ready, stream};
 use std::{
     collections::HashSet,
     num::{NonZeroU16, NonZeroUsize},
     sync::{Arc, Mutex},
 };
+use tokio::task;
 use tracing::trace;
 
 use crate::{
     Storage,
     asset_manager::AssetManager,
     format::{
-        ChunkId,
+        ChunkId, SnapshotId,
         manifest::{ChunkPayload, Manifest},
         snapshot::ManifestFileInfo,
     },
@@ -55,24 +56,19 @@ fn calculate_manifest_storage(
     Ok(size)
 }
 
-/// Compute the total size in bytes of all committed repo chunks.
-/// It doesn't include inline or virtual chunks.
-pub async fn repo_chunks_storage(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+async fn unique_manifest_infos<'a>(
+    storage: &'a (dyn Storage + Send + Sync),
+    storage_settings: &'a storage::Settings,
     asset_manager: Arc<AssetManager>,
-    max_manifest_mem_bytes: NonZeroUsize,
-    max_concurrent_manifest_fetches: NonZeroU16,
-) -> RepositoryResult<u64> {
-    let extra_roots = Default::default();
-    let all_snaps = pointed_snapshots(
-        storage,
-        storage_settings,
-        Arc::clone(&asset_manager),
-        &extra_roots,
-    )
-    .await?;
-
+    extra_roots: &'a HashSet<SnapshotId>,
+    max_snapshots_in_memory: NonZeroU16,
+) -> RepositoryResult<impl TryStream<Ok = ManifestFileInfo, Error = RepositoryError> + 'a>
+{
+    let all_snaps =
+        pointed_snapshots(storage, storage_settings, asset_manager, extra_roots)
+            .await?
+            .map(ready)
+            .buffer_unordered(max_snapshots_in_memory.get() as usize);
     let all_manifest_infos = all_snaps
         // this could be slightly optimized by not collecting all manifest info records into a vec
         // but we don't expect too many, and they are small anyway
@@ -82,26 +78,45 @@ pub async fn repo_chunks_storage(
             )
         })
         .try_flatten();
+    let res = try_unique_stream(|mi| mi.id.clone(), all_manifest_infos);
+    Ok(res)
+}
 
-    // we don't want to check manifests more than once, so we unique them by their id
-    let unique_manifest_infos = try_unique_stream(|mi| mi.id.clone(), all_manifest_infos);
+/// Compute the total size in bytes of all committed repo chunks.
+/// It doesn't include inline or virtual chunks.
+pub async fn repo_chunks_storage(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    asset_manager: Arc<AssetManager>,
+    max_snapshots_in_memory: NonZeroU16,
+    max_compressed_manifest_mem_bytes: NonZeroUsize,
+    max_concurrent_manifest_fetches: NonZeroU16,
+) -> RepositoryResult<u64> {
+    let extra_roots = Default::default();
+    let manifest_infos = unique_manifest_infos(
+        storage,
+        storage_settings,
+        asset_manager.clone(),
+        &extra_roots,
+        max_snapshots_in_memory,
+    )
+    .await?;
 
     // we want to fetch many manifests in parallel, but not more than memory allows
     // for this we use the StreamLimiter using the manifest size in bytes for usage
     let limiter = &Arc::new(StreamLimiter::new(
         "repo_chunks_storage".to_string(),
-        max_manifest_mem_bytes.get(),
-        |m: &ManifestFileInfo| m.size_bytes as usize,
+        max_compressed_manifest_mem_bytes.get(),
     ));
 
-    // The StreamLimiter works by calling limit on every element before they are processed
-    let rate_limited_manifests = unique_manifest_infos
-        .and_then(|m| async move { Ok(limiter.clone().limit(m).await) });
+    // We rate limit the stream of manifests to make sure we don't blow up memory
+    let rate_limited_manifests =
+        limiter.limit_stream(manifest_infos, |minfo| minfo.size_bytes as usize);
 
     let seen_chunks = &Arc::new(Mutex::new(HashSet::new()));
     let asset_manager = &asset_manager;
 
-    let (_, res) = rate_limited_manifests
+    let compute_stream = rate_limited_manifests
         .map_ok(|m| async move {
             let manifest =
                 Arc::clone(asset_manager).fetch_manifest(&m.id, m.size_bytes).await?;
@@ -110,26 +125,23 @@ pub async fn repo_chunks_storage(
         // Now we can buffer a bunch of fetch_manifest operations. Because we are using
         // StreamLimiter we know memory is not going to blow up
         .try_buffer_unordered(max_concurrent_manifest_fetches.get() as usize)
-        .map_ok(|(manifest, minfo)| async move {
-            let size = calculate_manifest_storage(manifest, Arc::clone(seen_chunks))?;
+        .and_then(|(manifest, minfo)| async move {
+            let seen_chunks = Arc::clone(seen_chunks);
+            let size = task::spawn_blocking(|| {
+                calculate_manifest_storage(manifest, seen_chunks)
+            })
+            .await??;
             Ok((size, minfo))
-        })
-        // We do some more buffering to get some concurrency on the processing of the manifest file
-        // TODO: this should actually happen in a CPU bounded worker pool
-        .try_buffer_unordered(4)
-        // Now StreamLimiter requires us to call free, this will make room for more manifests to be
-        // fetched into the previous buffer
-        .and_then(|(size, minfo)| async move {
-            limiter.clone().free(minfo).await;
-            Ok(size)
-        })
-        .try_fold((0u64, 0), |(processed, total_size), partial| {
+        });
+    let (_, res) = limiter
+        .unlimit_stream(compute_stream, |(_, minfo)| minfo.size_bytes as usize)
+        .try_fold((0u64, 0), |(processed, total_size), (partial, _)| {
             //info!("Processed {processed} manifests");
             ready(Ok((processed + 1, total_size + partial)))
         })
         .await?;
 
-    debug_assert_eq!(limiter.current_usage().await, (0, 0));
+    debug_assert_eq!(limiter.current_usage(), 0);
 
     Ok(res)
 }

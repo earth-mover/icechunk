@@ -1,8 +1,4 @@
-use std::{
-    collections::BTreeSet,
-    future::{Future, ready},
-    pin::Pin,
-};
+use std::{collections::BTreeSet, future::ready};
 
 use async_recursion::async_recursion;
 use bytes::Bytes;
@@ -342,7 +338,7 @@ pub async fn fetch_tag(
     let ref_path = tag_key(name)?;
     let delete_marker_path = tag_delete_marker_key(name)?;
 
-    let fut1: Pin<Box<dyn Future<Output = RefResult<Bytes>> + Send>> = async move {
+    let fut1 = async move {
         match storage.get_ref(storage_settings, ref_path.as_str()).await {
             Ok(GetRefResult::Found { bytes, .. }) => Ok(bytes),
             Ok(GetRefResult::NotFound) => {

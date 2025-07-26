@@ -398,7 +398,10 @@ impl S3Storage {
         let completed_parts = results
             .map_ok(|(idx, res)| {
                 let etag = res.e_tag().unwrap_or("");
-                CompletedPart::builder().e_tag(etag).part_number(idx).build()
+                CompletedPart::builder()
+                    .e_tag(strip_quotes(etag))
+                    .part_number(idx)
+                    .build()
             })
             .try_collect::<Vec<_>>()
             .await
@@ -549,7 +552,7 @@ impl Storage for S3Storage {
             settings.unsafe_use_conditional_update(),
         ) {
             (None, true, _) => req = req.if_none_match("*"),
-            (Some(etag), _, true) => req = req.if_match(etag),
+            (Some(etag), _, true) => req = req.if_match(strip_quotes(etag)),
             (_, _, _) => {}
         }
 
@@ -817,7 +820,7 @@ impl Storage for S3Storage {
                 builder = builder.if_none_match("*");
             }
             (Some(etag), _, true) => {
-                builder = builder.if_match(etag);
+                builder = builder.if_match(strip_quotes(etag));
             }
             (_, _, _) => {}
         }
@@ -1034,6 +1037,10 @@ async fn get_object_range(
 ) -> StorageResult<impl AsyncRead + use<>> {
     let b = client.get_object().bucket(bucket).key(key).range(range_to_header(range));
     Ok(b.send().await.map_err(Box::new)?.body.into_async_read())
+}
+
+fn strip_quotes(s: &str) -> &str {
+    s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
 use std::{borrow::Cow, sync::Arc};
 
-use bytes::Bytes;
 use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
@@ -18,6 +17,7 @@ use pyo3::{
     prelude::*,
     types::{PyTuple, PyType},
 };
+use pyo3_bytes::PyBytes;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -105,11 +105,11 @@ impl PyStore {
     fn from_bytes(
         _cls: Bound<'_, PyType>,
         py: Python<'_>,
-        bytes: Vec<u8>,
+        bytes: PyBytes,
     ) -> PyResult<Self> {
         // This is a compute intensive task, we need to release the Gil
         py.allow_threads(move || {
-            let bytes = Bytes::from(bytes);
+            let bytes = bytes.into_inner();
             let store = Store::from_bytes(bytes).map_err(|e| {
                 PyValueError::new_err(format!(
                     "Failed to deserialize store from bytes: {e}"
@@ -199,7 +199,7 @@ impl PyStore {
             // We need to distinguish the "safe" case of trying to fetch an uninitialized key
             // from other types of errors, we use PyKeyError exception for that
             match data {
-                Ok(data) => Ok(Vec::from(data)),
+                Ok(data) => Ok(PyBytes::new(data)),
                 Err(StoreError { kind: StoreErrorKind::NotFound(_), .. }) => {
                     Err(PyKeyError::new_err(key))
                 }
@@ -267,7 +267,7 @@ impl PyStore {
         &'py self,
         py: Python<'py>,
         key: String,
-        value: Vec<u8>,
+        value: PyBytes,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.0);
 
@@ -279,7 +279,7 @@ impl PyStore {
         // see this tracking issue: https://github.com/PyO3/pyo3/issues/1632
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             store
-                .set(&key, Bytes::from(value))
+                .set(&key, value.into_inner())
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
             Ok(())
@@ -290,13 +290,13 @@ impl PyStore {
         &'py self,
         py: Python<'py>,
         key: String,
-        value: Vec<u8>,
+        value: PyBytes,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.0);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             store
-                .set_if_not_exists(&key, Bytes::from(value))
+                .set_if_not_exists(&key, value.into_inner())
                 .await
                 .map_err(PyIcechunkStoreError::from)?;
             Ok(())
@@ -424,7 +424,7 @@ impl PyStore {
     fn set_partial_values<'py>(
         &'py self,
         py: Python<'py>,
-        key_start_values: Vec<(String, ChunkOffset, Vec<u8>)>,
+        key_start_values: Vec<(String, ChunkOffset, PyBytes)>,
     ) -> PyResult<Bound<'py, PyAny>> {
         // We need to get our own copy of the keys to pass to the downstream store function because that
         // function requires a Vec<&str, which we cannot borrow from when we are borrowing from the tuple
@@ -445,7 +445,7 @@ impl PyStore {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mapped_to_bytes = key_start_values.into_iter().enumerate().map(
                 |(i, (_key, offset, value))| {
-                    (keys[i].as_str(), offset, Bytes::from(value))
+                    (keys[i].as_str(), offset, value.into_inner())
                 },
             );
 

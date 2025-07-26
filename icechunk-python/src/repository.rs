@@ -1558,6 +1558,10 @@ impl PyRepository {
         &self,
         py: Python<'_>,
         delete_object_older_than: DateTime<Utc>,
+        dry_run: bool,
+        max_snapshots_in_memory: NonZeroU16,
+        max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<PyGCSummary> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
@@ -1567,6 +1571,10 @@ impl PyRepository {
                         delete_object_older_than,
                         delete_object_older_than,
                         Default::default(),
+                        max_snapshots_in_memory,
+                        max_compressed_manifest_mem_bytes,
+                        max_concurrent_manifest_fetches,
+                        dry_run,
                     );
                     let (storage, storage_settings, asset_manager) = {
                         let lock = self.0.read().await;
@@ -1626,8 +1634,9 @@ impl PyRepository {
     pub fn total_chunks_storage(
         &self,
         py: Python<'_>,
-        max_manifest_mem_bytes: Option<NonZeroUsize>,
-        max_concurrent_manifest_fetches: Option<NonZeroU16>,
+        max_snapshots_in_memory: NonZeroU16,
+        max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<u64> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
@@ -1645,13 +1654,9 @@ impl PyRepository {
                         storage.as_ref(),
                         &storage_settings,
                         asset_manager,
-                        max_manifest_mem_bytes.unwrap_or(
-                            NonZeroUsize::try_from(512 * 1020 * 1024)
-                                .unwrap_or(NonZeroUsize::MIN),
-                        ),
-                        max_concurrent_manifest_fetches.unwrap_or(
-                            NonZeroU16::try_from(500).unwrap_or(NonZeroU16::MIN),
-                        ),
+                        max_snapshots_in_memory,
+                        max_compressed_manifest_mem_bytes,
+                        max_concurrent_manifest_fetches,
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
