@@ -39,26 +39,64 @@ Create / activate a virtual environment:
     mamba activate icechunk
     ```
 
+=== "uv"
+
+    ```bash
+    uv sync
+    ```
+
 Install `maturin`:
 
-```bash
-pip install maturin
-```
+=== "Venv"
 
-Build the project in dev mode:
+    ```bash
+    pip install maturin
+    ```
 
-```bash
-maturin develop
+    Build the project in dev mode:
 
-# or with the optional dependencies
-maturin develop --extras=test,benchmark
-```
+    ```bash
+    maturin develop
 
-or build the project in editable mode:
+    # or with the optional dependencies
+    maturin develop --extras=test,benchmark
+    ```
 
-```bash
-pip install -e icechunk@.
-```
+    or build the project in editable mode:
+
+    ```bash
+    pip install -e icechunk@.
+    ```
+
+=== "uv"
+
+    uv manages rebuilding as needed, so it will run the Maturin build when using `uv run`.
+
+    To explicitly use Maturin, install it globally.
+
+    ```bash
+    uv tool install maturin
+    ```
+
+    Maturin may need to know it should work with uv, so add `--uv` to the CLI.
+
+    ```bash
+    maturin develop --uv --extras=test,benchmark
+    ```
+
+
+
+#### Testing
+
+The full Python test suite depends on S3 and Azure compatible object stores.
+
+They can be run from the root of the repo with `docker compose up` (`ctrl-c` then `docker compose down` once done to clean up.).
+
+=== "uv"
+
+    ```bash
+    uv run pytest
+    ```
 
 ### Rust Development Workflow
 

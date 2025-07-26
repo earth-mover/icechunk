@@ -13,3 +13,10 @@
 
 .ipynb_checkpoints
 .vscode
+
+# uv development
+icechunk-python/uv.lock
+
+# pixi environments
+.pixi
+*.egg-info
