@@ -1603,6 +1603,10 @@ impl PyRepository {
         &'py self,
         py: Python<'py>,
         delete_object_older_than: DateTime<Utc>,
+        dry_run: bool,
+        max_snapshots_in_memory: NonZeroU16,
+        max_compressed_manifest_mem_bytes: NonZeroUsize,
+        max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py::<_, PyGCSummary>(py, async move {
@@ -1610,6 +1614,10 @@ impl PyRepository {
                 delete_object_older_than,
                 delete_object_older_than,
                 Default::default(),
+                max_snapshots_in_memory,
+                max_compressed_manifest_mem_bytes,
+                max_concurrent_manifest_fetches,
+                dry_run,
             );
             let (storage, storage_settings, asset_manager) = {
                 let lock = repository.read().await;
