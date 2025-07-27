@@ -1362,27 +1362,27 @@ impl PyRepository {
         })
     }
 
-    // #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None, as_of = None))]
-    // fn readonly_session_async<'py>(
-    //     &'py self,
-    //     py: Python<'py>,
-    //     branch: Option<String>,
-    //     tag: Option<String>,
-    //     snapshot_id: Option<String>,
-    //     as_of: Option<DateTime<Utc>>,
-    // ) -> PyResult<Bound<'py, PyAny>> {
-    //     let version = args_to_version_info(branch, tag, snapshot_id, as_of)?;
-    //     let repository = self.0.clone();
+    #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None, as_of = None))]
+    fn readonly_session_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        branch: Option<String>,
+        tag: Option<String>,
+        snapshot_id: Option<String>,
+        as_of: Option<DateTime<Utc>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let version = args_to_version_info(branch, tag, snapshot_id, as_of)?;
+        let repository = self.0.clone();
 
-    //     pyo3_async_runtimes::tokio::future_into_py::<_, PySession>(py, async move {
-    //         let repository = repository.read().await;
-    //         let session = repository
-    //             .readonly_session(&version)
-    //             .await
-    //             .map_err(PyIcechunkStoreError::RepositoryError)?;
-    //         Ok(PySession(Arc::new(RwLock::new(session))))
-    //     })
-    // }
+        pyo3_async_runtimes::tokio::future_into_py::<_, PySession>(py, async move {
+            let repository = repository.read().await;
+            let session = repository
+                .readonly_session(&version)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(PySession(Arc::new(RwLock::new(session))))
+        })
+    }
 
     pub fn writable_session(&self, py: Python<'_>, branch: &str) -> PyResult<PySession> {
         // This function calls block_on, so we need to allow other thread python to make progress

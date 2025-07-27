@@ -50,6 +50,26 @@ pub enum VersionInfo {
     AsOf { branch: String, at: DateTime<Utc> },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefVersionInfo {
+    SnapshotId(SnapshotId),
+    TagRef(String),
+    BranchTipRef(String),
+}
+
+impl From<&VersionInfo> for Option<RefVersionInfo> {
+    fn from(info: &VersionInfo) -> Self {
+        match info {
+            VersionInfo::SnapshotId(id) => Some(RefVersionInfo::SnapshotId(id.clone())),
+            VersionInfo::TagRef(tag) => Some(RefVersionInfo::TagRef(tag.clone())),
+            VersionInfo::BranchTipRef(branch) => {
+                Some(RefVersionInfo::BranchTipRef(branch.clone()))
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RepositoryErrorKind {
@@ -65,6 +85,8 @@ pub enum RepositoryErrorKind {
     InvalidAsOfSpec { branch: String, at: DateTime<Utc> },
     #[error("invalid snapshot id: `{0}`")]
     InvalidSnapshotId(String),
+    #[error("invalid version info: `{0:?}`")]
+    InvalidVersionInfo(VersionInfo),
     #[error("tag error: `{0}`")]
     Tag(String),
     #[error("repositories can only be created in clean prefixes")]
@@ -639,12 +661,12 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    pub async fn resolve_version(
+    pub async fn resolve_ref_version(
         &self,
-        version: &VersionInfo,
+        version: &RefVersionInfo,
     ) -> RepositoryResult<SnapshotId> {
         match version {
-            VersionInfo::SnapshotId(sid) => {
+            RefVersionInfo::SnapshotId(sid) => {
                 raise_if_invalid_snapshot_id(
                     self.storage.as_ref(),
                     &self.storage_settings,
@@ -653,12 +675,12 @@ impl Repository {
                 .await?;
                 Ok(sid.clone())
             }
-            VersionInfo::TagRef(tag) => {
+            RefVersionInfo::TagRef(tag) => {
                 let ref_data =
                     fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
                 Ok(ref_data.snapshot)
             }
-            VersionInfo::BranchTipRef(branch) => {
+            RefVersionInfo::BranchTipRef(branch) => {
                 let ref_data = fetch_branch_tip(
                     self.storage.as_ref(),
                     &self.storage_settings,
@@ -667,24 +689,35 @@ impl Repository {
                 .await?;
                 Ok(ref_data.snapshot)
             }
-            VersionInfo::AsOf { branch, at } => {
-                let tip = VersionInfo::BranchTipRef(branch.clone());
-                let snap = self
-                    .ancestry(&tip)
-                    .await?
-                    .try_skip_while(|parent| ready(Ok(&parent.flushed_at > at)))
-                    .take(1)
-                    .try_collect::<Vec<_>>()
-                    .await?;
-                match snap.into_iter().next() {
-                    Some(snap) => Ok(snap.id),
-                    None => Err(RepositoryErrorKind::InvalidAsOfSpec {
-                        branch: branch.clone(),
-                        at: *at,
-                    }
-                    .into()),
+        }
+    }
+
+    #[instrument(skip(self))]
+    pub async fn resolve_version(
+        &self,
+        version: &VersionInfo,
+    ) -> RepositoryResult<SnapshotId> {
+        if let Some(version_info) = version.into() {
+            self.resolve_ref_version(&version_info).await
+        } else if let VersionInfo::AsOf { branch, at } = version {
+            let tip = VersionInfo::BranchTipRef(branch.clone());
+            let snap = self
+                .ancestry(&tip)
+                .await?
+                .try_skip_while(|parent| ready(Ok(&parent.flushed_at > at)))
+                .take(1)
+                .try_collect::<Vec<_>>()
+                .await?;
+            match snap.into_iter().next() {
+                Some(snap) => Ok(snap.id),
+                None => Err(RepositoryErrorKind::InvalidAsOfSpec {
+                    branch: branch.clone(),
+                    at: *at,
                 }
+                .into()),
             }
+        } else {
+            Err(RepositoryErrorKind::InvalidVersionInfo(version.clone()).into())
         }
     }
 
