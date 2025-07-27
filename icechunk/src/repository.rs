@@ -489,6 +489,16 @@ impl Repository {
         self.snapshot_ancestry_arc(&snapshot_id).await
     }
 
+    #[instrument(skip(self))]
+    async fn ancestry_ref<'a>(
+        &'a self,
+        version: &RefVersionInfo,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + 'a + use<'a>>
+    {
+        let snapshot_id = self.resolve_ref_version(version).await?;
+        self.snapshot_ancestry(&snapshot_id).await
+    }
+
     /// Create a new branch in the repository at the given snapshot id
     #[instrument(skip(self))]
     pub async fn create_branch(
@@ -700,9 +710,9 @@ impl Repository {
         if let Some(version_info) = version.into() {
             self.resolve_ref_version(&version_info).await
         } else if let VersionInfo::AsOf { branch, at } = version {
-            let tip = VersionInfo::BranchTipRef(branch.clone());
+            let tip = RefVersionInfo::BranchTipRef(branch.clone());
             let snap = self
-                .ancestry(&tip)
+                .ancestry_ref(&tip)
                 .await?
                 .try_skip_while(|parent| ready(Ok(&parent.flushed_at > at)))
                 .take(1)

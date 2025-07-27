@@ -1310,31 +1310,31 @@ impl PyRepository {
         })
     }
 
-    // #[pyo3(signature = (*, from_branch=None, from_tag=None, from_snapshot_id=None, to_branch=None, to_tag=None, to_snapshot_id=None))]
-    // #[allow(clippy::too_many_arguments)]
-    // fn diff_async<'py>(
-    //     &'py self,
-    //     py: Python<'py>,
-    //     from_branch: Option<String>,
-    //     from_tag: Option<String>,
-    //     from_snapshot_id: Option<String>,
-    //     to_branch: Option<String>,
-    //     to_tag: Option<String>,
-    //     to_snapshot_id: Option<String>,
-    // ) -> PyResult<Bound<'py, PyAny>> {
-    //     let from = args_to_version_info(from_branch, from_tag, from_snapshot_id, None)?;
-    //     let to = args_to_version_info(to_branch, to_tag, to_snapshot_id, None)?;
-    //     let repository = self.0.clone();
+    #[pyo3(signature = (*, from_branch=None, from_tag=None, from_snapshot_id=None, to_branch=None, to_tag=None, to_snapshot_id=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn diff_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        from_branch: Option<String>,
+        from_tag: Option<String>,
+        from_snapshot_id: Option<String>,
+        to_branch: Option<String>,
+        to_tag: Option<String>,
+        to_snapshot_id: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let from = args_to_version_info(from_branch, from_tag, from_snapshot_id, None)?;
+        let to = args_to_version_info(to_branch, to_tag, to_snapshot_id, None)?;
+        let repository = self.0.clone();
 
-    //     pyo3_async_runtimes::tokio::future_into_py::<_, PyDiff>(py, async move {
-    //         let repository = repository.read().await;
-    //         let diff = repository
-    //             .diff(&from, &to)
-    //             .await
-    //             .map_err(PyIcechunkStoreError::SessionError)?;
-    //         Ok(diff.into())
-    //     })
-    // }
+        pyo3_async_runtimes::tokio::future_into_py::<_, PyDiff>(py, async move {
+            let repository = repository.read().await;
+            let diff = repository
+                .diff(&from, &to)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(diff.into())
+        })
+    }
 
     #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None, as_of = None))]
     pub fn readonly_session(
