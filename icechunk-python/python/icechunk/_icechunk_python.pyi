@@ -1434,15 +1434,14 @@ class PyStore:
         location: str,
         offset: int,
         length: int,
-        checksum: str | datetime.datetime | None = None,
-        validate_container: bool = True,
+        checksum: str | datetime.datetime | None,
+        validate_container: bool,
     ) -> None: ...
     def set_virtual_refs(
         self,
         array_path: str,
         chunks: list[VirtualChunkSpec],
-        *,
-        validate_containers: bool = True,
+        validate_containers: bool,
     ) -> list[tuple[int, ...]] | None: ...
     async def delete(self, key: str) -> None: ...
     async def delete_dir(self, prefix: str) -> None: ...

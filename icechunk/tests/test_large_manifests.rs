@@ -68,7 +68,6 @@ async fn test_write_large_number_of_refs() -> Result<(), Box<dyn std::error::Err
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TASKS));
 
-    ("num_tasks", &NUM_TASKS);
     for i in 0..NUM_TASKS {
         let semaphore = semaphore.clone();
         let cloned_session = Arc::clone(&session);
@@ -87,10 +86,12 @@ async fn test_write_large_number_of_refs() -> Result<(), Box<dyn std::error::Err
 
 async fn write_chunk_refs_batch(session: Arc<RwLock<Session>>, batch: usize) {
     // let mut guard = session.write().await;
-    ("starting batch", &batch);
     for i in batch * TASK_CHUNK_SIZE..(batch + 1) * TASK_CHUNK_SIZE {
         let payload = ChunkPayload::Virtual(VirtualChunkRef {
-            location: VirtualChunkLocation(format!("s3://foo/bar/{i}")),
+            location: VirtualChunkLocation::from_absolute_path(
+                format!("s3://foo/bar/{i}").as_str(),
+            )
+            .unwrap(),
             offset: 0,
             length: 1,
             checksum: None,
@@ -106,5 +107,4 @@ async fn write_chunk_refs_batch(session: Arc<RwLock<Session>>, batch: usize) {
             .await
             .expect("Failed to write chunk ref");
     }
-    ("finished batch", &batch);
 }

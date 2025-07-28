@@ -215,8 +215,12 @@ pub enum VirtualReferenceErrorKind {
         "no virtual chunk container can handle the chunk location ({0}), edit the repository configuration adding a virtual chunk container for the chunk references, see https://icechunk.io/en/stable/virtual/"
     )]
     NoContainerForUrl(String),
-    #[error("error parsing virtual ref URL")]
-    CannotParseUrl(#[from] url::ParseError),
+    #[error("error parsing virtual ref URL: {url:?}")]
+    CannotParseUrl {
+        #[source]
+        cause: url::ParseError,
+        url: String,
+    },
     #[error("invalid credentials for virtual reference of type {0}")]
     InvalidCredentials(String),
     #[error("a virtual chunk in this repository resolves to the url prefix {url}, to be able to fetch the chunk you need to authorize the virtual chunk container when you open/create the repository, see https://icechunk.io/en/stable/virtual/", url = .0.url_prefix())]
@@ -253,15 +257,21 @@ where
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct VirtualChunkLocation(pub String);
+pub struct VirtualChunkLocation(String);
 
 impl VirtualChunkLocation {
+    pub fn url(&self) -> &str {
+        self.0.as_str()
+    }
+
     pub fn from_absolute_path(
         path: &str,
     ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
         // make sure we can parse the provided URL before creating the enum
         // TODO: consider other validation here.
-        let url = url::Url::parse(path)?;
+        let url = url::Url::parse(path).map_err(|e| {
+            VirtualReferenceErrorKind::CannotParseUrl { cause: e, url: path.to_string() }
+        })?;
         let scheme = url.scheme();
         let new_path: String = url
             .path_segments()
