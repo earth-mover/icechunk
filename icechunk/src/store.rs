@@ -379,7 +379,7 @@ impl Store {
                     && session.matching_container(&reference.location).is_none()
                 {
                     return Err(StoreErrorKind::InvalidVirtualChunkContainer {
-                        chunk_location: reference.location.0,
+                        chunk_location: reference.location.url().to_string(),
                     }
                     .into());
                 }
