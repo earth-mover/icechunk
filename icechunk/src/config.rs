@@ -98,10 +98,10 @@ pub struct CachingConfig {
 
 impl CachingConfig {
     pub fn num_snapshot_nodes(&self) -> u64 {
-        self.num_snapshot_nodes.unwrap_or(10_000)
+        self.num_snapshot_nodes.unwrap_or(30_000)
     }
     pub fn num_chunk_refs(&self) -> u64 {
-        self.num_chunk_refs.unwrap_or(5_000_000)
+        self.num_chunk_refs.unwrap_or(15_000_000)
     }
     pub fn num_transaction_changes(&self) -> u64 {
         self.num_transaction_changes.unwrap_or(0)
