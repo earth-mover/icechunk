@@ -5,6 +5,8 @@ name: Rust CI
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled]
   push:
     branches:
       - main
@@ -25,19 +27,73 @@ env:
   RUSTUP_MAX_RETRIES: 10
 
 jobs:
-  rust:
-    name: Rust CI
+  # Safe job that runs for all PRs (including external) - no secrets needed
+  rust-basic:
+    name: Rust CI (Basic)
+    if: github.event_name == 'pull_request'
     timeout-minutes: 20
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: ./
-    #permissions:
-      #contents: read
-      #actions: read
-      #pull-requests: read
     env:
-      #CC: deny_c
+      RUST_CHANNEL: '1.87.0'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Just
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        run: sudo snap install --edge --classic just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.RUST_CHANNEL }}
+
+      - name: Install cargo-deny
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        run: cargo install --locked cargo-deny
+
+      # Basic checks that don't need secrets
+      - name: Check formatting
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Cargo deny
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo deny check
+
+      - name: Run unit tests only
+        run: cargo test --lib
+
+  # Protected job that requires approval for external contributors - has access to secrets
+  rust-full:
+    name: Rust CI (Full with Secrets)
+    if: github.event_name == 'pull_request_target' || github.event_name == 'push' || github.event_name == 'schedule'
+    timeout-minutes: 20
+    runs-on: ${{ matrix.os }}
+    environment: ci-with-secrets  # This requires manual approval for external PRs
+    defaults:
+      run:
+        working-directory: ./
+    env:
       RUST_CHANNEL: '1.87.0'
 
     strategy:
@@ -49,7 +105,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          # For pull_request_target, checkout the PR head
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -86,14 +143,13 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
 
       - name: Install cargo-deny
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: cargo install --locked cargo-deny
 
-      - name: Check
+      - name: Check (with secrets)
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
@@ -110,7 +166,6 @@ jobs:
           TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
           TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-
         run: |
           just pre-commit
 
@@ -120,7 +175,7 @@ jobs:
           cargo test --lib
 
       - name: Run integration tests against object stores
-        if: github.event_name == 'cron'
+        if: github.event_name == 'schedule'
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -136,6 +191,5 @@ jobs:
           TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
           TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-
         run: |
           cargo test --all --all-targets -- --ignored
