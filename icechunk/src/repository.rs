@@ -744,8 +744,9 @@ impl Repository {
         to: &VersionInfo,
     ) -> SessionResult<Diff> {
         let from = self.resolve_version(from).await?;
+        let to = self.resolve_version(to).await?;
         let all_snaps = self
-            .ancestry(to)
+            .ancestry_ref(&RefVersionInfo::SnapshotId(to))
             .await?
             .try_take_while(|snap_info| ready(Ok(snap_info.id != from)))
             .try_collect::<Vec<_>>()
