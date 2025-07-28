@@ -119,6 +119,23 @@ impl PyStore {
         })
     }
 
+    #[classmethod]
+    fn from_bytes_async<'py>(
+        _cls: Bound<'_, PyType>,
+        py: Python<'py>,
+        bytes: PyBytes,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let bytes = bytes.into_inner();
+            let store = Store::from_bytes(bytes).map_err(|e| {
+                PyValueError::new_err(format!(
+                    "Failed to deserialize store from bytes: {e}"
+                ))
+            })?;
+            Ok(Self(Arc::new(store)))
+        })
+    }
+
     fn __eq__(&self, other: &PyStore) -> bool {
         // If the stores were created from the same session they are equal
         Arc::ptr_eq(&self.0.session(), &other.0.session())
@@ -135,6 +152,14 @@ impl PyStore {
         })
     }
 
+    fn read_only_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let read_only = store.read_only().await;
+            Ok(read_only)
+        })
+    }
+
     fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<[u8]>> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
@@ -144,6 +169,15 @@ impl PyStore {
                     self.0.as_bytes().await.map_err(PyIcechunkStoreError::from)?;
                 Ok(Cow::Owned(serialized.to_vec()))
             })
+        })
+    }
+
+    fn as_bytes_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let serialized =
+                store.as_bytes().await.map_err(PyIcechunkStoreError::from)?;
+            Ok(serialized.to_vec())
         })
     }
 
