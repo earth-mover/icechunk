@@ -414,3 +414,116 @@ def test_error_on_non_authorized_virtual_chunk_container() -> None:
 
     with pytest.raises(IcechunkError, match="file:///foo.*authorize"):
         array[0]
+
+
+async def test_async_single_virtual_ref() -> None:
+    """Test async API for setting a single virtual reference."""
+    config = RepositoryConfig.default()
+    container = VirtualChunkContainer(
+        "https://earthmover-sample-data.s3.amazonaws.com", http_store()
+    )
+    config.set_virtual_chunk_container(container)
+
+    repo = Repository.open_or_create(
+        storage=in_memory_storage(),
+        config=config,
+        authorize_virtual_chunk_access={
+            "https://earthmover-sample-data.s3.amazonaws.com": None
+        },
+    )
+    session = repo.writable_session("main")
+    store = session.store
+
+    _array = zarr.create_array(
+        store, shape=(1,), chunks=(1,), dtype="float32", compressors=None
+    )
+
+    # Use async API to set virtual ref
+    await store.set_virtual_ref_async(
+        "c/0",
+        "https://earthmover-sample-data.s3.amazonaws.com/netcdf/oscar_vel2018.nc",
+        offset=22306,
+        length=4,
+    )
+
+    # Verify the virtual ref was set
+    buffer_prototype = zarr.core.buffer.default_buffer_prototype()
+    result = await store.get("c/0", prototype=buffer_prototype)
+    assert result is not None
+    assert len(result.to_bytes()) == 4
+
+
+async def test_async_multiple_virtual_refs() -> None:
+    """Test async API for setting multiple virtual references."""
+    prefix = str(uuid.uuid4())
+    etags = write_chunks_to_minio(
+        [
+            (f"{prefix}/chunk-1", b"first"),
+            (f"{prefix}/chunk-2", b"second"),
+        ],
+    )
+
+    config = RepositoryConfig.default()
+    store_config = s3_store(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        s3_compatible=True,
+        force_path_style=True,
+    )
+    container = VirtualChunkContainer("s3://testbucket", store_config)
+    config.set_virtual_chunk_container(container)
+    credentials = containers_credentials(
+        {
+            "s3://testbucket": s3_credentials(
+                access_key_id="minio123", secret_access_key="minio123"
+            )
+        }
+    )
+
+    repo = Repository.open_or_create(
+        storage=in_memory_storage(),
+        config=config,
+        authorize_virtual_chunk_access=credentials,
+    )
+    session = repo.writable_session("main")
+    store = session.store
+
+    _array = zarr.create_array(
+        store, shape=(2, 1, 1), chunks=(1, 1, 1), dtype="i4", compressors=None
+    )
+
+    # Use async API to set multiple virtual refs
+    res = await store.set_virtual_refs_async(
+        array_path="/",
+        validate_containers=True,
+        chunks=[
+            VirtualChunkSpec(
+                index=[0, 0, 0],
+                location=f"s3://testbucket/{prefix}/chunk-1",
+                offset=0,
+                length=4,
+                etag_checksum=etags[0],
+            ),
+            VirtualChunkSpec(
+                index=[1, 0, 0],
+                location=f"s3://testbucket/{prefix}/chunk-2",
+                offset=1,
+                length=4,
+                etag_checksum=etags[1],
+            ),
+        ],
+    )
+
+    # Should succeed with no validation errors
+    assert res is None
+
+    # Verify the virtual refs were set
+    buffer_prototype = zarr.core.buffer.default_buffer_prototype()
+    first = await store.get("c/0/0/0", prototype=buffer_prototype)
+    assert first is not None
+    assert first.to_bytes() == b"firs"  # codespell:ignore firs
+
+    second = await store.get("c/1/0/0", prototype=buffer_prototype)
+    assert second is not None
+    assert second.to_bytes() == b"econ"
