@@ -35,7 +35,7 @@ pub mod strategies;
 mod stream_utils;
 pub mod virtual_chunks;
 
-pub use config::{ObjectStoreConfig, RepositoryConfig};
+pub use config::{LogsConfig, ObjectStoreConfig, RepositoryConfig, TelemetryConfig};
 pub use repository::Repository;
 pub use storage::{
     ObjectStorage, Storage, StorageError, new_in_memory_storage,
@@ -66,8 +66,15 @@ static LOG_FILTER: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
 #[cfg(feature = "logs")]
-pub fn initialize_tracing(log_filter_directive: Option<&str>) {
+pub fn initialize_tracing(
+    log_filter_directive: Option<&str>,
+    telemetry_config: Option<&TelemetryConfig>,
+) {
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler};
     use tracing_error::ErrorLayer;
+    use tracing_opentelemetry::OpenTelemetryLayer;
     use tracing_subscriber::{
         EnvFilter, Layer, Registry, layer::SubscriberExt, reload, util::SubscriberInitExt,
     };
@@ -93,9 +100,33 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
 
                 let error_span_layer = ErrorLayer::default();
 
+                let telemetry_layer = telemetry_config.and_then(|config| {
+                    let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
+                        .with_tonic()
+                        .with_endpoint(config.endpoint.as_str())
+                        .build()
+                        .map_err(|e| {
+                            println!(
+                                "Warning, failed initializing telemetry, continuing without it: {e}",
+                            );
+                            e
+                        })
+                        .ok()?;
+
+                    let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                        .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(1.0))))
+                        // If export trace to AWS X-Ray, you can use XrayIdGenerator
+                        .with_id_generator(RandomIdGenerator::default())
+                        .with_batch_exporter(otlp_exporter)
+                        .build()
+                        .tracer(config.tracer_name.clone());
+                    Some(OpenTelemetryLayer::new(tracer))
+                });
+
                 if let Err(err) = Registry::default()
                     .with(error_span_layer)
                     .with(stdout_layer)
+                    .with(telemetry_layer)
                     .try_init()
                 {
                     println!("Error initializing logs: {err}");

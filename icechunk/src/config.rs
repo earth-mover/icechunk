@@ -568,3 +568,26 @@ pub enum Credentials {
     Gcs(GcsCredentials),
     Azure(AzureCredentials),
 }
+
+#[derive(Clone, Debug)]
+pub struct TelemetryConfig {
+    pub endpoint: String,
+    pub tracer_name: String,
+}
+
+impl Default for TelemetryConfig {
+    fn default() -> Self {
+        Self { endpoint: "localhost".to_string(), tracer_name: "icechunk".to_string() }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LogsConfig {
+    pub env_var_name: String,
+}
+
+impl Default for LogsConfig {
+    fn default() -> Self {
+        Self { env_var_name: "ICECHUNK_LOG".to_string() }
+    }
+}
