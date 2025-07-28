@@ -215,7 +215,7 @@ pub enum VirtualReferenceErrorKind {
         "no virtual chunk container can handle the chunk location ({0}), edit the repository configuration adding a virtual chunk container for the chunk references, see https://icechunk.io/en/stable/virtual/"
     )]
     NoContainerForUrl(String),
-    #[error("error parsing virtual ref URL: {url}")]
+    #[error("error parsing virtual ref URL: {url:?}")]
     CannotParseUrl {
         #[source]
         cause: url::ParseError,
