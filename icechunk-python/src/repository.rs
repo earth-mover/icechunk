@@ -74,8 +74,11 @@ impl_pickle!(PySnapshotInfo);
 #[pyclass(name = "ManifestFileInfo", eq)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PyManifestFileInfo {
+    #[pyo3(get)]
     pub id: String,
+    #[pyo3(get)]
     pub size_bytes: u64,
+    #[pyo3(get)]
     pub num_chunk_refs: u32,
 }
 
