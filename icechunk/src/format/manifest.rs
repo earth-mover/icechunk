@@ -215,7 +215,7 @@ pub enum VirtualReferenceErrorKind {
         "no virtual chunk container can handle the chunk location ({0}), edit the repository configuration adding a virtual chunk container for the chunk references, see https://icechunk.io/en/stable/virtual/"
     )]
     NoContainerForUrl(String),
-    #[error("error parsing virtual ref URL")]
+    #[error("error parsing virtual ref URL: {0}")]
     CannotParseUrl(#[from] url::ParseError),
     #[error("invalid credentials for virtual reference of type {0}")]
     InvalidCredentials(String),
@@ -235,7 +235,7 @@ pub enum VirtualReferenceErrorKind {
         "error retrieving virtual chunk, not enough data. Expected: ({expected}), available ({available})"
     )]
     InvalidObjectSize { expected: u64, available: u64 },
-    #[error("unknown error")]
+    #[error("unknown error: {0}")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 

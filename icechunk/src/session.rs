@@ -88,17 +88,17 @@ pub enum SessionErrorKind {
     },
     #[error("unknown flush error")]
     OtherFlushError,
-    #[error("a concurrent task failed")]
+    #[error("a concurrent task failed: {0}")]
     ConcurrencyError(#[from] JoinError),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
     #[error("cannot rebase snapshot {snapshot} on top of the branch")]
     RebaseFailed { snapshot: SnapshotId, conflicts: Vec<Conflict> },
-    #[error("error in serializing config to JSON")]
+    #[error("error in serializing config to JSON: {0}")]
     JsonSerializationError(#[from] serde_json::Error),
-    #[error("error in session serialization")]
+    #[error("error in session serialization: {0}")]
     SerializationError(#[from] Box<rmp_serde::encode::Error>),
-    #[error("error in session deserialization")]
+    #[error("error in session deserialization: {0}")]
     DeserializationError(#[from] Box<rmp_serde::decode::Error>),
     #[error(
         "error finding conflicting path for node `{0}`, this probably indicades a bug in `rebase`"
@@ -117,7 +117,7 @@ pub enum SessionErrorKind {
     },
     #[error("`to` snapshot ancestry doesn't include `from`")]
     BadSnapshotChainForDiff,
-    #[error("failed to create manifest from chunk stream")]
+    #[error("failed to create manifest from chunk stream. {0}")]
     ManifestCreationError(#[from] Box<SessionError>),
 }
 
