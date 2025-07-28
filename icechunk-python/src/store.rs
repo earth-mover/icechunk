@@ -304,7 +304,6 @@ impl PyStore {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (key, location, offset, length, checksum = None, validate_container = false))]
     fn set_virtual_ref(
         &self,
         py: Python<'_>,
