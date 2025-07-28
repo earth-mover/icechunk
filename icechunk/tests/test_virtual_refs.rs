@@ -540,7 +540,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
     };
     assert!(matches!(
                 store.set_virtual_ref("array/c/0/0/0", bad_ref, true).await,
-                Err(StoreError{kind: StoreErrorKind::InvalidVirtualChunkContainer { chunk_location },..}) if chunk_location == bad_location.0));
+                Err(StoreError{kind: StoreErrorKind::InvalidVirtualChunkContainer { chunk_location },..}) if chunk_location == bad_location.url()));
     Ok(())
 }
 

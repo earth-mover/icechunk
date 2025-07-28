@@ -414,3 +414,50 @@ def test_error_on_non_authorized_virtual_chunk_container() -> None:
 
     with pytest.raises(IcechunkError, match="file:///foo.*authorize"):
         array[0]
+
+
+def test_cannot_write_invalid_urls() -> None:
+    repo = Repository.create(
+        storage=in_memory_storage(),
+    )
+    session = repo.writable_session("main")
+    store = session.store
+
+    zarr.create_array(store, shape=(5,), chunks=(1,), dtype="i4", compressors=None)
+
+    with pytest.raises(IcechunkError, match="error parsing"):
+        store.set_virtual_ref(
+            "c/0",
+            "",
+            offset=1,
+            length=4,
+        )
+
+    with pytest.raises(IcechunkError, match="error parsing"):
+        store.set_virtual_ref(
+            "c/0",
+            "some/relative/url",
+            offset=1,
+            length=4,
+        )
+
+    with pytest.raises(IcechunkError, match="error parsing"):
+        store.set_virtual_ref(
+            "c/0",
+            "/some/url/without/protocol",
+            offset=1,
+            length=4,
+        )
+
+    with pytest.raises(IcechunkError, match="error parsing"):
+        store.set_virtual_refs(
+            array_path="/",
+            chunks=[
+                VirtualChunkSpec(
+                    index=[0],
+                    location="relative",
+                    offset=0,
+                    length=4,
+                ),
+            ],
+        )
