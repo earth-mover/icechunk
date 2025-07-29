@@ -403,6 +403,19 @@ class ForkSession(Session):
             "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
         )
 
+    async def commit_async(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        rebase_with: ConflictSolver | None = None,
+        rebase_tries: int = 1_000,
+    ) -> NoReturn:
+        raise TypeError(
+            "Cannot commit a fork of a Session. If you are using uncooperative writes, "
+            "please send the Repository object to your workers, not a Session. "
+            "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
+        )
+
     @property
     def store(self) -> IcechunkStore:
         """
