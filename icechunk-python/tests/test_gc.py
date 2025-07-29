@@ -28,7 +28,7 @@ def mk_repo() -> tuple[str, ic.Repository]:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_expire_and_gc() -> None:
+def test_expire_and_gc() -> None:
     prefix, repo = mk_repo()
 
     session = repo.writable_session("main")
@@ -126,8 +126,8 @@ async def test_expire_and_gc() -> None:
     # same number as snapshots
     assert gc_result.transaction_logs_deleted == 21
 
-    # now let's run real GC, no dry_run. Lets also use the async api
-    gc_result = await repo.garbage_collect_async(old)
+    # now let's run real GC, no dry_run.
+    gc_result = repo.garbage_collect(old)
 
     space_after = 0
     for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}")["Contents"]:
