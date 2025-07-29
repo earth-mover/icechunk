@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::{
     io::{BufReader, Read},
     ops::Range,
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
 };
-use tracing::{Span, debug, instrument, trace};
+use tracing::{Span, debug, instrument, trace, warn};
 
 use crate::{
     Storage,
@@ -41,6 +41,12 @@ pub struct AssetManager {
     num_bytes_attributes: u64,
     num_bytes_chunks: u64,
     compression_level: u8,
+
+    #[serde(skip)]
+    manifest_cache_size_warned: AtomicBool,
+    #[serde(skip)]
+    snapshot_cache_size_warned: AtomicBool,
+
     #[serde(skip)]
     snapshot_cache: Cache<SnapshotId, Arc<Snapshot>, FileWeighter>,
     #[serde(skip)]
@@ -109,6 +115,8 @@ impl AssetManager {
                 FileWeighter,
             ),
             chunk_cache: Cache::with_weighter(0, num_bytes_chunks, FileWeighter),
+            snapshot_cache_size_warned: AtomicBool::new(false),
+            manifest_cache_size_warned: AtomicBool::new(false),
         }
     }
 
@@ -164,6 +172,7 @@ impl AssetManager {
             &self.storage_settings,
         )
         .await?;
+        self.warn_if_manifest_cache_small(manifest.as_ref());
         self.manifest_cache.insert(manifest.id().clone(), manifest);
         Ok(res)
     }
@@ -184,9 +193,40 @@ impl AssetManager {
                     &self.storage_settings,
                 )
                 .await?;
+                self.warn_if_manifest_cache_small(manifest.as_ref());
                 let _fail_is_ok = guard.insert(Arc::clone(&manifest));
                 Ok(manifest)
             }
+        }
+    }
+
+    fn warn_if_manifest_cache_small(&self, manifest: &Manifest) {
+        let manifest_weight = manifest.len();
+        let capacity = self.num_chunk_refs;
+        // TODO: we may need a config to silence this warning
+        if manifest_weight as u64 > capacity / 2
+            && !self.manifest_cache_size_warned.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            warn!(
+                "A manifest with {manifest_weight} chunk references is being loaded into the cache that can only keep {capacity} references. Consider increasing the size of the manifest cache using the num_chunk_refs field in CachingConfig"
+            );
+            self.manifest_cache_size_warned
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    fn warn_if_snapshot_cache_small(&self, snap: &Snapshot) {
+        let snap_weight = snap.len();
+        let capacity = self.num_snapshot_nodes;
+        // TODO: we may need a config to silence this warning
+        if snap_weight as u64 > capacity / 5
+            && !self.snapshot_cache_size_warned.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            warn!(
+                "A snapshot with {snap_weight} nodes is being loaded into the cache that can only keep {capacity} nodes. Consider increasing the size of the snapshot cache using the num_snapshot_nodes field in CachingConfig"
+            );
+            self.snapshot_cache_size_warned
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -209,6 +249,7 @@ impl AssetManager {
         )
         .await?;
         let snapshot_id = snapshot.id().clone();
+        self.warn_if_snapshot_cache_small(snapshot.as_ref());
         // This line is critical for expiration:
         // When we edit snapshots in place, we need the cache to return the new version
         self.snapshot_cache.insert(snapshot_id, snapshot);
@@ -229,6 +270,7 @@ impl AssetManager {
                     &self.storage_settings,
                 )
                 .await?;
+                self.warn_if_snapshot_cache_small(snapshot.as_ref());
                 let _fail_is_ok = guard.insert(Arc::clone(&snapshot));
                 Ok(snapshot)
             }
