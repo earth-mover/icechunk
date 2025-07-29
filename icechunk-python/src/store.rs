@@ -372,7 +372,6 @@ impl PyStore {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (key, location, offset, length, checksum = None, validate_container = false))]
     fn set_virtual_ref_async<'py>(
         &'py self,
         py: Python<'py>,
@@ -385,8 +384,10 @@ impl PyStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let location = VirtualChunkLocation::from_absolute_path(location.as_str())
+                .map_err(PyIcechunkStoreError::from)?;
             let virtual_ref = VirtualChunkRef {
-                location: VirtualChunkLocation(location),
+                location,
                 offset,
                 length,
                 checksum: checksum.map(|cs| cs.into()),
@@ -471,17 +472,24 @@ impl PyStore {
         pyo3_async_runtimes::tokio::future_into_py::<_, Option<Vec<Py<PyTuple>>>>(
             py,
             async move {
-                let vrefs = chunks.into_iter().map(|vcs| {
-                    let checksum = vcs.checksum();
-                    let index = ChunkIndices(vcs.index);
-                    let vref = VirtualChunkRef {
-                        location: VirtualChunkLocation(vcs.location),
-                        offset: vcs.offset,
-                        length: vcs.length,
-                        checksum,
-                    };
-                    (index, vref)
-                });
+                let vrefs: Vec<(ChunkIndices, VirtualChunkRef)> = chunks
+                    .into_iter()
+                    .map(|vcs| {
+                        let checksum = vcs.checksum();
+                        let index = ChunkIndices(vcs.index);
+                        let location = VirtualChunkLocation::from_absolute_path(
+                            vcs.location.as_str(),
+                        )
+                        .map_err(PyIcechunkStoreError::from)?;
+                        let vref = VirtualChunkRef {
+                            offset: vcs.offset,
+                            length: vcs.length,
+                            location,
+                            checksum,
+                        };
+                        Ok::<_, PyIcechunkStoreError>((index, vref))
+                    })
+                    .try_collect()?;
 
                 let array_path = if !array_path.starts_with("/") {
                     format!("/{array_path}")
