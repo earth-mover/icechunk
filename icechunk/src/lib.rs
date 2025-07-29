@@ -67,6 +67,7 @@ static LOG_FILTER: std::sync::LazyLock<
 
 #[cfg(feature = "logs")]
 pub fn initialize_tracing(log_filter_directive: Option<&str>) {
+    use tracing::Level;
     use tracing_error::ErrorLayer;
     use tracing_subscriber::{
         EnvFilter, Layer, Registry, layer::SubscriberExt, reload, util::SubscriberInitExt,
@@ -75,9 +76,9 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
     // We have two Layers. One keeps track of the spans to feed the ICError instances.
     // The other is the one spitting logs to stdout. Filtering only applies to the second Layer.
 
-    let filter = log_filter_directive
-        .map(EnvFilter::new)
-        .unwrap_or_else(|| EnvFilter::from_env("ICECHUNK_LOG"));
+    let filter = log_filter_directive.map(EnvFilter::new).unwrap_or_else(|| {
+        EnvFilter::from_env("ICECHUNK_LOG").add_directive(Level::WARN.into())
+    });
     match LOG_FILTER.lock() {
         Ok(mut guard) => match guard.as_ref() {
             Some(handle) => {
