@@ -326,9 +326,7 @@ async def test_timetravel_async() -> None:
     )
 
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
-
-    group = zarr.group(store=store, overwrite=True)
+    group = zarr.group(store=session.store, overwrite=True)
     air_temp = group.create_array(
         "air_temp", shape=(1000, 1000), chunks=(100, 100), dtype="i4"
     )
@@ -336,7 +334,7 @@ async def test_timetravel_async() -> None:
     air_temp[:, :] = 42
     assert air_temp[200, 6] == 42
 
-    status = await session.status_async()
+    status = session.status()
     assert status.new_groups == {"/"}
     assert status.new_arrays == {"/air_temp"}
     assert list(status.updated_chunks.keys()) == ["/air_temp"]
@@ -349,11 +347,10 @@ async def test_timetravel_async() -> None:
     assert status.updated_groups == set()
 
     first_snapshot_id = await session.commit_async("commit 1")
-    assert await session.read_only_async()
+    assert session.read_only
 
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
-    group = zarr.open_group(store=store)
+    group = zarr.open_group(store=session.store)
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
 
     air_temp[:, :] = 54
@@ -362,40 +359,38 @@ async def test_timetravel_async() -> None:
     new_snapshot_id = await session.commit_async("commit 2")
 
     session = await repo.readonly_session_async(snapshot_id=first_snapshot_id)
-    store = await session.store_async()
+    store = session.store
     group = zarr.open_group(store=store, mode="r")
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
-    assert await store.read_only_async()
+    assert store.read_only
     assert air_temp[200, 6] == 42
 
     session = await repo.readonly_session_async(snapshot_id=new_snapshot_id)
-    store = await session.store_async()
+    store = session.store
     group = zarr.open_group(store=store, mode="r")
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
-    assert await store.read_only_async()
+    assert store.read_only
     assert air_temp[200, 6] == 54
 
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
-    group = zarr.open_group(store=store)
+    group = zarr.open_group(store=session.store)
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
 
     air_temp[:, :] = 76
-    assert await session.has_uncommitted_changes_async()
-    assert await session.branch_async() == "main"
-    assert await session.snapshot_id_async() == new_snapshot_id
+    assert session.has_uncommitted_changes
+    assert session.branch == "main"
+    assert session.snapshot_id == new_snapshot_id
 
-    await session.discard_changes_async()
-    assert not (await session.has_uncommitted_changes_async())
+    session.discard_changes()
+    assert not session.has_uncommitted_changes
     assert air_temp[200, 6] == 54
 
     await repo.create_branch_async("feature", new_snapshot_id)
     session = await repo.writable_session_async("feature")
-    store = await session.store_async()
-    assert not await store.read_only_async()
-    assert await session.branch_async() == "feature"
+    assert not session.store.read_only
+    assert session.branch == "feature"
 
-    group = zarr.open_group(store=store)
+    group = zarr.open_group(store=session.store)
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
     air_temp[:, :] = 90
     feature_snapshot_id = await session.commit_async("commit 3")
@@ -410,11 +405,10 @@ async def test_timetravel_async() -> None:
     await repo.create_tag_async("v1.0", feature_snapshot_id)
     await repo.create_branch_async("feature-not-dead", feature_snapshot_id)
     session = await repo.readonly_session_async(tag="v1.0")
-    store = await session.store_async()
-    assert await store.read_only_async()
-    assert await session.branch_async() is None
+    assert session.store.read_only
+    assert session.branch is None
 
-    group = zarr.open_group(store=store, mode="r")
+    group = zarr.open_group(store=session.store, mode="r")
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
     assert air_temp[200, 6] == 90
 
@@ -473,14 +467,12 @@ Chunks updated:
     )
 
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
-
-    group = zarr.open_group(store=store)
+    group = zarr.open_group(store=session.store)
     air_temp = group.create_array(
         "air_temp", shape=(1000, 1000), chunks=(100, 100), dtype="i4", overwrite=True
     )
     assert (
-        repr(await session.status_async())
+        repr(session.status())
         == """\
 Arrays created:
     /air_temp
@@ -513,15 +505,12 @@ async def test_branch_reset_async() -> None:
     )
 
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
-
-    group = zarr.group(store=store, overwrite=True)
+    group = zarr.group(store=session.store, overwrite=True)
     group.create_group("a")
     prev_snapshot_id = await session.commit_async("group a")
 
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
-
+    store = session.store
     group = zarr.open_group(store=store)
     group.create_group("b")
     await session.commit_async("group b")
@@ -533,8 +522,7 @@ async def test_branch_reset_async() -> None:
     await repo.reset_branch_async("main", prev_snapshot_id)
 
     session = await repo.readonly_session_async("main")
-    store = await session.store_async()
-
+    store = session.store
     keys = {k async for k in store.list()}
     assert "a/zarr.json" in keys
     assert "b/zarr.json" not in keys
@@ -566,18 +554,16 @@ async def test_session_with_as_of_async() -> None:
     )
 
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
 
     times = []
-    group = zarr.group(store=store, overwrite=True)
+    group = zarr.group(store=session.store, overwrite=True)
     sid = await session.commit_async("root")
     to_append = await anext(repo.async_ancestry(snapshot_id=sid))
     times.append(to_append.written_at)
 
     for i in range(5):
         session = await repo.writable_session_async("main")
-        store = await session.store_async()
-        group = zarr.open_group(store=store)
+        group = zarr.open_group(store=session.store)
         group.create_group(f"child {i}")
         sid = await session.commit_async(f"child {i}")
         to_append = await anext(repo.async_ancestry(snapshot_id=sid))
@@ -604,8 +590,7 @@ async def test_default_commit_metadata_async() -> None:
 
     await repo.set_default_commit_metadata_async({"user": "test"})
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
-    root = zarr.group(store=store, overwrite=True)
+    root = zarr.group(store=session.store, overwrite=True)
     root.create_group("child")
     sid = await session.commit_async("root")
     snap = await anext(repo.async_ancestry(snapshot_id=sid))
@@ -615,19 +600,16 @@ async def test_default_commit_metadata_async() -> None:
 async def test_tag_expiration_async() -> None:
     repo = await ic.Repository.create_async(storage=ic.in_memory_storage())
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
-    root = zarr.group(store=store, overwrite=True)
+    root = zarr.group(store=session.store, overwrite=True)
     a = await session.commit_async("a")
 
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
-    root = zarr.group(store=store, overwrite=True)
+    root = zarr.group(store=session.store, overwrite=True)
     root.create_group("child1")
     b = await session.commit_async("b")
 
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
-    root = zarr.group(store=store, overwrite=True)
+    root = zarr.group(store=session.store, overwrite=True)
     root.create_group("child2")
     await session.commit_async("c")
 
@@ -646,20 +628,17 @@ async def test_tag_expiration_async() -> None:
 async def test_branch_expiration_async() -> None:
     repo = await ic.Repository.create_async(storage=ic.in_memory_storage())
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
-    root = zarr.group(store=store, overwrite=True)
+    root = zarr.group(store=session.store, overwrite=True)
     a = await session.commit_async("a")
 
     await repo.create_branch_async("branch", a)
     session = await repo.writable_session_async("branch")
-    store = await session.store_async()
-    root = zarr.group(store=store, overwrite=True)
+    root = zarr.group(store=session.store, overwrite=True)
     root.create_group("child1")
     b = await session.commit_async("b")
 
     session = await repo.writable_session_async("main")
-    store = await session.store_async()
-    root = zarr.group(store=store, overwrite=True)
+    root = zarr.group(store=session.store, overwrite=True)
     root.create_group("child2")
     c = await session.commit_async("c")
 

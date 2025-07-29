@@ -88,22 +88,6 @@ class IcechunkStore(Store, SyncMixin):
         state["_store"] = PyStore.from_bytes(store_repr)
         self.__dict__ = state
 
-    @classmethod
-    async def from_bytes_async(cls, data: bytes) -> "IcechunkStore":
-        """Create an IcechunkStore from serialized bytes asynchronously.
-
-        Parameters
-        ----------
-        data : bytes
-            The serialized store data
-
-        Returns
-        -------
-        IcechunkStore
-        """
-        store = await PyStore.from_bytes_async(data)
-        return cls(store=store, for_fork=False)
-
     def with_read_only(self, read_only: bool = False) -> Store:
         new_store = IcechunkStore(store=self._store, for_fork=False, read_only=read_only)
         new_store._is_open = False
@@ -117,26 +101,6 @@ class IcechunkStore(Store, SyncMixin):
             return ForkSession(self._store.session)
         else:
             return Session(self._store.session)
-
-    async def read_only_async(self) -> bool:
-        """Check if the store is read-only asynchronously.
-
-        Returns
-        -------
-        bool
-            True if the store is read-only, False otherwise
-        """
-        return await self._store.read_only_async()
-
-    async def as_bytes_async(self) -> bytes:
-        """Serialize the store to bytes asynchronously.
-
-        Returns
-        -------
-        bytes
-            The serialized store data
-        """
-        return await self._store.as_bytes_async()
 
     async def clear(self) -> None:
         """Clear the store.

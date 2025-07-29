@@ -668,19 +668,6 @@ impl PyRepository {
         })
     }
 
-    #[classmethod]
-    fn from_bytes_async<'py>(
-        _cls: Bound<'_, PyType>,
-        py: Python<'py>,
-        bytes: Vec<u8>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let repository = Repository::from_bytes(bytes)
-                .map_err(PyIcechunkStoreError::RepositoryError)?;
-            Ok(Self(Arc::new(RwLock::new(repository))))
-        })
-    }
-
     fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<[u8]>> {
         // This is a compute intensive task, we need to release the Gil
         py.allow_threads(move || {
@@ -690,16 +677,6 @@ impl PyRepository {
                 .as_bytes()
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(Cow::Owned(bytes))
-        })
-    }
-
-    fn as_bytes_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let repository = repository.read().await;
-            let bytes =
-                repository.as_bytes().map_err(PyIcechunkStoreError::RepositoryError)?;
-            Ok(bytes)
         })
     }
 
@@ -768,45 +745,12 @@ impl PyRepository {
         self.0.blocking_read().config().clone().into()
     }
 
-    fn config_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py::<_, PyRepositoryConfig>(
-            py,
-            async move {
-                let repository = repository.read().await;
-                Ok(repository.config().clone().into())
-            },
-        )
-    }
-
     pub fn storage_settings(&self) -> PyStorageSettings {
         self.0.blocking_read().storage_settings().clone().into()
     }
 
-    fn storage_settings_async<'py>(
-        &'py self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py::<_, PyStorageSettings>(
-            py,
-            async move {
-                let repository = repository.read().await;
-                Ok(repository.storage_settings().clone().into())
-            },
-        )
-    }
-
     pub fn storage(&self) -> PyStorage {
         PyStorage(Arc::clone(self.0.blocking_read().storage()))
-    }
-
-    fn storage_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py::<_, PyStorage>(py, async move {
-            let repository = repository.read().await;
-            Ok(PyStorage(Arc::clone(repository.storage())))
-        })
     }
 
     pub fn set_default_commit_metadata(

@@ -47,22 +47,6 @@ class Session:
         self._session = PySession.from_bytes(state["_session"])
         self._allow_changes = state["_allow_changes"]
 
-    @classmethod
-    async def from_bytes_async(cls, data: bytes) -> "Session":
-        """Create a Session from serialized bytes asynchronously.
-
-        Parameters
-        ----------
-        data : bytes
-            The serialized session data
-
-        Returns
-        -------
-        Session
-        """
-        session = await PySession.from_bytes_async(data)
-        return cls(session)
-
     @contextlib.contextmanager
     def allow_pickling(self) -> Generator[None, None, None]:
         """
@@ -87,27 +71,6 @@ class Session:
         """
         return self._session.read_only
 
-    async def read_only_async(self) -> bool:
-        """
-        Whether the session is read-only (async version).
-
-        Returns
-        -------
-        bool
-            True if the session is read-only, False otherwise.
-        """
-        return await self._session.read_only_async()
-
-    async def as_bytes_async(self) -> bytes:
-        """Serialize the session to bytes asynchronously.
-
-        Returns
-        -------
-        bytes
-            The serialized session data
-        """
-        return await self._session.as_bytes_async()
-
     @property
     def snapshot_id(self) -> str:
         """
@@ -119,17 +82,6 @@ class Session:
             The base snapshot ID of the session.
         """
         return self._session.snapshot_id
-
-    async def snapshot_id_async(self) -> str:
-        """
-        The base snapshot ID of the session (async version).
-
-        Returns
-        -------
-        str
-            The base snapshot ID of the session.
-        """
-        return await self._session.snapshot_id_async()
 
     @property
     def branch(self) -> str | None:
@@ -143,17 +95,6 @@ class Session:
         """
         return self._session.branch
 
-    async def branch_async(self) -> str | None:
-        """
-        The branch that the session is based on (async version).
-
-        Returns
-        -------
-        str or None
-            The branch that the session is based on if the session is writable, None otherwise.
-        """
-        return await self._session.branch_async()
-
     @property
     def has_uncommitted_changes(self) -> bool:
         """
@@ -166,17 +107,6 @@ class Session:
         """
         return self._session.has_uncommitted_changes
 
-    async def has_uncommitted_changes_async(self) -> bool:
-        """
-        Whether the session has uncommitted changes (async version).
-
-        Returns
-        -------
-        bool
-            True if the session has uncommitted changes, False otherwise.
-        """
-        return await self._session.has_uncommitted_changes_async()
-
     def status(self) -> Diff:
         """
         Compute an overview of the current session changes
@@ -188,28 +118,11 @@ class Session:
         """
         return self._session.status()
 
-    async def status_async(self) -> Diff:
-        """
-        Compute an overview of the current session changes (async version)
-
-        Returns
-        -------
-        Diff
-            The operations executed in the current session but still not committed.
-        """
-        return await self._session.status_async()
-
     def discard_changes(self) -> None:
         """
         When the session is writable, discard any uncommitted changes.
         """
         self._session.discard_changes()
-
-    async def discard_changes_async(self) -> None:
-        """
-        When the session is writable, discard any uncommitted changes (async version).
-        """
-        await self._session.discard_changes_async()
 
     @property
     def store(self) -> IcechunkStore:
@@ -482,22 +395,6 @@ class ForkSession(Session):
         if not isinstance(state, dict):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
-
-    @classmethod
-    async def from_bytes_async(cls, data: bytes) -> "ForkSession":
-        """Create a ForkSession from serialized bytes asynchronously.
-
-        Parameters
-        ----------
-        data : bytes
-            The serialized session data
-
-        Returns
-        -------
-        ForkSession
-        """
-        session = await PySession.from_bytes_async(data)
-        return cls(session)
 
     def merge(self, *others: Self) -> None:
         for other in others:

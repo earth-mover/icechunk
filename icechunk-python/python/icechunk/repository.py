@@ -11,7 +11,6 @@ from icechunk._icechunk_python import (
     RepositoryConfig,
     SnapshotInfo,
     Storage,
-    StorageSettings,
 )
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
@@ -332,32 +331,6 @@ class Repository:
             raise ValueError("Invalid repository state")
         self._repository = PyRepository.from_bytes(state["_repository"])
 
-    @classmethod
-    async def from_bytes_async(cls, data: bytes) -> Self:
-        """Create a Repository from serialized bytes asynchronously.
-
-        Parameters
-        ----------
-        data : bytes
-            The serialized repository data
-
-        Returns
-        -------
-        Self
-            An instance of the Repository class.
-        """
-        return cls(await PyRepository.from_bytes_async(data))
-
-    async def as_bytes_async(self) -> bytes:
-        """Serialize the repository to bytes asynchronously.
-
-        Returns
-        -------
-        bytes
-            The serialized repository data
-        """
-        return await self._repository.as_bytes_async()
-
     @staticmethod
     def fetch_config(storage: Storage) -> RepositoryConfig | None:
         """
@@ -424,28 +397,6 @@ class Repository:
         """
         return self._repository.config()
 
-    async def config_async(self) -> RepositoryConfig:
-        """
-        Get a copy of this repository's config (async version).
-
-        Returns
-        -------
-        RepositoryConfig
-            The repository configuration.
-        """
-        return await self._repository.config_async()
-
-    async def storage_settings_async(self) -> "StorageSettings":
-        """
-        Get a copy of this repository's storage settings (async version).
-
-        Returns
-        -------
-        StorageSettings
-            The repository storage settings.
-        """
-        return await self._repository.storage_settings_async()
-
     @property
     def storage(self) -> Storage:
         """
@@ -457,17 +408,6 @@ class Repository:
             The repository storage instance.
         """
         return self._repository.storage()
-
-    async def storage_async(self) -> Storage:
-        """
-        Get a copy of this repository's Storage instance (async version).
-
-        Returns
-        -------
-        Storage
-            The repository storage instance.
-        """
-        return await self._repository.storage_async()
 
     async def reopen_async(
         self,
