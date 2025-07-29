@@ -123,7 +123,7 @@ async def test_thread_concurrency() -> None:
         force_path_style=True,
         s3_compatible=True,
     )
-    container = icechunk.VirtualChunkContainer("s3://testbucket", store_config)
+    container = icechunk.VirtualChunkContainer("s3://testbucket/", store_config)
     config.set_virtual_chunk_container(container)
     config.inline_chunk_threshold_bytes = 0
     credentials = icechunk.containers_credentials(

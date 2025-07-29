@@ -124,7 +124,7 @@ def test_virtual_chunk_containers() -> None:
         allow_http=True,
         s3_compatible=True,
     )
-    container = icechunk.VirtualChunkContainer("s3://testbucket", store_config)
+    container = icechunk.VirtualChunkContainer("s3://testbucket/", store_config)
     config.set_virtual_chunk_container(container)
     assert re.match(
         r"RepositoryConfig\(inline_chunk_threshold_bytes=None, get_partial_values_concurrency=None, compression=None, caching=None, storage=None, manifest=.*\)",
@@ -132,14 +132,14 @@ def test_virtual_chunk_containers() -> None:
     )
     assert config.virtual_chunk_containers
     assert len(config.virtual_chunk_containers) == 1
-    assert config.virtual_chunk_containers["s3://testbucket"] == container
+    assert config.virtual_chunk_containers["s3://testbucket/"] == container
 
     config.clear_virtual_chunk_containers()
     assert {} == config.virtual_chunk_containers
 
     config.set_virtual_chunk_container(container)
     assert len(config.virtual_chunk_containers) == 1
-    assert config.virtual_chunk_containers["s3://testbucket"] == container
+    assert config.virtual_chunk_containers["s3://testbucket/"] == container
 
 
 def test_can_change_deep_config_values() -> None:
