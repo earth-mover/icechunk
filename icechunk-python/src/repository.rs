@@ -591,7 +591,6 @@ impl PyRepository {
 
     #[staticmethod]
     fn exists_async<'py>(
-        _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         storage: PyStorage,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -698,7 +697,6 @@ impl PyRepository {
 
     #[staticmethod]
     fn fetch_config_async<'py>(
-        _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         storage: PyStorage,
     ) -> PyResult<Bound<'py, PyAny>> {
