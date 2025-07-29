@@ -136,18 +136,6 @@ class Session:
         """
         return IcechunkStore(self._session.store, for_fork=False)
 
-    async def store_async(self) -> IcechunkStore:
-        """
-        Get a zarr Store object for reading and writing data from the repository (async version).
-
-        Returns
-        -------
-        IcechunkStore
-            A zarr Store object for reading and writing data from the repository.
-        """
-        store = await self._session.store_async()
-        return IcechunkStore(store, for_fork=False)
-
     def all_virtual_chunk_locations(self) -> list[str]:
         """
         Return the location URLs of all virtual chunks.
@@ -444,15 +432,3 @@ class ForkSession(Session):
             A zarr Store object for reading and writing data from the repository.
         """
         return IcechunkStore(self._session.store, for_fork=True)
-
-    async def store_async(self) -> IcechunkStore:
-        """
-        Get a zarr Store object for reading and writing data from the repository (async version).
-
-        Returns
-        -------
-        IcechunkStore
-            A zarr Store object for reading and writing data from the repository.
-        """
-        store = await self._session.store_async()
-        return IcechunkStore(store, for_fork=True)
