@@ -174,24 +174,6 @@ class Session:
             for coord in batch:
                 yield tuple(coord)
 
-    async def chunk_coordinates_async(
-        self, array_path: str, batch_size: int = 1000
-    ) -> AsyncIterator[tuple[int, ...]]:
-        """
-        Return an async iterator to all initialized chunks for the array at array_path (async version)
-
-        Returns
-        -------
-        an async iterator to chunk coordinates as tuples
-        """
-        # We do unbatching here to improve speed. Switching to rust to get
-        # a batch is much faster than switching for every element
-        async for batch in await self._session.chunk_coordinates_async(
-            array_path, batch_size
-        ):
-            for coord in batch:
-                yield tuple(coord)
-
     def merge(self, *others: "ForkSession") -> None:
         """
         Merge the changes for this session with the changes from another session.
