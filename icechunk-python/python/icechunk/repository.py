@@ -455,17 +455,6 @@ class Repository:
         """
         return self._repository.set_default_commit_metadata(metadata)
 
-    async def set_default_commit_metadata_async(self, metadata: dict[str, Any]) -> None:
-        """
-        Set the default commit metadata for the repository (async version).
-
-        Parameters
-        ----------
-        metadata : dict[str, Any]
-            The default commit metadata. Pass an empty dict to clear the default metadata.
-        """
-        return await self._repository.set_default_commit_metadata_async(metadata)
-
     def default_commit_metadata(self) -> dict[str, Any]:
         """
         Get the current configured default commit metadata for the repository.
@@ -476,17 +465,6 @@ class Repository:
             The default commit metadata.
         """
         return self._repository.default_commit_metadata()
-
-    async def default_commit_metadata_async(self) -> dict[str, Any]:
-        """
-        Get the current configured default commit metadata for the repository (async version).
-
-        Returns
-        -------
-        dict[str, Any]
-            The default commit metadata.
-        """
-        return await self._repository.default_commit_metadata_async()
 
     def ancestry(
         self,

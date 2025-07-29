@@ -86,17 +86,6 @@ impl PySession {
         })
     }
 
-    pub fn status_async<'py>(&'py self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let session = self.0.clone();
-
-        pyo3_async_runtimes::tokio::future_into_py::<_, PyDiff>(py, async move {
-            let session = session.read().await;
-            let res =
-                session.status().await.map_err(PyIcechunkStoreError::SessionError)?;
-            Ok(res.into())
-        })
-    }
-
     pub fn discard_changes(&self, py: Python<'_>) {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {

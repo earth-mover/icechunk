@@ -583,20 +583,6 @@ async def test_session_with_as_of_async() -> None:
         assert expected_children == actual_children
 
 
-async def test_default_commit_metadata_async() -> None:
-    repo = await ic.Repository.create_async(
-        storage=ic.in_memory_storage(),
-    )
-
-    await repo.set_default_commit_metadata_async({"user": "test"})
-    session = await repo.writable_session_async("main")
-    root = zarr.group(store=session.store, overwrite=True)
-    root.create_group("child")
-    sid = await session.commit_async("root")
-    snap = await anext(repo.async_ancestry(snapshot_id=sid))
-    assert snap.metadata == {"user": "test"}
-
-
 async def test_tag_expiration_async() -> None:
     repo = await ic.Repository.create_async(storage=ic.in_memory_storage())
     session = await repo.writable_session_async("main")

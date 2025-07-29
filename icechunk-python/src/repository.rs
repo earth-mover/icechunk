@@ -764,38 +764,11 @@ impl PyRepository {
         })
     }
 
-    fn set_default_commit_metadata_async<'py>(
-        &'py self,
-        py: Python<'py>,
-        metadata: PySnapshotProperties,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut repository = repository.write().await;
-            repository.set_default_commit_metadata(metadata.into());
-            Ok(())
-        })
-    }
-
     pub fn default_commit_metadata(&self, py: Python<'_>) -> PySnapshotProperties {
         py.allow_threads(move || {
             let metadata = self.0.blocking_read().default_commit_metadata().clone();
             metadata.into()
         })
-    }
-
-    fn default_commit_metadata_async<'py>(
-        &'py self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py::<_, PySnapshotProperties>(
-            py,
-            async move {
-                let repository = repository.read().await;
-                Ok(repository.default_commit_metadata().clone().into())
-            },
-        )
     }
 
     /// Returns an object that is both a sync and an async iterator
