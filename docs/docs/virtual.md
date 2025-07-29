@@ -119,6 +119,11 @@ credentials = icechunk.containers_credentials({"s3://mybucket/my/data/": icechun
 repo = icechunk.Repository.create(storage, config, credentials)
 ```
 
+!!! note
+
+    The updated configuration will only be persisted across sessions if you call [`repo.save_config`][icechunk.Repository.save_config].
+    This is therefore recommended, so that users reading the virtual chunks in later sessions do not also have to set the virtual containers.
+
 With the repo created, and the virtual chunk container added, lets write our virtual dataset to Icechunk with VirtualiZarr!
 
 ```python
