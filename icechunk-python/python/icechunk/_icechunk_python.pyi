@@ -1567,8 +1567,8 @@ class PyStore:
         location: str,
         offset: int,
         length: int,
-        checksum: str | datetime.datetime | None = None,
-        validate_container: bool = False,
+        checksum: str | datetime.datetime | None,
+        validate_container: bool,
     ) -> None: ...
     async def set_virtual_ref_async(
         self,

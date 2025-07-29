@@ -303,8 +303,12 @@ impl VirtualChunkResolver {
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
         // this resolves things like /../
-        let url = Url::parse(chunk_location)
-            .map_err(VirtualReferenceErrorKind::CannotParseUrl)?;
+        let url = Url::parse(chunk_location).map_err(|e| {
+            VirtualReferenceErrorKind::CannotParseUrl {
+                cause: e,
+                url: chunk_location.to_string(),
+            }
+        })?;
         let fetcher = self.get_fetcher(&url).await?;
         fetcher.fetch_chunk(&url, range, checksum).await
     }

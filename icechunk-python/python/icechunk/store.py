@@ -276,7 +276,7 @@ class IcechunkStore(Store, SyncMixin):
         offset: int,
         length: int,
         checksum: str | datetime | None = None,
-        validate_container: bool = False,
+        validate_container: bool = True,
     ) -> None:
         """Store a virtual reference to a chunk.
 
@@ -335,7 +335,7 @@ class IcechunkStore(Store, SyncMixin):
         array_path: str,
         chunks: list[VirtualChunkSpec],
         *,
-        validate_containers: bool = False,
+        validate_containers: bool = True,
     ) -> list[tuple[int, ...]] | None:
         """Store multiple virtual references for the same array.
 
