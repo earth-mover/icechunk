@@ -793,3 +793,60 @@ async def test_repository_lifecycle_async() -> None:
     readonly_session = await repo.readonly_session_async("main")
     readonly_root = zarr.open_group(store=readonly_session.store, mode="r")
     assert "test" in [name for name, _ in readonly_root.members()]
+
+
+async def test_rewrite_manifests_async() -> None:
+    """Test Repository.rewrite_manifests_async method."""
+    repo = await ic.Repository.create_async(
+        storage=ic.in_memory_storage(),
+        config=ic.RepositoryConfig(inline_chunk_threshold_bytes=0),
+    )
+
+    # Create some data to generate manifests
+    session = await repo.writable_session_async("main")
+    group = zarr.group(store=session.store, overwrite=True)
+    array = group.create_array(
+        "test_array",
+        shape=(100, 50),
+        chunks=(10, 10),
+        dtype="i4",
+        compressors=None,
+    )
+
+    # Write data to create chunks and manifests
+    array[:50, :25] = 42
+    _first_commit = await session.commit_async("initial data")
+
+    # Add more data
+    session = await repo.writable_session_async("main")
+    group = zarr.open_group(store=session.store)
+    array = group["test_array"]
+    array[50:, 25:] = 99
+    second_commit = await session.commit_async("more data")
+
+    # Get initial ancestry to verify commits exist
+    initial_ancestry = [snap async for snap in repo.async_ancestry(branch="main")]
+    assert len(initial_ancestry) >= 3  # initial + first_commit + second_commit
+
+    # Test rewrite_manifests_async
+    rewrite_commit = await repo.rewrite_manifests_async(
+        "rewritten manifests", branch="main", metadata={"operation": "manifest_rewrite"}
+    )
+
+    # Verify the rewrite created a new commit
+    assert rewrite_commit != second_commit
+
+    # Verify ancestry after rewrite
+    new_ancestry = [snap async for snap in repo.async_ancestry(branch="main")]
+    assert len(new_ancestry) == len(initial_ancestry) + 1
+    assert new_ancestry[0].message == "rewritten manifests"
+    assert new_ancestry[0].metadata == {"operation": "manifest_rewrite"}
+
+    # Verify data is still accessible after manifest rewrite
+    session = await repo.readonly_session_async("main")
+    group = zarr.open_group(store=session.store, mode="r")
+    array = group["test_array"]
+
+    # Check that data is preserved
+    assert array[0, 0] == 42  # from first commit
+    assert array[99, 49] == 99  # from second commit
