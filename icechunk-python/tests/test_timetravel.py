@@ -612,7 +612,7 @@ async def test_tag_expiration_async() -> None:
 
 
 async def test_branch_expiration_async() -> None:
-    repo = await ic.Repository.create_async(storage=ic.in_memory_storage())
+    repo = await ic.Repository.open_or_create_async(storage=ic.in_memory_storage())
     session = await repo.writable_session_async("main")
     root = zarr.group(store=session.store, overwrite=True)
     a = await session.commit_async("a")

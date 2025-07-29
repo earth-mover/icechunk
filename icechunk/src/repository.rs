@@ -714,7 +714,7 @@ impl Repository {
                 let snap = self
                     .ancestry_ref(&tip)
                     .await?
-                    .try_skip_while(|parent| ready(Ok(&parent.flushed_at > &at)))
+                    .try_skip_while(|parent| ready(Ok(parent.flushed_at > at)))
                     .take(1)
                     .try_collect::<Vec<_>>()
                     .await?;
