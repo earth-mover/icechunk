@@ -57,15 +57,17 @@ pub enum RefVersionInfo {
     BranchTipRef(String),
 }
 
-impl From<&VersionInfo> for Option<RefVersionInfo> {
-    fn from(info: &VersionInfo) -> Self {
-        match info {
-            VersionInfo::SnapshotId(id) => Some(RefVersionInfo::SnapshotId(id.clone())),
-            VersionInfo::TagRef(tag) => Some(RefVersionInfo::TagRef(tag.clone())),
-            VersionInfo::BranchTipRef(branch) => {
-                Some(RefVersionInfo::BranchTipRef(branch.clone()))
+impl TryFrom<&VersionInfo> for RefVersionInfo {
+    type Error = (String, DateTime<Utc>);
+
+    fn try_from(value: &VersionInfo) -> Result<Self, Self::Error> {
+        match value {
+            VersionInfo::SnapshotId(id) => Ok(RefVersionInfo::SnapshotId(id.clone())),
+            VersionInfo::TagRef(name) => Ok(RefVersionInfo::TagRef(name.clone())),
+            VersionInfo::BranchTipRef(name) => {
+                Ok(RefVersionInfo::BranchTipRef(name.clone()))
             }
-            _ => None,
+            VersionInfo::AsOf { branch, at } => Err((branch.clone(), *at)),
         }
     }
 }
@@ -85,8 +87,6 @@ pub enum RepositoryErrorKind {
     InvalidAsOfSpec { branch: String, at: DateTime<Utc> },
     #[error("invalid snapshot id: `{0}`")]
     InvalidSnapshotId(String),
-    #[error("invalid version info: `{0:?}`")]
-    InvalidVersionInfo(VersionInfo),
     #[error("tag error: `{0}`")]
     Tag(String),
     #[error("repositories can only be created in clean prefixes")]
@@ -707,27 +707,26 @@ impl Repository {
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<SnapshotId> {
-        if let Some(version_info) = version.into() {
-            self.resolve_ref_version(&version_info).await
-        } else if let VersionInfo::AsOf { branch, at } = version {
-            let tip = RefVersionInfo::BranchTipRef(branch.clone());
-            let snap = self
-                .ancestry_ref(&tip)
-                .await?
-                .try_skip_while(|parent| ready(Ok(&parent.flushed_at > at)))
-                .take(1)
-                .try_collect::<Vec<_>>()
-                .await?;
-            match snap.into_iter().next() {
-                Some(snap) => Ok(snap.id),
-                None => Err(RepositoryErrorKind::InvalidAsOfSpec {
-                    branch: branch.clone(),
-                    at: *at,
+        match version.try_into() {
+            Ok(ref_version_info) => self.resolve_ref_version(&ref_version_info).await,
+            Err((branch, at)) => {
+                let tip = RefVersionInfo::BranchTipRef(branch.clone());
+                let snap = self
+                    .ancestry_ref(&tip)
+                    .await?
+                    .try_skip_while(|parent| ready(Ok(&parent.flushed_at > &at)))
+                    .take(1)
+                    .try_collect::<Vec<_>>()
+                    .await?;
+                match snap.into_iter().next() {
+                    Some(snap) => Ok(snap.id),
+                    None => Err(RepositoryErrorKind::InvalidAsOfSpec {
+                        branch: branch.clone(),
+                        at,
+                    }
+                    .into()),
                 }
-                .into()),
             }
-        } else {
-            Err(RepositoryErrorKind::InvalidVersionInfo(version.clone()).into())
         }
     }
 
