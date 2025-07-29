@@ -715,3 +715,81 @@ def test_branch_expiration() -> None:
 
     # should succeed
     repo.lookup_snapshot(c)
+
+
+async def test_repository_lifecycle_async() -> None:
+    """Test Repository configuration and lifecycle async methods."""
+    storage = ic.in_memory_storage()
+
+    # Test exists_async with non-existent repo
+    assert not await ic.Repository.exists_async(storage)
+
+    # Test fetch_config_async with non-existent repo
+    config = await ic.Repository.fetch_config_async(storage)
+    assert config is None
+
+    # Test create_async with custom config
+    custom_config = ic.RepositoryConfig.default()
+    custom_config.inline_chunk_threshold_bytes = 1024
+
+    repo = await ic.Repository.create_async(
+        storage=storage,
+        config=custom_config,
+    )
+
+    # Test exists_async with existing repo
+    assert await ic.Repository.exists_async(storage)
+
+    # Test fetch_config_async with existing repo
+    fetched_config = await ic.Repository.fetch_config_async(storage)
+    assert fetched_config is not None
+    assert fetched_config.inline_chunk_threshold_bytes == 1024
+
+    # Test save_config_async - modify and save config
+    repo.config.inline_chunk_threshold_bytes = 2048
+    await repo.save_config_async()
+
+    # Verify config was saved
+    saved_config = await ic.Repository.fetch_config_async(storage)
+    assert saved_config is not None
+    assert saved_config.inline_chunk_threshold_bytes == 2048
+
+    # Test open_async
+    opened_repo = await ic.Repository.open_async(storage=storage)
+    assert opened_repo.config.inline_chunk_threshold_bytes == 2048
+
+    # Test open_or_create_async with existing repo
+    opened_or_created_repo = await ic.Repository.open_or_create_async(storage=storage)
+    assert opened_or_created_repo.config.inline_chunk_threshold_bytes == 2048
+
+    # Test reopen_async with new config
+    new_config = ic.RepositoryConfig.default()
+    new_config.inline_chunk_threshold_bytes = 4096
+
+    reopened_repo = await repo.reopen_async(config=new_config)
+    assert reopened_repo.config.inline_chunk_threshold_bytes == 4096
+
+    # Original repo should still have old config
+    assert repo.config.inline_chunk_threshold_bytes == 2048
+
+    # Test open_or_create_async with new storage (should create)
+    new_storage = ic.in_memory_storage()
+    assert not await ic.Repository.exists_async(new_storage)
+
+    created_repo = await ic.Repository.open_or_create_async(
+        storage=new_storage,
+        config=custom_config,
+    )
+    assert await ic.Repository.exists_async(new_storage)
+    assert created_repo.config.inline_chunk_threshold_bytes == 1024
+
+    # Test that we can use the repos normally
+    session = await repo.writable_session_async("main")
+    root = zarr.group(store=session.store, overwrite=True)
+    root.create_group("test")
+    await session.commit_async("test commit")
+
+    # Test readonly session works
+    readonly_session = await repo.readonly_session_async("main")
+    readonly_root = zarr.open_group(store=readonly_session.store, mode="r")
+    assert "test" in [name for name, _ in readonly_root.members()]
