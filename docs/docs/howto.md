@@ -271,3 +271,11 @@ expired = repo.expire_snapshots(older_than=expiry_time)
 ```python
 results = repo.garbage_collect(expiry_time)
 ```
+
+### Usage in async contexts
+
+Most methods in Icechunk have an async counterpart, named with an `_async` postfix. For more info, see [Async Usage](./async.md).
+
+```python
+results = await repo.garbage_collect_async(expiry_time)
+```

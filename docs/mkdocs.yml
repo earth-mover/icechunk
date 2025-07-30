@@ -157,6 +157,7 @@ plugins:
         # These redirects work with use_directory_urls: true (default)
         'icechunk-python/quickstart/index.md': 'quickstart.md'
         'icechunk-python/reference/index.md': 'reference.md'
+        'icechunk-python/async/index.md': 'async.md'
         'icechunk-python/configuration/index.md': 'configuration.md'
         'icechunk-python/storage/index.md': 'storage.md'
         'icechunk-python/version-control/index.md': 'version-control.md'
@@ -214,6 +215,7 @@ nav:
     - Xarray: xarray.md
     - Tuning Performance: performance.md
     - Virtual Datasets: virtual.md
+    - Async Usage: async.md
     - Icechunk for Git Users: icechunk-for-git-users.md
     - Creating Icechunk Datasets:
       - Global Raster Data cube: ingestion/glad-ingest.ipynb
