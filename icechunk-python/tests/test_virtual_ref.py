@@ -46,7 +46,7 @@ async def test_write_minio_virtual_refs() -> None:
         s3_compatible=True,
         force_path_style=True,
     )
-    container = VirtualChunkContainer("s3://testbucket", store_config)
+    container = VirtualChunkContainer("s3://testbucket/", store_config)
     config.set_virtual_chunk_container(container)
     credentials = containers_credentials(
         {
@@ -225,12 +225,12 @@ async def test_write_minio_virtual_refs() -> None:
     [
         (
             "s3",
-            "s3://earthmover-sample-data",
+            "s3://earthmover-sample-data/",
             ObjectStoreConfig.S3(S3Options(region="us-east-1", anonymous=True)),
         ),
         (
             "http",
-            "https://earthmover-sample-data.s3.amazonaws.com",
+            "https://earthmover-sample-data.s3.amazonaws.com/",
             http_store(),
         ),
     ],
@@ -384,7 +384,7 @@ def test_error_on_nonexisting_virtual_chunk_container() -> None:
 
 def test_error_on_non_authorized_virtual_chunk_container() -> None:
     store_config = local_filesystem_store("/foo")
-    container = VirtualChunkContainer("file:///foo", store_config)
+    container = VirtualChunkContainer("file:///foo/", store_config)
     config = RepositoryConfig.default()
     config.set_virtual_chunk_container(container)
     repo = Repository.open_or_create(
@@ -405,7 +405,7 @@ def test_error_on_non_authorized_virtual_chunk_container() -> None:
         chunks=[
             VirtualChunkSpec(
                 index=[0],
-                location="file:///foo",
+                location="file:///foo/bar",
                 offset=0,
                 length=4,
             ),

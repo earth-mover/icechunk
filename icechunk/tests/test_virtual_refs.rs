@@ -112,7 +112,7 @@ async fn create_local_repository(
 
     let mut containers = vec![
         VirtualChunkContainer::new(
-            "s3://testbucket".to_string(),
+            "s3://testbucket/".to_string(),
             ObjectStoreConfig::S3(S3Options {
                 region: Some("us-east-1".to_string()),
                 endpoint_url: None,
@@ -123,7 +123,7 @@ async fn create_local_repository(
         )
         .unwrap(),
         VirtualChunkContainer::new(
-            "s3://earthmover-sample-data".to_string(),
+            "s3://earthmover-sample-data/".to_string(),
             ObjectStoreConfig::S3(S3Options {
                 region: Some("us-east-1".to_string()),
                 endpoint_url: None,
@@ -134,12 +134,12 @@ async fn create_local_repository(
         )
         .unwrap(),
         VirtualChunkContainer::new(
-            "gcs://testbucket".to_string(),
+            "gcs://testbucket/".to_string(),
             ObjectStoreConfig::Gcs(Default::default()),
         )
         .unwrap(),
         VirtualChunkContainer::new(
-            "gcs://earthmover-sample-data".to_string(),
+            "gcs://earthmover-sample-data/".to_string(),
             ObjectStoreConfig::Gcs(Default::default()),
         )
         .unwrap(),
@@ -160,7 +160,7 @@ async fn create_local_repository(
     .into();
 
     if let Some(chunks_path) = chunks_path {
-        let prefix = format!("file://{}", chunks_path.to_str().unwrap());
+        let prefix = format!("file://{}/", chunks_path.to_str().unwrap());
         containers.push(
             VirtualChunkContainer::new(
                 prefix.clone(),
@@ -183,7 +183,7 @@ async fn create_minio_repository() -> Repository {
 
     let containers = vec![
         VirtualChunkContainer::new(
-            "s3://testbucket".to_string(),
+            "s3://testbucket/".to_string(),
             ObjectStoreConfig::S3Compatible(S3Options {
                 region: Some(String::from("us-east-1")),
                 endpoint_url: Some("http://localhost:9000".to_string()),
@@ -196,7 +196,7 @@ async fn create_minio_repository() -> Repository {
     ];
 
     let credentials = [(
-        "s3://testbucket".to_string(),
+        "s3://testbucket/".to_string(),
         Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
             access_key_id: "minio123".to_string(),
             secret_access_key: "minio123".to_string(),
@@ -688,7 +688,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
 
     let containers = vec![
         VirtualChunkContainer::new(
-            "s3://testbucket".to_string(),
+            "s3://testbucket/".to_string(),
             ObjectStoreConfig::S3Compatible(S3Options {
                 region: Some(String::from("us-east-1")),
                 endpoint_url: Some("http://localhost:9000".to_string()),
@@ -699,12 +699,12 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         )
         .unwrap(),
         VirtualChunkContainer::new(
-            format!("file://{}", chunk_dir.path().to_str().unwrap()),
+            format!("file://{}/", chunk_dir.path().to_str().unwrap()),
             ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
         )
         .unwrap(),
         VirtualChunkContainer::new(
-            "s3://earthmover-sample-data".to_string(),
+            "s3://earthmover-sample-data/".to_string(),
             ObjectStoreConfig::S3(S3Options {
                 region: Some(String::from("us-east-1")),
                 endpoint_url: None,
