@@ -4,7 +4,7 @@ Icechunk includes an optional asynchronous interface for orchestrating repos and
 
 ## When to use async
 
-The async interface allows for icechunk operations to run concurrently, without blocking the current thread while waiting for IO operations. The most common reason to use async is that you are working within a server context, or anywhere that work may be happening across multiple Icechunk repositories at a time.
+The async interface allows for icechunk operations to run concurrently, without blocking the current thread while waiting for IO operations. The most common reason to use async is that you are developing a backend service in which work may be happening across multiple Icechunk repositories simultaneously.
 
 ## Using the async interface
 
