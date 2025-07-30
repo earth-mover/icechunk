@@ -1,6 +1,6 @@
 # Async Usage
 
-Icechunk includes an optional asynchronous interface for orchestrating repos and sessions. However, the Icechunk core is fully asynchronous and delivers full parallelism and performance whether you choose to use the synchronous or asynchronous interface. Most users should use the synchronous interface, unless they have specific reasons otherwise.
+Icechunk includes an optional asynchronous interface for orchestrating repos and sessions. However, the Icechunk core is fully asynchronous and delivers full parallelism and performance whether you choose to use the synchronous or asynchronous interface. Most users, particularly those doing interactive data science and analytics, should use the synchronous interface.
 
 ## When to use async
 
