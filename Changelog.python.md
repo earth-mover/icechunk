@@ -1,5 +1,55 @@
 # Changelog
 
+## Python Icechunk Library 1.1.0
+
+### Features
+
+- Icechunk has an [asynchronous API](https://icechunk.io/en/latest/async/) now.
+  - Icechunk internals continue to be fully asynchronous. Most "normal" use cases
+    don't need the async API, the synchronous API will deliver the same performance.
+  - The async API is useful to get optimal concurrency in operations involving
+    multiple repos or multiple sessions. An example would be users who run Icechunk
+    in the context of a service accessing multiple repositories.
+  - Not every method in Icechunk has an async version, only those that can benefit because they do I/O.
+  - The new methods have the same name as they synchronous ones with an `_async` suffix.
+    They can be invoked on the same instances as usual.
+  - Some Examples:
+    - `Repository.create_async()`
+    - `Repository.open_async()`
+    - `Repository.garbage_collect_async()`
+    - `Repository.total_chunks_storage_async()`
+    - `Repository.lookup_tag_async()`
+    - `Repository.readonly_session_async()`
+    - `Repository.writable_session_async()`
+    - `Session.commit_async()`
+    - `Session.rebase_async()`
+    - There are many more, check the [API reference](https://icechunk.io/en/latest/reference/)
+- Icechunk default log level is `warn` now, instead of `error`.
+- Emit a log warning and recommendation when manifests are too large for the configured cache
+  size, which makes Icechunk less performant.
+- Add property accessors to `ManifestFileInfo`
+
+### Performance
+
+- We increased the size of the default asset caches
+  - Snapshots nodes: 10k -> 30k
+  - Chunk references: 5M  -> 15M
+
+### Fixes
+
+- Validate urls on `set_virtual_ref`
+
+### API Breaking Changes
+
+There are two minor API breaking changes that will affect only virtual dataset users:
+
+- To improve security, the `url_prefix` of virtual chunk containers must be declared with a final `/`
+  character now. This protects, for example, users from authorizing access to
+  `foo` prefix and inadvertently authorize access to `foo-production`.
+- `set_virtual_ref` and `set_virtual_refs` now default to `validate_container = True`. This improves
+  usability for repository writers, with an early error when they forget to create their virtual
+  chunk containers.
+
 ## Python Icechunk Library 1.0.3
 
 ### Fixes
