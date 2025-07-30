@@ -13,7 +13,7 @@ You can call both sync and async methods on a `Repository`, `Session`, or `Store
 ```python exec="on" session="async_usage" source="material-block"
 import icechunk
 
-async def get_branches(storage: icechunk.Storage): set[string]
+async def get_branches(storage: icechunk.Storage) -> set[str]:
     repo = await icechunk.Repository.open_async(storage)
     return await repo.list_branches_async()
 ```
