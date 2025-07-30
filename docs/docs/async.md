@@ -8,7 +8,7 @@ The async interface allows for icechunk operations to run concurrently, without 
 
 ## Using the async interface
 
-Because of Icehcunk's rust based runtime, you can call both sync and async methods on a `Repository`, `Session`, or `Store` as needed, there is no need to worry about sync contexts or event loops. Methods that support async are named with an `_async` postfix:
+You can call both sync and async methods on a `Repository`, `Session`, or `Store` as needed. (Of course, to use the async methods, you must be within a async function.) Methods that support async are named with an `_async` postfix:
 
 ```python exec="on" session="async_usage" source="material-block"
 import icechunk
