@@ -147,6 +147,17 @@ class Session:
         """
         return self._session.all_virtual_chunk_locations()
 
+    async def all_virtual_chunk_locations_async(self) -> list[str]:
+        """
+        Return the location URLs of all virtual chunks (async version).
+
+        Returns
+        -------
+        list of str
+            The location URLs of all virtual chunks.
+        """
+        return await self._session.all_virtual_chunk_locations_async()
+
     async def chunk_coordinates(
         self, array_path: str, batch_size: int = 1000
     ) -> AsyncIterator[tuple[int, ...]]:
@@ -179,6 +190,24 @@ class Session:
                     f"Received {type(other).__name__} instead."
                 )
             self._session.merge(other._session)
+        self._allow_changes = False
+
+    async def merge_async(self, *others: "ForkSession") -> None:
+        """
+        Merge the changes for this session with the changes from another session (async version).
+
+        Parameters
+        ----------
+        others : ForkSession
+            The forked sessions to merge changes from.
+        """
+        for other in others:
+            if not isinstance(other, ForkSession):
+                raise TypeError(
+                    "Sessions can only be merged with a ForkSession created with Session.fork(). "
+                    f"Received {type(other).__name__} instead."
+                )
+            await self._session.merge_async(other._session)
         self._allow_changes = False
 
     def commit(
@@ -227,6 +256,52 @@ class Session:
             message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
         )
 
+    async def commit_async(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        rebase_with: ConflictSolver | None = None,
+        rebase_tries: int = 1_000,
+    ) -> str:
+        """
+        Commit the changes in the session to the repository (async version).
+
+        When successful, the writable session is completed and the session is now read-only and based on the new commit. The snapshot ID of the new commit is returned.
+
+        If the session is out of date, this will raise a ConflictError exception depicting the conflict that occurred. The session will need to be rebased before committing.
+
+        Parameters
+        ----------
+        message : str
+            The message to write with the commit.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+        rebase_with : ConflictSolver | None, optional
+            If other session committed while the current session was writing, use Session.rebase with this solver.
+        rebase_tries : int, optional
+            If other session committed while the current session was writing, use Session.rebase up to this many times in a loop.
+
+        Returns
+        -------
+        str
+            The snapshot ID of the new commit.
+
+        Raises
+        ------
+        icechunk.ConflictError
+            If the session is out of date and a conflict occurs.
+        """
+        if self._allow_changes:
+            warnings.warn(
+                "Committing a session after forking, and without merging will not work. "
+                "Merge back in the remote changes first using Session.merge().",
+                UserWarning,
+                stacklevel=2,
+            )
+        return await self._session.commit_async(
+            message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
+        )
+
     def rebase(self, solver: ConflictSolver) -> None:
         """
         Rebase the session to the latest ancestry of the branch.
@@ -246,6 +321,26 @@ class Session:
             When a conflict is detected and the solver fails to resolve it.
         """
         self._session.rebase(solver)
+
+    async def rebase_async(self, solver: ConflictSolver) -> None:
+        """
+        Rebase the session to the latest ancestry of the branch (async version).
+
+        This method will iteratively crawl the ancestry of the branch and apply the changes from the branch to the session. If a conflict is detected, the conflict solver will be used to optionally resolve the conflict. When complete, the session will be based on the latest commit of the branch and the session will be ready to attempt another commit.
+
+        When a conflict is detected and a resolution is not possible with the provided solver, a RebaseFailed exception will be raised. This exception will contain the snapshot ID that the rebase failed on and a list of conflicts that occurred.
+
+        Parameters
+        ----------
+        solver : ConflictSolver
+            The conflict solver to use when a conflict is detected.
+
+        Raises
+        ------
+        RebaseFailedError
+            When a conflict is detected and the solver fails to resolve it.
+        """
+        await self._session.rebase_async(solver)
 
     def fork(self) -> "ForkSession":
         if self.has_uncommitted_changes:
@@ -279,7 +374,36 @@ class ForkSession(Session):
                 )
             self._session.merge(other._session)
 
+    async def merge_async(self, *others: Self) -> None:
+        """
+        Merge the changes for this fork session with the changes from other fork sessions (async version).
+
+        Parameters
+        ----------
+        others : ForkSession
+            The other fork sessions to merge changes from.
+        """
+        for other in others:
+            if not isinstance(other, ForkSession):
+                raise TypeError(
+                    f"A ForkSession can only be merged with another ForkSession. Received {type(other)} instead."
+                )
+            await self._session.merge_async(other._session)
+
     def commit(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        rebase_with: ConflictSolver | None = None,
+        rebase_tries: int = 1_000,
+    ) -> NoReturn:
+        raise TypeError(
+            "Cannot commit a fork of a Session. If you are using uncooperative writes, "
+            "please send the Repository object to your workers, not a Session. "
+            "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
+        )
+
+    async def commit_async(
         self,
         message: str,
         metadata: dict[str, Any] | None = None,

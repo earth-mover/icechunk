@@ -1065,7 +1065,7 @@ impl Session {
 
     pub async fn commit_rebasing<F1, F2, Fut1, Fut2>(
         &mut self,
-        solver: &dyn ConflictSolver,
+        solver: &(dyn ConflictSolver + Send + Sync),
         rebase_attempts: u16,
         message: &str,
         properties: Option<SnapshotProperties>,
@@ -1159,7 +1159,10 @@ impl Session {
     /// `Repository` in a consistent state, that would successfully commit on top
     /// of the latest successfully fast-forwarded commit.
     #[instrument(skip(self, solver))]
-    pub async fn rebase(&mut self, solver: &dyn ConflictSolver) -> SessionResult<()> {
+    pub async fn rebase(
+        &mut self,
+        solver: &(dyn ConflictSolver + Send + Sync),
+    ) -> SessionResult<()> {
         let Some(branch_name) = &self.branch_name else {
             return Err(SessionErrorKind::ReadOnlySession.into());
         };

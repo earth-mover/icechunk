@@ -9,7 +9,8 @@ from icechunk import ForkSession, IcechunkError, Repository, local_filesystem_st
 from icechunk.distributed import merge_sessions
 
 
-def test_session_fork() -> None:
+@pytest.mark.parametrize("use_async", [True, False])
+async def test_session_fork(use_async: bool) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Repository.create(local_filesystem_storage(tmpdir))
         session = repo.writable_session("main")
@@ -19,7 +20,10 @@ def test_session_fork() -> None:
         with pytest.raises(ValueError):
             session.fork()
 
-        session.commit("init")
+        if use_async:
+            await session.commit_async("init")
+        else:
+            session.commit("init")
 
         # forking a read-only session
         with pytest.raises(ValueError):
@@ -37,8 +41,12 @@ def test_session_fork() -> None:
         with pytest.warns(UserWarning):
             with pytest.raises(IcechunkError, match="cannot commit"):
                 session.commit("foo")
-        session.merge(fork)
-        session.commit("foo")
+        if use_async:
+            await session.merge_async(fork)
+            await session.commit_async("foo")
+        else:
+            session.merge(fork)
+            session.commit("foo")
 
         session = repo.writable_session("main")
         fork1 = pickle.loads(pickle.dumps(session.fork()))
@@ -56,8 +64,12 @@ def test_session_fork() -> None:
         with pytest.raises(TypeError, match="Received 'Session'"):
             merge_sessions(cast(ForkSession, session), fork1, fork2)
         # this is right
-        session.merge(fork1, fork2)
-        session.commit("all done")
+        if use_async:
+            await session.merge_async(fork1, fork2)
+            await session.commit_async("all done")
+        else:
+            session.merge(fork1, fork2)
+            session.commit("all done")
 
         groups = set(
             name for name, _ in zarr.open_group(session.store, mode="r").groups()

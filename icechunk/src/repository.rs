@@ -50,6 +50,28 @@ pub enum VersionInfo {
     AsOf { branch: String, at: DateTime<Utc> },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefVersionInfo {
+    SnapshotId(SnapshotId),
+    TagRef(String),
+    BranchTipRef(String),
+}
+
+impl TryFrom<&VersionInfo> for RefVersionInfo {
+    type Error = (String, DateTime<Utc>);
+
+    fn try_from(value: &VersionInfo) -> Result<Self, Self::Error> {
+        match value {
+            VersionInfo::SnapshotId(id) => Ok(RefVersionInfo::SnapshotId(id.clone())),
+            VersionInfo::TagRef(name) => Ok(RefVersionInfo::TagRef(name.clone())),
+            VersionInfo::BranchTipRef(name) => {
+                Ok(RefVersionInfo::BranchTipRef(name.clone()))
+            }
+            VersionInfo::AsOf { branch, at } => Err((branch.clone(), *at)),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RepositoryErrorKind {
@@ -467,6 +489,16 @@ impl Repository {
         self.snapshot_ancestry_arc(&snapshot_id).await
     }
 
+    #[instrument(skip(self))]
+    async fn ancestry_ref<'a>(
+        &'a self,
+        version: &RefVersionInfo,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + 'a + use<'a>>
+    {
+        let snapshot_id = self.resolve_ref_version(version).await?;
+        self.snapshot_ancestry(&snapshot_id).await
+    }
+
     /// Create a new branch in the repository at the given snapshot id
     #[instrument(skip(self))]
     pub async fn create_branch(
@@ -639,12 +671,12 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    pub async fn resolve_version(
+    pub async fn resolve_ref_version(
         &self,
-        version: &VersionInfo,
+        version: &RefVersionInfo,
     ) -> RepositoryResult<SnapshotId> {
         match version {
-            VersionInfo::SnapshotId(sid) => {
+            RefVersionInfo::SnapshotId(sid) => {
                 raise_if_invalid_snapshot_id(
                     self.storage.as_ref(),
                     &self.storage_settings,
@@ -653,12 +685,12 @@ impl Repository {
                 .await?;
                 Ok(sid.clone())
             }
-            VersionInfo::TagRef(tag) => {
+            RefVersionInfo::TagRef(tag) => {
                 let ref_data =
                     fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
                 Ok(ref_data.snapshot)
             }
-            VersionInfo::BranchTipRef(branch) => {
+            RefVersionInfo::BranchTipRef(branch) => {
                 let ref_data = fetch_branch_tip(
                     self.storage.as_ref(),
                     &self.storage_settings,
@@ -667,12 +699,22 @@ impl Repository {
                 .await?;
                 Ok(ref_data.snapshot)
             }
-            VersionInfo::AsOf { branch, at } => {
-                let tip = VersionInfo::BranchTipRef(branch.clone());
+        }
+    }
+
+    #[instrument(skip(self))]
+    pub async fn resolve_version(
+        &self,
+        version: &VersionInfo,
+    ) -> RepositoryResult<SnapshotId> {
+        match version.try_into() {
+            Ok(ref_version_info) => self.resolve_ref_version(&ref_version_info).await,
+            Err((branch, at)) => {
+                let tip = RefVersionInfo::BranchTipRef(branch.clone());
                 let snap = self
-                    .ancestry(&tip)
+                    .ancestry_ref(&tip)
                     .await?
-                    .try_skip_while(|parent| ready(Ok(&parent.flushed_at > at)))
+                    .try_skip_while(|parent| ready(Ok(parent.flushed_at > at)))
                     .take(1)
                     .try_collect::<Vec<_>>()
                     .await?;
@@ -680,7 +722,7 @@ impl Repository {
                     Some(snap) => Ok(snap.id),
                     None => Err(RepositoryErrorKind::InvalidAsOfSpec {
                         branch: branch.clone(),
-                        at: *at,
+                        at,
                     }
                     .into()),
                 }
@@ -701,8 +743,9 @@ impl Repository {
         to: &VersionInfo,
     ) -> SessionResult<Diff> {
         let from = self.resolve_version(from).await?;
+        let to = self.resolve_version(to).await?;
         let all_snaps = self
-            .ancestry(to)
+            .ancestry_ref(&RefVersionInfo::SnapshotId(to))
             .await?
             .try_take_while(|snap_info| ready(Ok(snap_info.id != from)))
             .try_collect::<Vec<_>>()

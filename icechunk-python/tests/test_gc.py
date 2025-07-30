@@ -28,7 +28,8 @@ def mk_repo() -> tuple[str, ic.Repository]:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-def test_expire_and_gc() -> None:
+@pytest.mark.parametrize("use_async", [True, False])
+async def test_expire_and_gc(use_async: bool) -> None:
     prefix, repo = mk_repo()
 
     session = repo.writable_session("main")
@@ -100,7 +101,10 @@ def test_expire_and_gc() -> None:
         == 22
     )
 
-    expired_snapshots = repo.expire_snapshots(old)
+    if use_async:
+        expired_snapshots = await repo.expire_snapshots_async(old)
+    else:
+        expired_snapshots = repo.expire_snapshots(old)
     # empty array + 20 old versions
     assert len(expired_snapshots) == 21
 
@@ -109,7 +113,10 @@ def test_expire_and_gc() -> None:
         space_before += obj["Size"]
 
     # let's run GC using dry_run = True
-    gc_result = repo.garbage_collect(old, dry_run=True)
+    if use_async:
+        gc_result = await repo.garbage_collect_async(old, dry_run=True)
+    else:
+        gc_result = repo.garbage_collect(old, dry_run=True)
     space_after = 0
     for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}")["Contents"]:
         space_after += obj["Size"]
@@ -126,8 +133,11 @@ def test_expire_and_gc() -> None:
     # same number as snapshots
     assert gc_result.transaction_logs_deleted == 21
 
-    # now let's run real GC, no dry_run
-    gc_result = repo.garbage_collect(old)
+    # now let's run real GC, no dry_run.
+    if use_async:
+        gc_result = await repo.garbage_collect_async(old)
+    else:
+        gc_result = repo.garbage_collect(old)
 
     space_after = 0
     for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}")["Contents"]:

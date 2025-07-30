@@ -263,6 +263,37 @@ class IcechunkStore(Store, SyncMixin):
             key, location, offset, length, checksum, validate_container
         )
 
+    async def set_virtual_ref_async(
+        self,
+        key: str,
+        location: str,
+        *,
+        offset: int,
+        length: int,
+        checksum: str | datetime | None = None,
+        validate_container: bool = True,
+    ) -> None:
+        """Store a virtual reference to a chunk asynchronously.
+
+        Parameters
+        ----------
+        key : str
+            The chunk to store the reference under. This is the fully qualified zarr key eg: 'array/c/0/0/0'
+        location : str
+            The location of the chunk in storage. This is absolute path to the chunk in storage eg: 's3://bucket/path/to/file.nc'
+        offset : int
+            The offset in bytes from the start of the file location in storage the chunk starts at
+        length : int
+            The length of the chunk in bytes, measured from the given offset
+        checksum : str | datetime | None
+            The etag or last_medified_at field of the object
+        validate_container: bool
+            If set to true, fail for locations that don't match any existing virtual chunk container
+        """
+        return await self._store.set_virtual_ref_async(
+            key, location, offset, length, checksum, validate_container
+        )
+
     def set_virtual_refs(
         self,
         array_path: str,
@@ -290,6 +321,36 @@ class IcechunkStore(Store, SyncMixin):
             If there were validation errors, it returns the chunk indices of all failed references.
         """
         return self._store.set_virtual_refs(array_path, chunks, validate_containers)
+
+    async def set_virtual_refs_async(
+        self,
+        array_path: str,
+        chunks: list[VirtualChunkSpec],
+        *,
+        validate_containers: bool = True,
+    ) -> list[tuple[int, ...]] | None:
+        """Store multiple virtual references for the same array asynchronously.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store. Example: "/groupA/groupB/outputs/my-array"
+        chunks : list[VirtualChunkSpec],
+            The list of virtual chunks to add
+        validate_containers: bool
+            If set to true, ignore virtual references for locations that don't match any existing virtual chunk container
+
+
+        Returns
+        -------
+        list[tuple[int, ...]] | None
+
+            If all virtual references where successfully updated, it returns None.
+            If there were validation errors, it returns the chunk indices of all failed references.
+        """
+        return await self._store.set_virtual_refs_async(
+            array_path, chunks, validate_containers
+        )
 
     async def delete(self, key: str) -> None:
         """Remove a key from the store

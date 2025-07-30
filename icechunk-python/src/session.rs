@@ -125,6 +125,25 @@ impl PySession {
         })
     }
 
+    pub fn all_virtual_chunk_locations_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, Vec<String>>(py, async move {
+            let session = session.read().await;
+            let res = session
+                .all_virtual_chunk_locations()
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?
+                .try_collect()
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+
+            Ok(res)
+        })
+    }
+
     /// Return vectors of coordinates, up to batch_size in length.
     ///
     /// We batch the results to make it faster.
@@ -180,6 +199,22 @@ impl PySession {
         })
     }
 
+    pub fn merge_async<'py>(
+        &'py self,
+        other: &PySession,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        let other = other.0.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut session = session.write().await;
+            let other = other.read().await.deref().clone();
+            session.merge(other).await.map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(())
+        })
+    }
+
     #[pyo3(signature = (message, metadata=None, rebase_with=None, rebase_tries=1_000))]
     pub fn commit(
         &self,
@@ -214,6 +249,39 @@ impl PySession {
         })
     }
 
+    pub fn commit_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        message: &str,
+        metadata: Option<PySnapshotProperties>,
+        rebase_with: Option<PyConflictSolver>,
+        rebase_tries: Option<u16>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        let message = message.to_owned();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let metadata = metadata.map(|m| m.into());
+            let mut session = session.write().await;
+            let snapshot_id = if let Some(solver) = rebase_with {
+                session
+                    .commit_rebasing(
+                        solver.as_ref(),
+                        rebase_tries.unwrap_or(1_000),
+                        &message,
+                        metadata,
+                        |_| async {},
+                        |_| async {},
+                    )
+                    .await
+            } else {
+                session.commit(&message, metadata).await
+            }
+            .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(snapshot_id.to_string())
+        })
+    }
+
     pub fn rebase(&self, solver: PyConflictSolver, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
@@ -227,6 +295,21 @@ impl PySession {
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(())
             })
+        })
+    }
+
+    pub fn rebase_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        solver: PyConflictSolver,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut session = session.write().await;
+            let solver = solver.as_ref();
+            session.rebase(solver).await.map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(())
         })
     }
 }

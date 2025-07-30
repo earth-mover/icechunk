@@ -337,6 +337,35 @@ impl PyStore {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn set_virtual_ref_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        key: String,
+        location: String,
+        offset: ChunkOffset,
+        length: ChunkLength,
+        checksum: Option<ChecksumArgument>,
+        validate_container: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let location = VirtualChunkLocation::from_absolute_path(location.as_str())
+                .map_err(PyIcechunkStoreError::from)?;
+            let virtual_ref = VirtualChunkRef {
+                location,
+                offset,
+                length,
+                checksum: checksum.map(|cs| cs.into()),
+            };
+            store
+                .set_virtual_ref(&key, virtual_ref, validate_container)
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            Ok(())
+        })
+    }
+
     fn set_virtual_refs(
         &self,
         py: Python<'_>,
@@ -396,6 +425,66 @@ impl PyStore {
                 }),
             }
         })
+    }
+
+    fn set_virtual_refs_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        array_path: String,
+        chunks: Vec<VirtualChunkSpec>,
+        validate_containers: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py::<_, Option<Vec<Py<PyTuple>>>>(
+            py,
+            async move {
+                let vrefs: Vec<(ChunkIndices, VirtualChunkRef)> = chunks
+                    .into_iter()
+                    .map(|vcs| {
+                        let checksum = vcs.checksum();
+                        let index = ChunkIndices(vcs.index);
+                        let location = VirtualChunkLocation::from_absolute_path(
+                            vcs.location.as_str(),
+                        )
+                        .map_err(PyIcechunkStoreError::from)?;
+                        let vref = VirtualChunkRef {
+                            offset: vcs.offset,
+                            length: vcs.length,
+                            location,
+                            checksum,
+                        };
+                        Ok::<_, PyIcechunkStoreError>((index, vref))
+                    })
+                    .try_collect()?;
+
+                let array_path = if !array_path.starts_with("/") {
+                    format!("/{array_path}")
+                } else {
+                    array_path.to_string()
+                };
+
+                let path = Path::try_from(array_path).map_err(|e| {
+                    PyValueError::new_err(format!("Invalid array path: {e}"))
+                })?;
+
+                let res = store
+                    .set_virtual_refs(&path, validate_containers, vrefs)
+                    .await
+                    .map_err(PyIcechunkStoreError::from)?;
+
+                match res {
+                    SetVirtualRefsResult::Done => Ok(None),
+                    SetVirtualRefsResult::FailedRefs(vec) => Python::with_gil(|py| {
+                        let res = vec
+                            .into_iter()
+                            .map(|ci| PyTuple::new(py, ci.0).map(|tup| tup.unbind()))
+                            .try_collect()?;
+
+                        Ok(Some(res))
+                    }),
+                }
+            },
+        )
     }
 
     fn delete<'py>(
