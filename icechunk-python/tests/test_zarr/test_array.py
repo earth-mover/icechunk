@@ -156,5 +156,4 @@ async def test_special_complex_fill_values_roundtrip(
     assert content is not None
     actual = json.loads(content.to_bytes())
     assert actual
-    pytest.xfail("IcechunkStore does not support complex fill types")
-    # assert actual["fill_value"] == expected
+    assert actual["fill_value"] == expected

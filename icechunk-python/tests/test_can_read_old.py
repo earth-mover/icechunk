@@ -46,7 +46,7 @@ def mk_repo(
             s3_compatible=True,
             force_path_style=True,
         )
-        container = ic.VirtualChunkContainer("s3://testbucket", virtual_store_config)
+        container = ic.VirtualChunkContainer("s3://testbucket/", virtual_store_config)
         config.set_virtual_chunk_container(container)
     credentials = ic.containers_credentials(
         {
