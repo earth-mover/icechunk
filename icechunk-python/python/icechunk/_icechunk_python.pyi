@@ -1734,9 +1734,6 @@ class GcsBearerCredential:
     This is a bearer token that has an expiration time.
     """
 
-    bearer: str
-    expires_after: datetime.datetime | None
-
     def __init__(
         self, bearer: str, *, expires_after: datetime.datetime | None = None
     ) -> None:
@@ -1749,6 +1746,11 @@ class GcsBearerCredential:
         expires_after: datetime.datetime | None
             The expiration time of the bearer token.
         """
+
+    @property
+    def bearer(self) -> str: ...
+    @property
+    def expires_after(self) -> datetime.datetime | None: ...
 
 class GcsStaticCredentials:
     """Credentials for a google cloud storage backend"""

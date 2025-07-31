@@ -278,7 +278,9 @@ impl From<PyGcsStaticCredentials> for GcsStaticCredentials {
 #[pyclass(name = "GcsBearerCredential")]
 #[derive(Clone, Debug)]
 pub struct PyGcsBearerCredential {
+    #[pyo3(get)]
     pub bearer: String,
+    #[pyo3(get)]
     pub expires_after: Option<DateTime<Utc>>,
 }
 
