@@ -11,6 +11,7 @@ use crate::{
             ManifestFileInfo, NodeData, NodeSnapshot, NodeType, SnapshotProperties,
         },
     },
+    repository::{RepositoryErrorKind, RepositoryResult},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -93,7 +94,7 @@ struct SnapshotInfoInspect {
 async fn inspect_snapshot(
     asset_manager: &AssetManager,
     id: &SnapshotId,
-) -> Result<SnapshotInfoInspect, Box<dyn std::error::Error>> {
+) -> RepositoryResult<SnapshotInfoInspect> {
     let snap = asset_manager.fetch_snapshot(id).await?;
     let res = SnapshotInfoInspect {
         id: snap.id().to_string(),
@@ -112,13 +113,14 @@ pub async fn snapshot_json(
     asset_manager: &AssetManager,
     id: &SnapshotId,
     pretty: bool,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> RepositoryResult<String> {
     let info = inspect_snapshot(asset_manager, id).await?;
     let res = if pretty {
         serde_json::to_string_pretty(&info)
     } else {
         serde_json::to_string(&info)
-    }?;
+    }
+    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
     Ok(res)
 }
 

@@ -1627,14 +1627,15 @@ impl PyRepository {
 
     #[pyo3(signature = (snapshot_id, *, pretty = true))]
     fn inspect_snapshot(&self, snapshot_id: String, pretty: bool) -> PyResult<String> {
-        let result = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let lock = self.0.read().await;
-            let snap = snapshot_id.try_into().map_err(PyValueError::new_err)?;
-            let res = snapshot_json(lock.asset_manager(), &snap, pretty)
-                .await
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            Ok::<_, PyErr>(res)
-        })?;
+        let result = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(async move {
+                let lock = self.0.read().await;
+                let snap = SnapshotId::try_from(snapshot_id.as_str())
+                    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+                let res = snapshot_json(lock.asset_manager(), &snap, pretty).await?;
+                Ok(res)
+            })
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
         Ok(result)
     }
 }
