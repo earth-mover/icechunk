@@ -2,32 +2,42 @@
 
 Built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/).
 
-## Developing
+## Developing Locally
 
-### Prerequisites
+### Install Base Conda Environment
 
-This repository uses [Poetry](https://python-poetry.org/) to manage dependencies
+```
+mamba env create -f docs/doc-env.yml  
+mamba activate icechunk-docs
+```
 
-1. Install dependencies using `poetry install`
+### Build Icechunk Python
 
-### Running
+```
+cd icechunk-python
+maturin build
+pip install "$(ls -t ../target/wheels/*.whl | head -n 1)[docs]"
+```
 
-1. Run `poetry shell` from the `/docs` directory
-2. Start the MkDocs development server: `mkdocs serve`
+### Install MkDocs and Plugins
 
-Alternatively you can run `poetry run mkdocs serve`
-
-> [!TIP]
-> You can use the optional `--dirty` flag to only rebuild changed files, although you may need to restart if you make changes to `mkdocs.yaml`.
+```
+pip install \
+mkdocs "mkdocs-material[imaging]" \
+mkdocs-include-markdown-plugin mkdocs-open-in-new-tab mkdocs-breadcrumbs-plugin \
+mkdocs-mermaid2-plugin mkdocs-minify-plugin mkdocs-awesome-pages-plugin \
+mkdocs-macros-plugin mkdocs-git-revision-date-localized-plugin mkdocstrings \
+mkdocstrings-python mkdocs-jupyter markdown-exec 
+```
 
 ### Building
 
-1. Run `mkdocs build`
+```
+cd docs
+mkdocs build
+```
 
-Builds output to: `icechunk-docs/.site` directory.
-
-
-### Deploying
+## Deploying
 
 Docs are automatically deployed upon commits to `main` branch via the `./github/workflows/deploy-docs.yaml` action.
 
