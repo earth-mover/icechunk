@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     asset_manager::AssetManager,
     format::{
-        SnapshotId,
+        ManifestId, SnapshotId,
         manifest::ManifestRef,
         snapshot::{
             ManifestFileInfo, NodeData, NodeSnapshot, NodeType, SnapshotProperties,
@@ -91,6 +91,40 @@ struct SnapshotInfoInspect {
     nodes: Vec<NodeSnapshotInspect>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct ArrayManifestInspect {
+    node_id: String,
+    num_chunks: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ManifestInfoInspect {
+    id: String,
+    arrays: Vec<ArrayManifestInspect>,
+}
+
+async fn inspect_manifest(
+    asset_manager: &AssetManager,
+    id: &ManifestId,
+) -> RepositoryResult<ManifestInfoInspect> {
+    todo!()
+}
+
+pub async fn manifest_json(
+    asset_manager: &AssetManager,
+    id: &ManifestId,
+    pretty: bool,
+) -> RepositoryResult<String> {
+    let info = inspect_manifest(asset_manager, id).await?;
+    let res = if pretty {
+        serde_json::to_string_pretty(&info)
+    } else {
+        serde_json::to_string(&info)
+    }
+    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+    Ok(res)
+}
+
 async fn inspect_snapshot(
     asset_manager: &AssetManager,
     id: &SnapshotId,
@@ -153,6 +187,32 @@ mod tests {
         let json = snapshot_json(repo.asset_manager(), &snap_id, true).await?;
         let info: SnapshotInfoInspect = serde_json::from_str(json.as_str())?;
         assert!(info.id == snap_id.to_string());
+
+        Ok(())
+    }
+
+    #[icechunk_macros::tokio_test]
+    async fn test_print_manifest() -> Result<(), Box<dyn std::error::Error>> {
+        let st = Arc::new(
+            ObjectStorage::new_local_filesystem(&PathBuf::from(
+                "../icechunk-python/tests/data/split-repo",
+            ))
+            .await?,
+        );
+        let repo = Repository::open(None, st, Default::default()).await?;
+        let snap = repo
+            .ancestry(&VersionInfo::BranchTipRef("main".to_string()))
+            .await?
+            .boxed()
+            .try_next()
+            .await?
+            .unwrap();
+
+        let manifest_id = &snap.manifests[0].id;
+
+        let json = manifest_json(repo.asset_manager(), manifest_id, true).await?;
+        let info: ManifestInfoInspect = serde_json::from_str(json.as_str())?;
+        assert!(info.id == manifest_id.to_string());
 
         Ok(())
     }
