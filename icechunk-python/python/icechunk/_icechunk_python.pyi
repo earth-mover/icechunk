@@ -1466,6 +1466,9 @@ class PyRepository:
         max_concurrent_manifest_fetches: int = 500,
     ) -> int: ...
     def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str: ...
+    async def inspect_snapshot_async(
+        self, snapshot_id: str, *, pretty: bool = True
+    ) -> str: ...
 
 class PySession:
     @classmethod

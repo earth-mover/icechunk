@@ -23,7 +23,7 @@ use icechunk::{
         manifests::rewrite_manifests,
         stats::repo_chunks_storage,
     },
-    repository::{RepositoryErrorKind, VersionInfo},
+    repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
 };
 use pyo3::{
     IntoPyObjectExt,
@@ -1637,6 +1637,28 @@ impl PyRepository {
             })
             .map_err(PyIcechunkStoreError::RepositoryError)?;
         Ok(result)
+    }
+
+    #[pyo3(signature = (snapshot_id, *, pretty = true))]
+    fn inspect_snapshot_async<'py>(
+        &self,
+        py: Python<'py>,
+        snapshot_id: String,
+        pretty: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let lock = repository.read().await;
+            let snap = SnapshotId::try_from(snapshot_id.as_str())
+                .map_err(|e| {
+                    RepositoryError::from(RepositoryErrorKind::Other(e.to_string()))
+                })
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            let res = snapshot_json(lock.asset_manager(), &snap, pretty)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(res)
+        })
     }
 }
 

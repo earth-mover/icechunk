@@ -1392,3 +1392,8 @@ class Repository:
 
     def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str:
         return self._repository.inspect_snapshot(snapshot_id, pretty=pretty)
+
+    async def inspect_snapshot_async(
+        self, snapshot_id: str, *, pretty: bool = True
+    ) -> str:
+        return await self._repository.inspect_snapshot_async(snapshot_id, pretty=pretty)
