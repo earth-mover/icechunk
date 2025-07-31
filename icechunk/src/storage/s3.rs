@@ -23,8 +23,8 @@ use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_s3::{
     Client,
     config::{
-        Builder, ConfigBag, Intercept, ProvideCredentials, Region, RuntimeComponents,
-        interceptors::BeforeTransmitInterceptorContextMut,
+        Builder, ConfigBag, IdentityCache, Intercept, ProvideCredentials, Region,
+        RuntimeComponents, interceptors::BeforeTransmitInterceptorContextMut,
     },
     error::{BoxError, SdkError},
     operation::put_object::PutObjectError,
@@ -40,7 +40,7 @@ use futures::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncRead, sync::OnceCell};
-use tracing::instrument;
+use tracing::{error, instrument};
 
 use super::{
     CHUNK_PREFIX, CONFIG_PATH, DeleteObjectsResult, FetchConfigResult, GetRefResult,
@@ -171,9 +171,18 @@ pub async fn mk_client(
         .with_max_backoff(core::time::Duration::from_millis(
             settings.retries().max_backoff_ms() as u64,
         ));
+
     let mut s3_builder = Builder::from(&aws_config.load().await)
         .force_path_style(config.force_path_style)
         .retry_config(retry_config);
+
+    // credentials may take a while to refresh, defaults are too strict
+    let id_cache = IdentityCache::lazy()
+        .load_timeout(core::time::Duration::from_secs(120))
+        .buffer_time(core::time::Duration::from_secs(120))
+        .build();
+
+    s3_builder = s3_builder.identity_cache(id_cache);
 
     if !extra_read_headers.is_empty() || !extra_write_headers.is_empty() {
         s3_builder = s3_builder.interceptor(ExtraHeadersInterceptor {
@@ -1017,7 +1026,12 @@ impl ProvideRefreshableCredentials {
     async fn provide(
         &self,
     ) -> Result<aws_credential_types::Credentials, CredentialsError> {
-        let creds = self.0.get().await.map_err(CredentialsError::not_loaded)?;
+        let creds = self
+            .0
+            .get()
+            .await
+            .inspect_err(|err| error!(error = err, "Cannot load credentials"))
+            .map_err(CredentialsError::not_loaded)?;
         let creds = aws_credential_types::Credentials::new(
             creds.access_key_id,
             creds.secret_access_key,

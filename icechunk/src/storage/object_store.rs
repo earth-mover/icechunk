@@ -8,7 +8,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use futures::{
     StreamExt, TryStreamExt,
     stream::{self, BoxStream},
@@ -38,7 +38,7 @@ use std::{
 };
 use tokio::{
     io::AsyncRead,
-    sync::{Mutex, OnceCell},
+    sync::{OnceCell, RwLock},
 };
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::instrument;
@@ -1147,28 +1147,33 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
 
 #[derive(Debug)]
 pub struct GcsRefreshableCredentialProvider {
-    last_credential: Arc<Mutex<Option<GcsBearerCredential>>>,
+    last_credential: Arc<RwLock<Option<GcsBearerCredential>>>,
     refresher: Arc<dyn GcsCredentialsFetcher>,
 }
 
 impl GcsRefreshableCredentialProvider {
     pub fn new(refresher: Arc<dyn GcsCredentialsFetcher>) -> Self {
-        Self { last_credential: Arc::new(Mutex::new(None)), refresher }
+        Self { last_credential: Arc::new(RwLock::new(None)), refresher }
     }
 
     pub async fn get_or_update_credentials(
         &self,
     ) -> Result<GcsBearerCredential, StorageError> {
-        let mut last_credential = self.last_credential.lock().await;
+        let last_credential = self.last_credential.read().await;
 
         // If we have a credential and it hasn't expired, return it
         if let Some(creds) = last_credential.as_ref() {
             if let Some(expires_after) = creds.expires_after {
-                if expires_after > Utc::now() {
+                if expires_after
+                    > Utc::now() + TimeDelta::seconds(rand::random_range(120..=180))
+                {
                     return Ok(creds.clone());
                 }
             }
         }
+
+        drop(last_credential);
+        let mut last_credential = self.last_credential.write().await;
 
         // Otherwise, refresh the credential and cache it
         let creds = self
