@@ -17,6 +17,7 @@ use icechunk::{
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
         transaction_log::Diff,
     },
+    inspect::snapshot_json,
     ops::{
         gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
         manifests::rewrite_manifests,
@@ -1622,6 +1623,19 @@ impl PyRepository {
             .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(result)
         })
+    }
+
+    #[pyo3(signature = (snapshot_id, *, pretty = true))]
+    fn inspect_snapshot(&self, snapshot_id: String, pretty: bool) -> PyResult<String> {
+        let result = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let lock = self.0.read().await;
+            let snap = snapshot_id.try_into().map_err(PyValueError::new_err)?;
+            let res = snapshot_json(lock.asset_manager(), &snap, pretty)
+                .await
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            Ok::<_, PyErr>(res)
+        })?;
+        Ok(result)
     }
 }
 

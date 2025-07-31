@@ -1465,6 +1465,7 @@ class PyRepository:
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> int: ...
+    def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str: ...
 
 class PySession:
     @classmethod

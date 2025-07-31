@@ -1389,3 +1389,6 @@ class Repository:
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
+
+    def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str:
+        return self._repository.inspect_snapshot(snapshot_id, pretty=pretty)
