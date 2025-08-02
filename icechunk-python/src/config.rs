@@ -140,19 +140,19 @@ pub(crate) fn datetime_repr(d: &DateTime<Utc>) -> String {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PythonCredentialsFetcher<CredType> {
     pub pickled_function: Vec<u8>,
-    pub current: Option<CredType>,
+    pub initial: Option<CredType>,
 }
 
 impl<CredType> PythonCredentialsFetcher<CredType> {
     fn new(pickled_function: Vec<u8>) -> Self {
-        PythonCredentialsFetcher { pickled_function, current: None }
+        PythonCredentialsFetcher { pickled_function, initial: None }
     }
 
-    fn new_with_current<C>(pickled_function: Vec<u8>, current: C) -> Self
+    fn new_with_initial<C>(pickled_function: Vec<u8>, current: C) -> Self
     where
         C: Into<CredType>,
     {
-        PythonCredentialsFetcher { pickled_function, current: Some(current.into()) }
+        PythonCredentialsFetcher { pickled_function, initial: Some(current.into()) }
     }
 }
 
@@ -174,18 +174,22 @@ where
 #[typetag::serde]
 impl S3CredentialsFetcher for PythonCredentialsFetcher<S3StaticCredentials> {
     async fn get(&self) -> Result<S3StaticCredentials, String> {
-        Python::with_gil(|py| {
-            if let Some(static_creds) = self.current.as_ref() {
-                // avoid herding by adding some randomness
-                let delta = TimeDelta::seconds(rand::random_range(5..180));
-                let expiration = static_creds
-                    .expires_after
-                    .map(|exp| exp - delta)
-                    .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC);
-                if Utc::now() < expiration {
+        if let Some(static_creds) = self.initial.as_ref() {
+            match static_creds.expires_after {
+                None => {
                     return Ok(static_creds.clone());
                 }
+                Some(expiration)
+                    if expiration
+                        > Utc::now()
+                            + TimeDelta::seconds(rand::random_range(120..=180)) =>
+                {
+                    return Ok(static_creds.clone());
+                }
+                _ => {}
             }
+        }
+        Python::with_gil(|py| {
             call_pickled::<PyS3StaticCredentials>(py, self.pickled_function.clone())
                 .map(|c| c.into())
         })
@@ -197,18 +201,22 @@ impl S3CredentialsFetcher for PythonCredentialsFetcher<S3StaticCredentials> {
 #[typetag::serde]
 impl GcsCredentialsFetcher for PythonCredentialsFetcher<GcsBearerCredential> {
     async fn get(&self) -> Result<GcsBearerCredential, String> {
-        Python::with_gil(|py| {
-            if let Some(static_creds) = self.current.as_ref() {
-                // avoid herding by adding some randomness
-                let delta = TimeDelta::seconds(rand::random_range(5..180));
-                let expiration = static_creds
-                    .expires_after
-                    .map(|exp| exp - delta)
-                    .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC);
-                if Utc::now() < expiration {
+        if let Some(static_creds) = self.initial.as_ref() {
+            match static_creds.expires_after {
+                None => {
                     return Ok(static_creds.clone());
                 }
+                Some(expiration)
+                    if expiration
+                        > Utc::now()
+                            + TimeDelta::seconds(rand::random_range(120..=180)) =>
+                {
+                    return Ok(static_creds.clone());
+                }
+                _ => {}
             }
+        }
+        Python::with_gil(|py| {
             call_pickled::<PyGcsBearerCredential>(py, self.pickled_function.clone())
                 .map(|c| c.into())
         })
@@ -233,7 +241,7 @@ impl From<PyS3Credentials> for S3Credentials {
             PyS3Credentials::Static(creds) => S3Credentials::Static(creds.into()),
             PyS3Credentials::Refreshable { pickled_function, current } => {
                 let fetcher = if let Some(current) = current {
-                    PythonCredentialsFetcher::new_with_current(pickled_function, current)
+                    PythonCredentialsFetcher::new_with_initial(pickled_function, current)
                 } else {
                     PythonCredentialsFetcher::new(pickled_function)
                 };
@@ -320,7 +328,7 @@ impl From<PyGcsCredentials> for GcsCredentials {
             PyGcsCredentials::Static(creds) => GcsCredentials::Static(creds.into()),
             PyGcsCredentials::Refreshable { pickled_function, current } => {
                 let fetcher = if let Some(current) = current {
-                    PythonCredentialsFetcher::new_with_current(pickled_function, current)
+                    PythonCredentialsFetcher::new_with_initial(pickled_function, current)
                 } else {
                     PythonCredentialsFetcher::new(pickled_function)
                 };
