@@ -1,5 +1,16 @@
 # Changelog
 
+## Python Icechunk Library 1.1.1
+
+### Features
+
+- New `Repository.inspect_snapshot` method returns a JSON representation
+  of a snapshot, including its properties and the manifests it points to.
+
+### Fixes
+
+- Improved credential refresh logic, avoiding refresh timeouts.
+
 ## Python Icechunk Library 1.1.0
 
 ### Features
