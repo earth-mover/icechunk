@@ -32,16 +32,16 @@ const __sharedMemory = new WebAssembly.Memory({
   shared: true,
 })
 
-let __wasmFilePath = __nodePath.join(__dirname, 'package-template.wasm32-wasi.wasm')
-const __wasmDebugFilePath = __nodePath.join(__dirname, 'package-template.wasm32-wasi.debug.wasm')
+let __wasmFilePath = __nodePath.join(__dirname, 'icechunk-js.wasm32-wasi.wasm')
+const __wasmDebugFilePath = __nodePath.join(__dirname, 'icechunk-js.wasm32-wasi.debug.wasm')
 
 if (__nodeFs.existsSync(__wasmDebugFilePath)) {
   __wasmFilePath = __wasmDebugFilePath
 } else if (!__nodeFs.existsSync(__wasmFilePath)) {
   try {
-    __wasmFilePath = __nodePath.resolve('@napi-rs/package-template-wasm32-wasi')
+    __wasmFilePath = __nodePath.resolve('@earthmover/icechunk-wasm32-wasi')
   } catch {
-    throw new Error('Cannot find package-template.wasm32-wasi.wasm file, and @napi-rs/package-template-wasm32-wasi package is not installed.')
+    throw new Error('Cannot find icechunk-js.wasm32-wasi.wasm file, and @earthmover/icechunk-wasm32-wasi package is not installed.')
   }
 }
 

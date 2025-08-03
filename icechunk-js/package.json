@@ -1,11 +1,14 @@
 {
-  "name": "icechunk",
-  "version": "1.0.0",
-  "description": "Template project for writing node package with napi-rs",
+  "name": "@earthmover/icechunk",
+  "version": "0.0.1",
+  "description": "Icechunk bindings for javascript",
   "main": "index.js",
-  "repository": "git@github.com:napi-rs/package-template.git",
+  "repository": "https://github.com/earth-mover/icechunk",
   "license": "Apache 2",
   "keywords": [
+    "zarr",
+    "icechunk",
+    "tensor",
     "napi-rs",
     "NAPI",
     "N-API",
@@ -18,7 +21,7 @@
     "index.js"
   ],
   "napi": {
-    "binaryName": "icechunk",
+    "binaryName": "icechunk-js",
     "targets": [
       "x86_64-pc-windows-msvc",
       "x86_64-apple-darwin",

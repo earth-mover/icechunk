@@ -1,8 +1,8 @@
 
 [package]
-authors = ["LongYinan <lynweklm@gmail.com>"]
+authors = ["Matt iannucci <matt@earthmover.io>"]
 edition = "2021"
-name = "icechunk"
+name = "icechunk_js"
 version = "0.1.0"
 
 [lib]
