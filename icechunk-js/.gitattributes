@@ -12,7 +12,7 @@
 # Generated codes
 index.js                         linguist-detectable=false
 index.d.ts                       linguist-detectable=false
-icechunk.wasi-browser.js linguist-detectable=false
-icechunk.wasi.cjs        linguist-detectable=false
+icechunk-js.wasi-browser.js linguist-detectable=false
+icechunk-js.wasi.cjs        linguist-detectable=false
 wasi-worker-browser.mjs          linguist-detectable=false
 wasi-worker.mjs                  linguist-detectable=false

@@ -1,14 +1,12 @@
 {
-  "name": "@earthmover/icechunk",
-  "version": "0.0.1",
-  "description": "Icechunk bindings for javascript",
+  "name": "@mpiannucci-beta/icechunk",
+  "version": "1.0.2",
+  "description": "Expirimental Icechunk bindings for JavaScript",
+  "browser": "browser.js",
   "main": "index.js",
-  "repository": "https://github.com/earth-mover/icechunk",
-  "license": "Apache 2",
+  "repository": "git@github.com:napi-rs/package-template.git",
+  "license": "n",
   "keywords": [
-    "zarr",
-    "icechunk",
-    "tensor",
     "napi-rs",
     "NAPI",
     "N-API",
@@ -101,5 +99,12 @@
     "singleQuote": true,
     "arrowParens": "always"
   },
-  "packageManager": "yarn@4.9.2"
+  "packageManager": "yarn@4.9.2",
+  "optionalDependencies": {
+    "@mpiannucci-beta/icechunk-win32-x64-msvc": "1.0.2",
+    "@mpiannucci-beta/icechunk-darwin-x64": "1.0.2",
+    "@mpiannucci-beta/icechunk-linux-x64-gnu": "1.0.2",
+    "@mpiannucci-beta/icechunk-darwin-arm64": "1.0.2",
+    "@mpiannucci-beta/icechunk-wasm32-wasi": "1.0.2"
+  }
 }

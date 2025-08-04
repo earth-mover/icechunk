@@ -1,1 +1,1 @@
-export * from '@earthmover/icechunk-wasm32-wasi'
+export * from '@napi-rs/package-template-wasm32-wasi'

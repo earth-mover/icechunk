@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { plus100 } from '@mpiannucci-beta/icechunk'
 
 function App() {
   const [count, setCount] = useState(0)
@@ -6,7 +7,8 @@ function App() {
   return (
     <>
       <h1>Vite + React + Icechunk</h1>
-      <p>Hello World</p>
+      <p>count: {count}</p>
+      <button onClick={() => setCount(plus100(count))}>Plus 100</button>
     </>
   )
 }
