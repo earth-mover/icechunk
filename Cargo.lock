@@ -1843,6 +1843,7 @@ dependencies = [
 name = "icechunk_js"
 version = "0.1.0"
 dependencies = [
+ "icechunk",
  "napi",
  "napi-build",
  "napi-derive",

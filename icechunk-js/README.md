@@ -83,3 +83,22 @@ git push
 ```
 
 GitHub actions will do the rest job for you.
+
+###  Notes
+
+Build wasm binary for npm
+```
+yarn build --target wasm32-wasip1-threads -o npm/wasm32-wasi
+```
+
+Create package dirs
+```
+yarn napi create-npm-dirs
+```
+
+publish
+```
+npm publish --access=public
+```
+
+Started on adding icechunk, need to turn off all the stuff that doesnt compile for wasm target
