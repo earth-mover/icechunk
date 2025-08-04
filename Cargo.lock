@@ -1414,8 +1414,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4567c8db10ae91089c99af84c68c38da3ec2f087c3f82960bcdbf3656b6f4d7"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi 0.11.0+wasi-snapshot-preview1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1775,6 +1777,7 @@ dependencies = [
  "err-into",
  "flatbuffers",
  "futures",
+ "getrandom 0.2.15",
  "icechunk-macros",
  "itertools",
  "object_store",

@@ -102,3 +102,11 @@ npm publish --access=public
 ```
 
 Started on adding icechunk, need to turn off all the stuff that doesnt compile for wasm target
+
+https://github.com/gyscos/zstd-rs/issues/93#issuecomment-2110684816
+
+```
+export PATH="/opt/homebrew/opt/llvm/bin/:$PATH"
+export CC=/opt/homebrew/opt/llvm/bin/clang
+export AR=/opt/homebrew/opt/llvm/bin/llvm-ar
+```
