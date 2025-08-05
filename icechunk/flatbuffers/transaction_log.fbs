@@ -1,6 +1,6 @@
-include "object_ids.fbs";
+include "common.fbs";
 
-namespace gen;
+namespace generated;
 
 table ChunkIndices {
   coords: [uint32] (required);

@@ -1,0 +1,52 @@
+include "common.fbs";
+
+namespace generated;
+
+table Ref {
+    name: string (required);
+    snapshot_index: uint32;
+}
+
+table SnapshotInfo {
+    id: ObjectId12 (required);
+    // -1 means no parent
+    parent_offset: int32;
+    // micros since epoch
+    flushed_at: uint64;
+    message: string (required);
+    metadata: [MetadataItem];
+}
+
+enum RepoAvailability : ubyte { Online = 0, ReadOnly, Offline }
+
+table RepoStatus {
+    availability: RepoAvailability;
+    set_at: uint64;
+    limited_availability_reason: string;
+}
+
+table Repo {
+
+  // sorted by name
+  tags: [Ref] (required);
+
+  // sorted by name
+  branches: [Ref] (required);
+
+  // sorted
+  deleted_tags: [string] (required);
+
+  // sorted by id
+  snapshots: [SnapshotInfo] (required);
+
+  spec_version: string (required);
+
+  // micros since epoch
+  last_updated_at: uint64;
+
+  status: RepoStatus (required);
+
+  metadata: [MetadataItem];
+}
+
+root_type Repo;

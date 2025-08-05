@@ -122,6 +122,7 @@
                 pkgs.just # script launcher with a make flavor
                 pkgs.alejandra # nix code formatter
                 pkgs.markdownlint-cli2
+                pkgs.flatbuffers
               ];
 
               env = {

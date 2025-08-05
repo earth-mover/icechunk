@@ -1,0 +1,526 @@
+use itertools::Itertools as _;
+use std::collections::HashMap;
+
+use super::{
+    IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
+    flatbuffers::generated::{self, ObjectId12},
+    snapshot::SnapshotInfo,
+};
+
+use chrono::{DateTime, Utc};
+use flatbuffers::VerifierOptions;
+
+#[derive(PartialEq)]
+pub struct RepoInfo {
+    buffer: Vec<u8>,
+}
+
+// TODO: implement debug instance for RepoInfo
+
+static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
+    max_depth: 10,
+    max_tables: 500_000,
+    max_apparent_size: 1 << 31, // taken from the default
+    ignore_missing_null_terminator: true,
+};
+
+impl RepoInfo {
+    fn new<'a>(
+        tags: impl IntoIterator<Item = (&'a str, u32)>,
+        branches: impl IntoIterator<Item = (&'a str, u32)>,
+        deleted_tags: impl IntoIterator<Item = &'a str>,
+        snapshots: impl IntoIterator<Item = SnapshotInfo>,
+    ) -> Self {
+        let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
+        let mut tags: Vec<_> = tags.into_iter().collect();
+        tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+        let tags = tags
+            .iter()
+            .map(|(name, offset)| {
+                let args = generated::RefArgs {
+                    name: Some(builder.create_string(name)),
+                    snapshot_index: *offset,
+                };
+                generated::Ref::create(&mut builder, &args)
+            })
+            .collect::<Vec<_>>();
+        let tags = builder.create_vector(&tags);
+
+        let mut branches: Vec<_> = branches.into_iter().collect();
+        branches.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+        let branches = branches
+            .iter()
+            .map(|(name, offset)| {
+                let args = generated::RefArgs {
+                    name: Some(builder.create_string(name)),
+                    snapshot_index: *offset,
+                };
+                generated::Ref::create(&mut builder, &args)
+            })
+            .collect::<Vec<_>>();
+        let branches = builder.create_vector(&branches);
+
+        let mut deleted_tags: Vec<_> = deleted_tags.into_iter().collect();
+        deleted_tags.sort();
+        let deleted_tags = deleted_tags
+            .iter()
+            .map(|name| builder.create_string(name))
+            .collect::<Vec<_>>();
+        let deleted_tags = builder.create_vector(&deleted_tags);
+
+        let mut snapshots: Vec<_> = snapshots.into_iter().collect();
+        snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+
+        let snapshot_index: HashMap<_, _> =
+            snapshots.iter().enumerate().map(|(ix, sn)| (sn.id.clone(), ix)).collect();
+
+        let snapshots = snapshots
+            .iter()
+            .map(|snap| {
+                let id = &snap.id.0;
+                let id = ObjectId12::new(id);
+                let parent_offset = snap
+                    .parent_id
+                    .as_ref()
+                    .map(|parent_id| snapshot_index.get(parent_id).unwrap());
+                let args = generated::SnapshotInfoArgs {
+                    id: Some(&id),
+                    parent_offset: match parent_offset {
+                        Some(of) => *of as i32,
+                        None => -1,
+                    },
+                    flushed_at: snap.flushed_at.timestamp_micros() as u64,
+                    message: Some(builder.create_string(snap.message.as_str())),
+                    metadata: None, // FIXME:
+                };
+                generated::SnapshotInfo::create(&mut builder, &args)
+            })
+            .collect::<Vec<_>>();
+        let snapshots = builder.create_vector(&snapshots);
+
+        let status = generated::RepoStatus::create(
+            &mut builder,
+            &generated::RepoStatusArgs {
+                availability: generated::RepoAvailability::Online, // FIXME:
+                set_at: 0,                                         // FIXME:
+                limited_availability_reason: None,
+            },
+        );
+
+        let meta_name = builder.create_string("foo");
+        let meta_value = builder.create_vector::<u8>(&[]);
+        let meta_item = generated::MetadataItem::create(
+            &mut builder,
+            &generated::MetadataItemArgs {
+                name: Some(meta_name), // FIXME:
+                value: Some(meta_value),
+            },
+        );
+        let metadata = builder.create_vector(&[meta_item]);
+
+        let repo_args = generated::RepoArgs {
+            tags: Some(tags),
+            branches: Some(branches),
+            deleted_tags: Some(deleted_tags),
+            // FIXME:
+            snapshots: Some(snapshots),
+            spec_version: Some(builder.create_string("fixme")), // FIXME:
+            last_updated_at: 0,                                 // FIXME:
+            status: Some(status),
+            metadata: Some(metadata),
+        };
+        let repo = generated::Repo::create(&mut builder, &repo_args);
+        builder.finish(repo, Some("Ichk"));
+        let (mut buffer, offset) = builder.collapse();
+        buffer.drain(0..offset);
+        buffer.shrink_to_fit();
+        Self { buffer }
+    }
+
+    pub fn initial(snapshot: SnapshotInfo) -> Self {
+        Self::new([], [("main", 0)], [], [snapshot])
+    }
+
+    fn all_tags(&self) -> IcechunkResult<impl Iterator<Item = (&str, u32)>> {
+        Ok(self.root()?.tags().iter().map(|r| (r.name(), r.snapshot_index())))
+    }
+
+    fn all_branches(&self) -> IcechunkResult<impl Iterator<Item = (&str, u32)>> {
+        Ok(self.root()?.branches().iter().map(|r| (r.name(), r.snapshot_index())))
+    }
+
+    fn deleted_tags(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
+        Ok(self.root()?.deleted_tags().iter())
+    }
+
+    pub fn all_snapshots(
+        &self,
+    ) -> IcechunkResult<impl Iterator<Item = IcechunkResult<SnapshotInfo>>> {
+        let root = self.root()?;
+        Ok(root.snapshots().iter().map(move |snap| {
+            let flushed_at = timestamp_to_timestamp(snap.flushed_at());
+            let parent_id = if snap.parent_offset() >= 0 {
+                let parent = root.snapshots().get(snap.parent_offset() as usize).id();
+                Some(parent)
+            } else {
+                None
+            };
+            flushed_at.map(|flushed_at| SnapshotInfo {
+                id: SnapshotId::new(snap.id().0),
+                flushed_at,
+                message: snap.message().to_string(),
+                metadata: Default::default(),  // FIXME
+                manifests: Default::default(), // FIXME: remove field
+                parent_id: parent_id.map(|buf| SnapshotId::new(buf.0)),
+            })
+        }))
+    }
+
+    pub fn add_snapshot(&self, snap: SnapshotInfo) -> IcechunkResult<Self> {
+        let mut snapshots: Vec<_> = self.all_snapshots()?.try_collect()?;
+        let new_index =
+            snapshots.binary_search_by_key(&&snap.id, |snap| &snap.id).unwrap_err();
+
+        snapshots.insert(new_index, snap);
+
+        let tags = self.all_tags()?.map(|(name, idx)| {
+            if idx as usize >= new_index { (name, idx + 1) } else { (name, idx) }
+        });
+        let branches = self.all_branches()?.map(|(name, idx)| {
+            if idx as usize >= new_index { (name, idx + 1) } else { (name, idx) }
+        });
+
+        let res = Self::new(tags, branches, self.deleted_tags()?, snapshots);
+        Ok(res)
+    }
+
+    pub fn add_branch(
+        &self,
+        name: &str,
+        snap: &SnapshotId,
+    ) -> IcechunkResult<Option<Self>> {
+        if self.resolve_branch(name)?.is_some() {
+            return Ok(None);
+        }
+
+        match self.resolve_snapshot_index(snap)? {
+            Some(snap_idx) => {
+                let mut branches: Vec<_> = self.all_branches()?.collect();
+                branches.push((name, snap_idx as u32));
+                let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+                Ok(Some(Self::new(
+                    self.all_tags()?,
+                    branches,
+                    self.deleted_tags()?,
+                    snaps,
+                )))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn delete_branch(&self, name: &str) -> IcechunkResult<Option<Self>> {
+        if self.resolve_branch(name)?.is_none() {
+            return Ok(None);
+        }
+
+        let mut branches: Vec<_> = self.all_branches()?.collect();
+        branches.retain(|(n, _)| n != &name);
+        let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+        Ok(Some(Self::new(self.all_tags()?, branches, self.deleted_tags()?, snaps)))
+    }
+
+    pub fn add_tag(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Option<Self>> {
+        if self.resolve_tag(name)?.is_some() || self.tag_was_deleted(name)? {
+            return Ok(None);
+        }
+
+        match self.resolve_snapshot_index(snap)? {
+            Some(snap_idx) => {
+                let mut tags: Vec<_> = self.all_tags()?.collect();
+                tags.push((name, snap_idx as u32));
+                let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+                Ok(Some(Self::new(
+                    tags,
+                    self.all_branches()?,
+                    self.deleted_tags()?,
+                    snaps,
+                )))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn delete_tag(&self, name: &str) -> IcechunkResult<Option<Self>> {
+        if self.resolve_tag(name)?.is_none() {
+            return Ok(None);
+        }
+
+        let mut tags: Vec<_> = self.all_tags()?.collect();
+        tags.retain(|(n, _)| n != &name);
+
+        let mut deleted_tags: Vec<_> = self.deleted_tags()?.collect();
+        deleted_tags.push(name);
+
+        let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+        Ok(Some(Self::new(tags, self.all_branches()?, deleted_tags, snaps)))
+    }
+
+    pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {
+        let _ = flatbuffers::root_with_opts::<generated::Snapshot>(
+            &ROOT_OPTIONS,
+            buffer.as_slice(),
+        )?;
+        Ok(RepoInfo { buffer })
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        self.buffer.as_slice()
+    }
+
+    fn root(&self) -> IcechunkResult<generated::Repo> {
+        Ok(flatbuffers::root::<generated::Repo>(&self.buffer)?)
+    }
+
+    pub fn list_tags(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
+        Ok(self.root()?.tags().iter().map(|r| r.name()))
+    }
+
+    pub fn list_branches(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
+        Ok(self.root()?.tags().iter().map(|r| r.name()))
+    }
+
+    pub fn resolve_tag(&self, name: &str) -> IcechunkResult<Option<SnapshotId>> {
+        let root = self.root()?;
+        let res = root.tags().lookup_by_key(name, |r, key| r.name().cmp(key)).map(|r| {
+            let index = r.snapshot_index();
+            SnapshotId::new(root.snapshots().get(index as usize).id().0)
+        });
+
+        Ok(res)
+    }
+
+    pub fn tag_was_deleted(&self, name: &str) -> IcechunkResult<bool> {
+        let root = self.root()?;
+        let res = root.deleted_tags().lookup_by_key(name, |name, key| name.cmp(key));
+        Ok(res.is_some())
+    }
+
+    pub fn resolve_branch(&self, name: &str) -> IcechunkResult<Option<SnapshotId>> {
+        let root = self.root()?;
+        let res =
+            root.branches().lookup_by_key(name, |r, key| r.name().cmp(key)).map(|r| {
+                let index = r.snapshot_index();
+                SnapshotId::new(root.snapshots().get(index as usize).id().0)
+            });
+
+        Ok(res)
+    }
+
+    pub fn spec_version(&self) -> IcechunkResult<&str> {
+        Ok(self.root()?.spec_version())
+    }
+
+    pub fn last_updated_at(&self) -> IcechunkResult<DateTime<Utc>> {
+        let ts = self.root()?.last_updated_at();
+        timestamp_to_timestamp(ts)
+    }
+
+    pub fn ancestry(
+        &self,
+        snapshot: &SnapshotId,
+    ) -> IcechunkResult<Option<impl Iterator<Item = IcechunkResult<SnapshotInfo>>>> {
+        let root = self.root()?;
+        if let Some(start) = self.resolve_snapshot_index(snapshot)? {
+            let mut index = Some(start as i32);
+            let iter = std::iter::from_fn(move || {
+                if let Some(ix) = index {
+                    let snap = root.snapshots().get(ix as usize);
+                    let parent_id = if snap.parent_offset() >= 0 {
+                        index = Some(snap.parent_offset());
+                        let parent = root.snapshots().get(snap.parent_offset() as usize);
+                        Some(SnapshotId::new(parent.id().0))
+                    } else {
+                        index = None;
+                        None
+                    };
+
+                    let flushed_at = timestamp_to_timestamp(snap.flushed_at());
+                    let info = flushed_at.map(|flushed_at| SnapshotInfo {
+                        id: SnapshotId::new(snap.id().0),
+                        flushed_at,
+                        message: snap.message().to_string(),
+                        metadata: Default::default(),  // FIXME
+                        manifests: Default::default(), // FIXME: remove field
+                        parent_id,
+                    });
+
+                    Some(info)
+                } else {
+                    None
+                }
+            });
+            Ok(Some(iter))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn resolve_snapshot_index(&self, id: &SnapshotId) -> IcechunkResult<Option<usize>> {
+        // TODO: replace by binary search
+        Ok(self.root()?.snapshots().iter().position(|snap| snap.id().0 == id.0))
+    }
+}
+
+fn timestamp_to_timestamp(ts: u64) -> IcechunkResult<DateTime<Utc>> {
+    let ts: i64 = ts.try_into().map_err(|_| {
+        IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidTimestamp)
+    })?;
+    DateTime::from_timestamp_micros(ts)
+        .ok_or_else(|| IcechunkFormatErrorKind::InvalidTimestamp.into())
+}
+
+#[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+
+    use std::collections::HashSet;
+
+    use super::*;
+
+    #[test]
+    fn test_add_snapshot() -> Result<(), Box<dyn std::error::Error>> {
+        let id1 = SnapshotId::random();
+        let snap1 = SnapshotInfo {
+            id: id1.clone(),
+            parent_id: None,
+            // needs to be micro second rounded
+            flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
+            message: "snap 1".to_string(),
+            metadata: Default::default(),
+            manifests: Default::default(),
+        };
+        let repo = RepoInfo::initial(snap1.clone());
+        assert_eq!(repo.all_snapshots()?.next().unwrap().unwrap(), snap1);
+
+        let id2 = SnapshotId::random();
+        let snap2 = SnapshotInfo {
+            id: id2.clone(),
+            parent_id: Some(id1.clone()),
+            message: "snap 2".to_string(),
+            ..snap1.clone()
+        };
+        let repo = repo.add_snapshot(snap2.clone())?;
+        let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
+        assert_eq!(all, HashSet::from_iter([snap1.clone(), snap2.clone()]));
+
+        let anc: Vec<_> = repo.ancestry(&id1)?.unwrap().try_collect()?;
+        assert_eq!(anc, [snap1.clone()]);
+
+        let anc: Vec<_> = repo.ancestry(&id2)?.unwrap().try_collect()?;
+        assert_eq!(anc, [snap2.clone(), snap1.clone()]);
+
+        assert!(repo.ancestry(&SnapshotId::random())?.is_none());
+
+        let id3 = SnapshotId::random();
+        let snap3 = SnapshotInfo {
+            id: id3.clone(),
+            parent_id: Some(id2.clone()),
+            message: "snap 3".to_string(),
+            ..snap2.clone()
+        };
+        let repo = repo.add_snapshot(snap3.clone())?;
+        let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
+        assert_eq!(
+            all,
+            HashSet::from_iter([snap1.clone(), snap2.clone(), snap3.clone()])
+        );
+
+        let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
+        assert_eq!(
+            all,
+            HashSet::from_iter([snap1.clone(), snap2.clone(), snap3.clone()])
+        );
+
+        let anc: Vec<_> = repo.ancestry(&id3)?.unwrap().try_collect()?;
+        assert_eq!(anc, [snap3.clone(), snap2.clone(), snap1.clone()]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tags_and_branches() -> Result<(), Box<dyn std::error::Error>> {
+        let id1 = SnapshotId::random();
+        let snap1 = SnapshotInfo {
+            id: id1.clone(),
+            parent_id: None,
+            // needs to be micro second rounded
+            flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
+            message: "snap 1".to_string(),
+            metadata: Default::default(),
+            manifests: Default::default(),
+        };
+        let repo = RepoInfo::initial(snap1.clone());
+        let repo = repo.add_branch("foo", &id1)?.unwrap();
+        let repo = repo.add_branch("bar", &id1)?.unwrap();
+        assert!(repo.add_branch("bad-snap", &SnapshotId::random())?.is_none());
+        // cannot add existing
+        assert!(repo.add_branch("bar", &id1)?.is_none());
+
+        assert_eq!(
+            repo.all_branches()?.collect::<HashSet<_>>(),
+            [("main", 0), ("foo", 0), ("bar", 0)].into()
+        );
+
+        let id2 = SnapshotId::random();
+        let snap2 = SnapshotInfo {
+            id: id2.clone(),
+            parent_id: Some(id1.clone()),
+            message: "snap 2".to_string(),
+            ..snap1.clone()
+        };
+        let repo = repo.add_snapshot(snap2)?;
+        let repo = repo.add_branch("baz", &id2)?.unwrap();
+        assert_eq!(repo.resolve_branch("main")?, Some(id1.clone()));
+        assert_eq!(repo.resolve_branch("foo")?, Some(id1.clone()));
+        assert_eq!(repo.resolve_branch("bar")?, Some(id1.clone()));
+        assert_eq!(repo.resolve_branch("baz")?, Some(id2.clone()));
+
+        let repo = repo.delete_branch("bar")?.unwrap();
+        assert_eq!(repo.resolve_branch("bar")?, None);
+        assert_eq!(
+            repo.all_branches()?.map(|(n, _)| n).collect::<HashSet<_>>(),
+            ["main", "foo", "baz"].into()
+        );
+
+        assert!(repo.delete_branch("bad-branch")?.is_none());
+
+        // tags
+        let repo = repo.add_tag("tag1", &id1)?.unwrap();
+        let repo = repo.add_tag("tag2", &id2)?.unwrap();
+        assert!(repo.add_branch("bad-snap", &SnapshotId::random())?.is_none());
+        assert!(repo.add_tag("tag1", &id1)?.is_none());
+        assert_eq!(repo.resolve_tag("tag1")?, Some(id1.clone()));
+        assert_eq!(repo.resolve_tag("tag2")?, Some(id2.clone()));
+        assert_eq!(
+            repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
+            ["tag1", "tag2"].into()
+        );
+
+        // delete tags
+        let repo = repo.add_tag("tag3", &id1)?.unwrap();
+        let repo = repo.delete_tag("tag3")?.unwrap();
+        assert_eq!(
+            repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
+            ["tag1", "tag2"].into()
+        );
+        // cannot add deleted
+        assert!(repo.add_tag("tag3", &id1)?.is_none());
+        // cannot delete deleted
+        assert!(repo.delete_tag("tag3")?.is_none());
+        assert_eq!(
+            repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
+            ["tag1", "tag2"].into()
+        );
+        Ok(())
+    }
+}

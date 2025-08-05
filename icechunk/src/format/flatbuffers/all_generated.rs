@@ -70,10 +70,8 @@ pub mod generated {
         type Inner = Self;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe {
-                let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
-                Self(b)
-            }
+            let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+            Self(b)
         }
     }
 
@@ -81,9 +79,7 @@ pub mod generated {
         type Output = NodeData;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            unsafe {
-                flatbuffers::emplace_scalar::<u8>(dst, self.0);
-            }
+            flatbuffers::emplace_scalar::<u8>(dst, self.0);
         }
     }
 
@@ -115,6 +111,99 @@ pub mod generated {
     impl flatbuffers::SimpleToVerifyInSlice for NodeData {}
     pub struct NodeDataUnionTableOffset {}
 
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MIN_REPO_AVAILABILITY: u8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_REPO_AVAILABILITY: u8 = 2;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_REPO_AVAILABILITY: [RepoAvailability; 3] =
+        [RepoAvailability::Online, RepoAvailability::ReadOnly, RepoAvailability::Offline];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct RepoAvailability(pub u8);
+    #[allow(non_upper_case_globals)]
+    impl RepoAvailability {
+        pub const Online: Self = Self(0);
+        pub const ReadOnly: Self = Self(1);
+        pub const Offline: Self = Self(2);
+
+        pub const ENUM_MIN: u8 = 0;
+        pub const ENUM_MAX: u8 = 2;
+        pub const ENUM_VALUES: &'static [Self] =
+            &[Self::Online, Self::ReadOnly, Self::Offline];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::Online => Some("Online"),
+                Self::ReadOnly => Some("ReadOnly"),
+                Self::Offline => Some("Offline"),
+                _ => None,
+            }
+        }
+    }
+    impl core::fmt::Debug for RepoAvailability {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> flatbuffers::Follow<'a> for RepoAvailability {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+            Self(b)
+        }
+    }
+
+    impl flatbuffers::Push for RepoAvailability {
+        type Output = RepoAvailability;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<u8>(dst, self.0);
+        }
+    }
+
+    impl flatbuffers::EndianScalar for RepoAvailability {
+        type Scalar = u8;
+        #[inline]
+        fn to_little_endian(self) -> u8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: u8) -> Self {
+            let b = u8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> flatbuffers::Verifiable for RepoAvailability {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            u8::run_verifier(v, pos)
+        }
+    }
+
+    impl flatbuffers::SimpleToVerifyInSlice for RepoAvailability {}
     // struct ObjectId12, aligned to 1
     #[repr(transparent)]
     #[derive(Clone, Copy, PartialEq)]
@@ -135,27 +224,25 @@ pub mod generated {
         type Inner = &'a ObjectId12;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { <&'a ObjectId12>::follow(buf, loc) }
+            <&'a ObjectId12>::follow(buf, loc)
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a ObjectId12 {
         type Inner = &'a ObjectId12;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { flatbuffers::follow_cast_ref::<ObjectId12>(buf, loc) }
+            flatbuffers::follow_cast_ref::<ObjectId12>(buf, loc)
         }
     }
     impl<'b> flatbuffers::Push for ObjectId12 {
         type Output = ObjectId12;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            unsafe {
-                let src = ::core::slice::from_raw_parts(
-                    self as *const ObjectId12 as *const u8,
-                    <Self as flatbuffers::Push>::size(),
-                );
-                dst.copy_from_slice(src);
-            }
+            let src = ::core::slice::from_raw_parts(
+                self as *const ObjectId12 as *const u8,
+                <Self as flatbuffers::Push>::size(),
+            );
+            dst.copy_from_slice(src);
         }
         #[inline]
         fn alignment() -> flatbuffers::PushAlignment {
@@ -217,27 +304,25 @@ pub mod generated {
         type Inner = &'a ObjectId8;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { <&'a ObjectId8>::follow(buf, loc) }
+            <&'a ObjectId8>::follow(buf, loc)
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a ObjectId8 {
         type Inner = &'a ObjectId8;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { flatbuffers::follow_cast_ref::<ObjectId8>(buf, loc) }
+            flatbuffers::follow_cast_ref::<ObjectId8>(buf, loc)
         }
     }
     impl<'b> flatbuffers::Push for ObjectId8 {
         type Output = ObjectId8;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            unsafe {
-                let src = ::core::slice::from_raw_parts(
-                    self as *const ObjectId8 as *const u8,
-                    <Self as flatbuffers::Push>::size(),
-                );
-                dst.copy_from_slice(src);
-            }
+            let src = ::core::slice::from_raw_parts(
+                self as *const ObjectId8 as *const u8,
+                <Self as flatbuffers::Push>::size(),
+            );
+            dst.copy_from_slice(src);
         }
         #[inline]
         fn alignment() -> flatbuffers::PushAlignment {
@@ -303,27 +388,25 @@ pub mod generated {
         type Inner = &'a ManifestFileInfo;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { <&'a ManifestFileInfo>::follow(buf, loc) }
+            <&'a ManifestFileInfo>::follow(buf, loc)
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a ManifestFileInfo {
         type Inner = &'a ManifestFileInfo;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { flatbuffers::follow_cast_ref::<ManifestFileInfo>(buf, loc) }
+            flatbuffers::follow_cast_ref::<ManifestFileInfo>(buf, loc)
         }
     }
     impl<'b> flatbuffers::Push for ManifestFileInfo {
         type Output = ManifestFileInfo;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            unsafe {
-                let src = ::core::slice::from_raw_parts(
-                    self as *const ManifestFileInfo as *const u8,
-                    <Self as flatbuffers::Push>::size(),
-                );
-                dst.copy_from_slice(src);
-            }
+            let src = ::core::slice::from_raw_parts(
+                self as *const ManifestFileInfo as *const u8,
+                <Self as flatbuffers::Push>::size(),
+            );
+            dst.copy_from_slice(src);
         }
         #[inline]
         fn alignment() -> flatbuffers::PushAlignment {
@@ -448,27 +531,25 @@ pub mod generated {
         type Inner = &'a ChunkIndexRange;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { <&'a ChunkIndexRange>::follow(buf, loc) }
+            <&'a ChunkIndexRange>::follow(buf, loc)
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a ChunkIndexRange {
         type Inner = &'a ChunkIndexRange;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { flatbuffers::follow_cast_ref::<ChunkIndexRange>(buf, loc) }
+            flatbuffers::follow_cast_ref::<ChunkIndexRange>(buf, loc)
         }
     }
     impl<'b> flatbuffers::Push for ChunkIndexRange {
         type Output = ChunkIndexRange;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            unsafe {
-                let src = ::core::slice::from_raw_parts(
-                    self as *const ChunkIndexRange as *const u8,
-                    <Self as flatbuffers::Push>::size(),
-                );
-                dst.copy_from_slice(src);
-            }
+            let src = ::core::slice::from_raw_parts(
+                self as *const ChunkIndexRange as *const u8,
+                <Self as flatbuffers::Push>::size(),
+            );
+            dst.copy_from_slice(src);
         }
         #[inline]
         fn alignment() -> flatbuffers::PushAlignment {
@@ -580,27 +661,25 @@ pub mod generated {
         type Inner = &'a DimensionShape;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { <&'a DimensionShape>::follow(buf, loc) }
+            <&'a DimensionShape>::follow(buf, loc)
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a DimensionShape {
         type Inner = &'a DimensionShape;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { flatbuffers::follow_cast_ref::<DimensionShape>(buf, loc) }
+            flatbuffers::follow_cast_ref::<DimensionShape>(buf, loc)
         }
     }
     impl<'b> flatbuffers::Push for DimensionShape {
         type Output = DimensionShape;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            unsafe {
-                let src = ::core::slice::from_raw_parts(
-                    self as *const DimensionShape as *const u8,
-                    <Self as flatbuffers::Push>::size(),
-                );
-                dst.copy_from_slice(src);
-            }
+            let src = ::core::slice::from_raw_parts(
+                self as *const DimensionShape as *const u8,
+                <Self as flatbuffers::Push>::size(),
+            );
+            dst.copy_from_slice(src);
         }
         #[inline]
         fn alignment() -> flatbuffers::PushAlignment {
@@ -689,6 +768,161 @@ pub mod generated {
         }
     }
 
+    pub enum MetadataItemOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct MetadataItem<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for MetadataItem<'a> {
+        type Inner = MetadataItem<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> MetadataItem<'a> {
+        pub const VT_NAME: flatbuffers::VOffsetT = 4;
+        pub const VT_VALUE: flatbuffers::VOffsetT = 6;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            MetadataItem { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args MetadataItemArgs<'args>,
+        ) -> flatbuffers::WIPOffset<MetadataItem<'bldr>> {
+            let mut builder = MetadataItemBuilder::new(_fbb);
+            if let Some(x) = args.value {
+                builder.add_value(x);
+            }
+            if let Some(x) = args.name {
+                builder.add_name(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn name(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(
+                        MetadataItem::VT_NAME,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn value(&self) -> flatbuffers::Vector<'a, u8> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        MetadataItem::VT_VALUE,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for MetadataItem<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "name",
+                    Self::VT_NAME,
+                    true,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "value",
+                    Self::VT_VALUE,
+                    true,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct MetadataItemArgs<'a> {
+        pub name: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub value: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+    }
+    impl<'a> Default for MetadataItemArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            MetadataItemArgs {
+                name: None,  // required field
+                value: None, // required field
+            }
+        }
+    }
+
+    pub struct MetadataItemBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> MetadataItemBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_name(&mut self, name: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                MetadataItem::VT_NAME,
+                name,
+            );
+        }
+        #[inline]
+        pub fn add_value(
+            &mut self,
+            value: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                MetadataItem::VT_VALUE,
+                value,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> MetadataItemBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            MetadataItemBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<MetadataItem<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, MetadataItem::VT_NAME, "name");
+            self.fbb_.required(o, MetadataItem::VT_VALUE, "value");
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for MetadataItem<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("MetadataItem");
+            ds.field("name", &self.name());
+            ds.field("value", &self.value());
+            ds.finish()
+        }
+    }
     pub enum ChunkRefOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -700,7 +934,7 @@ pub mod generated {
         type Inner = ChunkRef<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -981,7 +1215,7 @@ pub mod generated {
         type Inner = ArrayManifest<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -1129,7 +1363,7 @@ pub mod generated {
         type Inner = Manifest<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -1268,161 +1502,6 @@ pub mod generated {
             ds.finish()
         }
     }
-    pub enum MetadataItemOffset {}
-    #[derive(Copy, Clone, PartialEq)]
-
-    pub struct MetadataItem<'a> {
-        pub _tab: flatbuffers::Table<'a>,
-    }
-
-    impl<'a> flatbuffers::Follow<'a> for MetadataItem<'a> {
-        type Inner = MetadataItem<'a>;
-        #[inline]
-        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
-        }
-    }
-
-    impl<'a> MetadataItem<'a> {
-        pub const VT_NAME: flatbuffers::VOffsetT = 4;
-        pub const VT_VALUE: flatbuffers::VOffsetT = 6;
-
-        #[inline]
-        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-            MetadataItem { _tab: table }
-        }
-        #[allow(unused_mut)]
-        pub fn create<
-            'bldr: 'args,
-            'args: 'mut_bldr,
-            'mut_bldr,
-            A: flatbuffers::Allocator + 'bldr,
-        >(
-            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-            args: &'args MetadataItemArgs<'args>,
-        ) -> flatbuffers::WIPOffset<MetadataItem<'bldr>> {
-            let mut builder = MetadataItemBuilder::new(_fbb);
-            if let Some(x) = args.value {
-                builder.add_value(x);
-            }
-            if let Some(x) = args.name {
-                builder.add_name(x);
-            }
-            builder.finish()
-        }
-
-        #[inline]
-        pub fn name(&self) -> &'a str {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<flatbuffers::ForwardsUOffset<&str>>(
-                        MetadataItem::VT_NAME,
-                        None,
-                    )
-                    .unwrap()
-            }
-        }
-        #[inline]
-        pub fn value(&self) -> flatbuffers::Vector<'a, u8> {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
-                        MetadataItem::VT_VALUE,
-                        None,
-                    )
-                    .unwrap()
-            }
-        }
-    }
-
-    impl flatbuffers::Verifiable for MetadataItem<'_> {
-        #[inline]
-        fn run_verifier(
-            v: &mut flatbuffers::Verifier,
-            pos: usize,
-        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
-            use self::flatbuffers::Verifiable;
-            v.visit_table(pos)?
-                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
-                    "name",
-                    Self::VT_NAME,
-                    true,
-                )?
-                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
-                    "value",
-                    Self::VT_VALUE,
-                    true,
-                )?
-                .finish();
-            Ok(())
-        }
-    }
-    pub struct MetadataItemArgs<'a> {
-        pub name: Option<flatbuffers::WIPOffset<&'a str>>,
-        pub value: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
-    }
-    impl<'a> Default for MetadataItemArgs<'a> {
-        #[inline]
-        fn default() -> Self {
-            MetadataItemArgs {
-                name: None,  // required field
-                value: None, // required field
-            }
-        }
-    }
-
-    pub struct MetadataItemBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
-        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
-    }
-    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> MetadataItemBuilder<'a, 'b, A> {
-        #[inline]
-        pub fn add_name(&mut self, name: flatbuffers::WIPOffset<&'b str>) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
-                MetadataItem::VT_NAME,
-                name,
-            );
-        }
-        #[inline]
-        pub fn add_value(
-            &mut self,
-            value: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
-        ) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
-                MetadataItem::VT_VALUE,
-                value,
-            );
-        }
-        #[inline]
-        pub fn new(
-            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
-        ) -> MetadataItemBuilder<'a, 'b, A> {
-            let start = _fbb.start_table();
-            MetadataItemBuilder { fbb_: _fbb, start_: start }
-        }
-        #[inline]
-        pub fn finish(self) -> flatbuffers::WIPOffset<MetadataItem<'a>> {
-            let o = self.fbb_.end_table(self.start_);
-            self.fbb_.required(o, MetadataItem::VT_NAME, "name");
-            self.fbb_.required(o, MetadataItem::VT_VALUE, "value");
-            flatbuffers::WIPOffset::new(o.value())
-        }
-    }
-
-    impl core::fmt::Debug for MetadataItem<'_> {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            let mut ds = f.debug_struct("MetadataItem");
-            ds.field("name", &self.name());
-            ds.field("value", &self.value());
-            ds.finish()
-        }
-    }
     pub enum ManifestRefOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -1434,7 +1513,7 @@ pub mod generated {
         type Inner = ManifestRef<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -1570,7 +1649,7 @@ pub mod generated {
         type Inner = DimensionName<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -1683,7 +1762,7 @@ pub mod generated {
         type Inner = GroupNodeData<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -1762,7 +1841,7 @@ pub mod generated {
         type Inner = ArrayNodeData<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -1958,7 +2037,7 @@ pub mod generated {
         type Inner = NodeSnapshot<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -2237,7 +2316,7 @@ pub mod generated {
         type Inner = Snapshot<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -2525,7 +2604,7 @@ pub mod generated {
         type Inner = ChunkIndices<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -2642,7 +2721,7 @@ pub mod generated {
         type Inner = ArrayUpdatedChunks<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -2795,7 +2874,7 @@ pub mod generated {
         type Inner = TransactionLog<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            unsafe { Self { _tab: flatbuffers::Table::new(buf, loc) } }
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
         }
     }
 
@@ -3109,6 +3188,897 @@ pub mod generated {
             ds.field("updated_arrays", &self.updated_arrays());
             ds.field("updated_groups", &self.updated_groups());
             ds.field("updated_chunks", &self.updated_chunks());
+            ds.finish()
+        }
+    }
+    pub enum RefOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct Ref<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for Ref<'a> {
+        type Inner = Ref<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> Ref<'a> {
+        pub const VT_NAME: flatbuffers::VOffsetT = 4;
+        pub const VT_SNAPSHOT_INDEX: flatbuffers::VOffsetT = 6;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            Ref { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args RefArgs<'args>,
+        ) -> flatbuffers::WIPOffset<Ref<'bldr>> {
+            let mut builder = RefBuilder::new(_fbb);
+            builder.add_snapshot_index(args.snapshot_index);
+            if let Some(x) = args.name {
+                builder.add_name(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn name(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(Ref::VT_NAME, None)
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn snapshot_index(&self) -> u32 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<u32>(Ref::VT_SNAPSHOT_INDEX, Some(0)).unwrap() }
+        }
+    }
+
+    impl flatbuffers::Verifiable for Ref<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "name",
+                    Self::VT_NAME,
+                    true,
+                )?
+                .visit_field::<u32>("snapshot_index", Self::VT_SNAPSHOT_INDEX, false)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct RefArgs<'a> {
+        pub name: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub snapshot_index: u32,
+    }
+    impl<'a> Default for RefArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            RefArgs {
+                name: None, // required field
+                snapshot_index: 0,
+            }
+        }
+    }
+
+    pub struct RefBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> RefBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_name(&mut self, name: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Ref::VT_NAME, name);
+        }
+        #[inline]
+        pub fn add_snapshot_index(&mut self, snapshot_index: u32) {
+            self.fbb_.push_slot::<u32>(Ref::VT_SNAPSHOT_INDEX, snapshot_index, 0);
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> RefBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            RefBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<Ref<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, Ref::VT_NAME, "name");
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for Ref<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("Ref");
+            ds.field("name", &self.name());
+            ds.field("snapshot_index", &self.snapshot_index());
+            ds.finish()
+        }
+    }
+    pub enum SnapshotInfoOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct SnapshotInfo<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for SnapshotInfo<'a> {
+        type Inner = SnapshotInfo<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> SnapshotInfo<'a> {
+        pub const VT_ID: flatbuffers::VOffsetT = 4;
+        pub const VT_PARENT_OFFSET: flatbuffers::VOffsetT = 6;
+        pub const VT_FLUSHED_AT: flatbuffers::VOffsetT = 8;
+        pub const VT_MESSAGE: flatbuffers::VOffsetT = 10;
+        pub const VT_METADATA: flatbuffers::VOffsetT = 12;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            SnapshotInfo { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args SnapshotInfoArgs<'args>,
+        ) -> flatbuffers::WIPOffset<SnapshotInfo<'bldr>> {
+            let mut builder = SnapshotInfoBuilder::new(_fbb);
+            builder.add_flushed_at(args.flushed_at);
+            if let Some(x) = args.metadata {
+                builder.add_metadata(x);
+            }
+            if let Some(x) = args.message {
+                builder.add_message(x);
+            }
+            builder.add_parent_offset(args.parent_offset);
+            if let Some(x) = args.id {
+                builder.add_id(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn id(&self) -> &'a ObjectId12 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<ObjectId12>(SnapshotInfo::VT_ID, None).unwrap() }
+        }
+        #[inline]
+        pub fn parent_offset(&self) -> i32 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<i32>(SnapshotInfo::VT_PARENT_OFFSET, Some(0)).unwrap()
+            }
+        }
+        #[inline]
+        pub fn flushed_at(&self) -> u64 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<u64>(SnapshotInfo::VT_FLUSHED_AT, Some(0)).unwrap() }
+        }
+        #[inline]
+        pub fn message(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(
+                        SnapshotInfo::VT_MESSAGE,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn metadata(
+            &self,
+        ) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MetadataItem<'a>>>>
+        {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MetadataItem>>,
+                >>(SnapshotInfo::VT_METADATA, None)
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for SnapshotInfo<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<ObjectId12>("id", Self::VT_ID, true)?
+                .visit_field::<i32>("parent_offset", Self::VT_PARENT_OFFSET, false)?
+                .visit_field::<u64>("flushed_at", Self::VT_FLUSHED_AT, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "message",
+                    Self::VT_MESSAGE,
+                    true,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MetadataItem>>,
+                >>("metadata", Self::VT_METADATA, false)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct SnapshotInfoArgs<'a> {
+        pub id: Option<&'a ObjectId12>,
+        pub parent_offset: i32,
+        pub flushed_at: u64,
+        pub message: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub metadata: Option<
+            flatbuffers::WIPOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MetadataItem<'a>>>,
+            >,
+        >,
+    }
+    impl<'a> Default for SnapshotInfoArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            SnapshotInfoArgs {
+                id: None, // required field
+                parent_offset: 0,
+                flushed_at: 0,
+                message: None, // required field
+                metadata: None,
+            }
+        }
+    }
+
+    pub struct SnapshotInfoBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> SnapshotInfoBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_id(&mut self, id: &ObjectId12) {
+            self.fbb_.push_slot_always::<&ObjectId12>(SnapshotInfo::VT_ID, id);
+        }
+        #[inline]
+        pub fn add_parent_offset(&mut self, parent_offset: i32) {
+            self.fbb_.push_slot::<i32>(SnapshotInfo::VT_PARENT_OFFSET, parent_offset, 0);
+        }
+        #[inline]
+        pub fn add_flushed_at(&mut self, flushed_at: u64) {
+            self.fbb_.push_slot::<u64>(SnapshotInfo::VT_FLUSHED_AT, flushed_at, 0);
+        }
+        #[inline]
+        pub fn add_message(&mut self, message: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                SnapshotInfo::VT_MESSAGE,
+                message,
+            );
+        }
+        #[inline]
+        pub fn add_metadata(
+            &mut self,
+            metadata: flatbuffers::WIPOffset<
+                flatbuffers::Vector<'b, flatbuffers::ForwardsUOffset<MetadataItem<'b>>>,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                SnapshotInfo::VT_METADATA,
+                metadata,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> SnapshotInfoBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            SnapshotInfoBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<SnapshotInfo<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, SnapshotInfo::VT_ID, "id");
+            self.fbb_.required(o, SnapshotInfo::VT_MESSAGE, "message");
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for SnapshotInfo<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("SnapshotInfo");
+            ds.field("id", &self.id());
+            ds.field("parent_offset", &self.parent_offset());
+            ds.field("flushed_at", &self.flushed_at());
+            ds.field("message", &self.message());
+            ds.field("metadata", &self.metadata());
+            ds.finish()
+        }
+    }
+    pub enum RepoStatusOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct RepoStatus<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for RepoStatus<'a> {
+        type Inner = RepoStatus<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> RepoStatus<'a> {
+        pub const VT_AVAILABILITY: flatbuffers::VOffsetT = 4;
+        pub const VT_SET_AT: flatbuffers::VOffsetT = 6;
+        pub const VT_LIMITED_AVAILABILITY_REASON: flatbuffers::VOffsetT = 8;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            RepoStatus { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args RepoStatusArgs<'args>,
+        ) -> flatbuffers::WIPOffset<RepoStatus<'bldr>> {
+            let mut builder = RepoStatusBuilder::new(_fbb);
+            builder.add_set_at(args.set_at);
+            if let Some(x) = args.limited_availability_reason {
+                builder.add_limited_availability_reason(x);
+            }
+            builder.add_availability(args.availability);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn availability(&self) -> RepoAvailability {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<RepoAvailability>(
+                        RepoStatus::VT_AVAILABILITY,
+                        Some(RepoAvailability::Online),
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn set_at(&self) -> u64 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<u64>(RepoStatus::VT_SET_AT, Some(0)).unwrap() }
+        }
+        #[inline]
+        pub fn limited_availability_reason(&self) -> Option<&'a str> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(
+                    RepoStatus::VT_LIMITED_AVAILABILITY_REASON,
+                    None,
+                )
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for RepoStatus<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<RepoAvailability>(
+                    "availability",
+                    Self::VT_AVAILABILITY,
+                    false,
+                )?
+                .visit_field::<u64>("set_at", Self::VT_SET_AT, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "limited_availability_reason",
+                    Self::VT_LIMITED_AVAILABILITY_REASON,
+                    false,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct RepoStatusArgs<'a> {
+        pub availability: RepoAvailability,
+        pub set_at: u64,
+        pub limited_availability_reason: Option<flatbuffers::WIPOffset<&'a str>>,
+    }
+    impl<'a> Default for RepoStatusArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            RepoStatusArgs {
+                availability: RepoAvailability::Online,
+                set_at: 0,
+                limited_availability_reason: None,
+            }
+        }
+    }
+
+    pub struct RepoStatusBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> RepoStatusBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_availability(&mut self, availability: RepoAvailability) {
+            self.fbb_.push_slot::<RepoAvailability>(
+                RepoStatus::VT_AVAILABILITY,
+                availability,
+                RepoAvailability::Online,
+            );
+        }
+        #[inline]
+        pub fn add_set_at(&mut self, set_at: u64) {
+            self.fbb_.push_slot::<u64>(RepoStatus::VT_SET_AT, set_at, 0);
+        }
+        #[inline]
+        pub fn add_limited_availability_reason(
+            &mut self,
+            limited_availability_reason: flatbuffers::WIPOffset<&'b str>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                RepoStatus::VT_LIMITED_AVAILABILITY_REASON,
+                limited_availability_reason,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> RepoStatusBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            RepoStatusBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<RepoStatus<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for RepoStatus<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("RepoStatus");
+            ds.field("availability", &self.availability());
+            ds.field("set_at", &self.set_at());
+            ds.field("limited_availability_reason", &self.limited_availability_reason());
+            ds.finish()
+        }
+    }
+    pub enum RepoOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct Repo<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for Repo<'a> {
+        type Inner = Repo<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> Repo<'a> {
+        pub const VT_TAGS: flatbuffers::VOffsetT = 4;
+        pub const VT_BRANCHES: flatbuffers::VOffsetT = 6;
+        pub const VT_DELETED_TAGS: flatbuffers::VOffsetT = 8;
+        pub const VT_SNAPSHOTS: flatbuffers::VOffsetT = 10;
+        pub const VT_SPEC_VERSION: flatbuffers::VOffsetT = 12;
+        pub const VT_LAST_UPDATED_AT: flatbuffers::VOffsetT = 14;
+        pub const VT_STATUS: flatbuffers::VOffsetT = 16;
+        pub const VT_METADATA: flatbuffers::VOffsetT = 18;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            Repo { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args RepoArgs<'args>,
+        ) -> flatbuffers::WIPOffset<Repo<'bldr>> {
+            let mut builder = RepoBuilder::new(_fbb);
+            builder.add_last_updated_at(args.last_updated_at);
+            if let Some(x) = args.metadata {
+                builder.add_metadata(x);
+            }
+            if let Some(x) = args.status {
+                builder.add_status(x);
+            }
+            if let Some(x) = args.spec_version {
+                builder.add_spec_version(x);
+            }
+            if let Some(x) = args.snapshots {
+                builder.add_snapshots(x);
+            }
+            if let Some(x) = args.deleted_tags {
+                builder.add_deleted_tags(x);
+            }
+            if let Some(x) = args.branches {
+                builder.add_branches(x);
+            }
+            if let Some(x) = args.tags {
+                builder.add_tags(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn tags(
+            &self,
+        ) -> flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Ref<'a>>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<
+                        flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Ref>>,
+                    >>(Repo::VT_TAGS, None)
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn branches(
+            &self,
+        ) -> flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Ref<'a>>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<
+                        flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Ref>>,
+                    >>(Repo::VT_BRANCHES, None)
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn deleted_tags(
+            &self,
+        ) -> flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<&'a str>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<
+                        flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<&'a str>>,
+                    >>(Repo::VT_DELETED_TAGS, None)
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn snapshots(
+            &self,
+        ) -> flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SnapshotInfo<'a>>>
+        {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<
+                        flatbuffers::Vector<
+                            'a,
+                            flatbuffers::ForwardsUOffset<SnapshotInfo>,
+                        >,
+                    >>(Repo::VT_SNAPSHOTS, None)
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn spec_version(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(
+                        Repo::VT_SPEC_VERSION,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn last_updated_at(&self) -> u64 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<u64>(Repo::VT_LAST_UPDATED_AT, Some(0)).unwrap() }
+        }
+        #[inline]
+        pub fn status(&self) -> RepoStatus<'a> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<RepoStatus>>(
+                        Repo::VT_STATUS,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn metadata(
+            &self,
+        ) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MetadataItem<'a>>>>
+        {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MetadataItem>>,
+                >>(Repo::VT_METADATA, None)
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for Repo<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>,
+                >>("tags", Self::VT_TAGS, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>,
+                >>("branches", Self::VT_BRANCHES, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<&'_ str>>,
+                >>("deleted_tags", Self::VT_DELETED_TAGS, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SnapshotInfo>>,
+                >>("snapshots", Self::VT_SNAPSHOTS, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "spec_version",
+                    Self::VT_SPEC_VERSION,
+                    true,
+                )?
+                .visit_field::<u64>("last_updated_at", Self::VT_LAST_UPDATED_AT, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<RepoStatus>>(
+                    "status",
+                    Self::VT_STATUS,
+                    true,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MetadataItem>>,
+                >>("metadata", Self::VT_METADATA, false)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct RepoArgs<'a> {
+        pub tags: Option<
+            flatbuffers::WIPOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Ref<'a>>>,
+            >,
+        >,
+        pub branches: Option<
+            flatbuffers::WIPOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Ref<'a>>>,
+            >,
+        >,
+        pub deleted_tags: Option<
+            flatbuffers::WIPOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<&'a str>>,
+            >,
+        >,
+        pub snapshots: Option<
+            flatbuffers::WIPOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SnapshotInfo<'a>>>,
+            >,
+        >,
+        pub spec_version: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub last_updated_at: u64,
+        pub status: Option<flatbuffers::WIPOffset<RepoStatus<'a>>>,
+        pub metadata: Option<
+            flatbuffers::WIPOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MetadataItem<'a>>>,
+            >,
+        >,
+    }
+    impl<'a> Default for RepoArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            RepoArgs {
+                tags: None,         // required field
+                branches: None,     // required field
+                deleted_tags: None, // required field
+                snapshots: None,    // required field
+                spec_version: None, // required field
+                last_updated_at: 0,
+                status: None, // required field
+                metadata: None,
+            }
+        }
+    }
+
+    pub struct RepoBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> RepoBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_tags(
+            &mut self,
+            tags: flatbuffers::WIPOffset<
+                flatbuffers::Vector<'b, flatbuffers::ForwardsUOffset<Ref<'b>>>,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Repo::VT_TAGS, tags);
+        }
+        #[inline]
+        pub fn add_branches(
+            &mut self,
+            branches: flatbuffers::WIPOffset<
+                flatbuffers::Vector<'b, flatbuffers::ForwardsUOffset<Ref<'b>>>,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Repo::VT_BRANCHES,
+                branches,
+            );
+        }
+        #[inline]
+        pub fn add_deleted_tags(
+            &mut self,
+            deleted_tags: flatbuffers::WIPOffset<
+                flatbuffers::Vector<'b, flatbuffers::ForwardsUOffset<&'b str>>,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Repo::VT_DELETED_TAGS,
+                deleted_tags,
+            );
+        }
+        #[inline]
+        pub fn add_snapshots(
+            &mut self,
+            snapshots: flatbuffers::WIPOffset<
+                flatbuffers::Vector<'b, flatbuffers::ForwardsUOffset<SnapshotInfo<'b>>>,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Repo::VT_SNAPSHOTS,
+                snapshots,
+            );
+        }
+        #[inline]
+        pub fn add_spec_version(
+            &mut self,
+            spec_version: flatbuffers::WIPOffset<&'b str>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Repo::VT_SPEC_VERSION,
+                spec_version,
+            );
+        }
+        #[inline]
+        pub fn add_last_updated_at(&mut self, last_updated_at: u64) {
+            self.fbb_.push_slot::<u64>(Repo::VT_LAST_UPDATED_AT, last_updated_at, 0);
+        }
+        #[inline]
+        pub fn add_status(&mut self, status: flatbuffers::WIPOffset<RepoStatus<'b>>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<RepoStatus>>(
+                Repo::VT_STATUS,
+                status,
+            );
+        }
+        #[inline]
+        pub fn add_metadata(
+            &mut self,
+            metadata: flatbuffers::WIPOffset<
+                flatbuffers::Vector<'b, flatbuffers::ForwardsUOffset<MetadataItem<'b>>>,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Repo::VT_METADATA,
+                metadata,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> RepoBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            RepoBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<Repo<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, Repo::VT_TAGS, "tags");
+            self.fbb_.required(o, Repo::VT_BRANCHES, "branches");
+            self.fbb_.required(o, Repo::VT_DELETED_TAGS, "deleted_tags");
+            self.fbb_.required(o, Repo::VT_SNAPSHOTS, "snapshots");
+            self.fbb_.required(o, Repo::VT_SPEC_VERSION, "spec_version");
+            self.fbb_.required(o, Repo::VT_STATUS, "status");
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for Repo<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("Repo");
+            ds.field("tags", &self.tags());
+            ds.field("branches", &self.branches());
+            ds.field("deleted_tags", &self.deleted_tags());
+            ds.field("snapshots", &self.snapshots());
+            ds.field("spec_version", &self.spec_version());
+            ds.field("last_updated_at", &self.last_updated_at());
+            ds.field("status", &self.status());
+            ds.field("metadata", &self.metadata());
             ds.finish()
         }
     }

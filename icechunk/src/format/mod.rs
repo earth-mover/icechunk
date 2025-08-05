@@ -26,6 +26,7 @@ pub mod manifest;
 #[allow(
     dead_code,
     unused_imports,
+    unsafe_op_in_unsafe_fn,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::needless_lifetimes,
@@ -36,6 +37,7 @@ pub mod manifest;
 #[path = "./flatbuffers/all_generated.rs"]
 pub mod flatbuffers;
 
+pub mod repo_info;
 pub mod serializers;
 pub mod snapshot;
 pub mod transaction_log;

@@ -1,16 +1,6 @@
-include "object_ids.fbs";
+include "common.fbs";
 
-namespace gen;
-
-// a single key-value of snapshot metadata
-table MetadataItem {
-  // the name of the attribute
-  name: string (required);
-
-  // the value, serialized as rmp_serde of the json value
-  // TODO: better serialization format
-  value: [uint8] (required);
-}
+namespace generated;
 
 // a pointer to a manifest file
 struct ManifestFileInfo {
