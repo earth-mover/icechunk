@@ -8,10 +8,10 @@ use std::{
 };
 
 use crate::{
-    Storage, StorageError,
     config::{S3Credentials, S3CredentialsFetcher, S3Options},
     format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private,
+    storage::{Storage, StorageError},
 };
 use async_trait::async_trait;
 use aws_config::{
@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncRead, sync::OnceCell};
 use tracing::{error, instrument};
 
-use super::{
+use crate::storage::{
     CHUNK_PREFIX, CONFIG_PATH, DeleteObjectsResult, FetchConfigResult, GetRefResult,
     ListInfo, MANIFEST_PREFIX, REF_PREFIX, Reader, SNAPSHOT_PREFIX, Settings,
     StorageErrorKind, StorageResult, TRANSACTION_PREFIX, UpdateConfigResult, VersionInfo,

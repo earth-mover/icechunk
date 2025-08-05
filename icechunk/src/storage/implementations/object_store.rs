@@ -43,7 +43,7 @@ use tokio::{
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::instrument;
 
-use super::{
+use crate::storage::{
     CHUNK_PREFIX, CONFIG_PATH, ConcurrencySettings, DeleteObjectsResult, ETag,
     FetchConfigResult, Generation, GetRefResult, ListInfo, MANIFEST_PREFIX, REF_PREFIX,
     Reader, RetriesSettings, SNAPSHOT_PREFIX, Settings, Storage, StorageError,
