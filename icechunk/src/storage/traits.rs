@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use core::fmt;
-use futures::{stream::BoxStream, StreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use std::ops::Range;
 use tokio::io::AsyncRead;
 
@@ -29,7 +29,8 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
 
     fn can_write(&self) -> bool;
 
-    async fn fetch_config(&self, settings: &Settings) -> StorageResult<FetchConfigResult>;
+    async fn fetch_config(&self, settings: &Settings)
+    -> StorageResult<FetchConfigResult>;
     async fn update_config(
         &self,
         settings: &Settings,
@@ -134,10 +135,10 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         prefix: &str,
         ids: BoxStream<'_, (String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
-        use std::sync::{Arc, Mutex};
         use futures::StreamExt;
+        use std::sync::{Arc, Mutex};
         use tracing::warn;
-        
+
         let res = Arc::new(Mutex::new(DeleteObjectsResult::default()));
         ids.chunks(1_000)
             // FIXME: configurable concurrency
@@ -180,7 +181,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
     ) -> StorageResult<BoxStream<StorageResult<ListInfo<ChunkId>>>> {
-        use super::{translate_list_infos, CHUNK_PREFIX};
+        use super::{CHUNK_PREFIX, translate_list_infos};
         Ok(translate_list_infos(self.list_objects(settings, CHUNK_PREFIX).await?))
     }
 
@@ -188,7 +189,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
     ) -> StorageResult<BoxStream<StorageResult<ListInfo<ManifestId>>>> {
-        use super::{translate_list_infos, MANIFEST_PREFIX};
+        use super::{MANIFEST_PREFIX, translate_list_infos};
         Ok(translate_list_infos(self.list_objects(settings, MANIFEST_PREFIX).await?))
     }
 
@@ -196,7 +197,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
     ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
-        use super::{translate_list_infos, SNAPSHOT_PREFIX};
+        use super::{SNAPSHOT_PREFIX, translate_list_infos};
         Ok(translate_list_infos(self.list_objects(settings, SNAPSHOT_PREFIX).await?))
     }
 
@@ -204,7 +205,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
     ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
-        use super::{translate_list_infos, TRANSACTION_PREFIX};
+        use super::{TRANSACTION_PREFIX, translate_list_infos};
         Ok(translate_list_infos(self.list_objects(settings, TRANSACTION_PREFIX).await?))
     }
 
@@ -299,10 +300,10 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         key: &str,
         parts: Vec<Range<u64>>,
     ) -> StorageResult<Box<dyn bytes::Buf + Send + Unpin>> {
-        use futures::stream::FuturesOrdered;
-        use futures::TryStreamExt;
         use bytes::Buf;
-        
+        use futures::TryStreamExt;
+        use futures::stream::FuturesOrdered;
+
         let results =
             parts
                 .into_iter()
@@ -329,7 +330,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         range: &Range<u64>,
     ) -> StorageResult<Reader> {
         use super::split_in_multiple_requests;
-        
+
         let parts = split_in_multiple_requests(
             range,
             settings.concurrency().ideal_concurrent_request_size().get(),

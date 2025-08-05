@@ -1,7 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
-pub mod s3;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod object_store;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod s3;
 
 // Re-export implementations conditionally
 #[cfg(not(target_arch = "wasm32"))]

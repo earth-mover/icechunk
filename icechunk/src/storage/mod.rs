@@ -1,4 +1,4 @@
-use futures::{StreamExt, TryStreamExt, Stream, stream::BoxStream};
+use futures::{Stream, StreamExt, TryStreamExt, stream::BoxStream};
 use itertools::Itertools;
 use std::{
     cmp::{max, min},
@@ -8,14 +8,12 @@ use std::{
 };
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::{
-    config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options},
-};
+use crate::config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options};
 
 // Core modules - always available
+pub mod errors;
 pub mod traits;
 pub mod types;
-pub mod errors;
 
 // Implementation modules - conditionally compiled
 pub mod implementations;
@@ -25,9 +23,9 @@ pub mod implementations;
 pub mod logging;
 
 // Re-export core types and traits
+pub use errors::*;
 pub use traits::Storage;
 pub use types::*;
-pub use errors::*;
 
 // Conditional re-exports for implementations
 #[cfg(not(target_arch = "wasm32"))]
@@ -135,7 +133,7 @@ pub fn new_s3_storage(
     credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
     use implementations::s3::S3Storage;
-    
+
     if let Some(endpoint) = &config.endpoint_url {
         if endpoint.contains("fly.storage.tigris.dev") {
             return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
@@ -163,7 +161,7 @@ pub fn new_r2_storage(
     credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
     use implementations::s3::S3Storage;
-    
+
     let (bucket, prefix) = match (bucket, prefix) {
         (Some(bucket), Some(prefix)) => (bucket, Some(prefix)),
         (None, Some(prefix)) => match prefix.split_once("/") {
@@ -215,7 +213,7 @@ pub fn new_tigris_storage(
     use_weak_consistency: bool,
 ) -> StorageResult<Arc<dyn Storage>> {
     use implementations::s3::S3Storage;
-    
+
     let config = S3Options {
         endpoint_url: Some(
             config.endpoint_url.unwrap_or("https://fly.storage.tigris.dev".to_string()),
@@ -288,7 +286,8 @@ pub async fn new_s3_object_store_storage(
         }
     }
     let storage =
-        implementations::ObjectStorage::new_s3(bucket, prefix, credentials, Some(config)).await?;
+        implementations::ObjectStorage::new_s3(bucket, prefix, credentials, Some(config))
+            .await?;
     Ok(Arc::new(storage))
 }
 
@@ -301,15 +300,20 @@ pub async fn new_azure_blob_storage(
     config: Option<std::collections::HashMap<String, String>>,
 ) -> StorageResult<Arc<dyn Storage>> {
     use object_store::azure::AzureConfigKey;
-    
+
     let config = config
         .unwrap_or_default()
         .into_iter()
         .filter_map(|(key, value)| key.parse::<AzureConfigKey>().map(|k| (k, value)).ok())
         .collect();
-    let storage =
-        implementations::ObjectStorage::new_azure(account, container, prefix, credentials, Some(config))
-            .await?;
+    let storage = implementations::ObjectStorage::new_azure(
+        account,
+        container,
+        prefix,
+        credentials,
+        Some(config),
+    )
+    .await?;
     Ok(Arc::new(storage))
 }
 
@@ -321,7 +325,7 @@ pub async fn new_gcs_storage(
     config: Option<std::collections::HashMap<String, String>>,
 ) -> StorageResult<Arc<dyn Storage>> {
     use object_store::gcp::GoogleConfigKey;
-    
+
     let config = config
         .unwrap_or_default()
         .into_iter()
@@ -329,8 +333,13 @@ pub async fn new_gcs_storage(
             key.parse::<GoogleConfigKey>().map(|k| (k, value)).ok()
         })
         .collect();
-    let storage =
-        implementations::ObjectStorage::new_gcs(bucket, prefix, credentials, Some(config)).await?;
+    let storage = implementations::ObjectStorage::new_gcs(
+        bucket,
+        prefix,
+        credentials,
+        Some(config),
+    )
+    .await?;
     Ok(Arc::new(storage))
 }
 

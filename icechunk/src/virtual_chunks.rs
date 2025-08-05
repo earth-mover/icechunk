@@ -30,9 +30,7 @@ use crate::{
     config::{Credentials, GcsCredentials, S3Credentials, S3Options},
     format::{
         ChunkOffset,
-        manifest::{
-            Checksum, VirtualReferenceError, VirtualReferenceErrorKind,
-        },
+        manifest::{Checksum, VirtualReferenceError, VirtualReferenceErrorKind},
     },
     private,
     storage::{self, split_in_multiple_requests},
@@ -41,16 +39,12 @@ use crate::{
 #[cfg(not(target_arch = "wasm32"))]
 use crate::format::manifest::SecondsSinceEpoch;
 
-
-
 #[cfg(not(target_arch = "wasm32"))]
-use crate::{
-    storage::implementations::{
-        object_store::{
-            GcsObjectStoreBackend, HttpObjectStoreBackend, ObjectStoreBackend as _,
-        },
-        s3::{mk_client, range_to_header},
+use crate::storage::implementations::{
+    object_store::{
+        GcsObjectStoreBackend, HttpObjectStoreBackend, ObjectStoreBackend as _,
     },
+    s3::{mk_client, range_to_header},
 };
 
 pub type ContainerName = String;
@@ -770,7 +764,7 @@ impl ChunkFetcher for S3Fetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
         NonZeroU64::new(1024).unwrap_or(NonZeroU64::MIN)
     }
-    
+
     fn max_concurrent_requests_for_object(&self) -> NonZeroU16 {
         NonZeroU16::new(1).unwrap_or(NonZeroU16::MIN)
     }
@@ -781,12 +775,12 @@ impl ChunkFetcher for S3Fetcher {
         _range: Range<ChunkOffset>,
         _checksum: Option<&Checksum>,
     ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
-        Err(VirtualReferenceError::from(VirtualReferenceErrorKind::OtherError(
-            Box::new(std::io::Error::new(
+        Err(VirtualReferenceError::from(VirtualReferenceErrorKind::OtherError(Box::new(
+            std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "S3Fetcher not supported on WASM",
-            )),
-        )))
+            ),
+        ))))
     }
 }
 
@@ -804,12 +798,12 @@ impl ObjectStoreFetcher {
         _url: &str,
         _opts: &HashMap<String, String>,
     ) -> Result<Self, VirtualReferenceError> {
-        Err(VirtualReferenceError::from(VirtualReferenceErrorKind::OtherError(
-            Box::new(std::io::Error::new(
+        Err(VirtualReferenceError::from(VirtualReferenceErrorKind::OtherError(Box::new(
+            std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "ObjectStoreFetcher::new_http not supported on WASM",
-            )),
-        )))
+            ),
+        ))))
     }
 
     pub async fn new_gcs(
@@ -818,12 +812,12 @@ impl ObjectStoreFetcher {
         _credentials: Option<crate::config::GcsCredentials>,
         _config: HashMap<String, String>,
     ) -> Result<Self, VirtualReferenceError> {
-        Err(VirtualReferenceError::from(VirtualReferenceErrorKind::OtherError(
-            Box::new(std::io::Error::new(
+        Err(VirtualReferenceError::from(VirtualReferenceErrorKind::OtherError(Box::new(
+            std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "ObjectStoreFetcher::new_gcs not supported on WASM",
-            )),
-        )))
+            ),
+        ))))
     }
 }
 
@@ -836,7 +830,7 @@ impl ChunkFetcher for ObjectStoreFetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
         NonZeroU64::new(1024).unwrap_or(NonZeroU64::MIN)
     }
-    
+
     fn max_concurrent_requests_for_object(&self) -> NonZeroU16 {
         NonZeroU16::new(1).unwrap_or(NonZeroU16::MIN)
     }
@@ -847,12 +841,12 @@ impl ChunkFetcher for ObjectStoreFetcher {
         _range: Range<ChunkOffset>,
         _checksum: Option<&Checksum>,
     ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
-        Err(VirtualReferenceError::from(VirtualReferenceErrorKind::OtherError(
-            Box::new(std::io::Error::new(
+        Err(VirtualReferenceError::from(VirtualReferenceErrorKind::OtherError(Box::new(
+            std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "ObjectStoreFetcher not supported on WASM",
-            )),
-        )))
+            ),
+        ))))
     }
 }
 
