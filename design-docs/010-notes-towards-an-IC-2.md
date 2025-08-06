@@ -81,3 +81,7 @@ chance is going through every branch/tag looking at the spec version in
 the snapshot file
 
 * See [Single Entry Point Object for Refs and Ancestry](./011-ref-and-ancestry-entry-point.md)
+
+### Support more complex array updates
+
+Example: backfills, inserts, and upserts. This would require some changes to the manifest to make it efficient, as well as upstream API additions to Zarr.
