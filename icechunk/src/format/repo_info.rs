@@ -1,4 +1,5 @@
 use itertools::Itertools as _;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::{
@@ -10,12 +11,12 @@ use super::{
 use chrono::{DateTime, Utc};
 use flatbuffers::VerifierOptions;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
 pub struct RepoInfo {
     buffer: Vec<u8>,
 }
 
-// TODO: implement debug instance for RepoInfo
+// TODO: implement custom debug instance for RepoInfo
 
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     max_depth: 10,
@@ -83,6 +84,17 @@ impl RepoInfo {
                     .parent_id
                     .as_ref()
                     .map(|parent_id| snapshot_index.get(parent_id).unwrap());
+
+                let meta_name = builder.create_string("foo"); // FIXME: fake metadata
+                let meta_value = builder.create_vector::<u8>(&[]);
+                let meta_item = generated::MetadataItem::create(
+                    &mut builder,
+                    &generated::MetadataItemArgs {
+                        name: Some(meta_name), // FIXME:
+                        value: Some(meta_value),
+                    },
+                );
+                let metadata = builder.create_vector(&[meta_item]);
                 let args = generated::SnapshotInfoArgs {
                     id: Some(&id),
                     parent_offset: match parent_offset {
@@ -91,7 +103,7 @@ impl RepoInfo {
                     },
                     flushed_at: snap.flushed_at.timestamp_micros() as u64,
                     message: Some(builder.create_string(snap.message.as_str())),
-                    metadata: None, // FIXME:
+                    metadata: Some(metadata), // FIXME:
                 };
                 generated::SnapshotInfo::create(&mut builder, &args)
             })
@@ -267,7 +279,7 @@ impl RepoInfo {
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {
-        let _ = flatbuffers::root_with_opts::<generated::Snapshot>(
+        let _ = flatbuffers::root_with_opts::<generated::Repo>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;

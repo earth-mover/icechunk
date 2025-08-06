@@ -118,6 +118,7 @@ const CHUNK_PREFIX: &str = "chunks/";
 const REF_PREFIX: &str = "refs";
 const TRANSACTION_PREFIX: &str = "transactions/";
 const CONFIG_PATH: &str = "config.yaml";
+const REPO_INFO_PATH: &str = "repo";
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash, PartialOrd, Ord)]
 pub struct ETag(pub String);
@@ -381,13 +382,13 @@ impl Reader {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FetchConfigResult {
-    Found { bytes: Bytes, version: VersionInfo },
+pub enum VersionedFetchResult<R> {
+    Found { result: R, version: VersionInfo },
     NotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UpdateConfigResult {
+pub enum VersionedUpdateResult {
     Updated { new_version: VersionInfo },
     NotOnLatestVersion,
 }
@@ -430,14 +431,20 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
 
     fn can_write(&self) -> bool;
 
-    async fn fetch_config(&self, settings: &Settings)
-    -> StorageResult<FetchConfigResult>;
+    async fn fetch_config(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<VersionedFetchResult<Bytes>>;
     async fn update_config(
         &self,
         settings: &Settings,
         config: Bytes,
         previous_version: &VersionInfo,
-    ) -> StorageResult<UpdateConfigResult>;
+    ) -> StorageResult<VersionedUpdateResult>;
+    async fn fetch_repo_info(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncRead + Unpin + Send>>>;
     async fn fetch_snapshot(
         &self,
         settings: &Settings,
@@ -498,7 +505,13 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()>;
-
+    async fn update_repo_info(
+        &self,
+        settings: &Settings,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+        previous_version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult>;
     async fn get_ref(
         &self,
         settings: &Settings,

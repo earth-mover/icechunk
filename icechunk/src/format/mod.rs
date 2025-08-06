@@ -311,6 +311,7 @@ pub mod format_constants {
         Attributes = 3,
         TransactionLog = 4,
         Chunk = 5,
+        RepoInfo = 6,
     }
 
     impl TryFrom<u8> for FileTypeBin {
@@ -321,6 +322,7 @@ pub mod format_constants {
                 n if n == FileTypeBin::Snapshot as u8 => Ok(FileTypeBin::Snapshot),
                 n if n == FileTypeBin::Manifest as u8 => Ok(FileTypeBin::Manifest),
                 n if n == FileTypeBin::Attributes as u8 => Ok(FileTypeBin::Attributes),
+                n if n == FileTypeBin::RepoInfo as u8 => Ok(FileTypeBin::RepoInfo),
                 n if n == FileTypeBin::TransactionLog as u8 => {
                     Ok(FileTypeBin::TransactionLog)
                 }
@@ -333,7 +335,8 @@ pub mod format_constants {
     #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum SpecVersionBin {
-        V0dot1 = 1u8,
+        V1dot0 = 1u8,
+        V2dot0 = 2u8,
     }
 
     impl TryFrom<u8> for SpecVersionBin {
@@ -341,7 +344,8 @@ pub mod format_constants {
 
         fn try_from(value: u8) -> Result<Self, Self::Error> {
             match value {
-                n if n == SpecVersionBin::V0dot1 as u8 => Ok(SpecVersionBin::V0dot1),
+                n if n == SpecVersionBin::V1dot0 as u8 => Ok(SpecVersionBin::V1dot0),
+                n if n == SpecVersionBin::V2dot0 as u8 => Ok(SpecVersionBin::V2dot0),
                 n => Err(format!("Bad spec version code: {n}")),
             }
         }
@@ -349,7 +353,7 @@ pub mod format_constants {
 
     impl SpecVersionBin {
         pub fn current() -> Self {
-            Self::V0dot1
+            Self::V2dot0
         }
     }
 
@@ -389,6 +393,7 @@ pub mod format_constants {
     pub const ICECHUNK_FILE_TYPE_SNAPSHOT: &str = "snapshot";
     pub const ICECHUNK_FILE_TYPE_MANIFEST: &str = "manifest";
     pub const ICECHUNK_FILE_TYPE_TRANSACTION_LOG: &str = "transaction-log";
+    pub const ICECHUNK_FILE_TYPE_REPO_INFO: &str = "repo-info";
     pub const ICECHUNK_FILE_TYPE_METADATA_KEY: &str = "ic_file_type";
 
     pub const ICECHUNK_COMPRESSION_METADATA_KEY: &str = "ic_comp_alg";

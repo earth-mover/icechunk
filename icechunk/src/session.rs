@@ -2228,7 +2228,10 @@ mod tests {
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
         },
-        format::manifest::{ManifestExtents, ManifestSplits},
+        format::{
+            manifest::{ManifestExtents, ManifestSplits},
+            repo_info::RepoInfo,
+        },
         refs::{Ref, fetch_tag},
         repository::VersionInfo,
         storage::new_in_memory_storage,
@@ -2614,7 +2617,8 @@ mod tests {
 
     #[tokio_test]
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> =
+            crate::new_in_memory_storage().await?;
         let storage_settings = storage.default_settings();
         let asset_manager =
             AssetManager::new_no_cache(Arc::clone(&storage), storage_settings.clone(), 1);
@@ -2700,6 +2704,11 @@ mod tests {
             &storage::VersionInfo::for_creation(),
         )
         .await?;
+        let repo_info = RepoInfo::initial((&initial).try_into()?)
+            .add_snapshot(snapshot.as_ref().try_into()?)?;
+        asset_manager
+            .update_repo_info(Arc::new(repo_info), &storage::VersionInfo::for_creation())
+            .await?;
 
         let repo = Repository::open(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
@@ -3112,11 +3121,8 @@ mod tests {
                     actual_dims == new_dimension_names
         ));
 
-        // since we wrote every asset we should only have one fetch for the initial snapshot
-        // TODO: this could be better, we should need none
         let ops = logging.fetch_operations();
-        assert_eq!(ops.len(), 1);
-        assert_eq!(ops[0].0, "fetch_snapshot");
+        assert_eq!(ops.len(), 0);
 
         //test the previous version is still alive
         let ds = repository

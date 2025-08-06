@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncRead;
 
 use super::{
-    DeleteObjectsResult, FetchConfigResult, GetRefResult, ListInfo, Reader, Settings,
-    Storage, StorageError, StorageResult, UpdateConfigResult, VersionInfo,
+    DeleteObjectsResult, GetRefResult, ListInfo, Reader, Settings, Storage, StorageError,
+    StorageResult, VersionInfo, VersionedFetchResult, VersionedUpdateResult,
     WriteRefResult,
 };
 use crate::{
@@ -67,16 +67,32 @@ impl Storage for LoggingStorage {
     async fn fetch_config(
         &self,
         settings: &Settings,
-    ) -> StorageResult<FetchConfigResult> {
+    ) -> StorageResult<VersionedFetchResult<Bytes>> {
         self.backend.fetch_config(settings).await
+    }
+    async fn fetch_repo_info(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncRead + Unpin + Send>>> {
+        self.backend.fetch_repo_info(settings).await
     }
     async fn update_config(
         &self,
         settings: &Settings,
         config: Bytes,
         previous_version: &VersionInfo,
-    ) -> StorageResult<UpdateConfigResult> {
+    ) -> StorageResult<VersionedUpdateResult> {
         self.backend.update_config(settings, config, previous_version).await
+    }
+
+    async fn update_repo_info(
+        &self,
+        settings: &Settings,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+        previous_version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult> {
+        self.backend.update_repo_info(settings, metadata, bytes, previous_version).await
     }
 
     async fn fetch_snapshot(

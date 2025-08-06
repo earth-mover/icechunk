@@ -16,8 +16,8 @@ use icechunk::{
         update_branch,
     },
     storage::{
-        self, ETag, FetchConfigResult, Generation, StorageResult, UpdateConfigResult,
-        VersionInfo, new_in_memory_storage, new_s3_storage, s3::mk_client,
+        self, ETag, Generation, StorageResult, VersionInfo, VersionedFetchResult,
+        VersionedUpdateResult, new_in_memory_storage, new_s3_storage, s3::mk_client,
     },
 };
 use icechunk_macros::tokio_test;
@@ -411,13 +411,13 @@ pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Erro
         let storage_settings = storage.default_settings();
         let config = Bytes::copy_from_slice(b"hello");
         let version = match storage.update_config(&storage_settings, config.clone(), &VersionInfo::for_creation()).await? {
-    UpdateConfigResult::Updated { new_version } => new_version,
-    UpdateConfigResult::NotOnLatestVersion => panic!(),
+    VersionedUpdateResult::Updated { new_version } => new_version,
+    VersionedUpdateResult::NotOnLatestVersion => panic!(),
 };
         assert_ne!(version, VersionInfo::for_creation());
         let res = storage.fetch_config(&storage_settings, ).await?;
         assert!(
-            matches!(res, FetchConfigResult::Found{bytes, version: actual_version} if actual_version == version && bytes == config )
+            matches!(res, VersionedFetchResult::Found{result, version: actual_version} if actual_version == version && bytes == config )
         );
         Ok(())
     }).await?;
@@ -430,18 +430,18 @@ pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::E
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let first_version = match storage.update_config(&storage_settings, Bytes::copy_from_slice(b"hello"), &VersionInfo::for_creation()).await? {
-            UpdateConfigResult::Updated { new_version } => new_version,
+            VersionedUpdateResult::Updated { new_version } => new_version,
             _ => panic!(),
         };
         let config = Bytes::copy_from_slice(b"bye");
         let second_version = match storage.update_config(&storage_settings, config.clone(), &first_version).await? {
-            UpdateConfigResult::Updated { new_version } => new_version,
+            VersionedUpdateResult::Updated { new_version } => new_version,
             _ => panic!(),
         };
         assert_ne!(second_version, first_version);
         let res = storage.fetch_config(&storage_settings, ).await?;
         assert!(
-            matches!(res, FetchConfigResult::Found{bytes, version: actual_version} if actual_version == second_version && bytes == config )
+            matches!(res, VersionedFetchResult::Found{result, version: actual_version} if actual_version == second_version && bytes == config )
         );
         Ok(())
     }).await?;
@@ -463,7 +463,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing()
         )
         .await;
 
-    assert!(matches!(version, Ok(UpdateConfigResult::NotOnLatestVersion)));
+    assert!(matches!(version, Ok(VersionedUpdateResult::NotOnLatestVersion)));
     Ok(())
 }
 
@@ -475,7 +475,7 @@ pub async fn test_write_config_fails_on_bad_version_when_existing()
         let storage_settings = storage.default_settings();
         let config = Bytes::copy_from_slice(b"hello");
         let version = match storage.update_config(&storage_settings, config.clone(), &VersionInfo::for_creation()).await? {
-            UpdateConfigResult::Updated { new_version } => new_version,
+            VersionedUpdateResult::Updated { new_version } => new_version,
             _ => panic!(),
         };
         let update_res = storage
@@ -489,22 +489,22 @@ pub async fn test_write_config_fails_on_bad_version_when_existing()
             .await?;
         if storage_type == "local_filesystem" {
             // FIXME: local file system doesn't have conditional updates yet
-            assert!(matches!(update_res, UpdateConfigResult::Updated{..}));
+            assert!(matches!(update_res, VersionedUpdateResult::Updated{..}));
 
         } else {
-            assert!(matches!(update_res, UpdateConfigResult::NotOnLatestVersion));
+            assert!(matches!(update_res, VersionedUpdateResult::NotOnLatestVersion));
         }
 
         let fetch_res = storage.fetch_config(&storage_settings, ).await?;
         if storage_type == "local_filesystem" {
             // FIXME: local file system doesn't have conditional updates yet
             assert!(
-                matches!(fetch_res, FetchConfigResult::Found{bytes, version: actual_version}
+                matches!(fetch_res, VersionedFetchResult::Found{result, version: actual_version}
                     if actual_version != version && bytes == Bytes::copy_from_slice(b"bye"))
             );
         } else {
             assert!(
-                matches!(fetch_res, FetchConfigResult::Found{bytes, version: actual_version}
+                matches!(fetch_res, VersionedFetchResult::Found{result, version: actual_version}
                     if actual_version == version && bytes == config )
             );
         }
@@ -537,7 +537,7 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
             )
             .await?
         {
-            UpdateConfigResult::Updated { new_version } => new_version,
+            VersionedUpdateResult::Updated { new_version } => new_version,
             _ => panic!(),
         };
 
@@ -553,11 +553,11 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
             )
             .await?;
 
-        assert!(matches!(update_res, UpdateConfigResult::Updated { .. }));
+        assert!(matches!(update_res, VersionedUpdateResult::Updated { .. }));
 
         let fetch_res = storage.fetch_config(&storage_settings).await?;
         assert!(
-            matches!(fetch_res, FetchConfigResult::Found{bytes, ..} if bytes.as_ref() == b"bye")
+            matches!(fetch_res, VersionedFetchResult::Found{result, ..} if bytes.as_ref() == b"bye")
         );
         Ok(())
     })

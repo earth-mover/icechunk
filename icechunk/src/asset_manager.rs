@@ -18,16 +18,18 @@ use crate::{
         ChunkId, ChunkOffset, IcechunkFormatErrorKind, ManifestId, SnapshotId,
         format_constants::{self, CompressionAlgorithmBin, FileTypeBin, SpecVersionBin},
         manifest::Manifest,
+        repo_info::RepoInfo,
         serializers::{
-            deserialize_manifest, deserialize_snapshot, deserialize_transaction_log,
-            serialize_manifest, serialize_snapshot, serialize_transaction_log,
+            deserialize_manifest, deserialize_repo_info, deserialize_snapshot,
+            deserialize_transaction_log, serialize_manifest, serialize_repo_info,
+            serialize_snapshot, serialize_transaction_log,
         },
         snapshot::{Snapshot, SnapshotInfo},
         transaction_log::TransactionLog,
     },
     private,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, Reader},
+    storage::{self, Reader, VersionInfo},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -314,6 +316,29 @@ impl AssetManager {
                 Ok(transaction)
             }
         }
+    }
+
+    #[instrument(skip(self))]
+    pub async fn fetch_repo_info(
+        &self,
+    ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
+        fetch_repo_info(self.storage.as_ref(), &self.storage_settings).await
+    }
+
+    #[instrument(skip(self, info))]
+    pub async fn update_repo_info(
+        &self,
+        info: Arc<RepoInfo>,
+        version: &VersionInfo,
+    ) -> RepositoryResult<VersionInfo> {
+        write_repo_info(
+            info,
+            version,
+            self.compression_level,
+            self.storage.as_ref(),
+            &self.storage_settings,
+        )
+        .await
     }
 
     #[instrument(skip(self, bytes))]
@@ -725,6 +750,79 @@ async fn fetch_transaction_log(
     })
     .await?
     .map(Arc::new)
+}
+
+async fn write_repo_info(
+    info: Arc<RepoInfo>,
+    version: &VersionInfo,
+    compression_level: u8,
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+) -> RepositoryResult<VersionInfo> {
+    use format_constants::*;
+    let metadata = vec![
+        (
+            LATEST_ICECHUNK_FORMAT_VERSION_METADATA_KEY.to_string(),
+            (SpecVersionBin::current() as u8).to_string(),
+        ),
+        (ICECHUNK_CLIENT_NAME_METADATA_KEY.to_string(), ICECHUNK_CLIENT_NAME.to_string()),
+        (
+            ICECHUNK_FILE_TYPE_METADATA_KEY.to_string(),
+            ICECHUNK_FILE_TYPE_REPO_INFO.to_string(),
+        ),
+        (
+            ICECHUNK_COMPRESSION_METADATA_KEY.to_string(),
+            ICECHUNK_COMPRESSION_ZSTD.to_string(),
+        ),
+    ];
+
+    let span = Span::current();
+    let buffer = tokio::task::spawn_blocking(move || {
+        let _entered = span.entered();
+        let buffer = binary_file_header(
+            SpecVersionBin::current(),
+            FileTypeBin::RepoInfo,
+            CompressionAlgorithmBin::Zstd,
+        );
+        let mut compressor =
+            zstd::stream::Encoder::new(buffer, compression_level as i32)?;
+        serialize_repo_info(info.as_ref(), SpecVersionBin::current(), &mut compressor)?;
+        compressor.finish().map_err(RepositoryErrorKind::IOError)
+    })
+    .await??;
+
+    debug!(size_bytes = buffer.len(), "Writing repo info log");
+    match storage
+        .update_repo_info(storage_settings, metadata, buffer.into(), version)
+        .await?
+    {
+        storage::VersionedUpdateResult::Updated { new_version } => Ok(new_version),
+        storage::VersionedUpdateResult::NotOnLatestVersion => todo!(), // FIXME
+    }
+}
+
+async fn fetch_repo_info(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
+    debug!("Downloading repo info");
+    match storage.fetch_repo_info(storage_settings).await? {
+        storage::VersionedFetchResult::Found { result, version } => {
+            let span = Span::current();
+            tokio::task::spawn_blocking(move || {
+                let _entered = span.entered();
+                let (spec_version, decompressor) = check_and_get_decompressor(
+                    Reader::Asynchronous(result),
+                    FileTypeBin::RepoInfo,
+                )?;
+                deserialize_repo_info(spec_version, decompressor)
+                    .map(|ri| (Arc::new(ri), version))
+                    .map_err(RepositoryError::from)
+            })
+            .await?
+        }
+        storage::VersionedFetchResult::NotFound => todo!(),
+    }
 }
 
 #[derive(Debug, Clone)]

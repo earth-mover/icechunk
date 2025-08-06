@@ -27,6 +27,7 @@ use crate::{
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
+        repo_info::RepoInfo,
         snapshot::{
             ManifestFileInfo, NodeData, Snapshot, SnapshotInfo, SnapshotProperties,
         },
@@ -37,7 +38,7 @@ use crate::{
         fetch_branch_tip, fetch_tag, list_branches, list_tags, update_branch,
     },
     session::{Session, SessionErrorKind, SessionResult},
-    storage::{self, FetchConfigResult, StorageErrorKind, UpdateConfigResult},
+    storage::{self, StorageErrorKind, VersionedFetchResult, VersionedUpdateResult},
     virtual_chunks::VirtualChunkResolver,
 };
 
@@ -157,6 +158,8 @@ pub struct Repository {
     config: RepositoryConfig,
     storage_settings: storage::Settings,
     config_version: storage::VersionInfo,
+    repo_info_version: storage::VersionInfo,
+    repo_info: Arc<RepoInfo>,
     storage: Arc<dyn Storage + Send + Sync>,
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
@@ -186,25 +189,26 @@ impl Repository {
         // Merge the given config with the defaults
         let config =
             config.map(|c| RepositoryConfig::default().merge(c)).unwrap_or_default();
-        let compression = config.compression().level();
         let storage_c = Arc::clone(&storage);
         let storage_settings =
             config.storage().cloned().unwrap_or_else(|| storage.default_settings());
+
+        let asset_manager = Arc::new(AssetManager::new_with_config(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            config.caching(),
+            config.compression().level(),
+        ));
 
         if !storage.root_is_clean().await? {
             return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
         }
 
+        let asset_manager_c = Arc::clone(&asset_manager);
         let create_branch = async move {
-            // TODO: we could cache this first snapshot
-            let asset_manager = AssetManager::new_no_cache(
-                Arc::clone(&storage_c),
-                storage_settings.clone(),
-                compression,
-            );
             // On create we need to create the default branch
             let new_snapshot = Arc::new(Snapshot::initial()?);
-            asset_manager.write_snapshot(Arc::clone(&new_snapshot)).await?;
+            asset_manager_c.write_snapshot(Arc::clone(&new_snapshot)).await?;
 
             update_branch(
                 storage_c.as_ref(),
@@ -214,7 +218,16 @@ impl Repository {
                 None,
             )
             .await?;
-            Ok::<(), RepositoryError>(())
+
+            let snap_info = new_snapshot.as_ref().try_into()?;
+            let repo_info = Arc::new(RepoInfo::initial(snap_info));
+            let version = asset_manager_c
+                .update_repo_info(
+                    Arc::clone(&repo_info),
+                    &storage::VersionInfo::for_creation(),
+                )
+                .await?;
+            Ok::<_, RepositoryError>((repo_info, version))
         }
         .in_current_span();
 
@@ -235,10 +248,19 @@ impl Repository {
         }
         .in_current_span();
 
-        let (_, config_version) = try_join!(create_branch, update_config)?;
+        let ((repo_info, repo_info_version), config_version) =
+            try_join!(create_branch, update_config)?;
 
         debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
-        Self::new(config, config_version, storage, authorize_virtual_chunk_access)
+        Self::new(
+            config,
+            config_version,
+            repo_info,
+            repo_info_version,
+            storage,
+            asset_manager,
+            authorize_virtual_chunk_access,
+        )
     }
 
     #[instrument(skip_all)]
@@ -266,23 +288,68 @@ impl Repository {
             .in_current_span(),
         );
 
-        #[allow(clippy::expect_used)]
-        handle2.await.expect("Error checking if repo exists")?;
-        #[allow(clippy::expect_used)]
-        if let Some((default_config, config_version)) =
-            handle1.await.expect("Error fetching repo config")?
-        {
+        let storage_c = Arc::clone(&storage);
+        let handle3 = tokio::spawn(
+            async move {
+                let temp_asset_manager = Arc::new(AssetManager::new_no_cache(
+                    Arc::clone(&storage_c),
+                    storage_c.default_settings(),
+                    1, // we are only reading, compression doesn't matter
+                ));
+
+                temp_asset_manager.fetch_repo_info().await
+            }
+            .in_current_span(),
+        );
+
+        let (config_res, exists_res, repo_info_res) =
+            try_join!(handle1, handle2, handle3)?;
+
+        let _ = exists_res?;
+        let (repo_info, repo_info_version) = repo_info_res?;
+
+        if let Some((default_config, config_version)) = config_res? {
             // Merge the given config with the defaults
             let config =
                 config.map(|c| default_config.merge(c)).unwrap_or(default_config);
 
-            Self::new(config, config_version, storage, authorize_virtual_chunk_access)
+            let storage_settings =
+                config.storage().cloned().unwrap_or_else(|| storage.default_settings());
+
+            let asset_manager = Arc::new(AssetManager::new_with_config(
+                Arc::clone(&storage),
+                storage_settings.clone(),
+                config.caching(),
+                config.compression().level(),
+            ));
+
+            Self::new(
+                config,
+                config_version,
+                repo_info,
+                repo_info_version,
+                storage,
+                asset_manager,
+                authorize_virtual_chunk_access,
+            )
         } else {
             let config = config.unwrap_or_default();
+            let storage_settings =
+                config.storage().cloned().unwrap_or_else(|| storage.default_settings());
+
+            let asset_manager = Arc::new(AssetManager::new_with_config(
+                Arc::clone(&storage),
+                storage_settings.clone(),
+                config.caching(),
+                config.compression().level(),
+            ));
             Self::new(
                 config,
                 storage::VersionInfo::for_creation(),
+                repo_info,
+                repo_info_version,
                 storage,
+                asset_manager,
                 authorize_virtual_chunk_access,
             )
         }
@@ -303,7 +370,10 @@ impl Repository {
     fn new(
         config: RepositoryConfig,
         config_version: storage::VersionInfo,
+        repo_info: Arc<RepoInfo>,
+        repo_info_version: storage::VersionInfo,
         storage: Arc<dyn Storage + Send + Sync>,
+        asset_manager: Arc<AssetManager>,
         authorized_virtual_containers: HashMap<String, Option<Credentials>>,
     ) -> RepositoryResult<Self> {
         let containers = config.virtual_chunk_containers().cloned();
@@ -315,15 +385,11 @@ impl Repository {
             authorized_virtual_containers.clone(),
             storage_settings.clone(),
         ));
-        let asset_manager = Arc::new(AssetManager::new_with_config(
-            Arc::clone(&storage),
-            storage_settings.clone(),
-            config.caching(),
-            config.compression().level(),
-        ));
         Ok(Self {
             config,
             config_version,
+            repo_info,
+            repo_info_version,
             storage,
             storage_settings,
             virtual_resolver,
@@ -359,7 +425,10 @@ impl Repository {
         Self::new(
             config,
             self.config_version.clone(),
+            Arc::clone(&self.repo_info),
+            self.repo_info_version.clone(),
             Arc::clone(&self.storage),
+            Arc::clone(&self.asset_manager),
             authorize_virtual_chunk_access
                 .unwrap_or_else(|| self.authorized_virtual_containers.clone()),
         )
@@ -380,11 +449,11 @@ impl Repository {
         storage: &(dyn Storage + Send + Sync),
     ) -> RepositoryResult<Option<(RepositoryConfig, storage::VersionInfo)>> {
         match storage.fetch_config(&storage.default_settings()).await? {
-            FetchConfigResult::Found { bytes, version } => {
-                let config = serde_yaml_ng::from_slice(&bytes)?;
+            VersionedFetchResult::Found { result, version } => {
+                let config = serde_yaml_ng::from_slice(&result)?;
                 Ok(Some((config, version)))
             }
-            FetchConfigResult::NotFound => Ok(None),
+            VersionedFetchResult::NotFound => Ok(None),
         }
     }
 
@@ -425,8 +494,8 @@ impl Repository {
         let storage_settings =
             config.storage().cloned().unwrap_or_else(|| storage.default_settings());
         match storage.update_config(&storage_settings, bytes, previous_version).await? {
-            UpdateConfigResult::Updated { new_version } => Ok(new_version),
-            UpdateConfigResult::NotOnLatestVersion => {
+            VersionedUpdateResult::Updated { new_version } => Ok(new_version),
+            VersionedUpdateResult::NotOnLatestVersion => {
                 Err(RepositoryErrorKind::ConfigWasUpdated.into())
             }
         }
@@ -2389,6 +2458,9 @@ mod tests {
     ///
     /// We verify only the correct two arrays are preloaded
     async fn test_manifest_preload_known_manifests() -> Result<(), Box<dyn Error>> {
+        //let backend: Arc<dyn Storage + Send + Sync> =
+        //    new_local_filesystem_storage(&(std::path::Path::new("/tmp/testrepo2")))
+        //        .await?;
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage = Arc::clone(&backend);
 
