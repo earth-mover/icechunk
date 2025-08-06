@@ -256,7 +256,7 @@ impl VirtualChunkResolver {
         settings: storage::Settings,
     ) -> Self {
         fn add_trailing(s: String) -> String {
-            if s.ends_with('/') { s } else { format!("{}/", s) }
+            if s.ends_with('/') { s } else { format!("{s}/") }
         }
 
         // we need to validate the containers because they can come from persisted config
