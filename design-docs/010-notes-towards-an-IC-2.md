@@ -84,4 +84,10 @@ the snapshot file
 
 ### Support more complex array updates
 
-Example: backfills, inserts, and upserts. This would require some changes to the manifest to make it efficient, as well as upstream API additions to Zarr.
+Example: backfills, inserts, and upserts. This would require some
+changes to the manifest to make it efficient, as well as upstream
+API additions to Zarr.
+
+### Is Icechunk efficient in the presence of many thousands of nodes?
+
+### Config changes are not tracked
