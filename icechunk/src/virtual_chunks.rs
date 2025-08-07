@@ -2,40 +2,49 @@ use std::{
     collections::HashMap,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
-    str::FromStr,
     sync::Arc,
 };
 
 use async_trait::async_trait;
-use aws_sdk_s3::{Client, error::SdkError, operation::get_object::GetObjectError};
 use bytes::{Buf, Bytes};
-use futures::{TryStreamExt, stream::FuturesOrdered};
-use object_store::{
-    ClientConfigKey, GetOptions, ObjectStore, gcp::GoogleConfigKey,
-    local::LocalFileSystem, path::Path,
-};
 use quick_cache::sync::Cache;
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+#[cfg(not(target_arch = "wasm32"))]
+use {
+    aws_sdk_s3::{Client, error::SdkError, operation::get_object::GetObjectError},
+    futures::{TryStreamExt, stream::FuturesOrdered},
+    object_store::{
+        ClientConfigKey, GetOptions, ObjectStore, gcp::GoogleConfigKey,
+        local::LocalFileSystem, path::Path,
+    },
+    std::str::FromStr,
+};
+
+#[cfg(target_arch = "wasm32")]
+use futures::{TryStreamExt, stream::FuturesOrdered};
 
 use crate::{
     ObjectStoreConfig,
     config::{Credentials, GcsCredentials, S3Credentials, S3Options},
     format::{
         ChunkOffset,
-        manifest::{
-            Checksum, SecondsSinceEpoch, VirtualReferenceError, VirtualReferenceErrorKind,
-        },
+        manifest::{Checksum, VirtualReferenceError, VirtualReferenceErrorKind},
     },
     private,
-    storage::{
-        self,
-        object_store::{
-            GcsObjectStoreBackend, HttpObjectStoreBackend, ObjectStoreBackend as _,
-        },
-        s3::{mk_client, range_to_header},
-        split_in_multiple_requests,
+    storage::{self, split_in_multiple_requests},
+};
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::format::manifest::SecondsSinceEpoch;
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::storage::implementations::{
+    object_store::{
+        GcsObjectStoreBackend, HttpObjectStoreBackend, ObjectStoreBackend as _,
     },
+    s3::{mk_client, range_to_header},
 };
 
 pub type ContainerName = String;
@@ -256,7 +265,7 @@ impl VirtualChunkResolver {
         settings: storage::Settings,
     ) -> Self {
         fn add_trailing(s: String) -> String {
-            if s.ends_with('/') { s } else { format!("{s}/") }
+            if s.ends_with('/') { s } else { format!("{}/", s) }
         }
 
         // we need to validate the containers because they can come from persisted config
@@ -487,12 +496,14 @@ fn fetcher_cache_key(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 pub struct S3Fetcher {
     client: Arc<Client>,
     settings: storage::Settings,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl S3Fetcher {
     pub async fn new(
         opts: &S3Options,
@@ -505,8 +516,10 @@ impl S3Fetcher {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl private::Sealed for S3Fetcher {}
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl ChunkFetcher for S3Fetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
@@ -600,13 +613,17 @@ impl ChunkFetcher for S3Fetcher {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 pub struct ObjectStoreFetcher {
     client: Arc<dyn ObjectStore>,
     settings: storage::Settings,
 }
+
+#[cfg(not(target_arch = "wasm32"))]
 impl private::Sealed for ObjectStoreFetcher {}
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ObjectStoreFetcher {
     fn new_local() -> Self {
         ObjectStoreFetcher {
@@ -669,6 +686,7 @@ impl ObjectStoreFetcher {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl ChunkFetcher for ObjectStoreFetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
@@ -718,6 +736,117 @@ impl ChunkFetcher for ObjectStoreFetcher {
             }
             Err(err) => Err(VirtualReferenceErrorKind::FetchError(Box::new(err)).into()),
         }
+    }
+}
+
+// WASM-compatible stubs
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug)]
+pub struct S3Fetcher;
+
+#[cfg(target_arch = "wasm32")]
+impl S3Fetcher {
+    pub async fn new(
+        _opts: &crate::config::S3Options,
+        _credentials: &crate::config::S3Credentials,
+        _settings: storage::Settings,
+    ) -> Self {
+        Self
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl private::Sealed for S3Fetcher {}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait]
+impl ChunkFetcher for S3Fetcher {
+    fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
+        NonZeroU64::new(1024).unwrap_or(NonZeroU64::MIN)
+    }
+
+    fn max_concurrent_requests_for_object(&self) -> NonZeroU16 {
+        NonZeroU16::new(1).unwrap_or(NonZeroU16::MIN)
+    }
+
+    async fn fetch_part(
+        &self,
+        _chunk_location: &Url,
+        _range: Range<ChunkOffset>,
+        _checksum: Option<&Checksum>,
+    ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
+        Err(VirtualReferenceError::from(VirtualReferenceErrorKind::OtherError(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "S3Fetcher not supported on WASM",
+            ),
+        ))))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug)]
+pub struct ObjectStoreFetcher;
+
+#[cfg(target_arch = "wasm32")]
+impl ObjectStoreFetcher {
+    fn new_local() -> Self {
+        Self
+    }
+
+    pub async fn new_http(
+        _url: &str,
+        _opts: &HashMap<String, String>,
+    ) -> Result<Self, VirtualReferenceError> {
+        Err(VirtualReferenceError::from(VirtualReferenceErrorKind::OtherError(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "ObjectStoreFetcher::new_http not supported on WASM",
+            ),
+        ))))
+    }
+
+    pub async fn new_gcs(
+        _bucket: String,
+        _prefix: Option<String>,
+        _credentials: Option<crate::config::GcsCredentials>,
+        _config: HashMap<String, String>,
+    ) -> Result<Self, VirtualReferenceError> {
+        Err(VirtualReferenceError::from(VirtualReferenceErrorKind::OtherError(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "ObjectStoreFetcher::new_gcs not supported on WASM",
+            ),
+        ))))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl private::Sealed for ObjectStoreFetcher {}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait]
+impl ChunkFetcher for ObjectStoreFetcher {
+    fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
+        NonZeroU64::new(1024).unwrap_or(NonZeroU64::MIN)
+    }
+
+    fn max_concurrent_requests_for_object(&self) -> NonZeroU16 {
+        NonZeroU16::new(1).unwrap_or(NonZeroU16::MIN)
+    }
+
+    async fn fetch_part(
+        &self,
+        _chunk_location: &Url,
+        _range: Range<ChunkOffset>,
+        _checksum: Option<&Checksum>,
+    ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
+        Err(VirtualReferenceError::from(VirtualReferenceErrorKind::OtherError(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "ObjectStoreFetcher not supported on WASM",
+            ),
+        ))))
     }
 }
 

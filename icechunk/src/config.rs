@@ -9,6 +9,7 @@ use std::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use itertools::Either;
+#[cfg(not(target_arch = "wasm32"))]
 pub use object_store::gcp::GcpCredential;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
@@ -519,6 +520,7 @@ pub struct GcsBearerCredential {
     pub expires_after: Option<DateTime<Utc>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<&GcsBearerCredential> for GcpCredential {
     fn from(value: &GcsBearerCredential) -> Self {
         GcpCredential { bearer: value.bearer.clone() }
