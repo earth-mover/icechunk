@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { plus100 } from '@mpiannucci-beta/icechunk'
+import { plus100 } from '@earthmover/icechunk'
 
 function App() {
   const [count, setCount] = useState(0)

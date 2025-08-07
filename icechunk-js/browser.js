@@ -1,1 +1,1 @@
-export * from '@mpiannucci-beta/icechunk-wasm32-wasi'
+export * from '@earthmover/icechunk-wasm32-wasi'

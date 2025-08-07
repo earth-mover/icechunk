@@ -1,6 +1,6 @@
 {
-  "name": "@mpiannucci-beta/icechunk",
-  "version": "1.0.2",
+  "name": "@earthmover/icechunk",
+  "version": "1.0.3",
   "description": "Expirimental Icechunk bindings for JavaScript",
   "browser": "browser.js",
   "main": "index.js",
@@ -101,10 +101,10 @@
   },
   "packageManager": "yarn@4.9.2",
   "optionalDependencies": {
-    "@mpiannucci-beta/icechunk-win32-x64-msvc": "1.0.2",
-    "@mpiannucci-beta/icechunk-darwin-x64": "1.0.2",
-    "@mpiannucci-beta/icechunk-linux-x64-gnu": "1.0.2",
-    "@mpiannucci-beta/icechunk-darwin-arm64": "1.0.2",
-    "@mpiannucci-beta/icechunk-wasm32-wasi": "1.0.2"
+    "@earthmover/icechunk-win32-x64-msvc": "1.0.3",
+    "@earthmover/icechunk-darwin-x64": "1.0.3",
+    "@earthmover/icechunk-linux-x64-gnu": "1.0.3",
+    "@earthmover/icechunk-darwin-arm64": "1.0.3",
+    "@earthmover/icechunk-wasm32-wasi": "1.0.3"
   }
 }

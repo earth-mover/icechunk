@@ -29,6 +29,6 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['@mpiannucci-beta/icechunk'],
+    exclude: ['@earthmover/icechunk'],
   },
 })
