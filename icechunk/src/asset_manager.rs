@@ -373,6 +373,7 @@ impl AssetManager {
         }
     }
 
+    // FIXME: no longer needed
     /// Returns the sequence of parents of the current session, in order of latest first.
     /// Output stream includes snapshot_id argument
     #[instrument(skip(self))]
@@ -389,6 +390,7 @@ impl AssetManager {
         Ok(res)
     }
 
+    // FIXME: no longer needed
     /// Returns the sequence of parents of the current session, in order of latest first.
     /// Output stream includes snapshot_id argument
     #[instrument(skip(self))]
@@ -821,7 +823,9 @@ async fn fetch_repo_info(
             })
             .await?
         }
-        storage::VersionedFetchResult::NotFound => todo!(),
+        storage::VersionedFetchResult::NotFound => {
+            Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
+        }
     }
 }
 

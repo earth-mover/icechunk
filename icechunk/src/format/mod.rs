@@ -303,6 +303,8 @@ pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 pub mod format_constants {
     use std::sync::LazyLock;
 
+    use serde::{Deserialize, Serialize};
+
     #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum FileTypeBin {
@@ -333,7 +335,7 @@ pub mod format_constants {
     }
 
     #[repr(u8)]
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub enum SpecVersionBin {
         V1dot0 = 1u8,
         V2dot0 = 2u8,

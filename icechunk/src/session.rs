@@ -35,6 +35,7 @@ use crate::{
             VirtualReferenceError, VirtualReferenceErrorKind,
             uniform_manifest_split_edges,
         },
+        repo_info::RepoInfo,
         snapshot::{
             ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
             NodeType, Snapshot, SnapshotProperties,
@@ -43,7 +44,7 @@ use crate::{
     },
     refs::{RefError, RefErrorKind, fetch_branch_tip, update_branch},
     repository::{RepositoryError, RepositoryErrorKind},
-    storage::{self, StorageErrorKind},
+    storage::{self, StorageErrorKind, VersionInfo},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
 
@@ -209,6 +210,7 @@ impl ManifestSplits {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     config: RepositoryConfig,
+    repo_info: Option<(Arc<RepoInfo>, VersionInfo)>,
     storage_settings: Arc<storage::Settings>,
     storage: Arc<dyn Storage + Send + Sync>,
     asset_manager: Arc<AssetManager>,
@@ -232,6 +234,7 @@ impl Session {
     ) -> Self {
         Self {
             config,
+            repo_info: None,
             storage_settings: Arc::new(storage_settings),
             storage,
             asset_manager,
@@ -249,6 +252,8 @@ impl Session {
     #[allow(clippy::too_many_arguments)]
     pub fn create_writable_session(
         config: RepositoryConfig,
+        repo_info: Arc<RepoInfo>,
+        repo_info_version: VersionInfo,
         storage_settings: storage::Settings,
         storage: Arc<dyn Storage + Send + Sync>,
         asset_manager: Arc<AssetManager>,
@@ -259,6 +264,7 @@ impl Session {
     ) -> Self {
         Self {
             config,
+            repo_info: Some((repo_info, repo_info_version)),
             storage_settings: Arc::new(storage_settings),
             storage,
             asset_manager,
@@ -1009,10 +1015,17 @@ impl Session {
         )
         .await;
 
-        let id = match current {
+        let (repo_info, repo_info_version) = self
+            .repo_info
+            .as_ref()
+            .unwrap_or_else(|| panic!("Readonly session cannot commit"));
+
+        let (id, new_repo_info, new_repo_info_version) = match current {
             Err(RefError { kind: RefErrorKind::RefNotFound(_), .. }) => {
                 do_commit(
                     self.storage.as_ref(),
+                    repo_info.as_ref(),
+                    repo_info_version,
                     Arc::clone(&self.asset_manager),
                     self.storage_settings.as_ref(),
                     branch_name,
@@ -1037,6 +1050,8 @@ impl Session {
                 } else {
                     do_commit(
                         self.storage.as_ref(),
+                        repo_info.as_ref(),
+                        repo_info_version,
                         Arc::clone(&self.asset_manager),
                         self.storage_settings.as_ref(),
                         branch_name,
@@ -1059,6 +1074,7 @@ impl Session {
         // Once committed, the session is now read only, which we control
         // by setting the branch_name to None (you can only write to a branch session)
         self.branch_name = None;
+        self.repo_info = None;
 
         Ok(id)
     }
@@ -1925,7 +1941,7 @@ async fn flush(
     message: &str,
     properties: SnapshotProperties,
     rewrite_manifests: bool,
-) -> SessionResult<SnapshotId> {
+) -> SessionResult<Arc<Snapshot>> {
     if !rewrite_manifests && flush_data.change_set.is_empty() {
         return Err(SessionErrorKind::NoChangesToCommit.into());
     }
@@ -2095,12 +2111,14 @@ async fn flush(
         .into());
     }
 
-    Ok(new_snapshot_id.clone())
+    Ok(new_snapshot)
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn do_commit(
     storage: &(dyn Storage + Send + Sync),
+    repo_info: &RepoInfo,
+    repo_info_version: &VersionInfo,
     asset_manager: Arc<AssetManager>,
     storage_settings: &storage::Settings,
     branch_name: &str,
@@ -2110,24 +2128,33 @@ async fn do_commit(
     properties: Option<SnapshotProperties>,
     splits: &HashMap<NodeId, ManifestSplits>,
     rewrite_manifests: bool,
-) -> SessionResult<SnapshotId> {
+) -> SessionResult<(SnapshotId, Arc<RepoInfo>, VersionInfo)> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
-    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id, splits);
+    let flush_data =
+        FlushProcess::new(Arc::clone(&asset_manager), change_set, snapshot_id, splits);
     let new_snapshot = flush(flush_data, message, properties, rewrite_manifests).await?;
+    let new_snapshot_id = new_snapshot.id();
 
-    debug!(branch_name, new_snapshot_id=%new_snapshot, "Updating branch");
+    let new_repo_info =
+        Arc::new(repo_info.add_snapshot(new_snapshot.as_ref().try_into()?)?);
+    // FIXME: we need to verify changes and merge the repo info
+    let new_repo_info_version = asset_manager
+        .update_repo_info(Arc::clone(&new_repo_info), repo_info_version)
+        .await?;
+
+    debug!(branch_name, %new_snapshot_id, "Updating branch");
     let id = match update_branch(
         storage,
         storage_settings,
         branch_name,
-        new_snapshot.clone(),
+        new_snapshot_id.clone(),
         Some(&parent_snapshot),
     )
     .await
     {
-        Ok(_) => Ok(new_snapshot.clone()),
+        Ok(_) => Ok(new_snapshot_id.clone()),
         Err(RefError {
             kind: RefErrorKind::Conflict { expected_parent, actual_parent },
             ..
@@ -2138,8 +2165,8 @@ async fn do_commit(
         Err(err) => Err(err.into()),
     }?;
 
-    info!(branch_name, old_snapshot_id=%snapshot_id, new_snapshot_id=%new_snapshot, "Commit done");
-    Ok(id)
+    info!(branch_name, old_snapshot_id=%snapshot_id, %new_snapshot_id, "Commit done");
+    Ok((id, new_repo_info, new_repo_info_version))
 }
 async fn fetch_manifest(
     manifest_id: &ManifestId,
@@ -2462,7 +2489,8 @@ mod tests {
         let snapshot = ds.commit("commit", None).await?;
 
         // Verify that the first commit has no metadata
-        let ancestry = repo.snapshot_ancestry(&snapshot).await?;
+        let v = VersionInfo::SnapshotId(snapshot.clone());
+        let ancestry = repo.ancestry(&v).await?;
         let snapshot_infos = ancestry.try_collect::<Vec<_>>().await?;
         assert!(snapshot_infos[0].metadata.is_empty());
 
@@ -2476,7 +2504,8 @@ mod tests {
         ds.add_group("/group".try_into().unwrap(), Bytes::new()).await?;
         let snapshot = ds.commit("commit", None).await?;
 
-        let snapshot_info = repo.snapshot_ancestry(&snapshot).await?;
+        let v = VersionInfo::SnapshotId(snapshot.clone());
+        let snapshot_info = repo.ancestry(&v).await?;
         let snapshot_infos = snapshot_info.try_collect::<Vec<_>>().await?;
         assert_eq!(snapshot_infos[0].metadata, default_metadata);
 
@@ -2488,7 +2517,8 @@ mod tests {
         ds.add_group("/group2".try_into().unwrap(), Bytes::new()).await?;
         let snapshot = ds.commit("commit", Some(metadata.clone())).await?;
 
-        let snapshot_info = repo.snapshot_ancestry(&snapshot).await?;
+        let v = VersionInfo::SnapshotId(snapshot.clone());
+        let snapshot_info = repo.ancestry(&v).await?;
         let snapshot_infos = snapshot_info.try_collect::<Vec<_>>().await?;
         let mut expected_result = SnapshotProperties::default();
         expected_result.insert("author".to_string(), "Jane Doe".to_string().into());

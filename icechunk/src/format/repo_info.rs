@@ -5,12 +5,14 @@ use std::collections::HashMap;
 use super::{
     IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
     flatbuffers::generated::{self, ObjectId12},
+    format_constants::SpecVersionBin,
     snapshot::SnapshotInfo,
 };
 
 use chrono::{DateTime, Utc};
 use flatbuffers::VerifierOptions;
 
+// TODO: should we not implement serialize and let the session fetch the repo info?
 #[derive(PartialEq, Debug, Serialize, Deserialize)]
 pub struct RepoInfo {
     buffer: Vec<u8>,
@@ -136,8 +138,8 @@ impl RepoInfo {
             deleted_tags: Some(deleted_tags),
             // FIXME:
             snapshots: Some(snapshots),
-            spec_version: Some(builder.create_string("fixme")), // FIXME:
-            last_updated_at: 0,                                 // FIXME:
+            spec_version: SpecVersionBin::current() as u8,
+            last_updated_at: 0, // FIXME:
             status: Some(status),
             metadata: Some(metadata),
         };
@@ -210,9 +212,9 @@ impl RepoInfo {
         &self,
         name: &str,
         snap: &SnapshotId,
-    ) -> IcechunkResult<Option<Self>> {
-        if self.resolve_branch(name)?.is_some() {
-            return Ok(None);
+    ) -> IcechunkResult<Result<Self, Option<SnapshotId>>> {
+        if let Some(snap) = self.resolve_branch(name)? {
+            return Ok(Err(Some(snap)));
         }
 
         match self.resolve_snapshot_index(snap)? {
@@ -220,14 +222,9 @@ impl RepoInfo {
                 let mut branches: Vec<_> = self.all_branches()?.collect();
                 branches.push((name, snap_idx as u32));
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-                Ok(Some(Self::new(
-                    self.all_tags()?,
-                    branches,
-                    self.deleted_tags()?,
-                    snaps,
-                )))
+                Ok(Ok(Self::new(self.all_tags()?, branches, self.deleted_tags()?, snaps)))
             }
-            None => Ok(None),
+            None => Ok(Err(None)),
         }
     }
 
@@ -329,8 +326,8 @@ impl RepoInfo {
         Ok(res)
     }
 
-    pub fn spec_version(&self) -> IcechunkResult<&str> {
-        Ok(self.root()?.spec_version())
+    pub fn spec_version(&self) -> IcechunkResult<SpecVersionBin> {
+        Ok(self.root()?.spec_version().try_into().unwrap()) // FIXME: unwrap
     }
 
     pub fn last_updated_at(&self) -> IcechunkResult<DateTime<Utc>> {
@@ -338,10 +335,12 @@ impl RepoInfo {
         timestamp_to_timestamp(ts)
     }
 
-    pub fn ancestry(
-        &self,
-        snapshot: &SnapshotId,
-    ) -> IcechunkResult<Option<impl Iterator<Item = IcechunkResult<SnapshotInfo>>>> {
+    pub fn ancestry<'a, 'b>(
+        &'a self,
+        snapshot: &'b SnapshotId,
+    ) -> IcechunkResult<
+        Option<impl Iterator<Item = IcechunkResult<SnapshotInfo>> + Send + use<'a>>,
+    > {
         let root = self.root()?;
         if let Some(start) = self.resolve_snapshot_index(snapshot)? {
             let mut index = Some(start as i32);
@@ -375,6 +374,16 @@ impl RepoInfo {
             Ok(Some(iter))
         } else {
             Ok(None)
+        }
+    }
+
+    pub fn find_snapshot(&self, id: &SnapshotId) -> IcechunkResult<Option<SnapshotInfo>> {
+        match self.ancestry(id)? {
+            Some(mut it) => match it.next() {
+                Some(snap) => Ok(Some(snap?)),
+                None => Ok(None),
+            },
+            None => Ok(None),
         }
     }
 
@@ -474,9 +483,9 @@ mod tests {
         let repo = RepoInfo::initial(snap1.clone());
         let repo = repo.add_branch("foo", &id1)?.unwrap();
         let repo = repo.add_branch("bar", &id1)?.unwrap();
-        assert!(repo.add_branch("bad-snap", &SnapshotId::random())?.is_none());
+        assert!(matches!(repo.add_branch("bad-snap", &SnapshotId::random())?, Err(None)));
         // cannot add existing
-        assert!(repo.add_branch("bar", &id1)?.is_none());
+        assert!(matches!(repo.add_branch("bar", &id1)?, Err(Some(_))));
 
         assert_eq!(
             repo.all_branches()?.collect::<HashSet<_>>(),
@@ -509,7 +518,7 @@ mod tests {
         // tags
         let repo = repo.add_tag("tag1", &id1)?.unwrap();
         let repo = repo.add_tag("tag2", &id2)?.unwrap();
-        assert!(repo.add_branch("bad-snap", &SnapshotId::random())?.is_none());
+        assert!(matches!(repo.add_branch("bad-snap", &SnapshotId::random())?, Err(None)));
         assert!(repo.add_tag("tag1", &id1)?.is_none());
         assert_eq!(repo.resolve_tag("tag1")?, Some(id1.clone()));
         assert_eq!(repo.resolve_tag("tag2")?, Some(id2.clone()));

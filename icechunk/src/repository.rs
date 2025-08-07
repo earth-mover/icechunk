@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use err_into::ErrorInto as _;
 use futures::{
     Stream, StreamExt, TryStreamExt,
-    stream::{FuturesOrdered, FuturesUnordered},
+    stream::{self, FuturesOrdered, FuturesUnordered},
 };
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
@@ -27,6 +27,7 @@ use crate::{
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
+        format_constants::SpecVersionBin,
         repo_info::RepoInfo,
         snapshot::{
             ManifestFileInfo, NodeData, Snapshot, SnapshotInfo, SnapshotProperties,
@@ -155,11 +156,10 @@ pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Repository {
+    spec_version: SpecVersionBin,
     config: RepositoryConfig,
     storage_settings: storage::Settings,
     config_version: storage::VersionInfo,
-    repo_info_version: storage::VersionInfo,
-    repo_info: Arc<RepoInfo>,
     storage: Arc<dyn Storage + Send + Sync>,
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
@@ -221,13 +221,13 @@ impl Repository {
 
             let snap_info = new_snapshot.as_ref().try_into()?;
             let repo_info = Arc::new(RepoInfo::initial(snap_info));
-            let version = asset_manager_c
+            let _ = asset_manager_c
                 .update_repo_info(
                     Arc::clone(&repo_info),
                     &storage::VersionInfo::for_creation(),
                 )
                 .await?;
-            Ok::<_, RepositoryError>((repo_info, version))
+            Ok::<_, RepositoryError>(())
         }
         .in_current_span();
 
@@ -248,15 +248,13 @@ impl Repository {
         }
         .in_current_span();
 
-        let ((repo_info, repo_info_version), config_version) =
-            try_join!(create_branch, update_config)?;
+        let (_, config_version) = try_join!(create_branch, update_config)?;
 
-        debug_assert!(Self::exists(storage.as_ref()).await.unwrap_or(false));
+        debug_assert!(Self::exists(Arc::clone(&storage)).await.unwrap_or(false));
         Self::new(
+            SpecVersionBin::current(),
             config,
             config_version,
-            repo_info,
-            repo_info_version,
             storage,
             asset_manager,
             authorize_virtual_chunk_access,
@@ -271,42 +269,23 @@ impl Repository {
     ) -> RepositoryResult<Self> {
         debug!("Opening Repository");
         let storage_c = Arc::clone(&storage);
-        let handle1 = tokio::spawn(
+        let fetch_config = tokio::spawn(
             async move { Self::fetch_config(storage_c.as_ref()).await }.in_current_span(),
         );
 
         let storage_c = Arc::clone(&storage);
-        let handle2 = tokio::spawn(
-            async move {
-                if !Self::exists(storage_c.as_ref()).await? {
-                    return Err(RepositoryError::from(
-                        RepositoryErrorKind::RepositoryDoesntExist,
-                    ));
-                }
-                Ok(())
+        let find_spec_version = tokio::spawn(Self::repo_spec_version(storage_c));
+
+        let (config_res, spec_version_res) = try_join!(fetch_config, find_spec_version)?;
+
+        // fail if repo doesn't exist
+        let version = match spec_version_res {
+            Ok(Some(v)) => Ok(v),
+            Ok(None) => {
+                Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
             }
-            .in_current_span(),
-        );
-
-        let storage_c = Arc::clone(&storage);
-        let handle3 = tokio::spawn(
-            async move {
-                let temp_asset_manager = Arc::new(AssetManager::new_no_cache(
-                    Arc::clone(&storage_c),
-                    storage_c.default_settings(),
-                    1, // we are only reading, compression doesn't matter
-                ));
-
-                temp_asset_manager.fetch_repo_info().await
-            }
-            .in_current_span(),
-        );
-
-        let (config_res, exists_res, repo_info_res) =
-            try_join!(handle1, handle2, handle3)?;
-
-        let _ = exists_res?;
-        let (repo_info, repo_info_version) = repo_info_res?;
+            Err(err) => Err(err),
+        }?;
 
         if let Some((default_config, config_version)) = config_res? {
             // Merge the given config with the defaults
@@ -324,10 +303,9 @@ impl Repository {
             ));
 
             Self::new(
+                version,
                 config,
                 config_version,
-                repo_info,
-                repo_info_version,
                 storage,
                 asset_manager,
                 authorize_virtual_chunk_access,
@@ -344,10 +322,9 @@ impl Repository {
                 config.compression().level(),
             ));
             Self::new(
+                version,
                 config,
                 storage::VersionInfo::for_creation(),
-                repo_info,
-                repo_info_version,
                 storage,
                 asset_manager,
                 authorize_virtual_chunk_access,
@@ -360,7 +337,7 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
     ) -> RepositoryResult<Self> {
-        if Self::exists(storage.as_ref()).await? {
+        if Self::exists(Arc::clone(&storage)).await? {
             Self::open(config, storage, authorize_virtual_chunk_access).await
         } else {
             Self::create(config, storage, authorize_virtual_chunk_access).await
@@ -368,10 +345,9 @@ impl Repository {
     }
 
     fn new(
+        spec_version: SpecVersionBin,
         config: RepositoryConfig,
         config_version: storage::VersionInfo,
-        repo_info: Arc<RepoInfo>,
-        repo_info_version: storage::VersionInfo,
         storage: Arc<dyn Storage + Send + Sync>,
         asset_manager: Arc<AssetManager>,
         authorized_virtual_containers: HashMap<String, Option<Credentials>>,
@@ -386,10 +362,9 @@ impl Repository {
             storage_settings.clone(),
         ));
         Ok(Self {
+            spec_version,
             config,
             config_version,
-            repo_info,
-            repo_info_version,
             storage,
             storage_settings,
             virtual_resolver,
@@ -400,13 +375,55 @@ impl Repository {
     }
 
     #[instrument(skip_all)]
-    pub async fn exists(storage: &(dyn Storage + Send + Sync)) -> RepositoryResult<bool> {
-        match fetch_branch_tip(storage, &storage.default_settings(), Ref::DEFAULT_BRANCH)
+    pub async fn exists(
+        storage: Arc<dyn Storage + Send + Sync>,
+    ) -> RepositoryResult<bool> {
+        Ok(Self::repo_spec_version(storage).await?.is_some())
+    }
+
+    #[instrument(skip_all)]
+    async fn repo_spec_version(
+        storage: Arc<dyn Storage + Send + Sync>,
+    ) -> RepositoryResult<Option<SpecVersionBin>> {
+        let storage_c = Arc::clone(&storage);
+        let is_v1 = async move {
+            match fetch_branch_tip(
+                storage_c.as_ref(),
+                &storage_c.default_settings(),
+                Ref::DEFAULT_BRANCH,
+            )
             .await
-        {
-            Ok(_) => Ok(true),
-            Err(RefError { kind: RefErrorKind::RefNotFound(_), .. }) => Ok(false),
-            Err(err) => Err(err.into()),
+            {
+                Ok(_) => Ok(true),
+                Err(RefError { kind: RefErrorKind::RefNotFound(_), .. }) => Ok(false),
+                Err(err) => Err(err),
+            }
+        }
+        .in_current_span();
+
+        let after_v1 = async move {
+            let temp_asset_manager = Arc::new(AssetManager::new_no_cache(
+                Arc::clone(&storage),
+                storage.default_settings(),
+                1, // we are only reading, compression doesn't matter
+            ));
+
+            let res = temp_asset_manager.fetch_repo_info().await;
+            Ok(res.and_then(|(ri, _)| ri.spec_version().err_into()))
+        }
+        .in_current_span();
+
+        let (is_v1, after_v1) = try_join!(is_v1, after_v1)?;
+        match after_v1 {
+            // FIXME: what to do if we have both
+            Ok(v) => Ok(Some(v)),
+            Err(_) => {
+                if is_v1 {
+                    Ok(Some(SpecVersionBin::V1dot0))
+                } else {
+                    Ok(None)
+                }
+            }
         }
     }
 
@@ -423,10 +440,9 @@ impl Repository {
             .unwrap_or_else(|| self.config().clone());
 
         Self::new(
+            self.spec_version,
             config,
             self.config_version.clone(),
-            Arc::clone(&self.repo_info),
-            self.repo_info_version.clone(),
             Arc::clone(&self.storage),
             Arc::clone(&self.asset_manager),
             authorize_virtual_chunk_access
@@ -519,7 +535,7 @@ impl Repository {
 
     /// Returns the sequence of parents of the current session, in order of latest first.
     #[instrument(skip(self))]
-    pub async fn snapshot_ancestry(
+    pub async fn snapshot_ancestry_v1(
         &self,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_ + use<'_>>
@@ -528,34 +544,46 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    pub async fn snapshot_ancestry_arc(
-        self: Arc<Self>,
-        snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + use<>>
-    {
-        Arc::clone(&self.asset_manager).snapshot_info_ancestry(snapshot_id).await
+    pub async fn ancestry<'a>(
+        &'a self,
+        version: &'a VersionInfo,
+    ) -> RepositoryResult<
+        impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + 'a + use<'a>,
+    > {
+        match self.spec_version {
+            SpecVersionBin::V1dot0 => Ok(self.ancestry_v1(version).await?.left_stream()),
+            SpecVersionBin::V2dot0 => {
+                let iter = self.ancestry_v2(version).await?;
+                Ok(stream::iter(iter).right_stream())
+            }
+        }
     }
 
     /// Returns the sequence of parents of the snapshot pointed by the given version
     #[async_recursion(?Send)]
     #[instrument(skip(self))]
-    pub async fn ancestry<'a>(
+    pub async fn ancestry_v1<'a>(
         &'a self,
         version: &VersionInfo,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + 'a + use<'a>>
-    {
+    ) -> RepositoryResult<
+        impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + 'a + use<'a>,
+    > {
         let snapshot_id = self.resolve_version(version).await?;
-        self.snapshot_ancestry(&snapshot_id).await
+        self.snapshot_ancestry_v1(&snapshot_id).await
     }
 
-    #[instrument(skip(self))]
-    pub async fn ancestry_arc(
-        self: Arc<Self>,
+    pub async fn ancestry_v2(
+        &self,
         version: &VersionInfo,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + use<>>
+    ) -> RepositoryResult<impl Iterator<Item = RepositoryResult<SnapshotInfo>> + Send>
     {
-        let snapshot_id = self.resolve_version(version).await?;
-        self.snapshot_ancestry_arc(&snapshot_id).await
+        let (repo_info, _) = self.get_repo_info().await?;
+        let snapshot_id = self.resolve_version_v2(&repo_info, version)?;
+        let it = unsafe {
+            let repo_info_ref = &*Arc::as_ptr(&repo_info);
+            Box::new(repo_info_ref.ancestry(&snapshot_id)?.unwrap().map(|e| e.err_into()))
+        };
+        Ok(AcestryIterator { repo_info: repo_info.clone(), it })
     }
 
     #[instrument(skip(self))]
@@ -564,8 +592,8 @@ impl Repository {
         version: &RefVersionInfo,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + 'a + use<'a>>
     {
-        let snapshot_id = self.resolve_ref_version(version).await?;
-        self.snapshot_ancestry(&snapshot_id).await
+        let snapshot_id = self.resolve_ref_version_v1(version).await?;
+        self.snapshot_ancestry_v1(&snapshot_id).await
     }
 
     /// Create a new branch in the repository at the given snapshot id
@@ -581,40 +609,62 @@ impl Repository {
             )
             .into());
         }
-        raise_if_invalid_snapshot_id(
-            self.storage.as_ref(),
-            &self.storage_settings,
-            snapshot_id,
-        )
-        .await?;
-        update_branch(
-            self.storage.as_ref(),
-            &self.storage_settings,
-            branch_name,
-            snapshot_id.clone(),
-            None,
-        )
-        .await
-        .map_err(|e| match e {
-            RefError {
-                kind: RefErrorKind::Conflict { expected_parent, actual_parent },
-                ..
-            } => RepositoryErrorKind::Conflict { expected_parent, actual_parent }.into(),
-            err => err.into(),
-        })
+        if self.spec_version != SpecVersionBin::current() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                // FIXME:
+                "This repository is incompatible with Icechunk vesion you are using"
+                    .to_string(),
+            )
+            .into());
+        }
+
+        let (repo_info, version) = self.get_repo_info().await?;
+        raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
+        let new_repo_info = match repo_info.add_branch(branch_name, snapshot_id)? {
+            Ok(new) => Ok(new),
+            Err(Some(actual_parent)) => {
+                Err(RepositoryError::from(RepositoryErrorKind::Conflict {
+                    expected_parent: None,
+                    actual_parent: Some(actual_parent),
+                }))
+            }
+            Err(None) => {
+                panic!("Snaphshot not found")
+            }
+        }?;
+
+        let _ = self
+            .asset_manager
+            .update_repo_info(Arc::new(new_repo_info), &version)
+            .await?;
+        Ok(())
     }
 
     /// List all branches in the repository.
     #[instrument(skip(self))]
-    pub async fn list_branches(&self) -> RepositoryResult<BTreeSet<String>> {
+    pub async fn list_branches_v1(&self) -> RepositoryResult<BTreeSet<String>> {
         let branches =
             list_branches(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(branches)
     }
 
+    #[instrument(skip(self))]
+    pub async fn list_branches_v2(&self) -> RepositoryResult<BTreeSet<String>> {
+        let (ri, _) = self.get_repo_info().await?;
+        Ok(ri.list_branches()?.map(|s| s.to_string()).collect())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn list_branches(&self) -> RepositoryResult<BTreeSet<String>> {
+        match self.spec_version {
+            SpecVersionBin::V1dot0 => self.list_branches_v1().await,
+            SpecVersionBin::V2dot0 => self.list_branches_v2().await,
+        }
+    }
+
     /// Get the snapshot id of the tip of a branch
     #[instrument(skip(self))]
-    pub async fn lookup_branch(&self, branch: &str) -> RepositoryResult<SnapshotId> {
+    pub async fn lookup_branch_v1(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         let branch_version =
             fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
                 .await?;
@@ -622,17 +672,57 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    pub async fn lookup_snapshot(
+    pub async fn lookup_branch_v2(&self, branch: &str) -> RepositoryResult<SnapshotId> {
+        let (ri, _) = self.get_repo_info().await?;
+        match ri.resolve_branch(branch)? {
+            Some(snap) => Ok(snap),
+            None => Err(RepositoryError::from(RefError::from(
+                RefErrorKind::RefNotFound(branch.to_string()),
+            ))),
+        }
+    }
+
+    #[instrument(skip(self))]
+    pub async fn lookup_branch(&self, branch: &str) -> RepositoryResult<SnapshotId> {
+        match self.spec_version {
+            SpecVersionBin::V1dot0 => self.lookup_branch_v1(branch).await,
+            SpecVersionBin::V2dot0 => self.lookup_branch_v2(branch).await,
+        }
+    }
+
+    #[instrument(skip(self))]
+    pub async fn lookup_snapshot_v1(
         &self,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<SnapshotInfo> {
         self.asset_manager.fetch_snapshot_info(snapshot_id).await
     }
 
-    /// Make a branch point to the specified snapshot.
-    /// After execution, history of the branch will be altered, and the current
-    /// store will point to a different base snapshot_id
     #[instrument(skip(self))]
+    pub async fn lookup_snapshot_v2(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<SnapshotInfo> {
+        let (ri, _) = self.get_repo_info().await?;
+        match ri.find_snapshot(snapshot_id)? {
+            Some(snap) => Ok(snap),
+            None => Err(RepositoryError::from(RepositoryErrorKind::SnapshotNotFound {
+                id: snapshot_id.clone(),
+            })),
+        }
+    }
+
+    #[instrument(skip(self))]
+    pub async fn lookup_snapshot(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<SnapshotInfo> {
+        match self.spec_version {
+            SpecVersionBin::V1dot0 => self.lookup_snapshot_v1(snapshot_id).await,
+            SpecVersionBin::V2dot0 => self.lookup_snapshot_v2(snapshot_id).await,
+        }
+    }
+
     pub async fn reset_branch(
         &self,
         branch: &str,
@@ -640,26 +730,19 @@ impl Repository {
     ) -> RepositoryResult<()> {
         if !self.storage.can_write() {
             return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot reset branch".to_string(),
+                "Cannot create branch".to_string(),
             )
             .into());
         }
-        raise_if_invalid_snapshot_id(
-            self.storage.as_ref(),
-            &self.storage_settings,
-            snapshot_id,
-        )
-        .await?;
-        let branch_tip = self.lookup_branch(branch).await?;
-        update_branch(
-            self.storage.as_ref(),
-            &self.storage_settings,
-            branch,
-            snapshot_id.clone(),
-            Some(&branch_tip),
-        )
-        .await
-        .err_into()
+        if self.spec_version != SpecVersionBin::current() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                // FIXME:
+                "This repository is incompatible with Icechunk vesion you are using"
+                    .to_string(),
+            )
+            .into());
+        }
+        todo!()
     }
 
     /// Delete a branch from the repository.
@@ -673,9 +756,16 @@ impl Repository {
             )
             .into());
         }
+        if self.spec_version != SpecVersionBin::current() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                // FIXME:
+                "This repository is incompatible with Icechunk vesion you are using"
+                    .to_string(),
+            )
+            .into());
+        }
         if branch != Ref::DEFAULT_BRANCH {
-            delete_branch(self.storage.as_ref(), &self.storage_settings, branch).await?;
-            Ok(())
+            todo!()
         } else {
             Err(RepositoryErrorKind::CannotDeleteMain.into())
         }
@@ -692,7 +782,15 @@ impl Repository {
             )
             .into());
         }
-        Ok(delete_tag(self.storage.as_ref(), &self.storage_settings, tag).await?)
+        if self.spec_version != SpecVersionBin::current() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                // FIXME:
+                "This repository is incompatible with Icechunk vesion you are using"
+                    .to_string(),
+            )
+            .into());
+        }
+        todo!()
     }
 
     /// Create a new tag in the repository at the given snapshot id
@@ -708,45 +806,82 @@ impl Repository {
             )
             .into());
         }
-        raise_if_invalid_snapshot_id(
-            self.storage.as_ref(),
-            &self.storage_settings,
-            snapshot_id,
-        )
-        .await?;
+        if self.spec_version != SpecVersionBin::current() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                // FIXME:
+                "This repository is incompatible with Icechunk vesion you are using"
+                    .to_string(),
+            )
+            .into());
+        }
+        todo!()
+        // raise_if_invalid_snapshot_id(
+        //     self.storage.as_ref(),
+        //     &self.storage_settings,
+        //     snapshot_id,
+        // )
+        // .await?;
 
-        create_tag(
-            self.storage.as_ref(),
-            &self.storage_settings,
-            tag_name,
-            snapshot_id.clone(),
-        )
-        .await?;
-        Ok(())
+        // create_tag(
+        //     self.storage.as_ref(),
+        //     &self.storage_settings,
+        //     tag_name,
+        //     snapshot_id.clone(),
+        // )
+        // .await?;
+        // Ok(())
     }
 
     /// List all tags in the repository.
     #[instrument(skip(self))]
-    pub async fn list_tags(&self) -> RepositoryResult<BTreeSet<String>> {
+    pub async fn list_tags_v1(&self) -> RepositoryResult<BTreeSet<String>> {
         let tags = list_tags(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(tags)
     }
 
+    pub async fn list_tags_v2(&self) -> RepositoryResult<BTreeSet<String>> {
+        let (ri, _) = self.get_repo_info().await?;
+        Ok(ri.list_tags()?.map(|s| s.to_string()).collect())
+    }
+
+    pub async fn list_tags(&self) -> RepositoryResult<BTreeSet<String>> {
+        match self.spec_version {
+            SpecVersionBin::V1dot0 => self.list_tags_v1().await,
+            SpecVersionBin::V2dot0 => self.list_tags_v2().await,
+        }
+    }
+
     #[instrument(skip(self))]
-    pub async fn lookup_tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
+    pub async fn lookup_tag_v1(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         let ref_data =
             fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
         Ok(ref_data.snapshot)
     }
 
     #[instrument(skip(self))]
-    pub async fn resolve_ref_version(
+    pub async fn lookup_tag_v2(&self, tag: &str) -> RepositoryResult<SnapshotId> {
+        let (ri, _) = self.get_repo_info().await?;
+        Ok(ri
+            .resolve_tag(tag)?
+            .ok_or(RefError::from(RefErrorKind::RefNotFound(tag.to_string())))?)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn lookup_tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
+        match self.spec_version {
+            SpecVersionBin::V1dot0 => self.lookup_tag_v1(tag).await,
+            SpecVersionBin::V2dot0 => self.lookup_tag_v2(tag).await,
+        }
+    }
+
+    #[instrument(skip(self))]
+    async fn resolve_ref_version_v1(
         &self,
         version: &RefVersionInfo,
     ) -> RepositoryResult<SnapshotId> {
         match version {
             RefVersionInfo::SnapshotId(sid) => {
-                raise_if_invalid_snapshot_id(
+                raise_if_invalid_snapshot_id_v1(
                     self.storage.as_ref(),
                     &self.storage_settings,
                     sid,
@@ -772,12 +907,57 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
+    fn resolve_ref_version_v2(
+        &self,
+        repo_info: &RepoInfo,
+        version: &RefVersionInfo,
+    ) -> RepositoryResult<SnapshotId> {
+        match version {
+            RefVersionInfo::SnapshotId(sid) => {
+                raise_if_invalid_snapshot_id_v2(repo_info, sid)?;
+                Ok(sid.clone())
+            }
+            RefVersionInfo::TagRef(tag) => {
+                let id = repo_info
+                    .resolve_tag(tag)?
+                    .ok_or(RefError::from(RefErrorKind::RefNotFound(tag.to_string())))?;
+                Ok(id)
+            }
+            RefVersionInfo::BranchTipRef(branch) => {
+                let id = repo_info.resolve_branch(branch)?.ok_or(RefError::from(
+                    RefErrorKind::RefNotFound(branch.to_string()),
+                ))?;
+                Ok(id)
+            }
+        }
+    }
+
+    async fn get_repo_info(
+        &self,
+    ) -> RepositoryResult<(Arc<RepoInfo>, storage::VersionInfo)> {
+        self.asset_manager.fetch_repo_info().await
+    }
+
+    #[instrument(skip(self))]
     pub async fn resolve_version(
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<SnapshotId> {
+        match self.spec_version {
+            SpecVersionBin::V1dot0 => self.resolve_version_v1(version).await,
+            SpecVersionBin::V2dot0 => {
+                self.resolve_version_v2(&self.get_repo_info().await?.0.as_ref(), version)
+            }
+        }
+    }
+
+    #[instrument(skip(self))]
+    pub async fn resolve_version_v1(
+        &self,
+        version: &VersionInfo,
+    ) -> RepositoryResult<SnapshotId> {
         match version.try_into() {
-            Ok(ref_version_info) => self.resolve_ref_version(&ref_version_info).await,
+            Ok(ref_version_info) => self.resolve_ref_version_v1(&ref_version_info).await,
             Err((branch, at)) => {
                 let tip = RefVersionInfo::BranchTipRef(branch.clone());
                 let snap = self
@@ -795,6 +975,23 @@ impl Repository {
                     }
                     .into()),
                 }
+            }
+        }
+    }
+
+    #[instrument(skip(self))]
+    pub fn resolve_version_v2(
+        &self,
+        repo_info: &RepoInfo,
+        version: &VersionInfo,
+    ) -> RepositoryResult<SnapshotId> {
+        match version.try_into() {
+            Ok(ref_version_info) => {
+                self.resolve_ref_version_v2(repo_info, &ref_version_info)
+            }
+            Err((branch, at)) => {
+                // FIXME:
+                todo!()
             }
         }
     }
@@ -888,8 +1085,12 @@ impl Repository {
         let ref_data =
             fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
                 .await?;
+
+        let (repo_info, version) = self.get_repo_info().await?;
         let session = Session::create_writable_session(
             self.config.clone(),
+            repo_info,
+            version,
             self.storage_settings.clone(),
             self.storage.clone(),
             Arc::clone(&self.asset_manager),
@@ -979,6 +1180,41 @@ impl Repository {
     }
 }
 
+// struct AcestryIterator<'a> {
+//     repo_info: Arc<RepoInfo>,
+//     start_at: SnapshotId,
+//     it: Option<Box<dyn Iterator<Item = RepositoryResult<SnapshotInfo>> + 'a>>,
+// }
+//
+// impl<'a> Iterator for AcestryIterator<'a> {
+//     type Item = RepositoryResult<SnapshotInfo>;
+//
+//     fn next(&mut self) -> Option<Self::Item> {
+//         match self.it.as_mut() {
+//             Some(it) => it.next(),
+//             None => {
+//                 let mut anc = self.repo_info.ancestry(&self.start_at).unwrap().unwrap();
+//                 let res = anc.next().map(|r| r.err_into());
+//                 self.it = Some(Box::new(anc.map(|e| e.err_into())));
+//                 res
+//             }
+//         }
+//     }
+// }
+
+struct AcestryIterator {
+    repo_info: Arc<RepoInfo>,
+    it: Box<dyn Iterator<Item = RepositoryResult<SnapshotInfo>> + Send>,
+}
+
+impl Iterator for AcestryIterator {
+    type Item = RepositoryResult<SnapshotInfo>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.it.next()
+    }
+}
+
 impl ManifestPreloadCondition {
     pub fn matches(&self, path: &Path, info: &ManifestFileInfo) -> bool {
         match self {
@@ -1026,7 +1262,7 @@ fn validate_credentials(
     Ok(())
 }
 
-pub async fn raise_if_invalid_snapshot_id(
+pub async fn raise_if_invalid_snapshot_id_v1(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     snapshot_id: &SnapshotId,
@@ -1034,6 +1270,16 @@ pub async fn raise_if_invalid_snapshot_id(
     storage
         .fetch_snapshot(storage_settings, snapshot_id)
         .await
+        .map_err(|_| RepositoryErrorKind::SnapshotNotFound { id: snapshot_id.clone() })?;
+    Ok(())
+}
+
+pub fn raise_if_invalid_snapshot_id_v2(
+    repo_info: &RepoInfo,
+    snapshot_id: &SnapshotId,
+) -> RepositoryResult<()> {
+    repo_info
+        .find_snapshot(snapshot_id)
         .map_err(|_| RepositoryErrorKind::SnapshotNotFound { id: snapshot_id.clone() })?;
     Ok(())
 }

@@ -39,7 +39,7 @@ table Repo {
   // sorted by id
   snapshots: [SnapshotInfo] (required);
 
-  spec_version: string (required);
+  spec_version: uint8;
 
   // micros since epoch
   last_updated_at: uint64;
