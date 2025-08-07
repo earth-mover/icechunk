@@ -21,7 +21,8 @@ use icechunk::{
     repository::VersionInfo,
     session::{SessionErrorKind, get_chunk},
     storage::{
-        self, ConcurrencySettings, ETag, ObjectStorage, new_s3_storage, s3::mk_client,
+        self, ConcurrencySettings, ETag, ObjectStorage, backends::s3::mk_client,
+        new_s3_storage,
     },
     store::{StoreError, StoreErrorKind},
     virtual_chunks::VirtualChunkContainer,

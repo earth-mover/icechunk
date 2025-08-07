@@ -40,7 +40,7 @@ use crate::{
 use crate::format::manifest::SecondsSinceEpoch;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::storage::implementations::{
+use crate::storage::backends::{
     object_store::{
         GcsObjectStoreBackend, HttpObjectStoreBackend, ObjectStoreBackend as _,
     },

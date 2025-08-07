@@ -16,7 +16,7 @@ pub mod traits;
 pub mod types;
 
 // Implementation modules - conditionally compiled
-pub mod implementations;
+pub mod backends;
 
 // Test module
 #[cfg(test)]
@@ -29,7 +29,7 @@ pub use types::*;
 
 // Conditional re-exports for implementations
 #[cfg(not(target_arch = "wasm32"))]
-pub use implementations::{ObjectStorage, S3Storage};
+pub use backends::{ObjectStorage, S3Storage};
 
 /// Split an object request into multiple byte range requests
 ///
@@ -132,7 +132,7 @@ pub fn new_s3_storage(
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
-    use implementations::s3::S3Storage;
+    use backends::s3::S3Storage;
 
     if let Some(endpoint) = &config.endpoint_url {
         if endpoint.contains("fly.storage.tigris.dev") {
@@ -160,7 +160,7 @@ pub fn new_r2_storage(
     account_id: Option<String>,
     credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
-    use implementations::s3::S3Storage;
+    use backends::s3::S3Storage;
 
     let (bucket, prefix) = match (bucket, prefix) {
         (Some(bucket), Some(prefix)) => (bucket, Some(prefix)),
@@ -212,7 +212,7 @@ pub fn new_tigris_storage(
     credentials: Option<S3Credentials>,
     use_weak_consistency: bool,
 ) -> StorageResult<Arc<dyn Storage>> {
-    use implementations::s3::S3Storage;
+    use backends::s3::S3Storage;
 
     let config = S3Options {
         endpoint_url: Some(
@@ -252,7 +252,7 @@ pub fn new_tigris_storage(
 pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let st = implementations::ObjectStorage::new_in_memory().await?;
+        let st = backends::ObjectStorage::new_in_memory().await?;
         Ok(Arc::new(st))
     }
     #[cfg(target_arch = "wasm32")]
@@ -269,7 +269,7 @@ pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
 pub async fn new_local_filesystem_storage(
     path: &std::path::Path,
 ) -> StorageResult<Arc<dyn Storage>> {
-    let st = implementations::ObjectStorage::new_local_filesystem(path).await?;
+    let st = backends::ObjectStorage::new_local_filesystem(path).await?;
     Ok(Arc::new(st))
 }
 
@@ -286,7 +286,7 @@ pub async fn new_s3_object_store_storage(
         }
     }
     let storage =
-        implementations::ObjectStorage::new_s3(bucket, prefix, credentials, Some(config))
+        backends::ObjectStorage::new_s3(bucket, prefix, credentials, Some(config))
             .await?;
     Ok(Arc::new(storage))
 }
@@ -306,7 +306,7 @@ pub async fn new_azure_blob_storage(
         .into_iter()
         .filter_map(|(key, value)| key.parse::<AzureConfigKey>().map(|k| (k, value)).ok())
         .collect();
-    let storage = implementations::ObjectStorage::new_azure(
+    let storage = backends::ObjectStorage::new_azure(
         account,
         container,
         prefix,
@@ -333,13 +333,9 @@ pub async fn new_gcs_storage(
             key.parse::<GoogleConfigKey>().map(|k| (k, value)).ok()
         })
         .collect();
-    let storage = implementations::ObjectStorage::new_gcs(
-        bucket,
-        prefix,
-        credentials,
-        Some(config),
-    )
-    .await?;
+    let storage =
+        backends::ObjectStorage::new_gcs(bucket, prefix, credentials, Some(config))
+            .await?;
     Ok(Arc::new(storage))
 }
 
