@@ -17,7 +17,7 @@ use icechunk::{
     },
     storage::{
         self, ETag, FetchConfigResult, Generation, StorageResult, UpdateConfigResult,
-        VersionInfo, new_in_memory_storage, new_s3_storage, s3::mk_client,
+        VersionInfo, backends::s3::mk_client, new_in_memory_storage, new_s3_storage,
     },
 };
 use icechunk_macros::tokio_test;
