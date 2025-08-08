@@ -765,7 +765,20 @@ impl Repository {
             .into());
         }
         if branch != Ref::DEFAULT_BRANCH {
-            todo!()
+            let (ri, version) = self.get_repo_info().await?;
+            match ri.delete_branch(branch)? {
+                Some(new_ri) => {
+                    let _ = self
+                        .asset_manager
+                        .update_repo_info(Arc::new(new_ri), &version)
+                        .await?;
+                    Ok(())
+                }
+                None => {
+                    Err(RefError::from(RefErrorKind::RefNotFound(branch.to_string()))
+                        .into())
+                }
+            }
         } else {
             Err(RepositoryErrorKind::CannotDeleteMain.into())
         }
@@ -790,7 +803,19 @@ impl Repository {
             )
             .into());
         }
-        todo!()
+        let (ri, version) = self.get_repo_info().await?;
+        match ri.delete_tag(tag)? {
+            Some(new_ri) => {
+                let _ = self
+                    .asset_manager
+                    .update_repo_info(Arc::new(new_ri), &version)
+                    .await?;
+                Ok(())
+            }
+            None => {
+                Err(RefError::from(RefErrorKind::RefNotFound(tag.to_string())).into())
+            }
+        }
     }
 
     /// Create a new tag in the repository at the given snapshot id
@@ -814,22 +839,21 @@ impl Repository {
             )
             .into());
         }
-        todo!()
-        // raise_if_invalid_snapshot_id(
-        //     self.storage.as_ref(),
-        //     &self.storage_settings,
-        //     snapshot_id,
-        // )
-        // .await?;
+        let (ri, version) = self.get_repo_info().await?;
+        raise_if_invalid_snapshot_id_v2(ri.as_ref(), snapshot_id)?;
 
-        // create_tag(
-        //     self.storage.as_ref(),
-        //     &self.storage_settings,
-        //     tag_name,
-        //     snapshot_id.clone(),
-        // )
-        // .await?;
-        // Ok(())
+        match ri.add_tag(tag_name, snapshot_id)? {
+            Some(new_ri) => {
+                let _ = self
+                    .asset_manager
+                    .update_repo_info(Arc::new(new_ri), &version)
+                    .await?;
+                Ok(())
+            }
+            None => Err(RepositoryError::from(RefError::from(
+                RefErrorKind::TagAlreadyExists(tag_name.to_string()),
+            ))),
+        }
     }
 
     /// List all tags in the repository.
@@ -1278,10 +1302,12 @@ pub fn raise_if_invalid_snapshot_id_v2(
     repo_info: &RepoInfo,
     snapshot_id: &SnapshotId,
 ) -> RepositoryResult<()> {
-    repo_info
-        .find_snapshot(snapshot_id)
-        .map_err(|_| RepositoryErrorKind::SnapshotNotFound { id: snapshot_id.clone() })?;
-    Ok(())
+    match repo_info.find_snapshot(snapshot_id)? {
+        Some(_) => Ok(()),
+        None => Err(RepositoryError::from(RepositoryErrorKind::SnapshotNotFound {
+            id: snapshot_id.clone(),
+        })),
+    }
 }
 
 #[cfg(test)]

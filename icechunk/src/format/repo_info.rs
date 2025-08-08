@@ -4,13 +4,13 @@ use std::collections::HashMap;
 
 use super::{
     IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
-    flatbuffers::generated::{self, ObjectId12},
+    flatbuffers::generated::{self, MetadataItem, ObjectId12},
     format_constants::SpecVersionBin,
     snapshot::SnapshotInfo,
 };
 
 use chrono::{DateTime, Utc};
-use flatbuffers::VerifierOptions;
+use flatbuffers::{VerifierOptions, WIPOffset};
 
 // TODO: should we not implement serialize and let the session fetch the repo info?
 #[derive(PartialEq, Debug, Serialize, Deserialize)]
@@ -87,16 +87,24 @@ impl RepoInfo {
                     .as_ref()
                     .map(|parent_id| snapshot_index.get(parent_id).unwrap());
 
-                let meta_name = builder.create_string("foo"); // FIXME: fake metadata
-                let meta_value = builder.create_vector::<u8>(&[]);
-                let meta_item = generated::MetadataItem::create(
-                    &mut builder,
-                    &generated::MetadataItemArgs {
-                        name: Some(meta_name), // FIXME:
-                        value: Some(meta_value),
-                    },
-                );
-                let metadata = builder.create_vector(&[meta_item]);
+                let metadata_items: Vec<_> = snap
+                    .metadata
+                    .iter()
+                    .map(|(k, v)| {
+                        let name = builder.create_shared_string(k.as_str());
+                        let serialized = rmp_serde::to_vec(v).unwrap();
+                        let value = builder.create_vector(serialized.as_slice());
+                        generated::MetadataItem::create(
+                            &mut builder,
+                            &generated::MetadataItemArgs {
+                                name: Some(name),
+                                value: Some(value),
+                            },
+                        )
+                    })
+                    .collect();
+
+                let metadata = builder.create_vector(metadata_items.as_slice());
                 let args = generated::SnapshotInfoArgs {
                     id: Some(&id),
                     parent_offset: match parent_offset {
@@ -105,7 +113,7 @@ impl RepoInfo {
                     },
                     flushed_at: snap.flushed_at.timestamp_micros() as u64,
                     message: Some(builder.create_string(snap.message.as_str())),
-                    metadata: Some(metadata), // FIXME:
+                    metadata: Some(metadata),
                 };
                 generated::SnapshotInfo::create(&mut builder, &args)
             })
@@ -121,16 +129,8 @@ impl RepoInfo {
             },
         );
 
-        let meta_name = builder.create_string("foo");
-        let meta_value = builder.create_vector::<u8>(&[]);
-        let meta_item = generated::MetadataItem::create(
-            &mut builder,
-            &generated::MetadataItemArgs {
-                name: Some(meta_name), // FIXME:
-                value: Some(meta_value),
-            },
-        );
-        let metadata = builder.create_vector(&[meta_item]);
+        // FIXME: empty repo metadata
+        let metadata = builder.create_vector(&[] as &[WIPOffset<MetadataItem>]);
 
         let repo_args = generated::RepoArgs {
             tags: Some(tags),
@@ -172,25 +172,40 @@ impl RepoInfo {
     ) -> IcechunkResult<impl Iterator<Item = IcechunkResult<SnapshotInfo>>> {
         let root = self.root()?;
         Ok(root.snapshots().iter().map(move |snap| {
-            let flushed_at = timestamp_to_timestamp(snap.flushed_at());
+            let flushed_at = timestamp_to_timestamp(snap.flushed_at())?;
             let parent_id = if snap.parent_offset() >= 0 {
                 let parent = root.snapshots().get(snap.parent_offset() as usize).id();
                 Some(parent)
             } else {
                 None
             };
-            flushed_at.map(|flushed_at| SnapshotInfo {
+            let metadata = snap
+                .metadata()
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| {
+                            let name = item.name().to_string();
+                            let value =
+                                rmp_serde::from_slice(item.value().bytes()).unwrap();
+                            (name, value)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            Ok(SnapshotInfo {
                 id: SnapshotId::new(snap.id().0),
                 flushed_at,
                 message: snap.message().to_string(),
-                metadata: Default::default(),  // FIXME
+                metadata,
                 manifests: Default::default(), // FIXME: remove field
                 parent_id: parent_id.map(|buf| SnapshotId::new(buf.0)),
             })
         }))
     }
 
-    pub fn add_snapshot(&self, snap: SnapshotInfo) -> IcechunkResult<Self> {
+    pub fn add_snapshot(&self, snap: SnapshotInfo, branch: &str) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = self.all_snapshots()?.try_collect()?;
         let new_index =
             snapshots.binary_search_by_key(&&snap.id, |snap| &snap.id).unwrap_err();
@@ -201,7 +216,13 @@ impl RepoInfo {
             if idx as usize >= new_index { (name, idx + 1) } else { (name, idx) }
         });
         let branches = self.all_branches()?.map(|(name, idx)| {
-            if idx as usize >= new_index { (name, idx + 1) } else { (name, idx) }
+            if name == branch {
+                (name, new_index as u32)
+            } else if idx as usize >= new_index {
+                (name, idx + 1)
+            } else {
+                (name, idx)
+            }
         });
 
         let res = Self::new(tags, branches, self.deleted_tags()?, snapshots);
@@ -296,7 +317,7 @@ impl RepoInfo {
     }
 
     pub fn list_branches(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
-        Ok(self.root()?.tags().iter().map(|r| r.name()))
+        Ok(self.root()?.branches().iter().map(|r| r.name()))
     }
 
     pub fn resolve_tag(&self, name: &str) -> IcechunkResult<Option<SnapshotId>> {
@@ -357,11 +378,27 @@ impl RepoInfo {
                     };
 
                     let flushed_at = timestamp_to_timestamp(snap.flushed_at());
+                    // FIXME: duplicated with all_snapshots
+                    let metadata = snap
+                        .metadata()
+                        .map(|items| {
+                            items
+                                .iter()
+                                .map(|item| {
+                                    let name = item.name().to_string();
+                                    let value =
+                                        rmp_serde::from_slice(item.value().bytes())
+                                            .unwrap();
+                                    (name, value)
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     let info = flushed_at.map(|flushed_at| SnapshotInfo {
                         id: SnapshotId::new(snap.id().0),
                         flushed_at,
                         message: snap.message().to_string(),
-                        metadata: Default::default(),  // FIXME
+                        metadata,
                         manifests: Default::default(), // FIXME: remove field
                         parent_id,
                     });
@@ -407,6 +444,8 @@ mod tests {
 
     use std::collections::HashSet;
 
+    use crate::refs::fetch_branch_tip;
+
     use super::*;
 
     #[test]
@@ -431,7 +470,9 @@ mod tests {
             message: "snap 2".to_string(),
             ..snap1.clone()
         };
-        let repo = repo.add_snapshot(snap2.clone())?;
+        let repo = repo.add_snapshot(snap2.clone(), "main")?;
+        assert_eq!(&repo.resolve_branch("main")?.unwrap(), &snap2.id);
+
         let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
         assert_eq!(all, HashSet::from_iter([snap1.clone(), snap2.clone()]));
 
@@ -450,7 +491,8 @@ mod tests {
             message: "snap 3".to_string(),
             ..snap2.clone()
         };
-        let repo = repo.add_snapshot(snap3.clone())?;
+        let repo = repo.add_snapshot(snap3.clone(), "main")?;
+        assert_eq!(&repo.resolve_branch("main")?.unwrap(), &snap3.id);
         let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
         assert_eq!(
             all,
@@ -499,9 +541,9 @@ mod tests {
             message: "snap 2".to_string(),
             ..snap1.clone()
         };
-        let repo = repo.add_snapshot(snap2)?;
+        let repo = repo.add_snapshot(snap2, "main")?;
         let repo = repo.add_branch("baz", &id2)?.unwrap();
-        assert_eq!(repo.resolve_branch("main")?, Some(id1.clone()));
+        assert_eq!(repo.resolve_branch("main")?, Some(id2.clone()));
         assert_eq!(repo.resolve_branch("foo")?, Some(id1.clone()));
         assert_eq!(repo.resolve_branch("bar")?, Some(id1.clone()));
         assert_eq!(repo.resolve_branch("baz")?, Some(id2.clone()));

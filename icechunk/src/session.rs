@@ -2138,7 +2138,7 @@ async fn do_commit(
     let new_snapshot_id = new_snapshot.id();
 
     let new_repo_info =
-        Arc::new(repo_info.add_snapshot(new_snapshot.as_ref().try_into()?)?);
+        Arc::new(repo_info.add_snapshot(new_snapshot.as_ref().try_into()?, branch_name)?);
     // FIXME: we need to verify changes and merge the repo info
     let new_repo_info_version = asset_manager
         .update_repo_info(Arc::clone(&new_repo_info), repo_info_version)
@@ -2158,10 +2158,13 @@ async fn do_commit(
         Err(RefError {
             kind: RefErrorKind::Conflict { expected_parent, actual_parent },
             ..
-        }) => Err(SessionError::from(SessionErrorKind::Conflict {
-            expected_parent,
-            actual_parent,
-        })),
+        }) => {
+            dbg!(&expected_parent, &actual_parent);
+            Err(SessionError::from(SessionErrorKind::Conflict {
+                expected_parent,
+                actual_parent,
+            }))
+        }
         Err(err) => Err(err.into()),
     }?;
 
@@ -2486,7 +2489,7 @@ mod tests {
         let mut repo = create_memory_store_repository().await;
         let mut ds = repo.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::new()).await?;
-        let snapshot = ds.commit("commit", None).await?;
+        let snapshot = ds.commit("commit 1", None).await?;
 
         // Verify that the first commit has no metadata
         let v = VersionInfo::SnapshotId(snapshot.clone());
@@ -2502,7 +2505,7 @@ mod tests {
 
         let mut ds = repo.writable_session("main").await?;
         ds.add_group("/group".try_into().unwrap(), Bytes::new()).await?;
-        let snapshot = ds.commit("commit", None).await?;
+        let snapshot = ds.commit("commit 2", None).await?;
 
         let v = VersionInfo::SnapshotId(snapshot.clone());
         let snapshot_info = repo.ancestry(&v).await?;
@@ -2735,7 +2738,7 @@ mod tests {
         )
         .await?;
         let repo_info = RepoInfo::initial((&initial).try_into()?)
-            .add_snapshot(snapshot.as_ref().try_into()?)?;
+            .add_snapshot(snapshot.as_ref().try_into()?, "main")?;
         asset_manager
             .update_repo_info(Arc::new(repo_info), &storage::VersionInfo::for_creation())
             .await?;
@@ -3619,8 +3622,8 @@ mod tests {
         assert_eq!(&new_snapshot_id, ds.snapshot_id());
 
         repo.create_tag("v1", &new_snapshot_id).await?;
-        let ref_data = fetch_tag(storage.as_ref(), &storage_settings, "v1").await?;
-        assert_eq!(new_snapshot_id, ref_data.snapshot);
+        let s = repo.lookup_tag("v1").await?;
+        assert_eq!(new_snapshot_id, s);
 
         assert!(matches!(
                 ds.get_node(&Path::root()).await.ok(),
