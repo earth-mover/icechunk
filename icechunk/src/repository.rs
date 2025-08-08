@@ -1,3 +1,4 @@
+use itertools::Itertools as _;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     future::ready,
@@ -1018,8 +1019,38 @@ impl Repository {
                 self.resolve_ref_version_v2(repo_info, &ref_version_info)
             }
             Err((branch, at)) => {
-                // FIXME:
-                todo!()
+                let snap_id = repo_info.resolve_branch(branch.as_str())?.ok_or(
+                    RepositoryError::from(RepositoryErrorKind::InvalidAsOfSpec {
+                        branch: branch.clone(),
+                        at,
+                    }),
+                )?;
+
+                let ancestry = repo_info.ancestry(&snap_id)?.ok_or(
+                    RepositoryError::from(RepositoryErrorKind::InvalidAsOfSpec {
+                        branch: branch.clone(),
+                        at,
+                    }),
+                )?;
+                let snap: Vec<_> = ancestry
+                    .skip_while(|parent| {
+                        if let Ok(parent) = parent {
+                            parent.flushed_at > at
+                        } else {
+                            false
+                        }
+                    })
+                    .take(1)
+                    .try_collect()?;
+
+                match snap.into_iter().next() {
+                    Some(snap) => Ok(snap.id),
+                    None => Err(RepositoryErrorKind::InvalidAsOfSpec {
+                        branch: branch.clone(),
+                        at,
+                    }
+                    .into()),
+                }
             }
         }
     }
