@@ -7,14 +7,12 @@ use std::{
 
 use bytes::Bytes;
 use icechunk::{
-    ObjectStorage, Storage,
+    ObjectStorage, Repository, Storage,
     config::{S3Credentials, S3Options, S3StaticCredentials},
-    format::{ChunkId, ManifestId, SnapshotId},
+    format::{ChunkId, ManifestId, SnapshotId, snapshot::Snapshot},
     new_local_filesystem_storage,
-    refs::{
-        Ref, RefError, RefErrorKind, create_tag, fetch_branch_tip, fetch_tag, list_refs,
-        update_branch,
-    },
+    refs::{Ref, RefError, RefErrorKind},
+    repository::{RepositoryError, RepositoryErrorKind},
     storage::{
         self, ETag, Generation, StorageResult, VersionInfo, VersionedFetchResult,
         VersionedUpdateResult, new_in_memory_storage, new_s3_storage, s3::mk_client,
@@ -220,11 +218,10 @@ pub async fn test_chunk_write_read() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio_test]
 pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = SnapshotId::random();
-        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone()).await?;
-        let back = fetch_tag(storage.as_ref(), &storage_settings, "mytag").await?;
-        assert_eq!(id, back.snapshot);
+        let repo = Repository::create(None, storage, Default::default()).await?;
+        repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
+        let back = repo.lookup_tag("mytag").await?;
+        assert_eq!(Snapshot::INITIAL_SNAPSHOT_ID, back);
         Ok(())
     })
     .await?;
@@ -234,14 +231,16 @@ pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio_test]
 pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = SnapshotId::random();
-        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone())
-            .await?;
+        let repo = Repository::create(None, storage, Default::default()).await?;
+        repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
+        let back = repo.lookup_tag("non-existing-tag").await;
+        assert!(
+            matches!(
+                back,
+                Err(RepositoryError{kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(r)), ..}) if r == "non-existing-tag"
+            )
+            );
 
-        let back =
-            fetch_tag(storage.as_ref(), &storage_settings, "non-existing-tag").await;
-        assert!(matches!(back, Err(RefError{kind: RefErrorKind::RefNotFound(r), ..}) if r == "non-existing-tag"));
         Ok(())
     })
     .await?;
@@ -251,40 +250,15 @@ pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Err
 #[tokio_test]
 pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = SnapshotId::random();
-        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone())
-            .await?;
-
-        let res =
-            create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone())
-                .await;
-        assert!(matches!(res, Err(RefError{kind: RefErrorKind::TagAlreadyExists(r), ..}) if r == "mytag"));
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-#[tokio_test]
-pub async fn test_branch_initialization() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = SnapshotId::random();
-
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "some-branch",
-            id.clone(),
-            None,
-        )
-        .await?;
-
-        let res =
-            fetch_branch_tip(storage.as_ref(), &storage_settings, "some-branch").await?;
-        assert_eq!(res.snapshot, id);
-
+        let repo = Repository::create(None, storage, Default::default()).await?;
+        repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
+        let res  = repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await;
+        assert!(
+            matches!(
+                res,
+                Err(RepositoryError{kind: RepositoryErrorKind::Ref(RefErrorKind::TagAlreadyExists(r)), ..}) if r == "mytag"
+            )
+            );
         Ok(())
     })
     .await?;
@@ -294,109 +268,13 @@ pub async fn test_branch_initialization() -> Result<(), Box<dyn std::error::Erro
 #[tokio_test]
 pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = SnapshotId::random();
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "some-branch",
-            id.clone(),
-            None,
-        )
-        .await?;
-
-        let back =
-            fetch_branch_tip(storage.as_ref(), &storage_settings, "non-existing-branch")
-                .await;
+        let repo = Repository::create(None, storage, Default::default()).await?;
+        let back = repo.lookup_branch("non-existing-branch").await;
         assert!(
-            matches!(back, Err(RefError{kind: RefErrorKind::RefNotFound(r),..}) if r == "non-existing-branch")
-        );
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-#[tokio_test]
-pub async fn test_branch_update() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id1 = SnapshotId::random();
-        let id2 = SnapshotId::random();
-        let id3 = SnapshotId::random();
-
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "some-branch",
-            id1.clone(),
-            None,
-        )
-        .await?;
-
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "some-branch",
-            id2.clone(),
-            Some(&id1),
-        )
-        .await?;
-
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "some-branch",
-            id3.clone(),
-            Some(&id2),
-        )
-        .await?;
-
-        let res =
-            fetch_branch_tip(storage.as_ref(), &storage_settings, "some-branch").await?;
-        assert_eq!(res.snapshot, id3);
-
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-#[tokio_test]
-pub async fn test_ref_names() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id1 = SnapshotId::random();
-        let id2 = SnapshotId::random();
-        update_branch(storage.as_ref(), &storage_settings, "main", id1.clone(), None)
-            .await?;
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "main",
-            id2.clone(),
-            Some(&id1),
-        )
-        .await?;
-        update_branch(storage.as_ref(), &storage_settings, "foo", id1.clone(), None)
-            .await?;
-        update_branch(storage.as_ref(), &storage_settings, "bar", id1.clone(), None)
-            .await?;
-        create_tag(storage.as_ref(), &storage_settings, "my-tag", id1.clone()).await?;
-        create_tag(storage.as_ref(), &storage_settings, "my-other-tag", id1.clone())
-            .await?;
-
-        let res: HashSet<_> =
-            HashSet::from_iter(list_refs(storage.as_ref(), &storage_settings).await?);
-        assert_eq!(
-            res,
-            HashSet::from_iter([
-                Ref::Tag("my-tag".to_string()),
-                Ref::Tag("my-other-tag".to_string()),
-                Ref::Branch("main".to_string()),
-                Ref::Branch("foo".to_string()),
-                Ref::Branch("bar".to_string()),
-            ])
+            matches!(
+                back,
+                Err(RepositoryError{kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(r)), ..}) if r == "non-existing-branch"
+            )
         );
         Ok(())
     })

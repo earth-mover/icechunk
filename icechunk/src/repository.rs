@@ -36,7 +36,7 @@ use crate::{
     },
     refs::{
         Ref, RefError, RefErrorKind, fetch_branch_tip, fetch_tag, list_branches,
-        list_tags, update_branch,
+        list_tags,
     },
     session::{Session, SessionErrorKind, SessionResult},
     storage::{self, StorageErrorKind, VersionedFetchResult, VersionedUpdateResult},
@@ -191,7 +191,6 @@ impl Repository {
         // Merge the given config with the defaults
         let config =
             config.map(|c| RepositoryConfig::default().merge(c)).unwrap_or_default();
-        let storage_c = Arc::clone(&storage);
         let storage_settings =
             config.storage().cloned().unwrap_or_else(|| storage.default_settings());
 
@@ -207,19 +206,10 @@ impl Repository {
         }
 
         let asset_manager_c = Arc::clone(&asset_manager);
-        let create_branch = async move {
+        let create_repo_info = async move {
             // On create we need to create the default branch
             let new_snapshot = Arc::new(Snapshot::initial()?);
             asset_manager_c.write_snapshot(Arc::clone(&new_snapshot)).await?;
-
-            update_branch(
-                storage_c.as_ref(),
-                &storage_settings,
-                Ref::DEFAULT_BRANCH,
-                new_snapshot.id().clone(),
-                None,
-            )
-            .await?;
 
             let snap_info = new_snapshot.as_ref().try_into()?;
             let repo_info = Arc::new(RepoInfo::initial(snap_info));
@@ -250,7 +240,7 @@ impl Repository {
         }
         .in_current_span();
 
-        let (_, config_version) = try_join!(create_branch, update_config)?;
+        let (_, config_version) = try_join!(create_repo_info, update_config)?;
 
         debug_assert!(Self::exists(Arc::clone(&storage)).await.unwrap_or(false));
         Self::new(

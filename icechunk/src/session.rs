@@ -3566,7 +3566,6 @@ mod tests {
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
         let storage = Arc::clone(repo.storage());
-        let storage_settings = storage.default_settings();
         let mut ds = repo.writable_session("main").await?;
 
         let def = Bytes::copy_from_slice(b"");
