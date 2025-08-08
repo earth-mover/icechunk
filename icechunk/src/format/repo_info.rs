@@ -260,6 +260,31 @@ impl RepoInfo {
         Ok(Some(Self::new(self.all_tags()?, branches, self.deleted_tags()?, snaps)))
     }
 
+    pub fn update_branch(
+        &self,
+        name: &str,
+        snap: &SnapshotId,
+    ) -> IcechunkResult<Option<Self>> {
+        if self.resolve_branch(name)?.is_none() {
+            return Ok(None);
+        }
+        match self.resolve_snapshot_index(snap)? {
+            Some(snap_idx) => {
+                let branches = self.all_branches()?.map(|(br, idx)| {
+                    if br == name { (br, snap_idx as u32) } else { (br, idx) }
+                });
+                let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+                Ok(Some(Self::new(
+                    self.all_tags()?,
+                    branches,
+                    self.deleted_tags()?,
+                    snaps,
+                )))
+            }
+            None => Ok(None),
+        }
+    }
+
     pub fn add_tag(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Option<Self>> {
         if self.resolve_tag(name)?.is_some() || self.tag_was_deleted(name)? {
             return Ok(None);
@@ -442,11 +467,8 @@ fn timestamp_to_timestamp(ts: u64) -> IcechunkResult<DateTime<Utc>> {
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
-    use std::collections::HashSet;
-
-    use crate::refs::fetch_branch_tip;
-
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn test_add_snapshot() -> Result<(), Box<dyn std::error::Error>> {

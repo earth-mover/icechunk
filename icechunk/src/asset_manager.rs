@@ -793,7 +793,7 @@ async fn write_repo_info(
     })
     .await??;
 
-    debug!(size_bytes = buffer.len(), "Writing repo info log");
+    debug!(size_bytes = buffer.len(), "Writing repo info");
     match storage
         .update_repo_info(storage_settings, metadata, buffer.into(), version)
         .await?

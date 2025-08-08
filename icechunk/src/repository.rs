@@ -35,8 +35,8 @@ use crate::{
         transaction_log::{Diff, DiffBuilder},
     },
     refs::{
-        Ref, RefError, RefErrorKind, create_tag, delete_branch, delete_tag,
-        fetch_branch_tip, fetch_tag, list_branches, list_tags, update_branch,
+        Ref, RefError, RefErrorKind, fetch_branch_tip, fetch_tag, list_branches,
+        list_tags, update_branch,
     },
     session::{Session, SessionErrorKind, SessionResult},
     storage::{self, StorageErrorKind, VersionedFetchResult, VersionedUpdateResult},
@@ -585,7 +585,7 @@ impl Repository {
             let repo_info_ref = &*Arc::as_ptr(&repo_info);
             Box::new(repo_info_ref.ancestry(&snapshot_id)?.unwrap().map(|e| e.err_into()))
         };
-        Ok(AcestryIterator { repo_info: repo_info.clone(), it })
+        Ok(AcestryIterator { _repo_info: repo_info.clone(), it })
     }
 
     #[instrument(skip(self))]
@@ -744,7 +744,19 @@ impl Repository {
             )
             .into());
         }
-        todo!()
+        let (ri, version) = self.get_repo_info().await?;
+        match ri.update_branch(branch, snapshot_id)? {
+            Some(new_ri) => {
+                let _ = self
+                    .asset_manager
+                    .update_repo_info(Arc::new(new_ri), &version)
+                    .await?;
+                Ok(())
+            }
+            None => {
+                Err(RefError::from(RefErrorKind::RefNotFound(branch.to_string())).into())
+            }
+        }
     }
 
     /// Delete a branch from the repository.
@@ -1110,11 +1122,8 @@ impl Repository {
         }
         let snapshot_id = self.lookup_branch(branch).await?;
 
-        let (repo_info, version) = self.get_repo_info().await?;
         let session = Session::create_writable_session(
             self.config.clone(),
-            repo_info,
-            version,
             self.storage_settings.clone(),
             self.storage.clone(),
             Arc::clone(&self.asset_manager),
@@ -1204,30 +1213,9 @@ impl Repository {
     }
 }
 
-// struct AcestryIterator<'a> {
-//     repo_info: Arc<RepoInfo>,
-//     start_at: SnapshotId,
-//     it: Option<Box<dyn Iterator<Item = RepositoryResult<SnapshotInfo>> + 'a>>,
-// }
-//
-// impl<'a> Iterator for AcestryIterator<'a> {
-//     type Item = RepositoryResult<SnapshotInfo>;
-//
-//     fn next(&mut self) -> Option<Self::Item> {
-//         match self.it.as_mut() {
-//             Some(it) => it.next(),
-//             None => {
-//                 let mut anc = self.repo_info.ancestry(&self.start_at).unwrap().unwrap();
-//                 let res = anc.next().map(|r| r.err_into());
-//                 self.it = Some(Box::new(anc.map(|e| e.err_into())));
-//                 res
-//             }
-//         }
-//     }
-// }
-
 struct AcestryIterator {
-    repo_info: Arc<RepoInfo>,
+    // we need to keep the Arc alive
+    _repo_info: Arc<RepoInfo>,
     it: Box<dyn Iterator<Item = RepositoryResult<SnapshotInfo>> + Send>,
 }
 

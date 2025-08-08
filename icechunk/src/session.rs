@@ -42,7 +42,6 @@ use crate::{
         },
         transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
-    refs::{RefError, RefErrorKind, update_branch},
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{self, StorageErrorKind, VersionInfo},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
@@ -57,8 +56,8 @@ pub enum SessionErrorKind {
     StorageError(StorageErrorKind),
     #[error(transparent)]
     FormatError(IcechunkFormatErrorKind),
-    #[error(transparent)]
-    Ref(RefErrorKind),
+    //#[error(transparent)]
+    //Ref(RefErrorKind),
     #[error(transparent)]
     VirtualReferenceError(VirtualReferenceErrorKind),
 
@@ -147,12 +146,6 @@ impl From<RepositoryError> for SessionError {
     }
 }
 
-impl From<RefError> for SessionError {
-    fn from(value: RefError) -> Self {
-        Self::with_context(SessionErrorKind::Ref(value.kind), value.context)
-    }
-}
-
 impl From<IcechunkFormatError> for SessionError {
     fn from(value: IcechunkFormatError) -> Self {
         Self::with_context(SessionErrorKind::FormatError(value.kind), value.context)
@@ -210,7 +203,6 @@ impl ManifestSplits {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     config: RepositoryConfig,
-    repo_info: Option<(Arc<RepoInfo>, VersionInfo)>,
     storage_settings: Arc<storage::Settings>,
     storage: Arc<dyn Storage + Send + Sync>,
     asset_manager: Arc<AssetManager>,
@@ -234,7 +226,6 @@ impl Session {
     ) -> Self {
         Self {
             config,
-            repo_info: None,
             storage_settings: Arc::new(storage_settings),
             storage,
             asset_manager,
@@ -252,8 +243,6 @@ impl Session {
     #[allow(clippy::too_many_arguments)]
     pub fn create_writable_session(
         config: RepositoryConfig,
-        repo_info: Arc<RepoInfo>,
-        repo_info_version: VersionInfo,
         storage_settings: storage::Settings,
         storage: Arc<dyn Storage + Send + Sync>,
         asset_manager: Arc<AssetManager>,
@@ -264,7 +253,6 @@ impl Session {
     ) -> Self {
         Self {
             config,
-            repo_info: Some((repo_info, repo_info_version)),
             storage_settings: Arc::new(storage_settings),
             storage,
             asset_manager,
@@ -1008,14 +996,7 @@ impl Session {
             })
             .unwrap_or(default_metadata);
 
-        let (repo_info, repo_info_version) = self
-            .repo_info
-            .as_ref()
-            .unwrap_or_else(|| panic!("Readonly session cannot commit"));
-
         let (id, _, _) = do_commit(
-            Arc::clone(repo_info),
-            repo_info_version,
             Arc::clone(&self.asset_manager),
             branch_name,
             &self.snapshot_id,
@@ -1034,7 +1015,6 @@ impl Session {
         // Once committed, the session is now read only, which we control
         // by setting the branch_name to None (you can only write to a branch session)
         self.branch_name = None;
-        self.repo_info = None;
 
         Ok(id)
     }
@@ -1139,83 +1119,94 @@ impl Session {
         &mut self,
         solver: &(dyn ConflictSolver + Send + Sync),
     ) -> SessionResult<()> {
-        todo!()
-        // let Some(branch_name) = &self.branch_name else {
-        //     return Err(SessionErrorKind::ReadOnlySession.into());
-        // };
+        let Some(branch_name) = &self.branch_name else {
+            return Err(SessionErrorKind::ReadOnlySession.into());
+        };
 
-        // debug!("Rebase started");
-        // let ref_data = fetch_branch_tip(
-        //     self.storage.as_ref(),
-        //     self.storage_settings.as_ref(),
-        //     branch_name,
-        // )
-        // .await?;
+        debug!("Rebase started");
 
-        // if ref_data.snapshot == self.snapshot_id {
-        //     // nothing to do, commit should work without rebasing
-        //     warn!(
-        //         branch = &self.branch_name,
-        //         "No rebase is needed, parent snapshot is at the top of the branch. Aborting rebase."
-        //     );
-        //     Ok(())
-        // } else {
-        //     let current_snapshot =
-        //         self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
-        //     let ancestry = Arc::clone(&self.asset_manager)
-        //         .snapshot_info_ancestry(&current_snapshot.id())
-        //         .await?
-        //         .map_ok(|meta| meta.id);
-        //     let new_commits =
-        //         stream::once(ready(Ok(ref_data.snapshot.clone())))
-        //             .chain(ancestry.try_take_while(|snap_id| {
-        //                 ready(Ok(snap_id != &self.snapshot_id))
-        //             }))
-        //             .try_collect::<Vec<_>>()
-        //             .await?;
-        //     trace!("Found {} commits to rebase", new_commits.len());
+        let (latest_repo_info, _) = self.asset_manager.fetch_repo_info().await?;
 
-        //     // TODO: this clone is expensive
-        //     // we currently need it to be able to process commits one by one without modifying the
-        //     // changeset in case of failure
-        //     // let mut changeset = self.change_set.clone();
+        match latest_repo_info.resolve_branch(branch_name)? {
+            None => {
+                // FIXME: write test for this
+                // nothing to do, branch deleted
+                warn!(
+                    branch = &self.branch_name,
+                    "No rebase is needed, the branch was deleted. Aborting rebase."
+                );
+                Ok(())
+            }
+            Some(current_snapshot_id) if current_snapshot_id == self.snapshot_id => {
+                // nothing to do, commit should work without rebasing
+                warn!(
+                    branch = &self.branch_name,
+                    "No rebase is needed, parent snapshot is at the top of the branch. Aborting rebase."
+                );
+                Ok(())
+            }
+            Some(current_snapshot_id) => {
+                let ancestry = stream::iter(
+                    latest_repo_info
+                        .ancestry(&current_snapshot_id)?
+                        .unwrap()
+                        .map_ok(|snap| snap.id),
+                );
+                //let new_commits = stream::once(ready(Ok(current_snapshot_id.clone())))
+                //    .chain(ancestry.try_take_while(|snap_id| {
+                //        ready(Ok(snap_id != &self.snapshot_id))
+                //    }))
+                //    .try_collect::<Vec<_>>()
+                //    .await?;
+                let new_commits = ancestry
+                    .try_take_while(|snap_id| ready(Ok(snap_id != &self.snapshot_id)))
+                    .try_collect::<Vec<_>>()
+                    .await?;
+                trace!("Found {} commits to rebase", new_commits.len());
 
-        //     // we need to reverse the iterator to process them in order of oldest first
-        //     for snap_id in new_commits.into_iter().rev() {
-        //         debug!("Rebasing snapshot {}", &snap_id);
-        //         let tx_log = self.asset_manager.fetch_transaction_log(&snap_id).await?;
+                // TODO: this clone is expensive
+                // we currently need it to be able to process commits one by one without modifying the
+                // changeset in case of failure
+                // let mut changeset = self.change_set.clone();
 
-        //         let session = Self::create_readonly_session(
-        //             self.config.clone(),
-        //             self.storage_settings.as_ref().clone(),
-        //             Arc::clone(&self.storage),
-        //             Arc::clone(&self.asset_manager),
-        //             Arc::clone(&self.virtual_resolver),
-        //             ref_data.snapshot.clone(),
-        //         );
+                // we need to reverse the iterator to process them in order of oldest first
+                for snap_id in new_commits.into_iter().rev() {
+                    debug!("Rebasing snapshot {}", &snap_id);
+                    let tx_log =
+                        self.asset_manager.fetch_transaction_log(&snap_id).await?;
 
-        //         let change_set = std::mem::take(&mut self.change_set);
-        //         // TODO: this should probably execute in a worker thread
-        //         match solver.solve(&tx_log, &session, change_set, self).await? {
-        //             ConflictResolution::Patched(patched_changeset) => {
-        //                 trace!("Snapshot rebased");
-        //                 self.change_set = patched_changeset;
-        //                 self.snapshot_id = snap_id;
-        //             }
-        //             ConflictResolution::Unsolvable { reason, unmodified } => {
-        //                 warn!("Snapshot cannot be rebased. Aborting rebase.");
-        //                 self.change_set = unmodified;
-        //                 return Err(SessionErrorKind::RebaseFailed {
-        //                     snapshot: snap_id,
-        //                     conflicts: reason,
-        //                 }
-        //                 .into());
-        //             }
-        //         }
-        //     }
-        //     debug!("Rebase done");
-        //     Ok(())
-        // }
+                    let session = Self::create_readonly_session(
+                        self.config.clone(),
+                        self.storage_settings.as_ref().clone(),
+                        Arc::clone(&self.storage),
+                        Arc::clone(&self.asset_manager),
+                        Arc::clone(&self.virtual_resolver),
+                        current_snapshot_id.clone(),
+                    );
+
+                    let change_set = std::mem::take(&mut self.change_set);
+                    // TODO: this should probably execute in a worker thread
+                    match solver.solve(&tx_log, &session, change_set, self).await? {
+                        ConflictResolution::Patched(patched_changeset) => {
+                            trace!("Snapshot rebased");
+                            self.change_set = patched_changeset;
+                            self.snapshot_id = snap_id;
+                        }
+                        ConflictResolution::Unsolvable { reason, unmodified } => {
+                            warn!("Snapshot cannot be rebased. Aborting rebase.");
+                            self.change_set = unmodified;
+                            return Err(SessionErrorKind::RebaseFailed {
+                                snapshot: snap_id,
+                                conflicts: reason,
+                            }
+                            .into());
+                        }
+                    }
+                }
+                debug!("Rebase done");
+                Ok(())
+            }
+        }
     }
 }
 
@@ -2077,8 +2068,6 @@ async fn flush(
 
 #[allow(clippy::too_many_arguments)]
 async fn do_commit(
-    repo_info: Arc<RepoInfo>,
-    repo_info_version: &VersionInfo,
     asset_manager: Arc<AssetManager>,
     branch_name: &str,
     snapshot_id: &SnapshotId,
@@ -2096,11 +2085,20 @@ async fn do_commit(
     let new_snapshot_id = new_snapshot.id();
 
     let mut attempt = 1;
-    let mut repo_info = repo_info;
-    let mut repo_info_version = repo_info_version.clone();
     // TODO: give up eventually
     loop {
-        debug!(branch_name, %new_snapshot_id,attempt, "Generating new repo info object");
+        let (repo_info, repo_info_version) = asset_manager.fetch_repo_info().await?;
+
+        let actual_parent = repo_info.resolve_branch(branch_name)?;
+        if actual_parent.as_ref() != Some(snapshot_id) {
+            info!(branch_name, %new_snapshot_id, attempt, "Branch tip has changed, rebase needed");
+            return Err(SessionError::from(SessionErrorKind::Conflict {
+                expected_parent: Some(snapshot_id.clone()),
+                actual_parent,
+            }));
+        }
+
+        debug!(branch_name, %new_snapshot_id, attempt, "Generating new repo info object");
         let new_repo_info = Arc::new(
             repo_info.add_snapshot(new_snapshot.as_ref().try_into()?, branch_name)?,
         );
@@ -2111,20 +2109,20 @@ async fn do_commit(
             .await
         {
             Ok(new_version) => {
-                info!(branch_name, old_snapshot_id=%snapshot_id,new_repo_info_version=?new_version, %new_snapshot_id, "Commit done");
+                info!(
+                    branch_name,
+                    old_snapshot_id=%snapshot_id,
+                    new_repo_info_version=?new_version,
+                    %new_snapshot_id,
+                    attempt,
+                    "Commit done"
+                );
                 return Ok((new_snapshot_id, new_repo_info, new_version));
             }
             Err(RepositoryError {
                 kind: RepositoryErrorKind::RepoInfoUpdated, ..
             }) => {
-                (repo_info, repo_info_version) = asset_manager.fetch_repo_info().await?;
-                let actual_parent = repo_info.resolve_branch(branch_name)?;
-                if actual_parent.as_ref() != Some(snapshot_id) {
-                    return Err(SessionError::from(SessionErrorKind::Conflict {
-                        expected_parent: Some(snapshot_id.clone()),
-                        actual_parent,
-                    }));
-                }
+                debug!(%new_snapshot_id, attempt, "Commit needs to refresh repo info object");
                 attempt += 1;
             }
             Err(err) => return Err(err.into()),
@@ -2223,7 +2221,6 @@ mod tests {
             manifest::{ManifestExtents, ManifestSplits},
             repo_info::RepoInfo,
         },
-        refs::{Ref, fetch_tag},
         repository::VersionInfo,
         storage::new_in_memory_storage,
         strategies::{
@@ -2684,14 +2681,15 @@ mod tests {
             nodes.iter().cloned().map(Ok::<NodeSnapshot, Infallible>),
         )?);
         asset_manager.write_snapshot(Arc::clone(&snapshot)).await?;
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "main",
-            snapshot.id().clone(),
-            None,
-        )
-        .await?;
+        // FIXME:
+        // update_branch(
+        //     storage.as_ref(),
+        //     &storage_settings,
+        //     "main",
+        //     snapshot.id().clone(),
+        //     None,
+        // )
+        // .await?;
         Repository::store_config(
             storage.as_ref(),
             &RepositoryConfig::default(),
@@ -4418,7 +4416,7 @@ mod tests {
         // the result should be that it can never commit, failing after the indicated number of
         // attempts
         let conflicting = |attempt| async move {
-            attempts_ref.fetch_add(1, Ordering::SeqCst); //*attempts_ref = *attempts_ref + 1;;
+            attempts_ref.fetch_add(1, Ordering::SeqCst);
             assert_eq!(attempt, attempts_ref.load(Ordering::SeqCst));
 
             let repo_c = Arc::clone(repo_ref);
