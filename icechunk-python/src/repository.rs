@@ -582,7 +582,7 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let exists = Repository::exists(storage.0.as_ref())
+                let exists = Repository::exists(storage.0)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(exists)
@@ -596,7 +596,7 @@ impl PyRepository {
         storage: PyStorage,
     ) -> PyResult<Bound<'py, PyAny>> {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let exists = Repository::exists(storage.0.as_ref())
+            let exists = Repository::exists(storage.0)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(exists)

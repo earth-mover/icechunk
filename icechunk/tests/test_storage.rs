@@ -417,7 +417,7 @@ pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Erro
         assert_ne!(version, VersionInfo::for_creation());
         let res = storage.fetch_config(&storage_settings, ).await?;
         assert!(
-            matches!(res, VersionedFetchResult::Found{result, version: actual_version} if actual_version == version && bytes == config )
+            matches!(res, VersionedFetchResult::Found{result, version: actual_version} if actual_version == version && result == config )
         );
         Ok(())
     }).await?;
@@ -441,7 +441,7 @@ pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::E
         assert_ne!(second_version, first_version);
         let res = storage.fetch_config(&storage_settings, ).await?;
         assert!(
-            matches!(res, VersionedFetchResult::Found{result, version: actual_version} if actual_version == second_version && bytes == config )
+            matches!(res, VersionedFetchResult::Found{result, version: actual_version} if actual_version == second_version && result == config )
         );
         Ok(())
     }).await?;
@@ -500,12 +500,12 @@ pub async fn test_write_config_fails_on_bad_version_when_existing()
             // FIXME: local file system doesn't have conditional updates yet
             assert!(
                 matches!(fetch_res, VersionedFetchResult::Found{result, version: actual_version}
-                    if actual_version != version && bytes == Bytes::copy_from_slice(b"bye"))
+                    if actual_version != version && result == Bytes::copy_from_slice(b"bye"))
             );
         } else {
             assert!(
                 matches!(fetch_res, VersionedFetchResult::Found{result, version: actual_version}
-                    if actual_version == version && bytes == config )
+                    if actual_version == version && result == config )
             );
         }
         Ok(())
@@ -557,7 +557,7 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
 
         let fetch_res = storage.fetch_config(&storage_settings).await?;
         assert!(
-            matches!(fetch_res, VersionedFetchResult::Found{result, ..} if bytes.as_ref() == b"bye")
+            matches!(fetch_res, VersionedFetchResult::Found{result, ..} if result.as_ref() == b"bye")
         );
         Ok(())
     })
