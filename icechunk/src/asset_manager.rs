@@ -799,7 +799,9 @@ async fn write_repo_info(
         .await?
     {
         storage::VersionedUpdateResult::Updated { new_version } => Ok(new_version),
-        storage::VersionedUpdateResult::NotOnLatestVersion => todo!(), // FIXME
+        storage::VersionedUpdateResult::NotOnLatestVersion => {
+            Err(RepositoryErrorKind::RepoInfoUpdated.into())
+        }
     }
 }
 

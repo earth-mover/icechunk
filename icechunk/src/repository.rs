@@ -109,6 +109,8 @@ pub enum RepositoryErrorKind {
     ConfigWasUpdated,
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
+    #[error("repo info object was updated after this session started")]
+    RepoInfoUpdated,
     #[error("I/O error")]
     IOError(#[from] std::io::Error),
     #[error("a concurrent task failed")]
@@ -535,7 +537,7 @@ impl Repository {
 
     /// Returns the sequence of parents of the current session, in order of latest first.
     #[instrument(skip(self))]
-    pub async fn snapshot_ancestry_v1(
+    async fn snapshot_ancestry_v1(
         &self,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_ + use<'_>>
@@ -562,7 +564,7 @@ impl Repository {
     /// Returns the sequence of parents of the snapshot pointed by the given version
     #[async_recursion(?Send)]
     #[instrument(skip(self))]
-    pub async fn ancestry_v1<'a>(
+    async fn ancestry_v1<'a>(
         &'a self,
         version: &VersionInfo,
     ) -> RepositoryResult<
@@ -572,7 +574,7 @@ impl Repository {
         self.snapshot_ancestry_v1(&snapshot_id).await
     }
 
-    pub async fn ancestry_v2(
+    async fn ancestry_v2(
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<impl Iterator<Item = RepositoryResult<SnapshotInfo>> + Send>
@@ -642,14 +644,14 @@ impl Repository {
 
     /// List all branches in the repository.
     #[instrument(skip(self))]
-    pub async fn list_branches_v1(&self) -> RepositoryResult<BTreeSet<String>> {
+    async fn list_branches_v1(&self) -> RepositoryResult<BTreeSet<String>> {
         let branches =
             list_branches(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(branches)
     }
 
     #[instrument(skip(self))]
-    pub async fn list_branches_v2(&self) -> RepositoryResult<BTreeSet<String>> {
+    async fn list_branches_v2(&self) -> RepositoryResult<BTreeSet<String>> {
         let (ri, _) = self.get_repo_info().await?;
         Ok(ri.list_branches()?.map(|s| s.to_string()).collect())
     }
@@ -664,7 +666,7 @@ impl Repository {
 
     /// Get the snapshot id of the tip of a branch
     #[instrument(skip(self))]
-    pub async fn lookup_branch_v1(&self, branch: &str) -> RepositoryResult<SnapshotId> {
+    async fn lookup_branch_v1(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         let branch_version =
             fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
                 .await?;
@@ -672,7 +674,7 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    pub async fn lookup_branch_v2(&self, branch: &str) -> RepositoryResult<SnapshotId> {
+    async fn lookup_branch_v2(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         let (ri, _) = self.get_repo_info().await?;
         match ri.resolve_branch(branch)? {
             Some(snap) => Ok(snap),
@@ -691,7 +693,7 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    pub async fn lookup_snapshot_v1(
+    async fn lookup_snapshot_v1(
         &self,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<SnapshotInfo> {
@@ -699,7 +701,7 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    pub async fn lookup_snapshot_v2(
+    async fn lookup_snapshot_v2(
         &self,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<SnapshotInfo> {
@@ -858,12 +860,12 @@ impl Repository {
 
     /// List all tags in the repository.
     #[instrument(skip(self))]
-    pub async fn list_tags_v1(&self) -> RepositoryResult<BTreeSet<String>> {
+    async fn list_tags_v1(&self) -> RepositoryResult<BTreeSet<String>> {
         let tags = list_tags(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(tags)
     }
 
-    pub async fn list_tags_v2(&self) -> RepositoryResult<BTreeSet<String>> {
+    async fn list_tags_v2(&self) -> RepositoryResult<BTreeSet<String>> {
         let (ri, _) = self.get_repo_info().await?;
         Ok(ri.list_tags()?.map(|s| s.to_string()).collect())
     }
@@ -876,14 +878,14 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    pub async fn lookup_tag_v1(&self, tag: &str) -> RepositoryResult<SnapshotId> {
+    async fn lookup_tag_v1(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         let ref_data =
             fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
         Ok(ref_data.snapshot)
     }
 
     #[instrument(skip(self))]
-    pub async fn lookup_tag_v2(&self, tag: &str) -> RepositoryResult<SnapshotId> {
+    async fn lookup_tag_v2(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         let (ri, _) = self.get_repo_info().await?;
         Ok(ri
             .resolve_tag(tag)?
@@ -976,7 +978,7 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    pub async fn resolve_version_v1(
+    async fn resolve_version_v1(
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<SnapshotId> {
@@ -1004,7 +1006,7 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    pub fn resolve_version_v2(
+    fn resolve_version_v2(
         &self,
         repo_info: &RepoInfo,
         version: &VersionInfo,
@@ -1106,9 +1108,7 @@ impl Repository {
             )
             .into());
         }
-        let ref_data =
-            fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
-                .await?;
+        let snapshot_id = self.lookup_branch(branch).await?;
 
         let (repo_info, version) = self.get_repo_info().await?;
         let session = Session::create_writable_session(
@@ -1120,11 +1120,11 @@ impl Repository {
             Arc::clone(&self.asset_manager),
             self.virtual_resolver.clone(),
             branch.to_string(),
-            ref_data.snapshot.clone(),
+            snapshot_id.clone(),
             self.default_commit_metadata.clone(),
         );
 
-        self.preload_manifests(ref_data.snapshot);
+        self.preload_manifests(snapshot_id);
 
         Ok(session)
     }
@@ -1286,7 +1286,7 @@ fn validate_credentials(
     Ok(())
 }
 
-pub async fn raise_if_invalid_snapshot_id_v1(
+async fn raise_if_invalid_snapshot_id_v1(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     snapshot_id: &SnapshotId,
@@ -1298,7 +1298,7 @@ pub async fn raise_if_invalid_snapshot_id_v1(
     Ok(())
 }
 
-pub fn raise_if_invalid_snapshot_id_v2(
+fn raise_if_invalid_snapshot_id_v2(
     repo_info: &RepoInfo,
     snapshot_id: &SnapshotId,
 ) -> RepositoryResult<()> {
