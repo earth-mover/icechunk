@@ -73,6 +73,13 @@ pub enum Ref {
 impl Ref {
     pub const DEFAULT_BRANCH: &'static str = "main";
 
+    pub fn name(&self) -> &str {
+        match self {
+            Ref::Tag(n) => n,
+            Ref::Branch(n) => n,
+        }
+    }
+
     fn from_path(path: &str) -> RefResult<Self> {
         match path.strip_prefix("tag.") {
             Some(name) => Ok(Ref::Tag(name.to_string())),

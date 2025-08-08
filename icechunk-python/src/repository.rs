@@ -66,8 +66,7 @@ pub struct PySnapshotInfo {
     message: String,
     #[pyo3(get)]
     metadata: PySnapshotProperties,
-    #[pyo3(get)]
-    manifests: Vec<PyManifestFileInfo>,
+    // FIXME: breaking api by removing manifests
 }
 
 impl_pickle!(PySnapshotInfo);
@@ -201,7 +200,6 @@ impl From<SnapshotInfo> for PySnapshotInfo {
             written_at: val.flushed_at,
             message: val.message,
             metadata: val.metadata.into(),
-            manifests: val.manifests.into_iter().map(|v| v.into()).collect(),
         }
     }
 }
@@ -1392,18 +1390,12 @@ impl PyRepository {
         py.allow_threads(move || {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                    let (storage, storage_settings, asset_manager) = {
+                    let asset_manager = {
                         let lock = self.0.read().await;
-                        (
-                            Arc::clone(lock.storage()),
-                            lock.storage_settings().clone(),
-                            Arc::clone(lock.asset_manager()),
-                        )
+                        Arc::clone(lock.asset_manager())
                     };
 
                     let result = expire(
-                        storage.as_ref(),
-                        &storage_settings,
                         asset_manager,
                         older_than,
                         if delete_expired_branches {
@@ -1442,18 +1434,12 @@ impl PyRepository {
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py::<_, HashSet<String>>(py, async move {
-            let (storage, storage_settings, asset_manager) = {
+            let asset_manager = {
                 let lock = repository.read().await;
-                (
-                    Arc::clone(lock.storage()),
-                    lock.storage_settings().clone(),
-                    Arc::clone(lock.asset_manager()),
-                )
+                Arc::clone(lock.asset_manager())
             };
 
             let result = expire(
-                storage.as_ref(),
-                &storage_settings,
                 asset_manager,
                 older_than,
                 if delete_expired_branches {

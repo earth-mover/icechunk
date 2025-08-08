@@ -20,11 +20,11 @@ pub fn all_roots<'a>(
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> RepositoryResult<impl Iterator<Item = RepositoryResult<SnapshotId>> + 'a> {
     let res = repo_info
-        .list_tags()?
+        .tag_names()?
         .filter_map(|tag| repo_info.resolve_tag(tag).transpose())
         .chain(
             repo_info
-                .list_branches()?
+                .branch_names()?
                 .filter_map(|br| repo_info.resolve_branch(br).transpose()),
         )
         .chain(extra_roots.iter().cloned().map(Ok))

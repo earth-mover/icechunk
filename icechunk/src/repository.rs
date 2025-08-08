@@ -644,7 +644,7 @@ impl Repository {
     #[instrument(skip(self))]
     async fn list_branches_v2(&self) -> RepositoryResult<BTreeSet<String>> {
         let (ri, _) = self.get_repo_info().await?;
-        Ok(ri.list_branches()?.map(|s| s.to_string()).collect())
+        Ok(ri.branch_names()?.map(|s| s.to_string()).collect())
     }
 
     #[instrument(skip(self))]
@@ -716,6 +716,16 @@ impl Repository {
         }
     }
 
+    #[instrument(skip(self))]
+    pub async fn lookup_manifest_files(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<impl Iterator<Item = ManifestFileInfo>> {
+        let snap = self.asset_manager.fetch_snapshot(snapshot_id).await?;
+        Ok(snap.manifest_files().collect::<Vec<_>>().into_iter())
+    }
+
+    #[instrument(skip(self))]
     pub async fn reset_branch(
         &self,
         branch: &str,
@@ -870,7 +880,7 @@ impl Repository {
 
     async fn list_tags_v2(&self) -> RepositoryResult<BTreeSet<String>> {
         let (ri, _) = self.get_repo_info().await?;
-        Ok(ri.list_tags()?.map(|s| s.to_string()).collect())
+        Ok(ri.tag_names()?.map(|s| s.to_string()).collect())
     }
 
     pub async fn list_tags(&self) -> RepositoryResult<BTreeSet<String>> {

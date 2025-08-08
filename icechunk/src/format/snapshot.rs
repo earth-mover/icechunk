@@ -307,7 +307,6 @@ pub struct SnapshotInfo {
     pub flushed_at: DateTime<chrono::Utc>,
     pub message: String,
     pub metadata: SnapshotProperties,
-    pub manifests: Vec<ManifestFileInfo>,
 }
 
 impl TryFrom<&Snapshot> for SnapshotInfo {
@@ -320,7 +319,6 @@ impl TryFrom<&Snapshot> for SnapshotInfo {
             flushed_at: value.flushed_at()?,
             message: value.message().to_string(),
             metadata: value.metadata()?.clone(),
-            manifests: value.manifest_files().collect(),
         })
     }
 }

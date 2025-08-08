@@ -28,11 +28,40 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 };
 
 impl RepoInfo {
-    fn new<'a>(
+    pub fn new<'a>(
+        tags: impl IntoIterator<Item = (&'a str, SnapshotId)>,
+        branches: impl IntoIterator<Item = (&'a str, SnapshotId)>,
+        deleted_tags: impl IntoIterator<Item = &'a str>,
+        snapshots: impl IntoIterator<Item = SnapshotInfo>,
+    ) -> Self {
+        let mut snapshots: Vec<_> = snapshots.into_iter().collect();
+        snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+        let tags = tags
+            .into_iter()
+            .map(|(name, id)| {
+                let idx = snapshots
+                    .binary_search_by_key(&&id.0, |snap| &snap.id.0)
+                    .unwrap() as u32;
+                (name, idx)
+            })
+            .collect::<Vec<_>>();
+        let branches = branches
+            .into_iter()
+            .map(|(name, id)| {
+                let idx = snapshots
+                    .binary_search_by_key(&&id.0, |snap| &snap.id.0)
+                    .unwrap() as u32;
+                (name, idx)
+            })
+            .collect::<Vec<_>>();
+        Self::from_parts(tags, branches, deleted_tags, snapshots)
+    }
+
+    fn from_parts<'a>(
         tags: impl IntoIterator<Item = (&'a str, u32)>,
         branches: impl IntoIterator<Item = (&'a str, u32)>,
         deleted_tags: impl IntoIterator<Item = &'a str>,
-        snapshots: impl IntoIterator<Item = SnapshotInfo>,
+        sorted_snapshots: impl IntoIterator<Item = SnapshotInfo>,
     ) -> Self {
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
         let mut tags: Vec<_> = tags.into_iter().collect();
@@ -71,8 +100,8 @@ impl RepoInfo {
             .collect::<Vec<_>>();
         let deleted_tags = builder.create_vector(&deleted_tags);
 
-        let mut snapshots: Vec<_> = snapshots.into_iter().collect();
-        snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+        let snapshots: Vec<_> = sorted_snapshots.into_iter().collect();
+        debug_assert!(snapshots.is_sorted_by(|a, b| a.id.0 <= b.id.0));
 
         let snapshot_index: HashMap<_, _> =
             snapshots.iter().enumerate().map(|(ix, sn)| (sn.id.clone(), ix)).collect();
@@ -152,7 +181,7 @@ impl RepoInfo {
     }
 
     pub fn initial(snapshot: SnapshotInfo) -> Self {
-        Self::new([], [("main", 0)], [], [snapshot])
+        Self::from_parts([], [("main", 0)], [], [snapshot])
     }
 
     fn all_tags(&self) -> IcechunkResult<impl Iterator<Item = (&str, u32)>> {
@@ -163,7 +192,7 @@ impl RepoInfo {
         Ok(self.root()?.branches().iter().map(|r| (r.name(), r.snapshot_index())))
     }
 
-    fn deleted_tags(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
+    pub fn deleted_tags(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
         Ok(self.root()?.deleted_tags().iter())
     }
 
@@ -199,7 +228,6 @@ impl RepoInfo {
                 flushed_at,
                 message: snap.message().to_string(),
                 metadata,
-                manifests: Default::default(), // FIXME: remove field
                 parent_id: parent_id.map(|buf| SnapshotId::new(buf.0)),
             })
         }))
@@ -225,7 +253,7 @@ impl RepoInfo {
             }
         });
 
-        let res = Self::new(tags, branches, self.deleted_tags()?, snapshots);
+        let res = Self::from_parts(tags, branches, self.deleted_tags()?, snapshots);
         Ok(res)
     }
 
@@ -243,7 +271,12 @@ impl RepoInfo {
                 let mut branches: Vec<_> = self.all_branches()?.collect();
                 branches.push((name, snap_idx as u32));
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-                Ok(Ok(Self::new(self.all_tags()?, branches, self.deleted_tags()?, snaps)))
+                Ok(Ok(Self::from_parts(
+                    self.all_tags()?,
+                    branches,
+                    self.deleted_tags()?,
+                    snaps,
+                )))
             }
             None => Ok(Err(None)),
         }
@@ -257,7 +290,12 @@ impl RepoInfo {
         let mut branches: Vec<_> = self.all_branches()?.collect();
         branches.retain(|(n, _)| n != &name);
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-        Ok(Some(Self::new(self.all_tags()?, branches, self.deleted_tags()?, snaps)))
+        Ok(Some(Self::from_parts(
+            self.all_tags()?,
+            branches,
+            self.deleted_tags()?,
+            snaps,
+        )))
     }
 
     pub fn update_branch(
@@ -274,7 +312,7 @@ impl RepoInfo {
                     if br == name { (br, snap_idx as u32) } else { (br, idx) }
                 });
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-                Ok(Some(Self::new(
+                Ok(Some(Self::from_parts(
                     self.all_tags()?,
                     branches,
                     self.deleted_tags()?,
@@ -295,7 +333,7 @@ impl RepoInfo {
                 let mut tags: Vec<_> = self.all_tags()?.collect();
                 tags.push((name, snap_idx as u32));
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-                Ok(Some(Self::new(
+                Ok(Some(Self::from_parts(
                     tags,
                     self.all_branches()?,
                     self.deleted_tags()?,
@@ -318,7 +356,7 @@ impl RepoInfo {
         deleted_tags.push(name);
 
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-        Ok(Some(Self::new(tags, self.all_branches()?, deleted_tags, snaps)))
+        Ok(Some(Self::from_parts(tags, self.all_branches()?, deleted_tags, snaps)))
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {
@@ -337,12 +375,26 @@ impl RepoInfo {
         Ok(flatbuffers::root::<generated::Repo>(&self.buffer)?)
     }
 
-    pub fn list_tags(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
+    pub fn tag_names(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
         Ok(self.root()?.tags().iter().map(|r| r.name()))
     }
 
-    pub fn list_branches(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
+    pub fn branch_names(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
         Ok(self.root()?.branches().iter().map(|r| r.name()))
+    }
+
+    pub fn tags(&self) -> IcechunkResult<impl Iterator<Item = (&str, SnapshotId)>> {
+        let root = self.root()?;
+        Ok(self.all_tags()?.map(move |(name, idx)| {
+            (name, SnapshotId::new(root.snapshots().get(idx as usize).id().0))
+        }))
+    }
+
+    pub fn branches(&self) -> IcechunkResult<impl Iterator<Item = (&str, SnapshotId)>> {
+        let root = self.root()?;
+        Ok(self.all_branches()?.map(move |(name, idx)| {
+            (name, SnapshotId::new(root.snapshots().get(idx as usize).id().0))
+        }))
     }
 
     pub fn resolve_tag(&self, name: &str) -> IcechunkResult<Option<SnapshotId>> {
@@ -424,7 +476,6 @@ impl RepoInfo {
                         flushed_at,
                         message: snap.message().to_string(),
                         metadata,
-                        manifests: Default::default(), // FIXME: remove field
                         parent_id,
                     });
 
@@ -480,7 +531,6 @@ mod tests {
             flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
             message: "snap 1".to_string(),
             metadata: Default::default(),
-            manifests: Default::default(),
         };
         let repo = RepoInfo::initial(snap1.clone());
         assert_eq!(repo.all_snapshots()?.next().unwrap().unwrap(), snap1);
@@ -542,7 +592,6 @@ mod tests {
             flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
             message: "snap 1".to_string(),
             metadata: Default::default(),
-            manifests: Default::default(),
         };
         let repo = RepoInfo::initial(snap1.clone());
         let repo = repo.add_branch("foo", &id1)?.unwrap();

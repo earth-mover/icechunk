@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     future::ready,
     num::{NonZeroU16, NonZeroUsize},
     sync::{Arc, Mutex},
@@ -7,10 +7,8 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt, TryStream, TryStreamExt, stream};
-use tokio::{
-    pin,
-    task::{self},
-};
+use itertools::Itertools;
+use tokio::task::{self};
 use tracing::instrument;
 
 use crate::{
@@ -19,10 +17,11 @@ use crate::{
     format::{
         ChunkId, FileTypeTag, IcechunkFormatError, ManifestId, ObjectId, SnapshotId,
         manifest::{ChunkPayload, Manifest},
-        snapshot::{ManifestFileInfo, Snapshot},
+        repo_info::RepoInfo,
+        snapshot::{ManifestFileInfo, Snapshot, SnapshotInfo},
     },
     ops::pointed_snapshots,
-    refs::{Ref, RefError, list_refs},
+    refs::{Ref, RefError},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, DeleteObjectsResult, ListInfo},
     stream_utils::{StreamLimiter, try_unique_stream},
@@ -538,124 +537,6 @@ async fn gc_transaction_logs(
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ExpireRefResult {
-    NothingToDo {
-        ref_is_expired: bool,
-    },
-    Done {
-        released_snapshots: HashSet<SnapshotId>,
-        edited_snapshot: SnapshotId,
-        ref_is_expired: bool,
-    },
-}
-
-/// Expire snapshots older than a threshold.
-///
-/// This only processes snapshots found by navigating `reference`
-/// ancestry. Any other snapshots are not touched.
-///
-/// The operation will edit in place the oldest non-expired snapshot,
-/// changing its parent to be the root of the repo.
-///
-/// For this reasons, it's recommended to invalidate any snapshot
-/// caches before traversing history againg. The cache in the
-/// passed `asset_manager` is invalidated here, but other caches
-/// may exist, for example, in [`Repository`] instances.
-///
-/// Returns the ids of all snapshots considered expired and skipped
-/// from history. Notice that this snapshot are not necessarily
-/// available for garbage collection, they could still be pointed by
-/// ether refs.
-///
-/// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
-#[instrument(skip(asset_manager, storage))]
-pub async fn expire_ref(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
-    asset_manager: Arc<AssetManager>,
-    reference: &Ref,
-    older_than: DateTime<Utc>,
-) -> GCResult<ExpireRefResult> {
-    let snap_id = reference
-        .fetch(storage, storage_settings)
-        .await
-        .map(|ref_data| ref_data.snapshot)?;
-
-    tracing::info!("Starting expiration at ref {}", snap_id);
-
-    // the algorithm works by finding the oldest non expired snap and the root of the repo
-    // we do that in a single pass through the ancestry
-    // we keep two "pointer" the last editable_snap and the root, and we keep
-    // updating them as we navigate the ancestry
-    let mut editable_snap = snap_id.clone();
-    let mut root = snap_id.clone();
-
-    // here we'll populate the results of every expired snapshot
-    let mut released = HashSet::new();
-    let ancestry =
-        Arc::clone(&asset_manager).snapshot_info_ancestry(&snap_id).await?.peekable();
-
-    pin!(ancestry);
-
-    let mut ref_is_expired = false;
-    if let Some(Ok(info)) = ancestry.as_mut().peek().await {
-        if info.flushed_at < older_than {
-            tracing::debug!(flushed_at = %info.flushed_at, "Ref flagged as expired");
-            ref_is_expired = true;
-        }
-    }
-
-    while let Some(parent) = ancestry.try_next().await? {
-        if parent.flushed_at >= older_than {
-            tracing::debug!(snap = %parent.id, flushed_at = %parent.flushed_at, "Processing non expired snapshot");
-            // we are navigating non-expired snaps, last will be kept in editable_snap
-            editable_snap = parent.id;
-        } else {
-            tracing::debug!(snap = %parent.id, flushed_at = %parent.flushed_at, "Processing expired snapshot");
-            released.insert(parent.id.clone());
-            root = parent.id;
-        }
-    }
-
-    // we counted the root as released, but it's not
-    released.remove(&root);
-
-    let editable_snap = asset_manager.fetch_snapshot(&editable_snap).await?;
-
-    let old_parent_id = editable_snap.parent_id();
-    if editable_snap.id() == root    // only root can be expired
-        || Some(&root) == old_parent_id.as_ref()
-        // we never found an expirable snap
-        || root == snap_id
-    {
-        // Either the reference is the root, or it is pointing to the root as first parent
-        // Nothing to do
-        tracing::info!("Nothing to expire for this ref");
-        return Ok(ExpireRefResult::NothingToDo { ref_is_expired });
-    }
-
-    let root = asset_manager.fetch_snapshot(&root).await?;
-    // we don't want to create loops, so:
-    // we never edit the root of a tree
-    assert!(editable_snap.parent_id().is_some());
-    // and, we only set a root as parent
-    assert!(root.parent_id().is_none());
-
-    tracing::info!(root = %root.id(), editable_snap=%editable_snap.id(), "Expiration needed for this ref");
-
-    // TODO: add properties to the snapshot that tell us it was history edited
-    let new_snapshot = Arc::new(root.adopt(&editable_snap)?);
-    asset_manager.write_snapshot(new_snapshot).await?;
-    tracing::info!("Snapshot overwritten");
-
-    Ok(ExpireRefResult::Done {
-        released_snapshots: released,
-        edited_snapshot: editable_snap.id().clone(),
-        ref_is_expired,
-    })
-}
-
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ExpiredRefAction {
     Delete,
@@ -687,74 +568,138 @@ pub struct ExpireResult {
 /// ether refs.
 ///
 /// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
-#[instrument(skip(asset_manager, storage))]
+#[instrument(skip(asset_manager))]
 pub async fn expire(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
     asset_manager: Arc<AssetManager>,
     older_than: DateTime<Utc>,
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
 ) -> GCResult<ExpireResult> {
-    todo!()
-    // if !storage.can_write() {
-    //     return Err(GCError::Repository(
-    //         RepositoryErrorKind::ReadonlyStorage("Cannot expire snapshots".to_string())
-    //             .into(),
-    //     ));
-    // }
+    let (repo_info, repo_info_version) = asset_manager.fetch_repo_info().await?;
+    let tags = repo_info
+        .tags()?
+        .map(|(name, snap)| Ok::<_, GCError>((Ref::Tag(name.to_string()), snap)));
+    let branches = repo_info
+        .branches()?
+        .map(|(name, snap)| Ok((Ref::Branch(name.to_string()), snap)));
 
-    // let all_refs = stream::iter(list_refs(storage, storage_settings).await?);
-    // let asset_manager = Arc::clone(&asset_manager.clone());
+    let all_tips: Vec<(Ref, SnapshotId)> = tags.chain(branches).try_collect()?;
 
-    // all_refs
-    //     .then(move |r| {
-    //         let asset_manager = asset_manager.clone();
-    //         async move {
-    //             let ref_result =
-    //                 expire_ref(storage, storage_settings, asset_manager, &r, older_than)
-    //                     .await?;
-    //             Ok::<(Ref, ExpireRefResult), GCError>((r, ref_result))
-    //         }
-    //     })
-    //     .try_fold(ExpireResult::default(), |mut result, (r, ref_result)| async move {
-    //         let ref_is_expired = match ref_result {
-    //             ExpireRefResult::Done {
-    //                 released_snapshots,
-    //                 edited_snapshot,
-    //                 ref_is_expired,
-    //             } => {
-    //                 result.released_snapshots.extend(released_snapshots.into_iter());
-    //                 result.edited_snapshots.insert(edited_snapshot);
-    //                 ref_is_expired
-    //             }
-    //             ExpireRefResult::NothingToDo { ref_is_expired } => ref_is_expired,
-    //         };
-    //         if ref_is_expired {
-    //             match &r {
-    //                 Ref::Tag(name) => {
-    //                     if expired_tags == ExpiredRefAction::Delete {
-    //                         tracing::info!(name, "Deleting expired tag");
-    //                         delete_tag(storage, storage_settings, name.as_str())
-    //                             .await
-    //                             .map_err(GCError::Ref)?;
-    //                         result.deleted_refs.insert(r);
-    //                     }
-    //                 }
-    //                 Ref::Branch(name) => {
-    //                     if expired_branches == ExpiredRefAction::Delete
-    //                         && name != Ref::DEFAULT_BRANCH
-    //                     {
-    //                         tracing::info!(name, "Deleting expired branch");
-    //                         delete_branch(storage, storage_settings, name.as_str())
-    //                             .await
-    //                             .map_err(GCError::Ref)?;
-    //                         result.deleted_refs.insert(r);
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //         Ok(result)
-    //     })
-    //     .await
+    fn split_root<E>(
+        mut iter: impl Iterator<Item = Result<SnapshotInfo, E>>,
+    ) -> Result<(HashSet<SnapshotId>, Option<SnapshotId>), E> {
+        iter.try_fold((HashSet::new(), None), |(mut all, root), snap| match snap {
+            Ok(snap) if snap.parent_id.is_some() => {
+                all.insert(snap.id);
+                Ok((all, root))
+            }
+            Ok(snap) => Ok((all, Some(snap.id))),
+            Err(err) => Err(err),
+        })
+    }
+
+    let root_to_snaps = all_tips.iter().try_fold(
+        HashMap::new(),
+        |mut res: HashMap<SnapshotId, HashSet<SnapshotId>>, (_, tip_snap)| {
+            let ancestry = repo_info.ancestry(tip_snap)?.unwrap();
+            let (branch_snaps, root) = split_root(ancestry)?;
+            let root = root.unwrap();
+            match res.get_mut(&root) {
+                Some(s) => {
+                    s.extend(branch_snaps);
+                }
+                None => {
+                    res.insert(root, branch_snaps);
+                }
+            };
+
+            Ok::<_, GCError>(res)
+        },
+    )?;
+
+    let new_parent = move |id: &SnapshotId| {
+        for (new_parent, all) in root_to_snaps.iter() {
+            if all.contains(id) {
+                return Some(new_parent.clone());
+            }
+        }
+        None
+    };
+
+    let tag_tip_ids: HashSet<SnapshotId> = repo_info.tags()?.map(|(_, id)| id).collect();
+    let branch_tip_ids: HashSet<SnapshotId> =
+        repo_info.branches()?.map(|(_, id)| id).collect();
+
+    let released_snapshots: HashSet<SnapshotId> = repo_info
+        .all_snapshots()?
+        .filter_map(|si| match si {
+            // we retain all roots
+            Ok(si) if si.flushed_at < older_than && si.parent_id.is_some() => {
+                use ExpiredRefAction::*;
+                if expired_tags == Ignore && tag_tip_ids.contains(&si.id)
+                    || expired_branches == Ignore && branch_tip_ids.contains(&si.id)
+                {
+                    None
+                } else {
+                    Some(Ok(si.id))
+                }
+            }
+            Ok(_i) => None,
+            Err(e) => Some(Err(e)),
+        })
+        .try_collect()?;
+
+    let mut edited_snapshots = HashSet::new();
+    let retained: Vec<_> = repo_info
+        .all_snapshots()?
+        .filter_map(|si| match si {
+            // remove expired snapshots
+            Ok(si) if released_snapshots.contains(&si.id) => None,
+
+            // non expired snapshots could need editing to change their parent
+            Ok(si) => match si.parent_id.as_ref() {
+                Some(parent_id) => {
+                    if released_snapshots.contains(parent_id) {
+                        // parent is expired, so we change it to the root in that branch/tag
+                        edited_snapshots.insert(si.id.clone());
+                        Some(Ok(SnapshotInfo { parent_id: new_parent(&si.id), ..si }))
+                    } else {
+                        // parent is retained, so we retain the snapshot as is
+                        Some(Ok(si))
+                    }
+                }
+                // we retain all roots
+                None => Some(Ok(si)),
+            },
+            Err(e) => Some(Err(e)),
+        })
+        .try_collect()?;
+
+    let deleted_refs: HashSet<Ref> =
+        all_tips
+            .into_iter()
+            .filter_map(|(r, snap_id)| {
+                if released_snapshots.contains(&snap_id) { Some(r) } else { None }
+            })
+            .collect();
+
+    let tags = repo_info
+        .tags()?
+        .filter(|(name, _)| !deleted_refs.contains(&Ref::Tag(name.to_string())));
+
+    let branches = repo_info
+        .branches()?
+        .filter(|(name, _)| !deleted_refs.contains(&Ref::Branch(name.to_string())));
+
+    let deleted_tags =
+        repo_info.deleted_tags()?.chain(deleted_refs.iter().filter_map(|r| match r {
+            Ref::Tag(name) => Some(name.as_str()),
+            Ref::Branch(_) => None,
+        }));
+
+    let new_repo_info = RepoInfo::new(tags, branches, deleted_tags, retained);
+
+    asset_manager.update_repo_info(Arc::new(new_repo_info), &repo_info_version).await?;
+
+    Ok(ExpireResult { released_snapshots, edited_snapshots, deleted_refs })
 }
