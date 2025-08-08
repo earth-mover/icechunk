@@ -8,7 +8,6 @@ use tokio::task;
 use tracing::trace;
 
 use crate::{
-    Storage,
     asset_manager::AssetManager,
     format::{
         ChunkId, SnapshotId,
@@ -17,7 +16,6 @@ use crate::{
     },
     ops::pointed_snapshots,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage,
     stream_utils::{StreamLimiter, try_unique_stream},
 };
 
@@ -57,18 +55,15 @@ fn calculate_manifest_storage(
 }
 
 async fn unique_manifest_infos<'a>(
-    storage: &'a (dyn Storage + Send + Sync),
-    storage_settings: &'a storage::Settings,
     asset_manager: Arc<AssetManager>,
     extra_roots: &'a HashSet<SnapshotId>,
     max_snapshots_in_memory: NonZeroU16,
 ) -> RepositoryResult<impl TryStream<Ok = ManifestFileInfo, Error = RepositoryError> + 'a>
 {
-    let all_snaps =
-        pointed_snapshots(storage, storage_settings, asset_manager, extra_roots)
-            .await?
-            .map(ready)
-            .buffer_unordered(max_snapshots_in_memory.get() as usize);
+    let all_snaps = pointed_snapshots(asset_manager, extra_roots)
+        .await?
+        .map(ready)
+        .buffer_unordered(max_snapshots_in_memory.get() as usize);
     let all_manifest_infos = all_snaps
         // this could be slightly optimized by not collecting all manifest info records into a vec
         // but we don't expect too many, and they are small anyway
@@ -85,8 +80,6 @@ async fn unique_manifest_infos<'a>(
 /// Compute the total size in bytes of all committed repo chunks.
 /// It doesn't include inline or virtual chunks.
 pub async fn repo_chunks_storage(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
     asset_manager: Arc<AssetManager>,
     max_snapshots_in_memory: NonZeroU16,
     max_compressed_manifest_mem_bytes: NonZeroUsize,
@@ -94,8 +87,6 @@ pub async fn repo_chunks_storage(
 ) -> RepositoryResult<u64> {
     let extra_roots = Default::default();
     let manifest_infos = unique_manifest_infos(
-        storage,
-        storage_settings,
         asset_manager.clone(),
         &extra_roots,
         max_snapshots_in_memory,

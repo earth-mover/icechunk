@@ -22,7 +22,7 @@ use icechunk::{
         ExpireRefResult, ExpiredRefAction, GCConfig, GCSummary, expire, expire_ref,
         garbage_collect,
     },
-    refs::{Ref, update_branch},
+    refs::Ref,
     repository::VersionInfo,
     session::get_chunk,
 };
@@ -125,7 +125,7 @@ pub async fn do_test_gc(
         ds.set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
     }
-    let second_snap_id = ds.commit("second", None).await?;
+    let _second_snap_id = ds.commit("second", None).await?;
     assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
     assert_eq!(storage.list_manifests(&storage_settings).await?.count().await, 111);
 
@@ -160,14 +160,7 @@ pub async fn do_test_gc(
     }
 
     // Reset the branch to leave the latest commit dangling
-    update_branch(
-        storage.as_ref(),
-        &storage_settings,
-        "main",
-        first_snap_id,
-        Some(&second_snap_id),
-    )
-    .await?;
+    repo.reset_branch("main", &first_snap_id).await?;
 
     // we still have all the chunks
     assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);

@@ -22,7 +22,7 @@ use crate::{
         snapshot::{ManifestFileInfo, Snapshot},
     },
     ops::pointed_snapshots,
-    refs::{Ref, RefError, delete_branch, delete_tag, list_refs},
+    refs::{Ref, RefError, list_refs},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, DeleteObjectsResult, ListInfo},
     stream_utils::{StreamLimiter, try_unique_stream},
@@ -255,18 +255,11 @@ async fn chunks_retained(
 
 #[instrument(skip_all)]
 async fn find_retained(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
 ) -> GCResult<(HashSet<ChunkId>, HashSet<ManifestId>, HashSet<SnapshotId>)> {
-    let all_snaps = pointed_snapshots(
-        storage,
-        storage_settings,
-        Arc::clone(&asset_manager),
-        &config.extra_roots,
-    )
-    .await?;
+    let all_snaps =
+        pointed_snapshots(Arc::clone(&asset_manager), &config.extra_roots).await?;
 
     let keep_chunks = Arc::new(Mutex::new(HashSet::new()));
     let keep_manifests = Arc::new(Mutex::new(HashSet::new()));
@@ -345,8 +338,7 @@ pub async fn garbage_collect(
 
     tracing::info!("Finding GC roots");
     let (keep_chunks, keep_manifests, keep_snapshots) =
-        find_retained(storage, storage_settings, Arc::clone(&asset_manager), config)
-            .await?;
+        find_retained(Arc::clone(&asset_manager), config).await?;
 
     tracing::info!(
         snapshots = keep_snapshots.len(),
@@ -704,64 +696,65 @@ pub async fn expire(
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
 ) -> GCResult<ExpireResult> {
-    if !storage.can_write() {
-        return Err(GCError::Repository(
-            RepositoryErrorKind::ReadonlyStorage("Cannot expire snapshots".to_string())
-                .into(),
-        ));
-    }
+    todo!()
+    // if !storage.can_write() {
+    //     return Err(GCError::Repository(
+    //         RepositoryErrorKind::ReadonlyStorage("Cannot expire snapshots".to_string())
+    //             .into(),
+    //     ));
+    // }
 
-    let all_refs = stream::iter(list_refs(storage, storage_settings).await?);
-    let asset_manager = Arc::clone(&asset_manager.clone());
+    // let all_refs = stream::iter(list_refs(storage, storage_settings).await?);
+    // let asset_manager = Arc::clone(&asset_manager.clone());
 
-    all_refs
-        .then(move |r| {
-            let asset_manager = asset_manager.clone();
-            async move {
-                let ref_result =
-                    expire_ref(storage, storage_settings, asset_manager, &r, older_than)
-                        .await?;
-                Ok::<(Ref, ExpireRefResult), GCError>((r, ref_result))
-            }
-        })
-        .try_fold(ExpireResult::default(), |mut result, (r, ref_result)| async move {
-            let ref_is_expired = match ref_result {
-                ExpireRefResult::Done {
-                    released_snapshots,
-                    edited_snapshot,
-                    ref_is_expired,
-                } => {
-                    result.released_snapshots.extend(released_snapshots.into_iter());
-                    result.edited_snapshots.insert(edited_snapshot);
-                    ref_is_expired
-                }
-                ExpireRefResult::NothingToDo { ref_is_expired } => ref_is_expired,
-            };
-            if ref_is_expired {
-                match &r {
-                    Ref::Tag(name) => {
-                        if expired_tags == ExpiredRefAction::Delete {
-                            tracing::info!(name, "Deleting expired tag");
-                            delete_tag(storage, storage_settings, name.as_str())
-                                .await
-                                .map_err(GCError::Ref)?;
-                            result.deleted_refs.insert(r);
-                        }
-                    }
-                    Ref::Branch(name) => {
-                        if expired_branches == ExpiredRefAction::Delete
-                            && name != Ref::DEFAULT_BRANCH
-                        {
-                            tracing::info!(name, "Deleting expired branch");
-                            delete_branch(storage, storage_settings, name.as_str())
-                                .await
-                                .map_err(GCError::Ref)?;
-                            result.deleted_refs.insert(r);
-                        }
-                    }
-                }
-            }
-            Ok(result)
-        })
-        .await
+    // all_refs
+    //     .then(move |r| {
+    //         let asset_manager = asset_manager.clone();
+    //         async move {
+    //             let ref_result =
+    //                 expire_ref(storage, storage_settings, asset_manager, &r, older_than)
+    //                     .await?;
+    //             Ok::<(Ref, ExpireRefResult), GCError>((r, ref_result))
+    //         }
+    //     })
+    //     .try_fold(ExpireResult::default(), |mut result, (r, ref_result)| async move {
+    //         let ref_is_expired = match ref_result {
+    //             ExpireRefResult::Done {
+    //                 released_snapshots,
+    //                 edited_snapshot,
+    //                 ref_is_expired,
+    //             } => {
+    //                 result.released_snapshots.extend(released_snapshots.into_iter());
+    //                 result.edited_snapshots.insert(edited_snapshot);
+    //                 ref_is_expired
+    //             }
+    //             ExpireRefResult::NothingToDo { ref_is_expired } => ref_is_expired,
+    //         };
+    //         if ref_is_expired {
+    //             match &r {
+    //                 Ref::Tag(name) => {
+    //                     if expired_tags == ExpiredRefAction::Delete {
+    //                         tracing::info!(name, "Deleting expired tag");
+    //                         delete_tag(storage, storage_settings, name.as_str())
+    //                             .await
+    //                             .map_err(GCError::Ref)?;
+    //                         result.deleted_refs.insert(r);
+    //                     }
+    //                 }
+    //                 Ref::Branch(name) => {
+    //                     if expired_branches == ExpiredRefAction::Delete
+    //                         && name != Ref::DEFAULT_BRANCH
+    //                     {
+    //                         tracing::info!(name, "Deleting expired branch");
+    //                         delete_branch(storage, storage_settings, name.as_str())
+    //                             .await
+    //                             .map_err(GCError::Ref)?;
+    //                         result.deleted_refs.insert(r);
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //         Ok(result)
+    //     })
+    //     .await
 }

@@ -582,7 +582,7 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let exists = Repository::exists(storage.0.as_ref())
+                let exists = Repository::exists(storage.0)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(exists)
@@ -596,7 +596,7 @@ impl PyRepository {
         storage: PyStorage,
     ) -> PyResult<Bound<'py, PyAny>> {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let exists = Repository::exists(storage.0.as_ref())
+            let exists = Repository::exists(storage.0)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(exists)
@@ -1569,17 +1569,11 @@ impl PyRepository {
         py.allow_threads(move || {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                    let (storage, storage_settings, asset_manager) = {
+                    let asset_manager = {
                         let lock = self.0.read().await;
-                        (
-                            Arc::clone(lock.storage()),
-                            lock.storage_settings().clone(),
-                            Arc::clone(lock.asset_manager()),
-                        )
+                        Arc::clone(lock.asset_manager())
                     };
                     let result = repo_chunks_storage(
-                        storage.as_ref(),
-                        &storage_settings,
                         asset_manager,
                         max_snapshots_in_memory,
                         max_compressed_manifest_mem_bytes,
@@ -1603,17 +1597,11 @@ impl PyRepository {
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py::<_, u64>(py, async move {
-            let (storage, storage_settings, asset_manager) = {
+            let asset_manager = {
                 let lock = repository.read().await;
-                (
-                    Arc::clone(lock.storage()),
-                    lock.storage_settings().clone(),
-                    Arc::clone(lock.asset_manager()),
-                )
+                Arc::clone(lock.asset_manager())
             };
             let result = repo_chunks_storage(
-                storage.as_ref(),
-                &storage_settings,
                 asset_manager,
                 max_snapshots_in_memory,
                 max_compressed_manifest_mem_bytes,

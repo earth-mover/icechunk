@@ -300,7 +300,7 @@ impl std::fmt::Debug for Snapshot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SnapshotInfo {
     pub id: SnapshotId,
     pub parent_id: Option<SnapshotId>,

@@ -124,8 +124,6 @@ pub async fn do_test_repo_chunks_storage(
     }
 
     let size = repo_chunks_storage(
-        storage.as_ref(),
-        &storage_settings,
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MIN,
@@ -138,8 +136,6 @@ pub async fn do_test_repo_chunks_storage(
 
     let _ = session.commit("first", None).await?;
     let size = repo_chunks_storage(
-        storage.as_ref(),
-        &storage_settings,
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MAX,
@@ -164,8 +160,6 @@ pub async fn do_test_repo_chunks_storage(
 
     let second_commit = session.commit("second", None).await?;
     let size = repo_chunks_storage(
-        storage.as_ref(),
-        &storage_settings,
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MIN,
@@ -197,8 +191,6 @@ pub async fn do_test_repo_chunks_storage(
     }
     let _ = session.commit("third", None).await?;
     let size = repo_chunks_storage(
-        storage.as_ref(),
-        &storage_settings,
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MAX,
