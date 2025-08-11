@@ -1,9 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    env,
-    future::Future,
-    sync::Arc,
-};
+use std::{collections::HashMap, env, future::Future, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
@@ -11,7 +6,7 @@ use icechunk::{
     config::{S3Credentials, S3Options, S3StaticCredentials},
     format::{ChunkId, ManifestId, SnapshotId, snapshot::Snapshot},
     new_local_filesystem_storage,
-    refs::{Ref, RefError, RefErrorKind},
+    refs::RefErrorKind,
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
         self, ETag, Generation, StorageResult, VersionInfo, VersionedFetchResult,

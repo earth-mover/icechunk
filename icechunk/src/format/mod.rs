@@ -250,8 +250,12 @@ pub enum IcechunkFormatErrorKind {
     SnapshotIdNotFound { snapshot_id: SnapshotId },
     #[error("branch already exists `{branch} -> {snapshot_id}`")]
     BranchAlreadyExists { branch: String, snapshot_id: SnapshotId },
-    #[error("tag already exists or it was deleted: `{tag}`")]
+    #[error("branch not found `{branch}`")]
+    BranchNotFound { branch: String },
+    #[error("tag already exists `{tag}`")]
     TagAlreadyExists { tag: String },
+    #[error("tag not found `{tag}`")]
+    TagNotFound { tag: String },
     #[error("snapshot id is already present in the repository: `{snapshot_id}`")]
     DuplicateSnapshotId { snapshot_id: SnapshotId },
     #[error("manifest information cannot be found in snapshot for id `{manifest_id}`")]

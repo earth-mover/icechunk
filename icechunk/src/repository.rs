@@ -784,18 +784,22 @@ impl Repository {
         }
         if branch != Ref::DEFAULT_BRANCH {
             let (ri, version) = self.get_repo_info().await?;
-            match ri.delete_branch(branch)? {
-                Some(new_ri) => {
+            match ri.delete_branch(branch) {
+                Ok(new_ri) => {
                     let _ = self
                         .asset_manager
                         .update_repo_info(Arc::new(new_ri), &version)
                         .await?;
                     Ok(())
                 }
-                None => {
+                Err(IcechunkFormatError {
+                    kind: IcechunkFormatErrorKind::BranchNotFound { .. },
+                    ..
+                }) => {
                     Err(RefError::from(RefErrorKind::RefNotFound(branch.to_string()))
                         .into())
                 }
+                Err(err) => Err(err.into()),
             }
         } else {
             Err(RepositoryErrorKind::CannotDeleteMain.into())
@@ -822,17 +826,19 @@ impl Repository {
             .into());
         }
         let (ri, version) = self.get_repo_info().await?;
-        match ri.delete_tag(tag)? {
-            Some(new_ri) => {
+        match ri.delete_tag(tag) {
+            Ok(new_ri) => {
                 let _ = self
                     .asset_manager
                     .update_repo_info(Arc::new(new_ri), &version)
                     .await?;
                 Ok(())
             }
-            None => {
-                Err(RefError::from(RefErrorKind::RefNotFound(tag.to_string())).into())
-            }
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::TagNotFound { .. },
+                ..
+            }) => Err(RefError::from(RefErrorKind::RefNotFound(tag.to_string())).into()),
+            Err(err) => Err(err.into()),
         }
     }
 

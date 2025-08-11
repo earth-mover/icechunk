@@ -257,21 +257,19 @@ impl RepoInfo {
         }
     }
 
-    pub fn delete_branch(&self, name: &str) -> IcechunkResult<Option<Self>> {
+    pub fn delete_branch(&self, name: &str) -> IcechunkResult<Self> {
         if self.resolve_branch(name)?.is_none() {
-            return Ok(None);
+            return Err(IcechunkFormatErrorKind::BranchNotFound {
+                branch: name.to_string(),
+            }
+            .into());
         }
 
         let mut branches: Vec<_> = self.all_branches()?.collect();
         // retain preserves order
         branches.retain(|(n, _)| n != &name);
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-        Ok(Some(Self::from_parts(
-            self.all_tags()?,
-            branches,
-            self.deleted_tags()?,
-            snaps,
-        )?))
+        Ok(Self::from_parts(self.all_tags()?, branches, self.deleted_tags()?, snaps)?)
     }
 
     pub fn update_branch(
@@ -328,9 +326,11 @@ impl RepoInfo {
         }
     }
 
-    pub fn delete_tag(&self, name: &str) -> IcechunkResult<Option<Self>> {
+    pub fn delete_tag(&self, name: &str) -> IcechunkResult<Self> {
         if self.resolve_tag(name)?.is_none() {
-            return Ok(None);
+            return Err(
+                IcechunkFormatErrorKind::TagNotFound { tag: name.to_string() }.into()
+            );
         }
 
         let mut tags: Vec<_> = self.all_tags()?.collect();
@@ -342,7 +342,7 @@ impl RepoInfo {
         deleted_tags.sort();
 
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-        Ok(Some(Self::from_parts(tags, self.all_branches()?, deleted_tags, snaps)?))
+        Ok(Self::from_parts(tags, self.all_branches()?, deleted_tags, snaps)?)
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {
@@ -654,14 +654,14 @@ mod tests {
         assert_eq!(repo.resolve_branch("bar")?, Some(id1.clone()));
         assert_eq!(repo.resolve_branch("baz")?, Some(id2.clone()));
 
-        let repo = repo.delete_branch("bar")?.unwrap();
+        let repo = repo.delete_branch("bar")?;
         assert_eq!(repo.resolve_branch("bar")?, None);
         assert_eq!(
             repo.all_branches()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["main", "foo", "baz"].into()
         );
 
-        assert!(repo.delete_branch("bad-branch")?.is_none());
+        assert!(repo.delete_branch("bad-branch").is_err());
 
         // tags
         let repo = repo.add_tag("tag1", &id1)?;
@@ -677,7 +677,7 @@ mod tests {
 
         // delete tags
         let repo = repo.add_tag("tag3", &id1)?;
-        let repo = repo.delete_tag("tag3")?.unwrap();
+        let repo = repo.delete_tag("tag3")?;
         assert_eq!(
             repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["tag1", "tag2"].into()
@@ -685,7 +685,7 @@ mod tests {
         // cannot add deleted
         assert!(repo.add_tag("tag3", &id1).is_err());
         // cannot delete deleted
-        assert!(repo.delete_tag("tag3")?.is_none());
+        assert!(repo.delete_tag("tag3").is_err());
         assert_eq!(
             repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["tag1", "tag2"].into()
