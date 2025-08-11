@@ -860,17 +860,21 @@ impl Repository {
         let (ri, version) = self.get_repo_info().await?;
         raise_if_invalid_snapshot_id_v2(ri.as_ref(), snapshot_id)?;
 
-        match ri.add_tag(tag_name, snapshot_id)? {
-            Some(new_ri) => {
+        match ri.add_tag(tag_name, snapshot_id) {
+            Ok(new_ri) => {
                 let _ = self
                     .asset_manager
                     .update_repo_info(Arc::new(new_ri), &version)
                     .await?;
                 Ok(())
             }
-            None => Err(RepositoryError::from(RefError::from(
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::TagAlreadyExists { .. },
+                ..
+            }) => Err(RepositoryError::from(RefError::from(
                 RefErrorKind::TagAlreadyExists(tag_name.to_string()),
             ))),
+            Err(err) => Err(err.into()),
         }
     }
 

@@ -299,9 +299,13 @@ impl RepoInfo {
         }
     }
 
-    pub fn add_tag(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Option<Self>> {
+    pub fn add_tag(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Self> {
         if self.resolve_tag(name)?.is_some() || self.tag_was_deleted(name)? {
-            return Ok(None);
+            // TODO: better error on tag already deleted
+            return Err(IcechunkFormatErrorKind::TagAlreadyExists {
+                tag: name.to_string(),
+            }
+            .into());
         }
 
         match self.resolve_snapshot_index(snap)? {
@@ -310,14 +314,17 @@ impl RepoInfo {
                 tags.push((name, snap_idx as u32));
                 tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-                Ok(Some(Self::from_parts(
+                Ok(Self::from_parts(
                     tags,
                     self.all_branches()?,
                     self.deleted_tags()?,
                     snaps,
-                )?))
+                )?)
             }
-            None => Ok(None),
+            None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
+                snapshot_id: snap.clone(),
+            }
+            .into()),
         }
     }
 
@@ -657,10 +664,10 @@ mod tests {
         assert!(repo.delete_branch("bad-branch")?.is_none());
 
         // tags
-        let repo = repo.add_tag("tag1", &id1)?.unwrap();
-        let repo = repo.add_tag("tag2", &id2)?.unwrap();
-        assert!(repo.add_tag("bad-snap", &SnapshotId::random())?.is_none());
-        assert!(repo.add_tag("tag1", &id1)?.is_none());
+        let repo = repo.add_tag("tag1", &id1)?;
+        let repo = repo.add_tag("tag2", &id2)?;
+        assert!(repo.add_tag("bad-snap", &SnapshotId::random()).is_err());
+        assert!(repo.add_tag("tag1", &id1).is_err());
         assert_eq!(repo.resolve_tag("tag1")?, Some(id1.clone()));
         assert_eq!(repo.resolve_tag("tag2")?, Some(id2.clone()));
         assert_eq!(
@@ -669,14 +676,14 @@ mod tests {
         );
 
         // delete tags
-        let repo = repo.add_tag("tag3", &id1)?.unwrap();
+        let repo = repo.add_tag("tag3", &id1)?;
         let repo = repo.delete_tag("tag3")?.unwrap();
         assert_eq!(
             repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["tag1", "tag2"].into()
         );
         // cannot add deleted
-        assert!(repo.add_tag("tag3", &id1)?.is_none());
+        assert!(repo.add_tag("tag3", &id1).is_err());
         // cannot delete deleted
         assert!(repo.delete_tag("tag3")?.is_none());
         assert_eq!(
