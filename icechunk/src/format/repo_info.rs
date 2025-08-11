@@ -269,16 +269,15 @@ impl RepoInfo {
         // retain preserves order
         branches.retain(|(n, _)| n != &name);
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-        Ok(Self::from_parts(self.all_tags()?, branches, self.deleted_tags()?, snaps)?)
+        Self::from_parts(self.all_tags()?, branches, self.deleted_tags()?, snaps)
     }
 
-    pub fn update_branch(
-        &self,
-        name: &str,
-        snap: &SnapshotId,
-    ) -> IcechunkResult<Option<Self>> {
+    pub fn update_branch(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Self> {
         if self.resolve_branch(name)?.is_none() {
-            return Ok(None);
+            return Err(IcechunkFormatErrorKind::BranchNotFound {
+                branch: name.to_string(),
+            }
+            .into());
         }
         match self.resolve_snapshot_index(snap)? {
             Some(snap_idx) => {
@@ -286,14 +285,17 @@ impl RepoInfo {
                     if br == name { (br, snap_idx as u32) } else { (br, idx) }
                 });
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-                Ok(Some(Self::from_parts(
+                Ok(Self::from_parts(
                     self.all_tags()?,
                     branches,
                     self.deleted_tags()?,
                     snaps,
-                )?))
+                )?)
             }
-            None => Ok(None),
+            None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
+                snapshot_id: snap.clone(),
+            }
+            .into()),
         }
     }
 
@@ -342,7 +344,7 @@ impl RepoInfo {
         deleted_tags.sort();
 
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-        Ok(Self::from_parts(tags, self.all_branches()?, deleted_tags, snaps)?)
+        Self::from_parts(tags, self.all_branches()?, deleted_tags, snaps)
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {

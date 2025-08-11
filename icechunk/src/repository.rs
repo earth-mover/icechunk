@@ -749,17 +749,21 @@ impl Repository {
             .into());
         }
         let (ri, version) = self.get_repo_info().await?;
-        match ri.update_branch(branch, snapshot_id)? {
-            Some(new_ri) => {
+        match ri.update_branch(branch, snapshot_id) {
+            Ok(new_ri) => {
                 let _ = self
                     .asset_manager
                     .update_repo_info(Arc::new(new_ri), &version)
                     .await?;
                 Ok(())
             }
-            None => {
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::BranchNotFound { .. },
+                ..
+            }) => {
                 Err(RefError::from(RefErrorKind::RefNotFound(branch.to_string())).into())
             }
+            Err(err) => Err(err.into()),
         }
     }
 
