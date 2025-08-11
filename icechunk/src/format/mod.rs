@@ -248,6 +248,8 @@ pub enum IcechunkFormatErrorKind {
     ChunkCoordinatesNotFound { coords: ChunkIndices },
     #[error("snapshot id not found `{snapshot_id}`")]
     SnapshotIdNotFound { snapshot_id: SnapshotId },
+    #[error("branch already exists `{branch} -> {snapshot_id}`")]
+    BranchAlreadyExists { branch: String, snapshot_id: SnapshotId },
     #[error("snapshot id is already present in the repository: `{snapshot_id}`")]
     DuplicateSnapshotId { snapshot_id: SnapshotId },
     #[error("manifest information cannot be found in snapshot for id `{manifest_id}`")]

@@ -613,17 +613,20 @@ impl Repository {
 
         let (repo_info, version) = self.get_repo_info().await?;
         raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
-        let new_repo_info = match repo_info.add_branch(branch_name, snapshot_id)? {
+        let new_repo_info = match repo_info.add_branch(branch_name, snapshot_id) {
             Ok(new) => Ok(new),
-            Err(Some(actual_parent)) => {
-                Err(RepositoryError::from(RepositoryErrorKind::Conflict {
-                    expected_parent: None,
-                    actual_parent: Some(actual_parent),
-                }))
-            }
-            Err(None) => {
-                panic!("Snaphshot not found")
-            }
+            Err(IcechunkFormatError {
+                kind:
+                    IcechunkFormatErrorKind::BranchAlreadyExists {
+                        snapshot_id: actual_parent,
+                        ..
+                    },
+                ..
+            }) => Err(RepositoryError::from(RepositoryErrorKind::Conflict {
+                expected_parent: None,
+                actual_parent: Some(actual_parent),
+            })),
+            Err(err) => Err(err.into()),
         }?;
 
         let _ = self
@@ -985,7 +988,7 @@ impl Repository {
         match self.spec_version {
             SpecVersionBin::V1dot0 => self.resolve_version_v1(version).await,
             SpecVersionBin::V2dot0 => {
-                self.resolve_version_v2(&self.get_repo_info().await?.0.as_ref(), version)
+                self.resolve_version_v2(self.get_repo_info().await?.0.as_ref(), version)
             }
         }
     }

@@ -228,13 +228,13 @@ impl RepoInfo {
         Ok(res)
     }
 
-    pub fn add_branch(
-        &self,
-        name: &str,
-        snap: &SnapshotId,
-    ) -> IcechunkResult<Result<Self, Option<SnapshotId>>> {
-        if let Some(snap) = self.resolve_branch(name)? {
-            return Ok(Err(Some(snap)));
+    pub fn add_branch(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Self> {
+        if let Some(snapshot_id) = self.resolve_branch(name)? {
+            return Err(IcechunkFormatErrorKind::BranchAlreadyExists {
+                branch: name.to_string(),
+                snapshot_id,
+            }
+            .into());
         }
 
         match self.resolve_snapshot_index(snap)? {
@@ -243,14 +243,17 @@ impl RepoInfo {
                 branches.push((name, snap_idx as u32));
                 branches.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-                Ok(Ok(Self::from_parts(
+                Ok(Self::from_parts(
                     self.all_tags()?,
                     branches,
                     self.deleted_tags()?,
                     snaps,
-                )?))
+                )?)
             }
-            None => Ok(Err(None)),
+            None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
+                snapshot_id: snap.clone(),
+            }
+            .into()),
         }
     }
 
@@ -607,11 +610,23 @@ mod tests {
             metadata: Default::default(),
         };
         let repo = RepoInfo::initial(snap1.clone());
-        let repo = repo.add_branch("foo", &id1)?.unwrap();
-        let repo = repo.add_branch("bar", &id1)?.unwrap();
-        assert!(matches!(repo.add_branch("bad-snap", &SnapshotId::random())?, Err(None)));
+        let repo = repo.add_branch("foo", &id1)?;
+        let repo = repo.add_branch("bar", &id1)?;
+        assert!(matches!(
+            repo.add_branch("bad-snap", &SnapshotId::random()),
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::SnapshotIdNotFound { .. },
+                ..
+            })
+        ));
         // cannot add existing
-        assert!(matches!(repo.add_branch("bar", &id1)?, Err(Some(_))));
+        assert!(matches!(
+            repo.add_branch("bar", &id1),
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::BranchAlreadyExists { .. },
+                ..
+            })
+        ));
 
         assert_eq!(
             repo.all_branches()?.collect::<HashSet<_>>(),
@@ -626,7 +641,7 @@ mod tests {
             ..snap1.clone()
         };
         let repo = repo.add_snapshot(snap2, "main")?;
-        let repo = repo.add_branch("baz", &id2)?.unwrap();
+        let repo = repo.add_branch("baz", &id2)?;
         assert_eq!(repo.resolve_branch("main")?, Some(id2.clone()));
         assert_eq!(repo.resolve_branch("foo")?, Some(id1.clone()));
         assert_eq!(repo.resolve_branch("bar")?, Some(id1.clone()));
@@ -644,7 +659,7 @@ mod tests {
         // tags
         let repo = repo.add_tag("tag1", &id1)?.unwrap();
         let repo = repo.add_tag("tag2", &id2)?.unwrap();
-        assert!(matches!(repo.add_branch("bad-snap", &SnapshotId::random())?, Err(None)));
+        assert!(repo.add_tag("bad-snap", &SnapshotId::random())?.is_none());
         assert!(repo.add_tag("tag1", &id1)?.is_none());
         assert_eq!(repo.resolve_tag("tag1")?, Some(id1.clone()));
         assert_eq!(repo.resolve_tag("tag2")?, Some(id2.clone()));
