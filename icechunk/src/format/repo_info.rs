@@ -1,7 +1,7 @@
 use err_into::ErrorInto;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use super::{
     IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
@@ -229,7 +229,7 @@ impl RepoInfo {
     }
 
     pub fn add_branch(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Self> {
-        if let Some(snapshot_id) = self.resolve_branch(name)? {
+        if let Ok(snapshot_id) = self.resolve_branch(name) {
             return Err(IcechunkFormatErrorKind::BranchAlreadyExists {
                 branch: name.to_string(),
                 snapshot_id,
@@ -258,7 +258,13 @@ impl RepoInfo {
     }
 
     pub fn delete_branch(&self, name: &str) -> IcechunkResult<Self> {
-        if self.resolve_branch(name)?.is_none() {
+        if matches!(
+            self.resolve_branch(name),
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::BranchNotFound { .. },
+                ..
+            })
+        ) {
             return Err(IcechunkFormatErrorKind::BranchNotFound {
                 branch: name.to_string(),
             }
@@ -273,7 +279,13 @@ impl RepoInfo {
     }
 
     pub fn update_branch(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Self> {
-        if self.resolve_branch(name)?.is_none() {
+        if matches!(
+            self.resolve_branch(name),
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::BranchNotFound { .. },
+                ..
+            })
+        ) {
             return Err(IcechunkFormatErrorKind::BranchNotFound {
                 branch: name.to_string(),
             }
@@ -300,7 +312,7 @@ impl RepoInfo {
     }
 
     pub fn add_tag(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Self> {
-        if self.resolve_tag(name)?.is_some() || self.tag_was_deleted(name)? {
+        if self.resolve_tag(name).is_ok() || self.tag_was_deleted(name)? {
             // TODO: better error on tag already deleted
             return Err(IcechunkFormatErrorKind::TagAlreadyExists {
                 tag: name.to_string(),
@@ -329,7 +341,13 @@ impl RepoInfo {
     }
 
     pub fn delete_tag(&self, name: &str) -> IcechunkResult<Self> {
-        if self.resolve_tag(name)?.is_none() {
+        if matches!(
+            self.resolve_tag(name),
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::TagNotFound { .. },
+                ..
+            })
+        ) {
             return Err(
                 IcechunkFormatErrorKind::TagNotFound { tag: name.to_string() }.into()
             );
@@ -339,9 +357,8 @@ impl RepoInfo {
         // retain preserves order
         tags.retain(|(n, _)| n != &name);
 
-        let mut deleted_tags: Vec<_> = self.deleted_tags()?.collect();
-        deleted_tags.push(name);
-        deleted_tags.sort();
+        let mut deleted_tags: BTreeSet<_> = self.deleted_tags()?.collect();
+        deleted_tags.insert(name);
 
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
         Self::from_parts(tags, self.all_branches()?, deleted_tags, snaps)
@@ -385,12 +402,16 @@ impl RepoInfo {
         }))
     }
 
-    pub fn resolve_tag(&self, name: &str) -> IcechunkResult<Option<SnapshotId>> {
+    pub fn resolve_tag(&self, name: &str) -> IcechunkResult<SnapshotId> {
         let root = self.root()?;
-        let res = root.tags().lookup_by_key(name, |r, key| r.name().cmp(key)).map(|r| {
-            let index = r.snapshot_index();
-            SnapshotId::new(root.snapshots().get(index as usize).id().0)
-        });
+        let res = root
+            .tags()
+            .lookup_by_key(name, |r, key| r.name().cmp(key))
+            .map(|r| {
+                let index = r.snapshot_index();
+                SnapshotId::new(root.snapshots().get(index as usize).id().0)
+            })
+            .ok_or(IcechunkFormatErrorKind::TagNotFound { tag: name.to_string() })?;
 
         Ok(res)
     }
@@ -401,13 +422,18 @@ impl RepoInfo {
         Ok(res.is_some())
     }
 
-    pub fn resolve_branch(&self, name: &str) -> IcechunkResult<Option<SnapshotId>> {
+    pub fn resolve_branch(&self, name: &str) -> IcechunkResult<SnapshotId> {
         let root = self.root()?;
-        let res =
-            root.branches().lookup_by_key(name, |r, key| r.name().cmp(key)).map(|r| {
+        let res = root
+            .branches()
+            .lookup_by_key(name, |r, key| r.name().cmp(key))
+            .map(|r| {
                 let index = r.snapshot_index();
                 SnapshotId::new(root.snapshots().get(index as usize).id().0)
-            });
+            })
+            .ok_or(IcechunkFormatErrorKind::BranchNotFound {
+                branch: name.to_string(),
+            })?;
 
         Ok(res)
     }
@@ -568,7 +594,7 @@ mod tests {
             ..snap1.clone()
         };
         let repo = repo.add_snapshot(snap2.clone(), "main")?;
-        assert_eq!(&repo.resolve_branch("main")?.unwrap(), &snap2.id);
+        assert_eq!(&repo.resolve_branch("main")?, &snap2.id);
 
         let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
         assert_eq!(all, HashSet::from_iter([snap1.clone(), snap2.clone()]));
@@ -589,7 +615,7 @@ mod tests {
             ..snap2.clone()
         };
         let repo = repo.add_snapshot(snap3.clone(), "main")?;
-        assert_eq!(&repo.resolve_branch("main")?.unwrap(), &snap3.id);
+        assert_eq!(&repo.resolve_branch("main")?, &snap3.id);
         let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
         assert_eq!(
             all,
@@ -651,13 +677,13 @@ mod tests {
         };
         let repo = repo.add_snapshot(snap2, "main")?;
         let repo = repo.add_branch("baz", &id2)?;
-        assert_eq!(repo.resolve_branch("main")?, Some(id2.clone()));
-        assert_eq!(repo.resolve_branch("foo")?, Some(id1.clone()));
-        assert_eq!(repo.resolve_branch("bar")?, Some(id1.clone()));
-        assert_eq!(repo.resolve_branch("baz")?, Some(id2.clone()));
+        assert_eq!(repo.resolve_branch("main")?, id2.clone());
+        assert_eq!(repo.resolve_branch("foo")?, id1.clone());
+        assert_eq!(repo.resolve_branch("bar")?, id1.clone());
+        assert_eq!(repo.resolve_branch("baz")?, id2.clone());
 
         let repo = repo.delete_branch("bar")?;
-        assert_eq!(repo.resolve_branch("bar")?, None);
+        assert!(repo.resolve_branch("bar").is_err());
         assert_eq!(
             repo.all_branches()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["main", "foo", "baz"].into()
@@ -670,8 +696,8 @@ mod tests {
         let repo = repo.add_tag("tag2", &id2)?;
         assert!(repo.add_tag("bad-snap", &SnapshotId::random()).is_err());
         assert!(repo.add_tag("tag1", &id1).is_err());
-        assert_eq!(repo.resolve_tag("tag1")?, Some(id1.clone()));
-        assert_eq!(repo.resolve_tag("tag2")?, Some(id2.clone()));
+        assert_eq!(repo.resolve_tag("tag1")?, id1.clone());
+        assert_eq!(repo.resolve_tag("tag2")?, id2.clone());
         assert_eq!(
             repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["tag1", "tag2"].into()

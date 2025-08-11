@@ -1127,8 +1127,11 @@ impl Session {
 
         let (latest_repo_info, _) = self.asset_manager.fetch_repo_info().await?;
 
-        match latest_repo_info.resolve_branch(branch_name)? {
-            None => {
+        match latest_repo_info.resolve_branch(branch_name) {
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::BranchNotFound { .. },
+                ..
+            }) => {
                 // FIXME: write test for this
                 // nothing to do, branch deleted
                 warn!(
@@ -1137,7 +1140,8 @@ impl Session {
                 );
                 Ok(())
             }
-            Some(current_snapshot_id) if current_snapshot_id == self.snapshot_id => {
+            Err(err) => Err(err.into()),
+            Ok(current_snapshot_id) if current_snapshot_id == self.snapshot_id => {
                 // nothing to do, commit should work without rebasing
                 warn!(
                     branch = &self.branch_name,
@@ -1145,19 +1149,13 @@ impl Session {
                 );
                 Ok(())
             }
-            Some(current_snapshot_id) => {
+            Ok(current_snapshot_id) => {
                 let ancestry = stream::iter(
                     latest_repo_info
                         .ancestry(&current_snapshot_id)?
                         .unwrap()
                         .map_ok(|snap| snap.id),
                 );
-                //let new_commits = stream::once(ready(Ok(current_snapshot_id.clone())))
-                //    .chain(ancestry.try_take_while(|snap_id| {
-                //        ready(Ok(snap_id != &self.snapshot_id))
-                //    }))
-                //    .try_collect::<Vec<_>>()
-                //    .await?;
                 let new_commits = ancestry
                     .try_take_while(|snap_id| ready(Ok(snap_id != &self.snapshot_id)))
                     .try_collect::<Vec<_>>()
@@ -2090,11 +2088,11 @@ async fn do_commit(
         let (repo_info, repo_info_version) = asset_manager.fetch_repo_info().await?;
 
         let actual_parent = repo_info.resolve_branch(branch_name)?;
-        if actual_parent.as_ref() != Some(snapshot_id) {
+        if &actual_parent != snapshot_id {
             info!(branch_name, %new_snapshot_id, attempt, "Branch tip has changed, rebase needed");
             return Err(SessionError::from(SessionErrorKind::Conflict {
                 expected_parent: Some(snapshot_id.clone()),
-                actual_parent,
+                actual_parent: Some(actual_parent),
             }));
         }
 
@@ -3565,7 +3563,6 @@ mod tests {
     #[tokio_test(flavor = "multi_thread")]
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
-        let storage = Arc::clone(repo.storage());
         let mut ds = repo.writable_session("main").await?;
 
         let def = Bytes::copy_from_slice(b"");
@@ -4067,7 +4064,7 @@ mod tests {
         )
         .await?;
 
-        let conflicting_snap = ds1.commit("write two chunks with repo 1", None).await?;
+        let _conflicting_snap = ds1.commit("write two chunks with repo 1", None).await?;
 
         // let's try to create a new commit, that conflicts with the previous one but writes to
         // different chunks

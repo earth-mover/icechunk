@@ -21,12 +21,8 @@ pub fn all_roots<'a>(
 ) -> RepositoryResult<impl Iterator<Item = RepositoryResult<SnapshotId>> + 'a> {
     let res = repo_info
         .tag_names()?
-        .filter_map(|tag| repo_info.resolve_tag(tag).transpose())
-        .chain(
-            repo_info
-                .branch_names()?
-                .filter_map(|br| repo_info.resolve_branch(br).transpose()),
-        )
+        .map(|tag| repo_info.resolve_tag(tag))
+        .chain(repo_info.branch_names()?.map(|br| repo_info.resolve_branch(br)))
         .chain(extra_roots.iter().cloned().map(Ok))
         .map(|r| r.err_into());
     Ok(res)
@@ -42,8 +38,6 @@ pub async fn pointed_snapshots<'a>(
     let res = try_stream! {
 
         let roots = all_roots(repo_info.as_ref(), extra_roots)?;
-        //pin!(roots);
-        //while let Some(pointed_snap_id) = roots.try_next().await? {
         for pointed_snap_id in roots {
             let pointed_snap_id = pointed_snap_id?;
             if ! seen.contains(&pointed_snap_id)

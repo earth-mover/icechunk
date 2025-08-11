@@ -571,7 +571,7 @@ impl Repository {
     ) -> RepositoryResult<impl Iterator<Item = RepositoryResult<SnapshotInfo>> + Send>
     {
         let (repo_info, _) = self.get_repo_info().await?;
-        let snapshot_id = self.resolve_version_v2(&repo_info, version)?;
+        let snapshot_id = self.resolve_version_v2(&repo_info, version).await?;
         let it = unsafe {
             let repo_info_ref = &*Arc::as_ptr(&repo_info);
             Box::new(repo_info_ref.ancestry(&snapshot_id)?.unwrap().map(|e| e.err_into()))
@@ -670,11 +670,15 @@ impl Repository {
     #[instrument(skip(self))]
     async fn lookup_branch_v2(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         let (ri, _) = self.get_repo_info().await?;
-        match ri.resolve_branch(branch)? {
-            Some(snap) => Ok(snap),
-            None => Err(RepositoryError::from(RefError::from(
-                RefErrorKind::RefNotFound(branch.to_string()),
-            ))),
+        match ri.resolve_branch(branch) {
+            Ok(snap) => Ok(snap),
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::BranchNotFound { .. },
+                ..
+            }) => Err(RepositoryError::from(RefError::from(RefErrorKind::RefNotFound(
+                branch.to_string(),
+            )))),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -917,9 +921,16 @@ impl Repository {
     #[instrument(skip(self))]
     async fn lookup_tag_v2(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         let (ri, _) = self.get_repo_info().await?;
-        Ok(ri
-            .resolve_tag(tag)?
-            .ok_or(RefError::from(RefErrorKind::RefNotFound(tag.to_string())))?)
+        match ri.resolve_tag(tag) {
+            Ok(snap) => Ok(snap),
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::TagNotFound { .. },
+                ..
+            }) => Err(RepositoryError::from(RefError::from(RefErrorKind::RefNotFound(
+                tag.to_string(),
+            )))),
+            Err(err) => Err(err.into()),
+        }
     }
 
     #[instrument(skip(self))]
@@ -963,7 +974,7 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    fn resolve_ref_version_v2(
+    async fn resolve_ref_version_v2(
         &self,
         repo_info: &RepoInfo,
         version: &RefVersionInfo,
@@ -973,18 +984,8 @@ impl Repository {
                 raise_if_invalid_snapshot_id_v2(repo_info, sid)?;
                 Ok(sid.clone())
             }
-            RefVersionInfo::TagRef(tag) => {
-                let id = repo_info
-                    .resolve_tag(tag)?
-                    .ok_or(RefError::from(RefErrorKind::RefNotFound(tag.to_string())))?;
-                Ok(id)
-            }
-            RefVersionInfo::BranchTipRef(branch) => {
-                let id = repo_info.resolve_branch(branch)?.ok_or(RefError::from(
-                    RefErrorKind::RefNotFound(branch.to_string()),
-                ))?;
-                Ok(id)
-            }
+            RefVersionInfo::TagRef(tag) => self.lookup_tag(tag).await,
+            RefVersionInfo::BranchTipRef(branch) => self.lookup_branch(branch).await,
         }
     }
 
@@ -1003,6 +1004,7 @@ impl Repository {
             SpecVersionBin::V1dot0 => self.resolve_version_v1(version).await,
             SpecVersionBin::V2dot0 => {
                 self.resolve_version_v2(self.get_repo_info().await?.0.as_ref(), version)
+                    .await
             }
         }
     }
@@ -1036,23 +1038,17 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    fn resolve_version_v2(
+    async fn resolve_version_v2(
         &self,
         repo_info: &RepoInfo,
         version: &VersionInfo,
     ) -> RepositoryResult<SnapshotId> {
         match version.try_into() {
             Ok(ref_version_info) => {
-                self.resolve_ref_version_v2(repo_info, &ref_version_info)
+                self.resolve_ref_version_v2(repo_info, &ref_version_info).await
             }
             Err((branch, at)) => {
-                let snap_id = repo_info.resolve_branch(branch.as_str())?.ok_or(
-                    RepositoryError::from(RepositoryErrorKind::InvalidAsOfSpec {
-                        branch: branch.clone(),
-                        at,
-                    }),
-                )?;
-
+                let snap_id = repo_info.resolve_branch(branch.as_str())?;
                 let ancestry = repo_info.ancestry(&snap_id)?.ok_or(
                     RepositoryError::from(RepositoryErrorKind::InvalidAsOfSpec {
                         branch: branch.clone(),
