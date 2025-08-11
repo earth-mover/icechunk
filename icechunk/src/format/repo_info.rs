@@ -454,9 +454,8 @@ impl RepoInfo {
     pub fn ancestry<'a>(
         &'a self,
         snapshot: &SnapshotId,
-    ) -> IcechunkResult<
-        Option<impl Iterator<Item = IcechunkResult<SnapshotInfo>> + Send + use<'a>>,
-    > {
+    ) -> IcechunkResult<impl Iterator<Item = IcechunkResult<SnapshotInfo>> + Send + use<'a>>
+    {
         let root = self.root()?;
         if let Some(start) = self.resolve_snapshot_index(snapshot)? {
             let mut index = Some(start as i32);
@@ -475,19 +474,23 @@ impl RepoInfo {
                     None
                 }
             });
-            Ok(Some(iter))
+            Ok(iter)
         } else {
-            Ok(None)
+            Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
+                snapshot_id: snapshot.clone(),
+            }
+            .into())
         }
     }
 
-    pub fn find_snapshot(&self, id: &SnapshotId) -> IcechunkResult<Option<SnapshotInfo>> {
-        match self.ancestry(id)? {
-            Some(mut it) => match it.next() {
-                Some(snap) => Ok(Some(snap?)),
-                None => Ok(None),
-            },
-            None => Ok(None),
+    pub fn find_snapshot(&self, id: &SnapshotId) -> IcechunkResult<SnapshotInfo> {
+        let mut anc = self.ancestry(id)?;
+        #[allow(clippy::panic)]
+        match anc.next() {
+            Some(snap) => snap,
+            // It's OK to panic here because ancestry already found the snapshot, and
+            // it's always the first element of the ancestry
+            None => panic!("Ancestry head snapshot not found"),
         }
     }
 
@@ -599,13 +602,13 @@ mod tests {
         let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
         assert_eq!(all, HashSet::from_iter([snap1.clone(), snap2.clone()]));
 
-        let anc: Vec<_> = repo.ancestry(&id1)?.unwrap().try_collect()?;
+        let anc: Vec<_> = repo.ancestry(&id1)?.try_collect()?;
         assert_eq!(anc, [snap1.clone()]);
 
-        let anc: Vec<_> = repo.ancestry(&id2)?.unwrap().try_collect()?;
+        let anc: Vec<_> = repo.ancestry(&id2)?.try_collect()?;
         assert_eq!(anc, [snap2.clone(), snap1.clone()]);
 
-        assert!(repo.ancestry(&SnapshotId::random())?.is_none());
+        assert!(repo.ancestry(&SnapshotId::random()).is_err());
 
         let id3 = SnapshotId::random();
         let snap3 = SnapshotInfo {
@@ -628,7 +631,7 @@ mod tests {
             HashSet::from_iter([snap1.clone(), snap2.clone(), snap3.clone()])
         );
 
-        let anc: Vec<_> = repo.ancestry(&id3)?.unwrap().try_collect()?;
+        let anc: Vec<_> = repo.ancestry(&id3)?.try_collect()?;
         assert_eq!(anc, [snap3.clone(), snap2.clone(), snap1.clone()]);
         Ok(())
     }

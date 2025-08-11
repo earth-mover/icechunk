@@ -574,7 +574,7 @@ impl Repository {
         let snapshot_id = self.resolve_version_v2(&repo_info, version).await?;
         let it = unsafe {
             let repo_info_ref = &*Arc::as_ptr(&repo_info);
-            Box::new(repo_info_ref.ancestry(&snapshot_id)?.unwrap().map(|e| e.err_into()))
+            Box::new(repo_info_ref.ancestry(&snapshot_id)?.map(|e| e.err_into()))
         };
         Ok(AcestryIterator { _repo_info: repo_info.clone(), it })
     }
@@ -704,12 +704,7 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<SnapshotInfo> {
         let (ri, _) = self.get_repo_info().await?;
-        match ri.find_snapshot(snapshot_id)? {
-            Some(snap) => Ok(snap),
-            None => Err(RepositoryError::from(RepositoryErrorKind::SnapshotNotFound {
-                id: snapshot_id.clone(),
-            })),
-        }
+        Ok(ri.find_snapshot(snapshot_id)?)
     }
 
     #[instrument(skip(self))]
@@ -1049,12 +1044,7 @@ impl Repository {
             }
             Err((branch, at)) => {
                 let snap_id = repo_info.resolve_branch(branch.as_str())?;
-                let ancestry = repo_info.ancestry(&snap_id)?.ok_or(
-                    RepositoryError::from(RepositoryErrorKind::InvalidAsOfSpec {
-                        branch: branch.clone(),
-                        at,
-                    }),
-                )?;
+                let ancestry = repo_info.ancestry(&snap_id)?;
                 let snap: Vec<_> = ancestry
                     .skip_while(|parent| {
                         if let Ok(parent) = parent {
@@ -1334,12 +1324,8 @@ fn raise_if_invalid_snapshot_id_v2(
     repo_info: &RepoInfo,
     snapshot_id: &SnapshotId,
 ) -> RepositoryResult<()> {
-    match repo_info.find_snapshot(snapshot_id)? {
-        Some(_) => Ok(()),
-        None => Err(RepositoryError::from(RepositoryErrorKind::SnapshotNotFound {
-            id: snapshot_id.clone(),
-        })),
-    }
+    repo_info.find_snapshot(snapshot_id)?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1153,7 +1153,6 @@ impl Session {
                 let ancestry = stream::iter(
                     latest_repo_info
                         .ancestry(&current_snapshot_id)?
-                        .unwrap()
                         .map_ok(|snap| snap.id),
                 );
                 let new_commits = ancestry

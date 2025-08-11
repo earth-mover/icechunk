@@ -601,7 +601,7 @@ pub async fn expire(
     let root_to_snaps = all_tips.iter().try_fold(
         HashMap::new(),
         |mut res: HashMap<SnapshotId, HashSet<SnapshotId>>, (_, tip_snap)| {
-            let ancestry = repo_info.ancestry(tip_snap)?.unwrap();
+            let ancestry = repo_info.ancestry(tip_snap)?;
             let (branch_snaps, root) = split_root(ancestry)?;
             let root = root.unwrap();
             match res.get_mut(&root) {

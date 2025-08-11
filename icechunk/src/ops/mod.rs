@@ -42,19 +42,18 @@ pub async fn pointed_snapshots<'a>(
             let pointed_snap_id = pointed_snap_id?;
             if ! seen.contains(&pointed_snap_id)
             {
-                if let Some(parents) = repo_info.ancestry(&pointed_snap_id)?{
-                    for snap_info in parents {
-                        let snap_id = snap_info?.id;
-                        let snap: Arc<Snapshot> = asset_manager.fetch_snapshot(&snap_id).await?;
-                        if seen.insert(snap_id) { // it's a new snapshot
-                            yield snap
-                        } else {
-                            // as soon as we find a repeated snapshot
-                            // there is no point in continuing to retrieve
-                            // the rest of the ancestry, it must be already
-                            // retrieved from other ref
-                            break
-                        }
+                let parents = repo_info.ancestry(&pointed_snap_id)?;
+                for snap_info in parents {
+                    let snap_id = snap_info?.id;
+                    let snap: Arc<Snapshot> = asset_manager.fetch_snapshot(&snap_id).await?;
+                    if seen.insert(snap_id) { // it's a new snapshot
+                        yield snap
+                    } else {
+                        // as soon as we find a repeated snapshot
+                        // there is no point in continuing to retrieve
+                        // the rest of the ancestry, it must be already
+                        // retrieved from other ref
+                        break
                     }
                 }
             }
