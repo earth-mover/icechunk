@@ -697,7 +697,7 @@ pub async fn expire(
             Ref::Branch(_) => None,
         }));
 
-    let new_repo_info = RepoInfo::new(tags, branches, deleted_tags, retained);
+    let new_repo_info = RepoInfo::new(tags, branches, deleted_tags, retained)?;
 
     asset_manager.update_repo_info(Arc::new(new_repo_info), &repo_info_version).await?;
 

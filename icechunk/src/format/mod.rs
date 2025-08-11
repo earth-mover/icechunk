@@ -246,6 +246,10 @@ pub enum IcechunkFormatErrorKind {
     NodeNotFound { path: Path },
     #[error("chunk coordinates not found `{coords:?}`")]
     ChunkCoordinatesNotFound { coords: ChunkIndices },
+    #[error("snapshot id not found `{snapshot_id}`")]
+    SnapshotIdNotFound { snapshot_id: SnapshotId },
+    #[error("snapshot id is already present in the repository: `{snapshot_id}`")]
+    DuplicateSnapshotId { snapshot_id: SnapshotId },
     #[error("manifest information cannot be found in snapshot for id `{manifest_id}`")]
     ManifestInfoNotFound { manifest_id: ManifestId },
     #[error("invalid magic numbers in file")]

@@ -495,22 +495,6 @@ impl Snapshot {
         self.root().manifest_files().iter().map(|mf| mf.into())
     }
 
-    /// Cretase a new `Snapshot` with all the same data as `new_child` but `self` as parent
-    pub fn adopt(&self, new_child: &Snapshot) -> IcechunkResult<Self> {
-        // Rust flatbuffers implementation doesn't allow mutation of scalars, so we need to
-        // create a whole new buffer and write to it in full
-
-        Snapshot::from_iter(
-            Some(new_child.id()),
-            Some(self.id()),
-            new_child.message().clone(),
-            Some(new_child.metadata()?.clone()),
-            new_child.manifest_files().collect(),
-            Some(new_child.flushed_at()?),
-            new_child.iter(),
-        )
-    }
-
     pub fn get_node(&self, path: &Path) -> IcechunkResult<NodeSnapshot> {
         let res = self
             .root()

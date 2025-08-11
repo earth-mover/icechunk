@@ -1,3 +1,4 @@
+use err_into::ErrorInto;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -33,69 +34,49 @@ impl RepoInfo {
         branches: impl IntoIterator<Item = (&'a str, SnapshotId)>,
         deleted_tags: impl IntoIterator<Item = &'a str>,
         snapshots: impl IntoIterator<Item = SnapshotInfo>,
-    ) -> Self {
+    ) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = snapshots.into_iter().collect();
         snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
-        let tags = tags
-            .into_iter()
-            .map(|(name, id)| {
-                let idx = snapshots
-                    .binary_search_by_key(&&id.0, |snap| &snap.id.0)
-                    .unwrap() as u32;
-                (name, idx)
-            })
-            .collect::<Vec<_>>();
-        let branches = branches
-            .into_iter()
-            .map(|(name, id)| {
-                let idx = snapshots
-                    .binary_search_by_key(&&id.0, |snap| &snap.id.0)
-                    .unwrap() as u32;
-                (name, idx)
-            })
-            .collect::<Vec<_>>();
+        let tags = resolve_ref_iter(&snapshots, tags)?;
+        let branches = resolve_ref_iter(&snapshots, branches)?;
+        let mut deleted_tags: Vec<_> = deleted_tags.into_iter().collect();
+        deleted_tags.sort();
         Self::from_parts(tags, branches, deleted_tags, snapshots)
     }
 
     fn from_parts<'a>(
-        tags: impl IntoIterator<Item = (&'a str, u32)>,
-        branches: impl IntoIterator<Item = (&'a str, u32)>,
-        deleted_tags: impl IntoIterator<Item = &'a str>,
+        sorted_tags: impl IntoIterator<Item = (&'a str, u32)>,
+        sorted_branches: impl IntoIterator<Item = (&'a str, u32)>,
+        sorted_deleted_tags: impl IntoIterator<Item = &'a str>,
         sorted_snapshots: impl IntoIterator<Item = SnapshotInfo>,
-    ) -> Self {
+    ) -> IcechunkResult<Self> {
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
-        let mut tags: Vec<_> = tags.into_iter().collect();
-        tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
-        let tags = tags
-            .iter()
+        let tags = sorted_tags
+            .into_iter()
             .map(|(name, offset)| {
                 let args = generated::RefArgs {
                     name: Some(builder.create_string(name)),
-                    snapshot_index: *offset,
+                    snapshot_index: offset,
                 };
                 generated::Ref::create(&mut builder, &args)
             })
             .collect::<Vec<_>>();
         let tags = builder.create_vector(&tags);
 
-        let mut branches: Vec<_> = branches.into_iter().collect();
-        branches.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
-        let branches = branches
-            .iter()
+        let branches = sorted_branches
+            .into_iter()
             .map(|(name, offset)| {
                 let args = generated::RefArgs {
                     name: Some(builder.create_string(name)),
-                    snapshot_index: *offset,
+                    snapshot_index: offset,
                 };
                 generated::Ref::create(&mut builder, &args)
             })
             .collect::<Vec<_>>();
         let branches = builder.create_vector(&branches);
 
-        let mut deleted_tags: Vec<_> = deleted_tags.into_iter().collect();
-        deleted_tags.sort();
-        let deleted_tags = deleted_tags
-            .iter()
+        let deleted_tags = sorted_deleted_tags
+            .into_iter()
             .map(|name| builder.create_string(name))
             .collect::<Vec<_>>();
         let deleted_tags = builder.create_vector(&deleted_tags);
@@ -106,47 +87,58 @@ impl RepoInfo {
         let snapshot_index: HashMap<_, _> =
             snapshots.iter().enumerate().map(|(ix, sn)| (sn.id.clone(), ix)).collect();
 
-        let snapshots = snapshots
+        // TODO: we should check no loops
+        let snapshots: Vec<_> = snapshots
             .iter()
             .map(|snap| {
                 let id = &snap.id.0;
                 let id = ObjectId12::new(id);
-                let parent_offset = snap
-                    .parent_id
-                    .as_ref()
-                    .map(|parent_id| snapshot_index.get(parent_id).unwrap());
+                let parent_offset = match snap.parent_id.as_ref() {
+                    Some(parent_id) => {
+                        let index = snapshot_index.get(parent_id).ok_or(
+                            IcechunkFormatError::from(
+                                IcechunkFormatErrorKind::SnapshotIdNotFound {
+                                    snapshot_id: snap.id.clone(),
+                                },
+                            ),
+                        )?;
+                        Ok(*index as i32)
+                    }
+                    None => Ok::<_, IcechunkFormatError>(-1),
+                }?;
 
                 let metadata_items: Vec<_> = snap
                     .metadata
                     .iter()
                     .map(|(k, v)| {
                         let name = builder.create_shared_string(k.as_str());
-                        let serialized = rmp_serde::to_vec(v).unwrap();
+                        let serialized = rmp_serde::to_vec(v).map_err(Box::new)?;
                         let value = builder.create_vector(serialized.as_slice());
-                        generated::MetadataItem::create(
+                        let item = generated::MetadataItem::create(
                             &mut builder,
                             &generated::MetadataItemArgs {
                                 name: Some(name),
                                 value: Some(value),
                             },
-                        )
+                        );
+                        Ok::<_, IcechunkFormatError>(item)
                     })
-                    .collect();
+                    .try_collect()?;
 
                 let metadata = builder.create_vector(metadata_items.as_slice());
                 let args = generated::SnapshotInfoArgs {
                     id: Some(&id),
-                    parent_offset: match parent_offset {
-                        Some(of) => *of as i32,
-                        None => -1,
-                    },
+                    parent_offset,
                     flushed_at: snap.flushed_at.timestamp_micros() as u64,
                     message: Some(builder.create_string(snap.message.as_str())),
                     metadata: Some(metadata),
                 };
-                generated::SnapshotInfo::create(&mut builder, &args)
+                Ok::<_, IcechunkFormatError>(generated::SnapshotInfo::create(
+                    &mut builder,
+                    &args,
+                ))
             })
-            .collect::<Vec<_>>();
+            .try_collect()?;
         let snapshots = builder.create_vector(&snapshots);
 
         let status = generated::RepoStatus::create(
@@ -177,11 +169,14 @@ impl RepoInfo {
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Self { buffer }
+        Ok(Self { buffer })
     }
 
     pub fn initial(snapshot: SnapshotInfo) -> Self {
+        #[allow(clippy::expect_used)]
+        // This method is basically constant, so it's OK to unwrap in it
         Self::from_parts([], [("main", 0)], [], [snapshot])
+            .expect("Cannot generat initial snapshot")
     }
 
     fn all_tags(&self) -> IcechunkResult<impl Iterator<Item = (&str, u32)>> {
@@ -200,43 +195,19 @@ impl RepoInfo {
         &self,
     ) -> IcechunkResult<impl Iterator<Item = IcechunkResult<SnapshotInfo>>> {
         let root = self.root()?;
-        Ok(root.snapshots().iter().map(move |snap| {
-            let flushed_at = timestamp_to_timestamp(snap.flushed_at())?;
-            let parent_id = if snap.parent_offset() >= 0 {
-                let parent = root.snapshots().get(snap.parent_offset() as usize).id();
-                Some(parent)
-            } else {
-                None
-            };
-            let metadata = snap
-                .metadata()
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(|item| {
-                            let name = item.name().to_string();
-                            let value =
-                                rmp_serde::from_slice(item.value().bytes()).unwrap();
-                            (name, value)
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            Ok(SnapshotInfo {
-                id: SnapshotId::new(snap.id().0),
-                flushed_at,
-                message: snap.message().to_string(),
-                metadata,
-                parent_id: parent_id.map(|buf| SnapshotId::new(buf.0)),
-            })
-        }))
+        Ok(root.snapshots().iter().map(move |snap| mk_snapshot_info(&root, &snap)))
     }
 
     pub fn add_snapshot(&self, snap: SnapshotInfo, branch: &str) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = self.all_snapshots()?.try_collect()?;
-        let new_index =
-            snapshots.binary_search_by_key(&&snap.id, |snap| &snap.id).unwrap_err();
+        let new_index = match snapshots.binary_search_by_key(&&snap.id, |snap| &snap.id) {
+            Ok(_) => Err(IcechunkFormatError::from(
+                IcechunkFormatErrorKind::DuplicateSnapshotId {
+                    snapshot_id: snap.id.clone(),
+                },
+            )),
+            Err(idx) => Ok(idx),
+        }?;
 
         snapshots.insert(new_index, snap);
 
@@ -253,7 +224,7 @@ impl RepoInfo {
             }
         });
 
-        let res = Self::from_parts(tags, branches, self.deleted_tags()?, snapshots);
+        let res = Self::from_parts(tags, branches, self.deleted_tags()?, snapshots)?;
         Ok(res)
     }
 
@@ -270,13 +241,14 @@ impl RepoInfo {
             Some(snap_idx) => {
                 let mut branches: Vec<_> = self.all_branches()?.collect();
                 branches.push((name, snap_idx as u32));
+                branches.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
                 Ok(Ok(Self::from_parts(
                     self.all_tags()?,
                     branches,
                     self.deleted_tags()?,
                     snaps,
-                )))
+                )?))
             }
             None => Ok(Err(None)),
         }
@@ -288,6 +260,7 @@ impl RepoInfo {
         }
 
         let mut branches: Vec<_> = self.all_branches()?.collect();
+        // retain preserves order
         branches.retain(|(n, _)| n != &name);
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
         Ok(Some(Self::from_parts(
@@ -295,7 +268,7 @@ impl RepoInfo {
             branches,
             self.deleted_tags()?,
             snaps,
-        )))
+        )?))
     }
 
     pub fn update_branch(
@@ -317,7 +290,7 @@ impl RepoInfo {
                     branches,
                     self.deleted_tags()?,
                     snaps,
-                )))
+                )?))
             }
             None => Ok(None),
         }
@@ -332,13 +305,14 @@ impl RepoInfo {
             Some(snap_idx) => {
                 let mut tags: Vec<_> = self.all_tags()?.collect();
                 tags.push((name, snap_idx as u32));
+                tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
                 Ok(Some(Self::from_parts(
                     tags,
                     self.all_branches()?,
                     self.deleted_tags()?,
                     snaps,
-                )))
+                )?))
             }
             None => Ok(None),
         }
@@ -350,13 +324,15 @@ impl RepoInfo {
         }
 
         let mut tags: Vec<_> = self.all_tags()?.collect();
+        // retain preserves order
         tags.retain(|(n, _)| n != &name);
 
         let mut deleted_tags: Vec<_> = self.deleted_tags()?.collect();
         deleted_tags.push(name);
+        deleted_tags.sort();
 
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-        Ok(Some(Self::from_parts(tags, self.all_branches()?, deleted_tags, snaps)))
+        Ok(Some(Self::from_parts(tags, self.all_branches()?, deleted_tags, snaps)?))
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {
@@ -425,7 +401,11 @@ impl RepoInfo {
     }
 
     pub fn spec_version(&self) -> IcechunkResult<SpecVersionBin> {
-        Ok(self.root()?.spec_version().try_into().unwrap()) // FIXME: unwrap
+        self.root()?
+            .spec_version()
+            .try_into()
+            .map_err(|_| IcechunkFormatErrorKind::InvalidSpecVersion)
+            .err_into()
     }
 
     pub fn last_updated_at(&self) -> IcechunkResult<DateTime<Utc>> {
@@ -433,9 +413,9 @@ impl RepoInfo {
         timestamp_to_timestamp(ts)
     }
 
-    pub fn ancestry<'a, 'b>(
+    pub fn ancestry<'a>(
         &'a self,
-        snapshot: &'b SnapshotId,
+        snapshot: &SnapshotId,
     ) -> IcechunkResult<
         Option<impl Iterator<Item = IcechunkResult<SnapshotInfo>> + Send + use<'a>>,
     > {
@@ -444,43 +424,16 @@ impl RepoInfo {
             let mut index = Some(start as i32);
             let iter = std::iter::from_fn(move || {
                 if let Some(ix) = index {
-                    let snap = root.snapshots().get(ix as usize);
-                    let parent_id = if snap.parent_offset() >= 0 {
+                    if ix >= 0 {
+                        let snap = root.snapshots().get(ix as usize);
                         index = Some(snap.parent_offset());
-                        let parent = root.snapshots().get(snap.parent_offset() as usize);
-                        Some(SnapshotId::new(parent.id().0))
+                        Some(mk_snapshot_info(&root, &snap))
                     } else {
                         index = None;
                         None
-                    };
-
-                    let flushed_at = timestamp_to_timestamp(snap.flushed_at());
-                    // FIXME: duplicated with all_snapshots
-                    let metadata = snap
-                        .metadata()
-                        .map(|items| {
-                            items
-                                .iter()
-                                .map(|item| {
-                                    let name = item.name().to_string();
-                                    let value =
-                                        rmp_serde::from_slice(item.value().bytes())
-                                            .unwrap();
-                                    (name, value)
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let info = flushed_at.map(|flushed_at| SnapshotInfo {
-                        id: SnapshotId::new(snap.id().0),
-                        flushed_at,
-                        message: snap.message().to_string(),
-                        metadata,
-                        parent_id,
-                    });
-
-                    Some(info)
+                    }
                 } else {
+                    index = None;
                     None
                 }
             });
@@ -506,12 +459,72 @@ impl RepoInfo {
     }
 }
 
+fn resolve_ref_iter<'a>(
+    sorted_snapshots: &[SnapshotInfo],
+    it: impl IntoIterator<Item = (&'a str, SnapshotId)>,
+) -> IcechunkResult<Vec<(&'a str, u32)>> {
+    let mut res: Vec<_> = it
+        .into_iter()
+        .map(|(name, id)| {
+            let idx = sorted_snapshots
+                .binary_search_by_key(&&id.0, |snap| &snap.id.0)
+                .map_err(|_| {
+                    IcechunkFormatError::from(
+                        IcechunkFormatErrorKind::SnapshotIdNotFound {
+                            snapshot_id: id.clone(),
+                        },
+                    )
+                })? as u32;
+            Ok::<_, IcechunkFormatError>((name, idx))
+        })
+        .try_collect()?;
+    res.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+    Ok(res)
+}
+
 fn timestamp_to_timestamp(ts: u64) -> IcechunkResult<DateTime<Utc>> {
     let ts: i64 = ts.try_into().map_err(|_| {
         IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidTimestamp)
     })?;
     DateTime::from_timestamp_micros(ts)
         .ok_or_else(|| IcechunkFormatErrorKind::InvalidTimestamp.into())
+}
+
+fn mk_snapshot_info(
+    repo: &generated::Repo,
+    snap: &generated::SnapshotInfo<'_>,
+) -> IcechunkResult<SnapshotInfo> {
+    let flushed_at = timestamp_to_timestamp(snap.flushed_at())?;
+    let parent_id = if snap.parent_offset() >= 0 {
+        let parent = repo.snapshots().get(snap.parent_offset() as usize).id();
+        Some(parent)
+    } else {
+        None
+    };
+    let metadata = snap
+        .metadata()
+        .map(|items| {
+            let items = items
+                .iter()
+                .map(|item| {
+                    let name = item.name().to_string();
+                    let value =
+                        rmp_serde::from_slice(item.value().bytes()).map_err(Box::new)?;
+                    Ok::<_, IcechunkFormatError>((name, value))
+                })
+                .try_collect()?;
+            Ok::<_, IcechunkFormatError>(items)
+        })
+        .transpose()?
+        .unwrap_or_default();
+
+    Ok(SnapshotInfo {
+        id: SnapshotId::new(snap.id().0),
+        flushed_at,
+        message: snap.message().to_string(),
+        metadata,
+        parent_id: parent_id.map(|buf| SnapshotId::new(buf.0)),
+    })
 }
 
 #[cfg(test)]
