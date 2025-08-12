@@ -4105,8 +4105,7 @@ mod tests {
             panic!("Bad test, it should conflict")
         }
 
-        // reset the branch to what repo1 wrote
-        let current_snap = repo.lookup_branch("main").await?;
+        let _ = repo.lookup_branch("main").await?;
         Ok(())
     }
 

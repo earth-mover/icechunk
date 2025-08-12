@@ -603,7 +603,7 @@ pub async fn expire(
         |mut res: HashMap<SnapshotId, HashSet<SnapshotId>>, (_, tip_snap)| {
             let ancestry = repo_info.ancestry(tip_snap)?;
             let (branch_snaps, root) = split_root(ancestry)?;
-            let root = root.unwrap();
+            let root = root.unwrap_or(Snapshot::INITIAL_SNAPSHOT_ID);
             match res.get_mut(&root) {
                 Some(s) => {
                     s.extend(branch_snaps);

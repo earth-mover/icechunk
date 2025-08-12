@@ -43,8 +43,9 @@
 use std::io::{Read, Write};
 
 use super::{
-    IcechunkFormatError, format_constants::SpecVersionBin, manifest::Manifest,
-    repo_info::RepoInfo, snapshot::Snapshot, transaction_log::TransactionLog,
+    IcechunkFormatError, IcechunkFormatErrorKind, format_constants::SpecVersionBin,
+    manifest::Manifest, repo_info::RepoInfo, snapshot::Snapshot,
+    transaction_log::TransactionLog,
 };
 
 pub fn serialize_snapshot(
@@ -90,9 +91,10 @@ pub fn serialize_repo_info(
 ) -> Result<(), std::io::Error> {
     match version {
         SpecVersionBin::V2dot0 => write.write_all(info.bytes()),
-        SpecVersionBin::V1dot0 => {
-            panic!("Cannot write repo info object using version 1.0 of the Icechunk spec")
-        }
+        SpecVersionBin::V1dot0 => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Trying to write to an old Icechunk format version. Aborting.",
+        )),
     }
 }
 
@@ -153,8 +155,6 @@ pub fn deserialize_repo_info(
             buffer.shrink_to_fit();
             RepoInfo::from_buffer(buffer)
         }
-        SpecVersionBin::V1dot0 => {
-            panic!("Cannot read repo info object using version 1.0 of the Icechunk spec")
-        }
+        SpecVersionBin::V1dot0 => Err(IcechunkFormatErrorKind::InvalidSpecVersion.into()),
     }
 }

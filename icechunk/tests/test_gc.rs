@@ -7,7 +7,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Repository, RepositoryConfig, Storage,
@@ -19,7 +19,6 @@ use icechunk::{
     format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
     new_in_memory_storage,
     ops::gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
-    refs::Ref,
     repository::VersionInfo,
     session::get_chunk,
 };
@@ -122,7 +121,7 @@ pub async fn do_test_gc(
         ds.set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
     }
-    let second_snap_id = ds.commit("second", None).await?;
+    let _second_snap_id = ds.commit("second", None).await?;
     assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
     assert_eq!(storage.list_manifests(&storage_settings).await?.count().await, 111);
 
