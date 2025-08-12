@@ -605,7 +605,7 @@ impl Repository {
         if self.spec_version != SpecVersionBin::current() {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 // FIXME:
-                "This repository is incompatible with Icechunk vesion you are using"
+                "This repository is incompatible with Icechunk version you are using"
                     .to_string(),
             )
             .into());
@@ -742,7 +742,7 @@ impl Repository {
         if self.spec_version != SpecVersionBin::current() {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 // FIXME:
-                "This repository is incompatible with Icechunk vesion you are using"
+                "This repository is incompatible with Icechunk version you are using"
                     .to_string(),
             )
             .into());
@@ -780,7 +780,7 @@ impl Repository {
         if self.spec_version != SpecVersionBin::current() {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 // FIXME:
-                "This repository is incompatible with Icechunk vesion you are using"
+                "This repository is incompatible with Icechunk version you are using"
                     .to_string(),
             )
             .into());
@@ -823,7 +823,7 @@ impl Repository {
         if self.spec_version != SpecVersionBin::current() {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 // FIXME:
-                "This repository is incompatible with Icechunk vesion you are using"
+                "This repository is incompatible with Icechunk version you are using"
                     .to_string(),
             )
             .into());
@@ -861,7 +861,7 @@ impl Repository {
         if self.spec_version != SpecVersionBin::current() {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 // FIXME:
-                "This repository is incompatible with Icechunk vesion you are using"
+                "This repository is incompatible with Icechunk version you are using"
                     .to_string(),
             )
             .into());

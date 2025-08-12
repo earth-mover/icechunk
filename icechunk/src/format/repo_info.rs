@@ -176,7 +176,7 @@ impl RepoInfo {
         #[allow(clippy::expect_used)]
         // This method is basically constant, so it's OK to unwrap in it
         Self::from_parts([], [("main", 0)], [], [snapshot])
-            .expect("Cannot generat initial snapshot")
+            .expect("Cannot generate initial snapshot")
     }
 
     fn all_tags(&self) -> IcechunkResult<impl Iterator<Item = (&str, u32)>> {
