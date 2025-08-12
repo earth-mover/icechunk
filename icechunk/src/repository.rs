@@ -1,3 +1,4 @@
+use async_stream::try_stream;
 use itertools::Itertools as _;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
@@ -6,7 +7,6 @@ use std::{
     sync::Arc,
 };
 
-use async_recursion::async_recursion;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto as _;
@@ -527,22 +527,49 @@ impl Repository {
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
+    /// Output stream includes snapshot_id argument
     #[instrument(skip(self))]
-    async fn snapshot_ancestry_v1(
+    pub async fn snapshot_info_ancestry_v1(
         &self,
         snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + '_ + use<'_>>
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + use<>>
     {
-        Arc::clone(&self.asset_manager).snapshot_info_ancestry(snapshot_id).await
+        let res =
+            self.snapshot_ancestry_v1(snapshot_id).await?.and_then(|snap| async move {
+                let info = snap.as_ref().try_into()?;
+                Ok(info)
+            });
+        Ok(res)
+    }
+
+    /// Returns the sequence of parents of the current session, in order of latest first.
+    /// Output stream includes snapshot_id argument
+    #[instrument(skip(self))]
+    pub async fn snapshot_ancestry_v1(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<Arc<Snapshot>>> + use<>>
+    {
+        let am = Arc::clone(&self.asset_manager);
+        let mut this = am.fetch_snapshot(snapshot_id).await?;
+        let stream = try_stream! {
+            yield Arc::clone(&this);
+            #[allow(deprecated)]
+            while let Some(parent) = this.parent_id() {
+                let snap = am.fetch_snapshot(&parent).await?;
+                yield Arc::clone(&snap);
+                this = snap;
+            }
+        };
+        Ok(stream)
     }
 
     #[instrument(skip(self))]
-    pub async fn ancestry<'a>(
-        &'a self,
-        version: &'a VersionInfo,
-    ) -> RepositoryResult<
-        impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + 'a + use<'a>,
-    > {
+    pub async fn ancestry(
+        &self,
+        version: &VersionInfo,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
+    {
         match self.spec_version {
             SpecVersionBin::V1dot0 => Ok(self.ancestry_v1(version).await?.left_stream()),
             SpecVersionBin::V2dot0 => {
@@ -553,40 +580,36 @@ impl Repository {
     }
 
     /// Returns the sequence of parents of the snapshot pointed by the given version
-    #[async_recursion(?Send)]
     #[instrument(skip(self))]
-    async fn ancestry_v1<'a>(
-        &'a self,
+    async fn ancestry_v1(
+        &self,
         version: &VersionInfo,
-    ) -> RepositoryResult<
-        impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + 'a + use<'a>,
-    > {
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
+    {
         let snapshot_id = self.resolve_version(version).await?;
-        self.snapshot_ancestry_v1(&snapshot_id).await
+        self.snapshot_info_ancestry_v1(&snapshot_id).await
     }
 
+    #[instrument(skip(self))]
     async fn ancestry_v2(
         &self,
         version: &VersionInfo,
-    ) -> RepositoryResult<impl Iterator<Item = RepositoryResult<SnapshotInfo>> + Send>
-    {
+    ) -> RepositoryResult<
+        impl Iterator<Item = RepositoryResult<SnapshotInfo>> + Send + use<>,
+    > {
         let (repo_info, _) = self.get_repo_info().await?;
         let snapshot_id = self.resolve_version_v2(&repo_info, version).await?;
-        let it = unsafe {
-            let repo_info_ref = &*Arc::as_ptr(&repo_info);
-            Box::new(repo_info_ref.ancestry(&snapshot_id)?.map(|e| e.err_into()))
-        };
-        Ok(AcestryIterator { _repo_info: repo_info.clone(), it })
+        AncestryIteratorV2::new(repo_info, &snapshot_id)
     }
 
     #[instrument(skip(self))]
-    async fn ancestry_ref<'a>(
-        &'a self,
+    async fn ancestry_ref_v1(
+        &self,
         version: &RefVersionInfo,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + 'a + use<'a>>
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
     {
         let snapshot_id = self.resolve_ref_version_v1(version).await?;
-        self.snapshot_ancestry_v1(&snapshot_id).await
+        self.snapshot_info_ancestry_v1(&snapshot_id).await
     }
 
     /// Create a new branch in the repository at the given snapshot id
@@ -1014,7 +1037,7 @@ impl Repository {
             Err((branch, at)) => {
                 let tip = RefVersionInfo::BranchTipRef(branch.clone());
                 let snap = self
-                    .ancestry_ref(&tip)
+                    .ancestry_ref_v1(&tip)
                     .await?
                     .try_skip_while(|parent| ready(Ok(parent.flushed_at > at)))
                     .take(1)
@@ -1083,7 +1106,7 @@ impl Repository {
         let from = self.resolve_version(from).await?;
         let to = self.resolve_version(to).await?;
         let all_snaps = self
-            .ancestry_ref(&RefVersionInfo::SnapshotId(to))
+            .ancestry(&VersionInfo::SnapshotId(to))
             .await?
             .try_take_while(|snap_info| ready(Ok(snap_info.id != from)))
             .try_collect::<Vec<_>>()
@@ -1247,17 +1270,27 @@ impl Repository {
     }
 }
 
-struct AcestryIterator {
+struct AncestryIteratorV2 {
     // we need to keep the Arc alive
     _repo_info: Arc<RepoInfo>,
     it: Box<dyn Iterator<Item = RepositoryResult<SnapshotInfo>> + Send>,
 }
 
-impl Iterator for AcestryIterator {
+impl Iterator for AncestryIteratorV2 {
     type Item = RepositoryResult<SnapshotInfo>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.it.next()
+    }
+}
+
+impl AncestryIteratorV2 {
+    fn new(repo_info: Arc<RepoInfo>, snapshot_id: &SnapshotId) -> RepositoryResult<Self> {
+        let it = unsafe {
+            let repo_info_ref = &*Arc::as_ptr(&repo_info);
+            Box::new(repo_info_ref.ancestry(snapshot_id)?.map(|e| e.err_into()))
+        };
+        Ok(Self { _repo_info: repo_info.clone(), it })
     }
 }
 

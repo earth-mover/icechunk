@@ -154,7 +154,7 @@ impl RepoInfo {
         // TODO: repo metadata
         let metadata = builder.create_vector(&[] as &[WIPOffset<MetadataItem>]);
 
-        // TODO: provied accessors for last_updated_at, status, metadata, etc.
+        // TODO: provide accessors for last_updated_at, status, metadata, etc.
         let repo_args = generated::RepoArgs {
             tags: Some(tags),
             branches: Some(branches),
@@ -483,7 +483,6 @@ impl RepoInfo {
                         None
                     }
                 } else {
-                    index = None;
                     None
                 }
             });

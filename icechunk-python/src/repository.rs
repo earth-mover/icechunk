@@ -782,14 +782,8 @@ impl PyRepository {
             let version = args_to_version_info(branch, tag, snapshot_id, None)?;
             let ancestry = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move {
-                    let (snapshot_id, asset_manager) = {
-                        let lock = self.0.read().await;
-                        (
-                            lock.resolve_version(&version).await?,
-                            Arc::clone(lock.asset_manager()),
-                        )
-                    };
-                    asset_manager.snapshot_info_ancestry(&snapshot_id).await
+                    let repo = self.0.read().await;
+                    repo.ancestry(&version).await
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?
                 .map_err(PyIcechunkStoreError::RepositoryError);

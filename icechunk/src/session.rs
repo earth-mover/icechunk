@@ -38,7 +38,7 @@ use crate::{
         repo_info::RepoInfo,
         snapshot::{
             ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
-            NodeType, Snapshot, SnapshotProperties,
+            NodeType, Snapshot, SnapshotInfo, SnapshotProperties,
         },
         transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
@@ -1996,7 +1996,6 @@ async fn flush(
 
     let new_snapshot = Snapshot::from_iter(
         None,
-        Some(old_snapshot.id().clone()),
         message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
@@ -2096,9 +2095,12 @@ async fn do_commit(
         }
 
         debug!(branch_name, %new_snapshot_id, attempt, "Generating new repo info object");
-        let new_repo_info = Arc::new(
-            repo_info.add_snapshot(new_snapshot.as_ref().try_into()?, branch_name)?,
-        );
+        let new_snapshot_info = SnapshotInfo {
+            parent_id: Some(snapshot_id.clone()),
+            ..new_snapshot.as_ref().try_into()?
+        };
+        let new_repo_info =
+            Arc::new(repo_info.add_snapshot(new_snapshot_info, branch_name)?);
         debug!(attempt, "Attempting to update repo info object");
 
         match asset_manager
@@ -2670,7 +2672,6 @@ mod tests {
         let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
             None,
-            Some(initial.id().clone()),
             "message".to_string(),
             None,
             manifests,

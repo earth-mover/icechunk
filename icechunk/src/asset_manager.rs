@@ -1,7 +1,5 @@
-use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{Stream, TryStreamExt};
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -371,44 +369,6 @@ impl AssetManager {
                 Ok(chunk)
             }
         }
-    }
-
-    // FIXME: no longer needed
-    /// Returns the sequence of parents of the current session, in order of latest first.
-    /// Output stream includes snapshot_id argument
-    #[instrument(skip(self))]
-    pub async fn snapshot_info_ancestry(
-        self: Arc<Self>,
-        snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + use<>>
-    {
-        let res =
-            self.snapshot_ancestry(snapshot_id).await?.and_then(|snap| async move {
-                let info = snap.as_ref().try_into()?;
-                Ok(info)
-            });
-        Ok(res)
-    }
-
-    // FIXME: no longer needed
-    /// Returns the sequence of parents of the current session, in order of latest first.
-    /// Output stream includes snapshot_id argument
-    #[instrument(skip(self))]
-    pub async fn snapshot_ancestry(
-        self: Arc<Self>,
-        snapshot_id: &SnapshotId,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<Arc<Snapshot>>> + use<>>
-    {
-        let mut this = self.fetch_snapshot(snapshot_id).await?;
-        let stream = try_stream! {
-            yield Arc::clone(&this);
-            while let Some(parent) = this.parent_id() {
-                let snap = self.fetch_snapshot(&parent).await?;
-                yield Arc::clone(&snap);
-                this = snap;
-            }
-        };
-        Ok(stream)
     }
 
     #[instrument(skip(self))]
