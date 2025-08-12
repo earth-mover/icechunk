@@ -15,12 +15,13 @@ from urllib.parse import urlparse
 from icechunk import (
     IcechunkStore,
     Repository,
+    Storage,
     gcs_storage,
     in_memory_storage,
     local_filesystem_storage,
     s3_storage,
 )
-from zarr.abc.store_adapter import StoreAdapter
+from zarr.abc.store_adapter import StoreAdapter  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from zarr.abc.store_adapter import URLSegment
@@ -31,7 +32,6 @@ __all__ = [
     "IcechunkPathSpec",
     "IcechunkStoreAdapter",
     "create_readonly_session_from_path",
-    "create_readonly_session_from_path_spec",
     "parse_icechunk_path_spec",
 ]
 
@@ -204,27 +204,6 @@ async def create_readonly_session_from_path(
         raise ValueError(f"Could not create readonly session for {ref_desc}: {e}") from e
 
 
-def create_readonly_session_from_path_spec(segment_path: str):
-    """Convenience function that combines parsing and session creation.
-
-    Args:
-        segment_path: Raw path specification from ZEP 8 URL
-
-    Returns:
-        Function that takes a Repository and returns IcechunkStore
-
-    Usage:
-        session_creator = create_readonly_session_from_path_spec("@tag.v1.0/data")
-        store = await session_creator(repo)
-    """
-    path_spec = parse_icechunk_path_spec(segment_path)
-
-    async def _create_session(repo: Repository) -> IcechunkStore:
-        return await create_readonly_session_from_path(repo, path_spec)
-
-    return _create_session
-
-
 # =============================================================================
 # Storage and URL Parsing Utilities
 # =============================================================================
@@ -252,7 +231,7 @@ def _parse_gcs_url(url: str) -> tuple[str, str]:
     return bucket, prefix
 
 
-def _create_icechunk_storage(preceding_url: str):
+def _create_icechunk_storage(preceding_url: str) -> Storage:
     """Create appropriate Icechunk storage from URL."""
     if preceding_url == "memory:":
         return in_memory_storage()
@@ -298,7 +277,7 @@ async def _create_icechunk_store(repo: Repository, segment_path: str) -> Icechun
 # =============================================================================
 
 
-class IcechunkStoreAdapter(StoreAdapter):
+class IcechunkStoreAdapter(StoreAdapter):  # type: ignore[misc]
     """Store adapter for Icechunk repositories in ZEP 8 URL chains."""
 
     adapter_name = "icechunk"

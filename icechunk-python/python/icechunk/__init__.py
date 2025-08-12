@@ -88,7 +88,6 @@ from icechunk.store import IcechunkStore
 from icechunk.zarr_adapter import (
     IcechunkPathSpec,
     create_readonly_session_from_path,
-    create_readonly_session_from_path_spec,
     parse_icechunk_path_spec,
 )
 
@@ -151,7 +150,6 @@ __all__ = [
     "azure_storage",
     "containers_credentials",
     "create_readonly_session_from_path",
-    "create_readonly_session_from_path_spec",
     "gcs_credentials",
     "gcs_from_env_credentials",
     "gcs_refreshable_credentials",

@@ -23,7 +23,6 @@ import zarr
 from icechunk.zarr_adapter import (
     IcechunkPathSpec,
     create_readonly_session_from_path,
-    create_readonly_session_from_path_spec,
     parse_icechunk_path_spec,
 )
 from zarr.registry import register_store_adapter
@@ -678,26 +677,6 @@ async def test_create_readonly_session_error():
         ValueError, match="Could not create readonly session for branch 'nonexistent'"
     ):
         await create_readonly_session_from_path(mock_repo, path_spec)
-
-
-@pytest.mark.asyncio
-async def test_create_readonly_session_from_path_spec():
-    """Test convenience function that combines parsing and session creation."""
-    mock_repo = AsyncMock()
-    mock_session = AsyncMock()
-    mock_store = MagicMock()
-
-    mock_repo.readonly_session_async.return_value = mock_session
-    mock_session.store = mock_store
-
-    # Create session creator function
-    session_creator = create_readonly_session_from_path_spec("@tag.v1.0/data")
-
-    # Use it to create session
-    store = await session_creator(mock_repo)
-
-    mock_repo.readonly_session_async.assert_called_once_with(tag="v1.0")
-    assert store == mock_store
 
 
 def test_parsing_integration_examples():
