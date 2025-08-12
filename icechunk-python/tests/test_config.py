@@ -236,3 +236,23 @@ def test_manifest_preload_magic_methods() -> None:
 
 def test_spec_version() -> None:
     assert icechunk.spec_version() >= 1
+
+
+def test_config_from_store() -> None:
+    config = icechunk.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 5
+
+    store_config = icechunk.s3_store(region="us-east-1")
+    container = icechunk.VirtualChunkContainer("s3://example/", store_config)
+    config.set_virtual_chunk_container(container)
+
+    storage = icechunk.in_memory_storage()
+    repo = icechunk.Repository.create(
+        storage=storage,
+        config=config,
+    )
+    session = repo.writable_session("main")
+    store = session.store
+
+    assert store.session.config == config
+    assert store.session.config.virtual_chunk_containers.keys() == {"s3://example/"}
