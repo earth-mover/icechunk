@@ -131,13 +131,13 @@ cache-keys = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
 minversion = "7"
 testpaths = ["tests", "integration_tests"]
 log_cli_level = "INFO"
 xfail_strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers"]
 markers = [
+  "asyncio",
   "gpu", # need this to run the zarr tests
 ]
 filterwarnings = [
@@ -209,3 +209,7 @@ ban-relative-imports = "all"
 
 [project.scripts]
 icechunk = "icechunk._icechunk_python:cli_entrypoint"
+
+[project.entry-points."zarr.stores"]
+icechunk = "icechunk.zarr_adapter:IcechunkStoreAdapter"
+ic = "icechunk.zarr_adapter:ICStoreAdapter"
