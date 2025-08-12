@@ -41,7 +41,7 @@ impl RepoInfo {
         let branches = resolve_ref_iter(&snapshots, branches)?;
         let mut deleted_tags: Vec<_> = deleted_tags.into_iter().collect();
         deleted_tags.sort();
-        Self::from_parts(tags, branches, deleted_tags, snapshots)
+        Self::from_parts(tags, branches, deleted_tags, snapshots, None)
     }
 
     fn from_parts<'a>(
@@ -49,6 +49,7 @@ impl RepoInfo {
         sorted_branches: impl IntoIterator<Item = (&'a str, u32)>,
         sorted_deleted_tags: impl IntoIterator<Item = &'a str>,
         sorted_snapshots: impl IntoIterator<Item = SnapshotInfo>,
+        updated_at: Option<DateTime<Utc>>,
     ) -> IcechunkResult<Self> {
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
         let tags = sorted_tags
@@ -144,23 +145,24 @@ impl RepoInfo {
         let status = generated::RepoStatus::create(
             &mut builder,
             &generated::RepoStatusArgs {
-                availability: generated::RepoAvailability::Online, // FIXME:
-                set_at: 0,                                         // FIXME:
+                availability: generated::RepoAvailability::Online, // TODO:
+                set_at: 0,
                 limited_availability_reason: None,
             },
         );
 
-        // FIXME: empty repo metadata
+        // TODO: repo metadata
         let metadata = builder.create_vector(&[] as &[WIPOffset<MetadataItem>]);
 
+        // TODO: provied accessors for last_updated_at, status, metadata, etc.
         let repo_args = generated::RepoArgs {
             tags: Some(tags),
             branches: Some(branches),
             deleted_tags: Some(deleted_tags),
-            // FIXME:
             snapshots: Some(snapshots),
             spec_version: SpecVersionBin::current() as u8,
-            last_updated_at: 0, // FIXME:
+            last_updated_at: updated_at.unwrap_or_else(Utc::now).timestamp_micros()
+                as u64,
             status: Some(status),
             metadata: Some(metadata),
         };
@@ -173,9 +175,10 @@ impl RepoInfo {
     }
 
     pub fn initial(snapshot: SnapshotInfo) -> Self {
+        let last_updated_at = snapshot.flushed_at;
         #[allow(clippy::expect_used)]
         // This method is basically constant, so it's OK to unwrap in it
-        Self::from_parts([], [("main", 0)], [], [snapshot])
+        Self::from_parts([], [("main", 0)], [], [snapshot], Some(last_updated_at))
             .expect("Cannot generate initial snapshot")
     }
 
@@ -199,6 +202,7 @@ impl RepoInfo {
     }
 
     pub fn add_snapshot(&self, snap: SnapshotInfo, branch: &str) -> IcechunkResult<Self> {
+        let flushed_at = snap.flushed_at;
         let mut snapshots: Vec<_> = self.all_snapshots()?.try_collect()?;
         let new_index = match snapshots.binary_search_by_key(&&snap.id, |snap| &snap.id) {
             Ok(_) => Err(IcechunkFormatError::from(
@@ -224,7 +228,13 @@ impl RepoInfo {
             }
         });
 
-        let res = Self::from_parts(tags, branches, self.deleted_tags()?, snapshots)?;
+        let res = Self::from_parts(
+            tags,
+            branches,
+            self.deleted_tags()?,
+            snapshots,
+            Some(flushed_at),
+        )?;
         Ok(res)
     }
 
@@ -248,6 +258,7 @@ impl RepoInfo {
                     branches,
                     self.deleted_tags()?,
                     snaps,
+                    None,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -275,7 +286,7 @@ impl RepoInfo {
         // retain preserves order
         branches.retain(|(n, _)| n != &name);
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-        Self::from_parts(self.all_tags()?, branches, self.deleted_tags()?, snaps)
+        Self::from_parts(self.all_tags()?, branches, self.deleted_tags()?, snaps, None)
     }
 
     pub fn update_branch(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Self> {
@@ -302,6 +313,7 @@ impl RepoInfo {
                     branches,
                     self.deleted_tags()?,
                     snaps,
+                    None,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -331,6 +343,7 @@ impl RepoInfo {
                     self.all_branches()?,
                     self.deleted_tags()?,
                     snaps,
+                    None,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -361,7 +374,7 @@ impl RepoInfo {
         deleted_tags.insert(name);
 
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-        Self::from_parts(tags, self.all_branches()?, deleted_tags, snaps)
+        Self::from_parts(tags, self.all_branches()?, deleted_tags, snaps, None)
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {
