@@ -6,6 +6,7 @@ from typing import Any, NoReturn, Self
 from icechunk import (
     ConflictSolver,
     Diff,
+    RepositoryConfig,
 )
 from icechunk._icechunk_python import PySession
 from icechunk.store import IcechunkStore
@@ -135,6 +136,21 @@ class Session:
             A zarr Store object for reading and writing data from the repository.
         """
         return IcechunkStore(self._session.store, for_fork=False)
+
+    @property
+    def config(self) -> RepositoryConfig:
+        """
+        Get the repository configuration.
+
+        Notice that changes to the returned object won't be impacted. To change configuration values
+        use `Repository.reopen`.
+
+        Returns
+        -------
+        RepositoryConfig
+            The config for the repository that owns this session.
+        """
+        return self._session.config
 
     def all_virtual_chunk_locations(self) -> list[str]:
         """
