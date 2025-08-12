@@ -156,17 +156,17 @@ async def test_icechunk_can_read_old_repo_with_manifest_splitting() -> None:
     snapshot = ancestry[2]
     assert snapshot.message == "write data"
     # FIXME: uncomment
-    #assert len(snapshot.manifests) == 9
+    # assert len(snapshot.manifests) == 9
 
     snapshot = ancestry[3]
     assert snapshot.message == "write data again"
     # FIXME: uncomment
-    #assert len(snapshot.manifests) == 9
+    # assert len(snapshot.manifests) == 9
 
     snapshot = ancestry[4]
     assert snapshot.message == "write data again with more splits"
     # FIXME: uncomment
-    #assert len(snapshot.manifests) == 17
+    # assert len(snapshot.manifests) == 17
 
     assert repo.config.manifest
     assert repo.config.manifest.splitting == UPDATED_SPLITTING_CONFIG

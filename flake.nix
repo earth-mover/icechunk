@@ -110,6 +110,7 @@
               packages = [
                 python
                 pkgs.uv
+                pkgs.ruff
 
                 fenix.packages.x86_64-linux.stable.toolchain
                 pkgs.cargo-nextest # test runner

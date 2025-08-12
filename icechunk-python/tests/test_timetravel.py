@@ -128,7 +128,7 @@ def test_timetravel() -> None:
     ]
     assert parents[-1].id == "1CECHNKREP0F1RSTCMT0"
     # FIXME: uncomment
-    #assert [len(snap.manifests) for snap in parents] == [1, 1, 1, 0]
+    # assert [len(snap.manifests) for snap in parents] == [1, 1, 1, 0]
     assert sorted(parents, key=lambda p: p.written_at) == list(reversed(parents))
     assert len(set([snap.id for snap in parents])) == 4
     assert list(repo.ancestry(tag="v1.0")) == parents
@@ -428,7 +428,7 @@ async def test_timetravel_async() -> None:
     ]
     assert parents[-1].id == "1CECHNKREP0F1RSTCMT0"
     # FIXME: uncomment
-    #assert [len(snap.manifests) for snap in parents] == [1, 1, 1, 0]
+    # assert [len(snap.manifests) for snap in parents] == [1, 1, 1, 0]
     assert sorted(parents, key=lambda p: p.written_at) == list(reversed(parents))
     assert len(set([snap.id for snap in parents])) == 4
     assert [parent async for parent in repo.async_ancestry(tag="v1.0")] == parents
