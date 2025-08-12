@@ -7,6 +7,7 @@ use pyo3::{prelude::*, types::PyType};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
+    config::PyRepositoryConfig,
     conflicts::PyConflictSolver,
     errors::{PyIcechunkStoreError, PyIcechunkStoreResult},
     repository::{PyDiff, PySnapshotProperties},
@@ -103,6 +104,16 @@ impl PySession {
 
             let store = Arc::new(store);
             Ok(PyStore(store))
+        })
+    }
+
+    #[getter]
+    pub fn config(&self, py: Python<'_>) -> PyResult<PyRepositoryConfig> {
+        // This is blocking function, we need to release the Gil
+        py.allow_threads(move || {
+            let session = self.0.blocking_read();
+            let config = session.config().clone().into();
+            Ok(config)
         })
     }
 

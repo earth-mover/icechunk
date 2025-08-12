@@ -23,7 +23,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Just
         run: sudo snap install --edge --classic just
       - name: Stand up MinIO
@@ -124,7 +124,7 @@ jobs:
   xarray-backends:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: "icechunk"
 
@@ -144,7 +144,7 @@ jobs:
           done
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: "pydata/xarray"
           path: "xarray"
