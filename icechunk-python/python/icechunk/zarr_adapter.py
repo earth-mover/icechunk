@@ -2,24 +2,21 @@
 Icechunk store adapter for ZEP 8 URL syntax support.
 
 This module provides integration between Icechunk and zarr-python's ZEP 8 URL syntax,
-enabling Icechunk stores to be used in URL chains. It also includes shared utilities
-for parsing ZEP 8 URL path specifications and creating readonly sessions.
+leveraging Rust-based parsing and session creation for high performance.
+
+Requires the Rust-based Python bindings to be built and available.
 """
 
 from __future__ import annotations
 
-import re
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from icechunk import (
-    IcechunkStore,
-    Repository,
-    Storage,
-    gcs_storage,
-    in_memory_storage,
-    local_filesystem_storage,
-    s3_storage,
+from icechunk import IcechunkStore, Repository
+from icechunk.zep8 import (
+    IcechunkPathSpec,
+    create_readonly_session_from_path,
+    parse_icechunk_path_spec,
 )
 from zarr.abc.store_adapter import StoreAdapter
 
@@ -36,217 +33,39 @@ __all__ = [
 ]
 
 # =============================================================================
-# Shared Session Utilities
+# Storage Creation Utilities
 # =============================================================================
 
 
-class IcechunkPathSpec:
-    """Parsed icechunk path specification from ZEP 8 URL syntax.
-
-    Represents the parsed components of a path specification like:
-    - @branch.main/data/array -> branch='main', path='data/array'
-    - @tag.v1.0 -> tag='v1.0', path=''
-    - @abc123def456/nested -> snapshot_id='abc123def456', path='nested'
-    - data/array -> branch='main' (default), path='data/array'
-    """
-
-    def __init__(
-        self,
-        branch: Optional[str] = None,
-        tag: Optional[str] = None,
-        snapshot_id: Optional[str] = None,
-        path: str = "",
-    ):
-        """Initialize path specification.
-
-        Args:
-            branch: Branch name (defaults to 'main' if no other ref specified)
-            tag: Tag name
-            snapshot_id: Snapshot ID
-            path: Path within the repository after version specification
-        """
-        # Ensure only one reference type is specified
-        ref_count = sum(1 for ref in [branch, tag, snapshot_id] if ref is not None)
-        if ref_count > 1:
-            raise ValueError("Only one of branch, tag, or snapshot_id can be specified")
-
-        # Default to main branch if no reference specified
-        if ref_count == 0:
-            branch = "main"
-
-        self.branch = branch
-        self.tag = tag
-        self.snapshot_id = snapshot_id
-        self.path = path
-
-    @property
-    def reference_type(self) -> str:
-        """Get the type of reference specified."""
-        if self.branch is not None:
-            return "branch"
-        elif self.tag is not None:
-            return "tag"
-        elif self.snapshot_id is not None:
-            return "snapshot"
-        else:
-            return "branch"  # Default
-
-    @property
-    def reference_value(self) -> str:
-        """Get the reference value."""
-        if self.branch is not None:
-            return self.branch
-        elif self.tag is not None:
-            return self.tag
-        elif self.snapshot_id is not None:
-            return self.snapshot_id
-        else:
-            return "main"  # Default
-
-    def __repr__(self) -> str:
-        return (
-            f"IcechunkPathSpec(branch={self.branch!r}, tag={self.tag!r}, "
-            f"snapshot_id={self.snapshot_id!r}, path={self.path!r})"
-        )
-
-
-def parse_icechunk_path_spec(segment_path: str) -> IcechunkPathSpec:
-    """Parse ZEP 8 URL path specification into structured components.
-
-    Args:
-        segment_path: Path specification using ZEP 8 format:
-            - @branch.main/path  -> branch 'main'
-            - @tag.v123/path     -> tag 'v123'
-            - @SNAPSHOT_ID/path  -> snapshot 'SNAPSHOT_ID'
-            - empty/path         -> default to main branch
-            - just/path          -> default to main branch, path='just/path'
-
-    Returns:
-        IcechunkPathSpec with parsed components
-
-    Examples:
-        >>> parse_icechunk_path_spec("@branch.main/data/temp")
-        IcechunkPathSpec(branch='main', tag=None, snapshot_id=None, path='data/temp')
-
-        >>> parse_icechunk_path_spec("@tag.v1.0")
-        IcechunkPathSpec(branch=None, tag='v1.0', snapshot_id=None, path='')
-
-        >>> parse_icechunk_path_spec("data/array")
-        IcechunkPathSpec(branch='main', tag=None, snapshot_id=None, path='data/array')
-    """
-    if not segment_path:
-        # Empty path -> default to main branch
-        return IcechunkPathSpec(branch="main", path="")
-
-    if not segment_path.startswith("@"):
-        # No @ prefix -> treat entire string as path, default to main branch
-        return IcechunkPathSpec(branch="main", path=segment_path)
-
-    # Remove @ prefix and split on first /
-    ref_spec = segment_path[1:]
-    if "/" in ref_spec:
-        ref_part, path_part = ref_spec.split("/", 1)
-    else:
-        ref_part = ref_spec
-        path_part = ""
-
-    # Parse reference specification
-    if ref_part.startswith("branch."):
-        branch_name = ref_part[7:]  # Remove 'branch.' prefix
-        if not branch_name:
-            raise ValueError("Branch name cannot be empty in @branch.name format")
-        return IcechunkPathSpec(branch=branch_name, path=path_part)
-    elif ref_part.startswith("tag."):
-        tag_name = ref_part[4:]  # Remove 'tag.' prefix
-        if not tag_name:
-            raise ValueError("Tag name cannot be empty in @tag.name format")
-        return IcechunkPathSpec(tag=tag_name, path=path_part)
-    else:
-        # Assume it's a snapshot ID (no prefix, must be a valid ID format)
-        if not re.match(r"^[a-fA-F0-9]{12,}$", ref_part):
-            # If it doesn't look like a snapshot ID, treat as invalid
-            raise ValueError(
-                f"Invalid reference specification: '{ref_part}'. "
-                "Expected @branch.name, @tag.name, or @SNAPSHOT_ID format"
-            )
-        return IcechunkPathSpec(snapshot_id=ref_part, path=path_part)
-
-
-async def create_readonly_session_from_path(
-    repo: Repository, path_spec: IcechunkPathSpec
-) -> IcechunkStore:
-    """Create readonly Icechunk session from parsed path specification.
-
-    Args:
-        repo: Icechunk repository instance
-        path_spec: Parsed path specification
-
-    Returns:
-        IcechunkStore instance for the specified version
-
-    Raises:
-        ValueError: If branch, tag, or snapshot doesn't exist
-    """
-    try:
-        if path_spec.branch is not None:
-            session = await repo.readonly_session_async(branch=path_spec.branch)
-        elif path_spec.tag is not None:
-            session = await repo.readonly_session_async(tag=path_spec.tag)
-        elif path_spec.snapshot_id is not None:
-            session = await repo.readonly_session_async(snapshot_id=path_spec.snapshot_id)
-        else:
-            # Fallback to main branch (should not happen due to IcechunkPathSpec validation)
-            session = await repo.readonly_session_async(branch="main")
-
-        return session.store
-    except Exception as e:
-        ref_desc = f"{path_spec.reference_type} '{path_spec.reference_value}'"
-        raise ValueError(f"Could not create readonly session for {ref_desc}: {e}") from e
-
-
-# =============================================================================
-# Storage and URL Parsing Utilities
-# =============================================================================
-
-
-def _parse_s3_url(url: str) -> tuple[str, str]:
-    """Parse s3:// URL into bucket and prefix."""
-    parsed = urlparse(url)
-    if parsed.scheme != "s3":
-        raise ValueError(f"Expected s3:// URL, got: {url}")
-
-    bucket = parsed.netloc
-    prefix = parsed.path.lstrip("/")
-    return bucket, prefix
-
-
-def _parse_gcs_url(url: str) -> tuple[str, str]:
-    """Parse gcs:// or gs:// URL into bucket and prefix."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("gcs", "gs"):
-        raise ValueError(f"Expected gcs:// or gs:// URL, got: {url}")
-
-    bucket = parsed.netloc
-    prefix = parsed.path.lstrip("/")
-    return bucket, prefix
-
-
-def _create_icechunk_storage(preceding_url: str) -> Storage:
+def _create_icechunk_storage(preceding_url: str):
     """Create appropriate Icechunk storage from URL."""
     if preceding_url == "memory:":
-        return in_memory_storage()
+        raise ValueError(
+            "memory:|icechunk: URLs are not supported. In-memory Icechunk repositories "
+            "cannot be shared across different URL resolution calls."
+        )
     elif preceding_url.startswith("file:"):
         path = preceding_url[5:]  # Remove 'file:' prefix
+        from icechunk import local_filesystem_storage
+
         return local_filesystem_storage(path)
     elif preceding_url.startswith("s3://"):
-        bucket, prefix = _parse_s3_url(preceding_url)
+        from icechunk import s3_storage
+
+        parsed = urlparse(preceding_url)
+        bucket = parsed.netloc
+        prefix = parsed.path.lstrip("/")
         return s3_storage(
             bucket=bucket,
             prefix=prefix,
             from_env=True,  # Use environment variables for credentials
         )
     elif preceding_url.startswith(("gcs://", "gs://")):
-        bucket, prefix = _parse_gcs_url(preceding_url)
+        from icechunk import gcs_storage
+
+        parsed = urlparse(preceding_url)
+        bucket = parsed.netloc
+        prefix = parsed.path.lstrip("/")
         return gcs_storage(
             bucket=bucket,
             prefix=prefix,
@@ -259,15 +78,9 @@ def _create_icechunk_storage(preceding_url: str) -> Storage:
 async def _create_icechunk_store(repo: Repository, segment_path: str) -> IcechunkStore:
     """Create appropriate Icechunk session based on path specification.
 
-    Uses consolidated session utilities for consistent parsing and session creation.
-
-    Expected path formats:
-    - @branch.main/path  -> branch 'main'
-    - @tag.v123/path     -> tag 'v123'
-    - @SNAPSHOT_ID/path  -> snapshot 'SNAPSHOT_ID'
-    - empty/path         -> default to main branch
+    Uses Rust-based parsing and session creation utilities.
     """
-    # Use consolidated utilities for parsing and session creation
+    # Use Rust-based parsing for performance
     path_spec = parse_icechunk_path_spec(segment_path)
     return await create_readonly_session_from_path(repo, path_spec)
 
@@ -278,7 +91,10 @@ async def _create_icechunk_store(repo: Repository, segment_path: str) -> Icechun
 
 
 class IcechunkStoreAdapter(StoreAdapter):
-    """Store adapter for Icechunk repositories in ZEP 8 URL chains."""
+    """Store adapter for Icechunk repositories in ZEP 8 URL chains.
+
+    Leverages Rust-based parsing and session creation for high performance.
+    """
 
     adapter_name = "icechunk"
 
@@ -311,22 +127,8 @@ class IcechunkStoreAdapter(StoreAdapter):
         ------
         ValueError
             If write mode is requested or repository cannot be opened.
-
-        Examples
-        --------
-        For URL "s3://mybucket/repo|icechunk:@branch.main":
-        - segment.adapter = "icechunk"
-        - segment.path = "@branch.main"
-        - preceding_url = "s3://mybucket/repo"
-        - Uses icechunk.s3_storage(bucket="mybucket", prefix="repo")
-
-        For URL "file:/tmp/repo|icechunk:@tag.v1.0/data":
-        - segment.adapter = "icechunk"
-        - segment.path = "@tag.v1.0/data"
-        - Opens tag "v1.0" and accesses path "data"
         """
         # Icechunk adapter is read-only via ZEP 8 URLs
-        # For writing, use the native Icechunk API directly
         mode = kwargs.get("mode", "r")
         if mode in ("w", "w-", "a"):
             raise ValueError(
@@ -370,6 +172,7 @@ class IcechunkStoreAdapter(StoreAdapter):
             ) from None
 
         # Create appropriate session / store based on segment path
+        # Uses the Rust-based implementation for high performance
         store = await _create_icechunk_store(repo, segment.path)
 
         return store
@@ -393,6 +196,7 @@ class IcechunkStoreAdapter(StoreAdapter):
             The zarr path component, e.g. "data/array" or ""
         """
         try:
+            # Use Rust-based parsing for consistency and performance
             path_spec = parse_icechunk_path_spec(segment_path)
             return path_spec.path
         except Exception:

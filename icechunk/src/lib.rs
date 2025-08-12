@@ -35,6 +35,7 @@ pub mod store;
 pub mod strategies;
 mod stream_utils;
 pub mod virtual_chunks;
+pub mod zep8;
 
 pub use config::{ObjectStoreConfig, RepositoryConfig};
 pub use repository::Repository;

@@ -6,6 +6,7 @@ mod repository;
 mod session;
 mod store;
 mod streams;
+mod zep8;
 
 use std::env;
 
@@ -161,6 +162,9 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("RebaseFailedError", py.get_type::<PyRebaseFailedError>())?;
     m.add_class::<PyConflictType>()?;
     m.add_class::<PyConflict>()?;
+
+    // Add ZEP 8 support
+    zep8::register_zep8_module(py, m)?;
 
     Ok(())
 }
