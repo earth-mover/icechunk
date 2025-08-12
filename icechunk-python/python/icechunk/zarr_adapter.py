@@ -21,7 +21,7 @@ from icechunk import (
     local_filesystem_storage,
     s3_storage,
 )
-from zarr.abc.store_adapter import StoreAdapter  # type: ignore[import-untyped]
+from zarr.abc.store_adapter import StoreAdapter
 
 if TYPE_CHECKING:
     from zarr.abc.store_adapter import URLSegment
@@ -277,7 +277,7 @@ async def _create_icechunk_store(repo: Repository, segment_path: str) -> Icechun
 # =============================================================================
 
 
-class IcechunkStoreAdapter(StoreAdapter):  # type: ignore[misc]
+class IcechunkStoreAdapter(StoreAdapter):
     """Store adapter for Icechunk repositories in ZEP 8 URL chains."""
 
     adapter_name = "icechunk"

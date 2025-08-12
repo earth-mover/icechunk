@@ -223,20 +223,3 @@ ManifestSplittingConfig.from_dict = from_dict  # type: ignore[method-assign]
 ManifestSplittingConfig.to_dict = to_dict  # type: ignore[attr-defined]
 
 initialize_logs()
-
-
-# Auto-register ZEP 8 adapters for zarr URL support
-def _register_zarr_adapters():
-    """Auto-register icechunk adapters when the package is imported."""
-    try:
-        from icechunk.zarr_adapter import IcechunkStoreAdapter, ICStoreAdapter
-        from zarr.registry import register_store_adapter
-
-        register_store_adapter(IcechunkStoreAdapter)
-        register_store_adapter(ICStoreAdapter)
-    except ImportError:
-        # zarr not available or version doesn't support ZEP 8
-        pass
-
-
-_register_zarr_adapters()
