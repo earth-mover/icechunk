@@ -9,6 +9,7 @@ use std::{
     ops::Range,
     sync::{Arc, atomic::AtomicBool},
 };
+use tokio::sync::Semaphore;
 use tracing::{Span, debug, instrument, trace, warn};
 
 use crate::{
@@ -42,6 +43,8 @@ pub struct AssetManager {
     num_bytes_chunks: u64,
     compression_level: u8,
 
+    max_concurrent_requests: u16,
+
     #[serde(skip)]
     manifest_cache_size_warned: AtomicBool,
     #[serde(skip)]
@@ -55,6 +58,9 @@ pub struct AssetManager {
     transactions_cache: Cache<SnapshotId, Arc<TransactionLog>, FileWeighter>,
     #[serde(skip)]
     chunk_cache: Cache<(ChunkId, Range<ChunkOffset>), Bytes, FileWeighter>,
+
+    #[serde(skip)]
+    request_semaphore: Semaphore,
 }
 
 impl private::Sealed for AssetManager {}
@@ -69,6 +75,7 @@ struct AssetManagerSerializer {
     num_bytes_attributes: u64,
     num_bytes_chunks: u64,
     compression_level: u8,
+    max_concurrent_requests: u16,
 }
 
 impl From<AssetManagerSerializer> for AssetManager {
@@ -82,6 +89,7 @@ impl From<AssetManagerSerializer> for AssetManager {
             value.num_bytes_attributes,
             value.num_bytes_chunks,
             value.compression_level,
+            value.max_concurrent_requests,
         )
     }
 }
@@ -97,6 +105,7 @@ impl AssetManager {
         num_bytes_attributes: u64,
         num_bytes_chunks: u64,
         compression_level: u8,
+        max_concurrent_requests: u16,
     ) -> Self {
         Self {
             num_snapshot_nodes,
@@ -105,6 +114,7 @@ impl AssetManager {
             num_bytes_attributes,
             num_bytes_chunks,
             compression_level,
+            max_concurrent_requests,
             storage,
             storage_settings,
             snapshot_cache: Cache::with_weighter(1, num_snapshot_nodes, FileWeighter),
@@ -117,6 +127,7 @@ impl AssetManager {
             chunk_cache: Cache::with_weighter(0, num_bytes_chunks, FileWeighter),
             snapshot_cache_size_warned: AtomicBool::new(false),
             manifest_cache_size_warned: AtomicBool::new(false),
+            request_semaphore: Semaphore::new(max_concurrent_requests as usize),
         }
     }
 
@@ -124,8 +135,19 @@ impl AssetManager {
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
         compression_level: u8,
+        max_concurrent_requests: u16,
     ) -> Self {
-        Self::new(storage, storage_settings, 0, 0, 0, 0, 0, compression_level)
+        Self::new(
+            storage,
+            storage_settings,
+            0,
+            0,
+            0,
+            0,
+            0,
+            compression_level,
+            max_concurrent_requests,
+        )
     }
 
     pub fn new_with_config(
@@ -133,6 +155,7 @@ impl AssetManager {
         storage_settings: storage::Settings,
         config: &CachingConfig,
         compression_level: u8,
+        max_concurrent_requests: u16,
     ) -> Self {
         Self::new(
             storage,
@@ -143,6 +166,7 @@ impl AssetManager {
             config.num_bytes_attributes(),
             config.num_bytes_chunks(),
             compression_level,
+            max_concurrent_requests,
         )
     }
 
@@ -170,6 +194,7 @@ impl AssetManager {
             self.compression_level,
             self.storage.as_ref(),
             &self.storage_settings,
+            &self.request_semaphore,
         )
         .await?;
         self.warn_if_manifest_cache_small(manifest.as_ref());
@@ -191,6 +216,7 @@ impl AssetManager {
                     manifest_size,
                     self.storage.as_ref(),
                     &self.storage_settings,
+                    &self.request_semaphore,
                 )
                 .await?;
                 self.warn_if_manifest_cache_small(manifest.as_ref());
@@ -246,6 +272,7 @@ impl AssetManager {
             self.compression_level,
             self.storage.as_ref(),
             &self.storage_settings,
+            &self.request_semaphore,
         )
         .await?;
         let snapshot_id = snapshot.id().clone();
@@ -268,6 +295,7 @@ impl AssetManager {
                     snapshot_id,
                     self.storage.as_ref(),
                     &self.storage_settings,
+                    &self.request_semaphore,
                 )
                 .await?;
                 self.warn_if_snapshot_cache_small(snapshot.as_ref());
@@ -290,6 +318,7 @@ impl AssetManager {
             self.compression_level,
             self.storage.as_ref(),
             &self.storage_settings,
+            &self.request_semaphore,
         )
         .await?;
         self.transactions_cache.insert(transaction_id, log);
@@ -308,6 +337,7 @@ impl AssetManager {
                     transaction_id,
                     self.storage.as_ref(),
                     &self.storage_settings,
+                    &self.request_semaphore,
                 )
                 .await?;
                 let _fail_is_ok = guard.insert(Arc::clone(&transaction));
@@ -323,6 +353,7 @@ impl AssetManager {
         bytes: Bytes,
     ) -> RepositoryResult<()> {
         trace!(%chunk_id, size_bytes=bytes.len(), "Writing chunk");
+        let _permit = self.request_semaphore.acquire().await?;
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
         Ok(self.storage.write_chunk(&self.storage_settings, chunk_id, bytes).await?)
     }
@@ -338,10 +369,12 @@ impl AssetManager {
             Ok(chunk) => Ok(chunk),
             Err(guard) => {
                 trace!(%chunk_id, ?range, "Downloading chunk");
+                let permit = self.request_semaphore.acquire().await?;
                 let chunk = self
                     .storage
                     .fetch_chunk(&self.storage_settings, chunk_id, range)
                     .await?;
+                drop(permit);
                 let _fail_is_ok = guard.insert(chunk.clone());
                 Ok(chunk)
             }
@@ -390,6 +423,7 @@ impl AssetManager {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<DateTime<Utc>> {
         debug!(%snapshot_id, "Getting snapshot timestamp");
+        let _permit = self.request_semaphore.acquire().await?;
         Ok(self
             .storage
             .get_snapshot_last_modified(&self.storage_settings, snapshot_id)
@@ -491,6 +525,7 @@ async fn write_new_manifest(
     compression_level: u8,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
+    semaphore: &Semaphore,
 ) -> RepositoryResult<u64> {
     use format_constants::*;
     let metadata = vec![
@@ -536,6 +571,7 @@ async fn write_new_manifest(
 
     let len = buffer.len() as u64;
     debug!(%id, size_bytes=len, "Writing manifest");
+    let _permit = semaphore.acquire().await?;
     storage.write_manifest(storage_settings, id.clone(), metadata, buffer.into()).await?;
     Ok(len)
 }
@@ -545,9 +581,11 @@ async fn fetch_manifest(
     manifest_size: u64,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
+    semaphore: &Semaphore,
 ) -> RepositoryResult<Arc<Manifest>> {
     debug!(%manifest_id, "Downloading manifest");
 
+    let _permit = semaphore.acquire().await?;
     let reader = if manifest_size > 0 {
         storage
             .fetch_manifest_known_size(storage_settings, manifest_id, manifest_size)
@@ -587,6 +625,7 @@ async fn write_new_snapshot(
     compression_level: u8,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
+    semaphore: &Semaphore,
 ) -> RepositoryResult<SnapshotId> {
     use format_constants::*;
     let metadata = vec![
@@ -628,6 +667,7 @@ async fn write_new_snapshot(
     .await??;
 
     debug!(%id, size_bytes=buffer.len(), "Writing snapshot");
+    let _permit = semaphore.acquire().await?;
     storage.write_snapshot(storage_settings, id.clone(), metadata, buffer.into()).await?;
 
     Ok(id)
@@ -637,8 +677,10 @@ async fn fetch_snapshot(
     snapshot_id: &SnapshotId,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
+    semaphore: &Semaphore,
 ) -> RepositoryResult<Arc<Snapshot>> {
     debug!(%snapshot_id, "Downloading snapshot");
+    let _permit = semaphore.acquire().await?;
     let read = storage.fetch_snapshot(storage_settings, snapshot_id).await?;
 
     let span = Span::current();
@@ -660,6 +702,7 @@ async fn write_new_tx_log(
     compression_level: u8,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
+    semaphore: &Semaphore,
 ) -> RepositoryResult<()> {
     use format_constants::*;
     let metadata = vec![
@@ -698,6 +741,7 @@ async fn write_new_tx_log(
     .await??;
 
     debug!(%transaction_id, size_bytes=buffer.len(), "Writing transaction log");
+    let _permit = semaphore.acquire().await?;
     storage
         .write_transaction_log(storage_settings, transaction_id, metadata, buffer.into())
         .await?;
@@ -709,8 +753,10 @@ async fn fetch_transaction_log(
     transaction_id: &SnapshotId,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
+    semaphore: &Semaphore,
 ) -> RepositoryResult<Arc<TransactionLog>> {
     debug!(%transaction_id, "Downloading transaction log");
+    let _permit = semaphore.acquire().await?;
     let read = storage.fetch_transaction_log(storage_settings, transaction_id).await?;
 
     let span = Span::current();
@@ -774,7 +820,8 @@ mod test {
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
-        let manager = AssetManager::new_no_cache(backend.clone(), settings.clone(), 1);
+        let manager =
+            AssetManager::new_no_cache(backend.clone(), settings.clone(), 1, 100);
 
         let node1 = NodeId::random();
         let node2 = NodeId::random();
@@ -801,6 +848,7 @@ mod test {
             settings,
             &CachingConfig::default(),
             1,
+            100,
         );
 
         let manifest =
@@ -847,7 +895,8 @@ mod test {
     async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
-        let manager = AssetManager::new_no_cache(backend.clone(), settings.clone(), 1);
+        let manager =
+            AssetManager::new_no_cache(backend.clone(), settings.clone(), 1, 100);
 
         let ci1 = ChunkInfo {
             node: NodeId::random(),
@@ -890,6 +939,7 @@ mod test {
                 num_bytes_chunks: Some(0),
             },
             1,
+            100,
         );
 
         // we keep asking for all 3 items, but the cache can only fit 2
@@ -910,8 +960,12 @@ mod test {
         // object_store requests, one of them must wait
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
-        let manager =
-            Arc::new(AssetManager::new_no_cache(storage.clone(), settings.clone(), 1));
+        let manager = Arc::new(AssetManager::new_no_cache(
+            storage.clone(),
+            settings.clone(),
+            1,
+            100,
+        ));
 
         // some reasonable size so it takes some time to parse
         let manifest = Manifest::from_iter((0..5_000).map(|_| ChunkInfo {
@@ -932,6 +986,7 @@ mod test {
             logging_c.default_settings(),
             &CachingConfig::default(),
             1,
+            100,
         ));
 
         let manager_c = Arc::new(manager);

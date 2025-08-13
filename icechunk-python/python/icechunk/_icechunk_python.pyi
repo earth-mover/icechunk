@@ -993,6 +993,7 @@ class RepositoryConfig:
         inline_chunk_threshold_bytes: int | None = None,
         get_partial_values_concurrency: int | None = None,
         compression: CompressionConfig | None = None,
+        max_concurrent_requests: int | None = None,
         caching: CachingConfig | None = None,
         storage: StorageSettings | None = None,
         virtual_chunk_containers: dict[str, VirtualChunkContainer] | None = None,
@@ -1009,6 +1010,9 @@ class RepositoryConfig:
             The number of concurrent requests to make when getting partial values from storage.
         compression: CompressionConfig | None
             The compression configuration for the repository.
+        max_concurrent_requests: int | None
+            The maximum number of concurrent HTTP requests Icechunk will do for this repo.
+            Default is 256.
         caching: CachingConfig | None
             The caching configuration for the repository.
         storage: StorageSettings | None
@@ -1077,6 +1081,28 @@ class RepositoryConfig:
         ----------
         value: CompressionConfig | None
             The compression configuration for the repository.
+        """
+        ...
+    @property
+    def max_concurrent_requests(self) -> int | None:
+        """
+        The maximum number of concurrent HTTP requests Icechunk will do for this repo.
+
+        Returns
+        -------
+        int | None
+            The maximum number of concurrent HTTP requests Icechunk will do for this repo.
+        """
+        ...
+    @max_concurrent_requests.setter
+    def max_concurrent_requests(self, value: int | None) -> None:
+        """
+        Set the maximum number of concurrent HTTP requests Icechunk should do for this repo.
+
+        Parameters
+        ----------
+        value: int | None
+            The maximum allowed.
         """
         ...
     @property

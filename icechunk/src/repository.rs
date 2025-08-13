@@ -16,7 +16,7 @@ use futures::{
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{task::JoinError, try_join};
+use tokio::{sync::AcquireError, task::JoinError, try_join};
 use tracing::{Instrument, debug, error, instrument, trace};
 
 use crate::{
@@ -111,6 +111,8 @@ pub enum RepositoryErrorKind {
     IOError(#[from] std::io::Error),
     #[error("a concurrent task failed")]
     ConcurrencyError(#[from] JoinError),
+    #[error("the http request semaphore cannot be acquired")]
+    AcquireError(#[from] AcquireError),
     #[error("main branch cannot be deleted")]
     CannotDeleteMain,
     #[error("the storage used by this Icechunk repository is read-only: {0}")]
@@ -195,12 +197,14 @@ impl Repository {
             return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
         }
 
+        let max_concurrent_reqs = config.max_concurrent_requests();
         let create_branch = async move {
             // TODO: we could cache this first snapshot
             let asset_manager = AssetManager::new_no_cache(
                 Arc::clone(&storage_c),
                 storage_settings.clone(),
                 compression,
+                max_concurrent_reqs,
             );
             // On create we need to create the default branch
             let new_snapshot = Arc::new(Snapshot::initial()?);
@@ -320,6 +324,7 @@ impl Repository {
             storage_settings.clone(),
             config.caching(),
             config.compression().level(),
+            config.max_concurrent_requests(),
         ));
         Ok(Self {
             config,
