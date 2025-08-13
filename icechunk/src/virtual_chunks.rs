@@ -743,7 +743,7 @@ mod tests {
                     anonymous: false,
                     allow_http: false,
                     force_path_style: false,
-                    network_stream_timeout_seconds: 20,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()
@@ -757,7 +757,7 @@ mod tests {
                     anonymous: false,
                     allow_http: false,
                     force_path_style: false,
-                    network_stream_timeout_seconds: 20,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()
@@ -771,7 +771,7 @@ mod tests {
                     anonymous: false,
                     allow_http: false,
                     force_path_style: false,
-                    network_stream_timeout_seconds: 20,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()
@@ -785,7 +785,7 @@ mod tests {
                     anonymous: false,
                     allow_http: false,
                     force_path_style: false,
-                    network_stream_timeout_seconds: 20,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()
@@ -799,7 +799,7 @@ mod tests {
                     anonymous: false,
                     allow_http: false,
                     force_path_style: false,
-                    network_stream_timeout_seconds: 20,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()
@@ -813,7 +813,7 @@ mod tests {
                     anonymous: false,
                     allow_http: false,
                     force_path_style: false,
-                    network_stream_timeout_seconds: 20,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()
@@ -827,7 +827,7 @@ mod tests {
                     anonymous: false,
                     allow_http: false,
                     force_path_style: false,
-                    network_stream_timeout_seconds: 20,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()

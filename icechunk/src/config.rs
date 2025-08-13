@@ -24,7 +24,7 @@ pub struct S3Options {
     // field was added in v0.2.6
     #[serde(default = "default_force_path_style")]
     pub force_path_style: bool,
-    pub network_stream_timeout_seconds: u32,
+    pub network_stream_timeout_seconds: Option<u32>,
 }
 
 fn default_force_path_style() -> bool {
@@ -41,7 +41,9 @@ impl fmt::Display for S3Options {
             self.anonymous,
             self.allow_http,
             self.force_path_style,
-            self.network_stream_timeout_seconds,
+            self.network_stream_timeout_seconds
+                .map(|n| n.to_string())
+                .unwrap_or("None".to_string()),
         )
     }
 }

@@ -145,12 +145,12 @@ pub async fn mk_client(
         aws_config = aws_config.endpoint_url(endpoint)
     }
 
-    let stalled_stream = if config.network_stream_timeout_seconds == 0 {
+    let stalled_stream = if config.network_stream_timeout_seconds == Some(0) {
         StalledStreamProtectionConfig::disabled()
     } else {
         StalledStreamProtectionConfig::enabled()
             .grace_period(std::time::Duration::from_secs(
-                config.network_stream_timeout_seconds as u64,
+                config.network_stream_timeout_seconds.unwrap_or(60) as u64,
             ))
             .build()
     };
@@ -1086,7 +1086,7 @@ mod tests {
             allow_http: true,
             anonymous: false,
             force_path_style: false,
-            network_stream_timeout_seconds: 20,
+            network_stream_timeout_seconds: None,
         };
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "access_key_id".to_string(),
@@ -1109,7 +1109,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":20},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
@@ -1125,7 +1125,7 @@ mod tests {
                 allow_http: true,
                 anonymous: false,
                 force_path_style: false,
-                network_stream_timeout_seconds: 20,
+                network_stream_timeout_seconds: None,
             },
             "bucket".to_string(),
             Some("prefix".to_string()),

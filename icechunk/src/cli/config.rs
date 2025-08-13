@@ -103,7 +103,7 @@ mod tests {
             anonymous: false,
             allow_http: false,
             force_path_style: false,
-            network_stream_timeout_seconds: 20,
+            network_stream_timeout_seconds: None,
         };
         let credentials = S3Credentials::FromEnv;
         let repo_config = RepositoryConfig::default();

@@ -411,20 +411,20 @@ pub struct PyS3Options {
     #[pyo3(get, set)]
     pub force_path_style: bool,
     #[pyo3(get, set)]
-    pub network_stream_timeout_seconds: u32,
+    pub network_stream_timeout_seconds: Option<u32>,
 }
 
 #[pymethods]
 impl PyS3Options {
     #[new]
-    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=false, network_stream_timeout_seconds=20))]
+    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=false, network_stream_timeout_seconds=None))]
     pub(crate) fn new(
         region: Option<String>,
         endpoint_url: Option<String>,
         allow_http: bool,
         anonymous: bool,
         force_path_style: bool,
-        network_stream_timeout_seconds: u32,
+        network_stream_timeout_seconds: Option<u32>,
     ) -> Self {
         Self {
             region,
@@ -445,7 +445,8 @@ impl PyS3Options {
             http = format_bool(self.allow_http),
             anon = format_bool(self.anonymous),
             force_path_style = format_bool(self.force_path_style),
-            net_timeout = self.network_stream_timeout_seconds,
+            net_timeout =
+                format_option(self.network_stream_timeout_seconds.map(|n| n.to_string())),
         )
     }
 }
