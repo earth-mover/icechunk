@@ -1443,6 +1443,8 @@ pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub compression: Option<Py<PyCompressionConfig>>,
     #[pyo3(get, set)]
+    pub max_concurrent_requests: Option<u16>,
+    #[pyo3(get, set)]
     pub caching: Option<Py<PyCachingConfig>>,
     #[pyo3(get, set)]
     pub storage: Option<Py<PyStorageSettings>>,
@@ -1478,6 +1480,7 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
                 inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
                 get_partial_values_concurrency: value.get_partial_values_concurrency,
                 compression: value.compression.as_ref().map(|c| (&*c.borrow(py)).into()),
+                max_concurrent_requests: value.max_concurrent_requests,
                 caching: value.caching.as_ref().map(|c| (&*c.borrow(py)).into()),
                 storage: value.storage.as_ref().map(|s| (&*s.borrow(py)).into()),
                 virtual_chunk_containers: cont,
@@ -1497,6 +1500,7 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
                 Py::new(py, Into::<PyCompressionConfig>::into(c))
                     .expect("Cannot create instance of CompressionConfig")
             }),
+            max_concurrent_requests: value.max_concurrent_requests,
             caching: value.caching.map(|c| {
                 Py::new(py, Into::<PyCachingConfig>::into(c))
                     .expect("Cannot create instance of CachingConfig")
@@ -1526,12 +1530,13 @@ impl PyRepositoryConfig {
     }
 
     #[new]
-    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None))]
+    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, max_concurrent_requests = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         inline_chunk_threshold_bytes: Option<u16>,
         get_partial_values_concurrency: Option<u16>,
         compression: Option<Py<PyCompressionConfig>>,
+        max_concurrent_requests: Option<u16>,
         caching: Option<Py<PyCachingConfig>>,
         storage: Option<Py<PyStorageSettings>>,
         virtual_chunk_containers: Option<HashMap<String, PyVirtualChunkContainer>>,
@@ -1541,6 +1546,7 @@ impl PyRepositoryConfig {
             inline_chunk_threshold_bytes,
             get_partial_values_concurrency,
             compression,
+            max_concurrent_requests,
             caching,
             storage,
             virtual_chunk_containers,

@@ -166,6 +166,7 @@ def test_can_change_deep_config_values() -> None:
     config.storage.storage_class = "STANDARD_IA"
     config.manifest = icechunk.ManifestConfig()
     config.manifest.preload = icechunk.ManifestPreloadConfig(max_total_refs=42)
+    config.max_concurrent_requests = 10
     config.manifest.preload.preload_if = icechunk.ManifestPreloadCondition.and_conditions(
         [
             icechunk.ManifestPreloadCondition.true(),
@@ -188,6 +189,7 @@ def test_can_change_deep_config_values() -> None:
     assert stored_config.inline_chunk_threshold_bytes == 5
     assert stored_config.compression
     assert stored_config.compression.level == 2
+    assert stored_config.max_concurrent_requests == 10
     assert stored_config.caching
     assert stored_config.caching.num_chunk_refs == 8
     assert stored_config.storage
