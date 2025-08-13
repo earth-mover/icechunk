@@ -9,7 +9,7 @@
   can be too eager in launching concurrent HTTP requests. This can overload
   the machine, timing out some requests and producing an error. There is a new
   `max_concurrent_requests` field in `RepositoryConfig` to limit this. This will
-  limit concurrent HTTP requests to this value. Default is 256.
+  limit concurrent HTTP requests to this value. Default is 256. See the [docs](https://icechunk.io/en/stable/performance/) for more.
 - Ability to tune and disable network stream stall detection. `s3_storage` like
   functions now take an optional `network_stream_timeout_seconds` with a 60
   seconds default. If configured to 0, stream stall detection is disabled
