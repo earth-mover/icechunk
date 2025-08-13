@@ -742,7 +742,8 @@ mod tests {
                     endpoint_url: None,
                     anonymous: false,
                     allow_http: false,
-                    force_path_style: false
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()
@@ -755,7 +756,8 @@ mod tests {
                     endpoint_url: None,
                     anonymous: false,
                     allow_http: false,
-                    force_path_style: false
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()
@@ -768,7 +770,8 @@ mod tests {
                     endpoint_url: None,
                     anonymous: false,
                     allow_http: false,
-                    force_path_style: false
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()
@@ -781,7 +784,8 @@ mod tests {
                     endpoint_url: None,
                     anonymous: false,
                     allow_http: false,
-                    force_path_style: false
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()
@@ -794,7 +798,8 @@ mod tests {
                     endpoint_url: None,
                     anonymous: false,
                     allow_http: false,
-                    force_path_style: false
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()
@@ -807,7 +812,8 @@ mod tests {
                     endpoint_url: None,
                     anonymous: false,
                     allow_http: false,
-                    force_path_style: false
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()
@@ -820,7 +826,8 @@ mod tests {
                     endpoint_url: None,
                     anonymous: false,
                     allow_http: false,
-                    force_path_style: false
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
                 })
             )
             .is_err()

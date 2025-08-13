@@ -37,6 +37,7 @@ async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + S
             allow_http: true,
             anonymous: false,
             force_path_style: true,
+            network_stream_timeout_seconds: None,
         },
         "testbucket".to_string(),
         Some(prefix.to_string()),
@@ -72,6 +73,7 @@ async fn mk_s3_object_store_storage(
                 allow_http: true,
                 anonymous: false,
                 force_path_style: true,
+                network_stream_timeout_seconds: None,
             }),
         )
         .await?,
