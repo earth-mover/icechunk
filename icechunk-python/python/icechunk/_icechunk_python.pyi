@@ -13,7 +13,7 @@ class S3Options:
         allow_http: bool = False,
         anonymous: bool = False,
         force_path_style: bool = False,
-        network_stream_timeout_seconds: int = 60,
+        network_stream_timeout_seconds: int | None = None,
     ) -> None:
         """
         Create a new `S3Options` object
@@ -30,9 +30,9 @@ class S3Options:
             Whether to use anonymous credentials to the storage backend. When `True`, the s3 requests will not be signed.
         force_path_style: bool
             Whether to force use of path-style addressing for buckets.
-        network_stream_timeout_seconds: int
+        network_stream_timeout_seconds: int | None
             Timeout requests if no bytes can be transmitted during this period of time.
-            If set to 0, timeout is disabled.
+            If set to 0, timeout is disabled. Default is 60 seconds.
         """
 
 class ObjectStoreConfig:
