@@ -23,7 +23,7 @@ use crate::{
     ops::pointed_snapshots,
     refs::{Ref, RefError},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, DeleteObjectsResult, ListInfo},
+    storage::{self, DeleteObjectsResult, ListInfo, VersionInfo},
     stream_utils::{StreamLimiter, try_unique_stream},
 };
 
@@ -335,6 +335,8 @@ pub async fn garbage_collect(
         return Ok(GCSummary::default());
     }
 
+    let (repo_info, repo_info_version) = asset_manager.fetch_repo_info().await?;
+
     tracing::info!("Finding GC roots");
     let (keep_chunks, keep_manifests, keep_snapshots) =
         find_retained(Arc::clone(&asset_manager), config).await?;
@@ -354,6 +356,15 @@ pub async fn garbage_collect(
     // The trivial approach of parallelizing the deletes of the different types of objects doesn't
     // work: we want to dolete snapshots before deleting chunks, etc
     if config.deletes_snapshots() {
+        if !config.dry_run {
+            delete_snapshots_from_repo_info(
+                asset_manager.as_ref(),
+                &keep_snapshots,
+                repo_info,
+                &repo_info_version,
+            )
+            .await?;
+        }
         let res = gc_snapshots(
             asset_manager.as_ref(),
             storage,
@@ -397,6 +408,28 @@ pub async fn garbage_collect(
     }
 
     Ok(summary)
+}
+
+async fn delete_snapshots_from_repo_info(
+    asset_manager: &AssetManager,
+    keep_snapshots: &HashSet<SnapshotId>,
+    repo_info: Arc<RepoInfo>,
+    repo_info_version: &VersionInfo,
+) -> GCResult<()> {
+    let kept_snaps: Vec<_> = repo_info
+        .all_snapshots()?
+        .filter_ok(|si| keep_snapshots.contains(&si.id))
+        .try_collect()?;
+    let new_repo_info = RepoInfo::new(
+        repo_info.tags()?,
+        repo_info.branches()?,
+        repo_info.deleted_tags()?,
+        kept_snaps,
+    )?;
+    let _ = asset_manager
+        .update_repo_info(Arc::new(new_repo_info), repo_info_version)
+        .await?;
+    Ok(())
 }
 
 async fn fake_delete_result<const SIZE: usize, T: FileTypeTag>(

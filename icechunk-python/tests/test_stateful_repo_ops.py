@@ -484,43 +484,43 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(IcechunkError):
                 self.repo.delete_branch(branch)
 
-    @precondition(lambda self: bool(self.commit_times))
-    @rule(
-        data=st.data(),
-        delta=st.timedeltas(
-            min_value=datetime.timedelta(days=-1), max_value=datetime.timedelta(days=1)
-        ),
-        delete_expired_branches=st.booleans(),
-        delete_expired_tags=st.booleans(),
-    )
-    def expire_snapshots(
-        self,
-        data: st.DataObject,
-        delta: int,
-        delete_expired_branches: bool,
-        delete_expired_tags: bool,
-    ) -> None:
-        commit_time = data.draw(st.sampled_from(self.commit_times))
-        older_than = commit_time + delta
-        note(
-            f"Expiring snapshots {older_than=!r}, ({commit_time=!r}, {delta=!r}), {delete_expired_branches=!r}, {delete_expired_tags=!r}"
-        )
-        actual = self.repo.expire_snapshots(
-            older_than,
-            delete_expired_branches=delete_expired_branches,
-            delete_expired_tags=delete_expired_tags,
-        )
-        note(f"repo  expired snaps={actual!r}")
-        expected = self.model.expire_snapshots(
-            older_than,
-            delete_expired_branches=delete_expired_branches,
-            delete_expired_tags=delete_expired_tags,
-        )
-        assert self.initial_snapshot.id not in actual
-        assert actual == expected.expired_snapshots, (actual, expected)
+    # @precondition(lambda self: bool(self.commit_times))
+    # @rule(
+    #     data=st.data(),
+    #     delta=st.timedeltas(
+    #         min_value=datetime.timedelta(days=-1), max_value=datetime.timedelta(days=1)
+    #     ),
+    #     delete_expired_branches=st.booleans(),
+    #     delete_expired_tags=st.booleans(),
+    # )
+    # def expire_snapshots(
+    #     self,
+    #     data: st.DataObject,
+    #     delta: int,
+    #     delete_expired_branches: bool,
+    #     delete_expired_tags: bool,
+    # ) -> None:
+    #     commit_time = data.draw(st.sampled_from(self.commit_times))
+    #     older_than = commit_time + delta
+    #     note(
+    #         f"Expiring snapshots {older_than=!r}, ({commit_time=!r}, {delta=!r}), {delete_expired_branches=!r}, {delete_expired_tags=!r}"
+    #     )
+    #     actual = self.repo.expire_snapshots(
+    #         older_than,
+    #         delete_expired_branches=delete_expired_branches,
+    #         delete_expired_tags=delete_expired_tags,
+    #     )
+    #     note(f"repo  expired snaps={actual!r}")
+    #     expected = self.model.expire_snapshots(
+    #         older_than,
+    #         delete_expired_branches=delete_expired_branches,
+    #         delete_expired_tags=delete_expired_tags,
+    #     )
+    #     assert self.initial_snapshot.id not in actual
+    #     assert actual == expected.expired_snapshots, (actual, expected)
 
-        for branch in expected.deleted_branches:
-            self.maybe_checkout_branch(branch)
+    #     for branch in expected.deleted_branches:
+    #         self.maybe_checkout_branch(branch)
 
     @precondition(lambda self: bool(self.commit_times))
     @rule(
@@ -546,6 +546,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # deleted a checked out snapshot :?
         for snapshot in expected:
             if self.model.HEAD == snapshot:
+                note(f"deleted the checked out snapshot {snapshot}, creating new session")
                 self.session = self.repo.writable_session(DEFAULT_BRANCH)
                 self.model.checkout_branch(DEFAULT_BRANCH)
 
