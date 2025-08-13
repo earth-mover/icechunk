@@ -1290,7 +1290,7 @@ impl AncestryIteratorV2 {
             let repo_info_ref = &*Arc::as_ptr(&repo_info);
             Box::new(repo_info_ref.ancestry(snapshot_id)?.map(|e| e.err_into()))
         };
-        Ok(Self { _repo_info: repo_info.clone(), it })
+        Ok(Self { _repo_info: repo_info, it })
     }
 }
 
