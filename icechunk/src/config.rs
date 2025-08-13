@@ -354,6 +354,7 @@ pub struct RepositoryConfig {
     pub get_partial_values_concurrency: Option<u16>,
 
     pub compression: Option<CompressionConfig>,
+    pub max_concurrent_requests: Option<u16>,
     pub caching: Option<CachingConfig>,
 
     // If not set it will use the Storage implementation default
@@ -371,6 +372,7 @@ pub struct RepositoryConfig {
 static DEFAULT_COMPRESSION: OnceLock<CompressionConfig> = OnceLock::new();
 static DEFAULT_CACHING: OnceLock<CachingConfig> = OnceLock::new();
 static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
+pub const DEFAULT_MAX_CONCURRENT_REQUESTS: u16 = 256;
 
 impl RepositoryConfig {
     pub fn inline_chunk_threshold_bytes(&self) -> u16 {
@@ -400,6 +402,10 @@ impl RepositoryConfig {
         })
     }
 
+    pub fn max_concurrent_requests(&self) -> u16 {
+        self.max_concurrent_requests.unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS)
+    }
+
     pub fn merge(&self, other: Self) -> Self {
         Self {
             inline_chunk_threshold_bytes: other
@@ -413,6 +419,15 @@ impl RepositoryConfig {
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            max_concurrent_requests: match (
+                &self.max_concurrent_requests,
+                other.max_concurrent_requests,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
             },
             caching: match (&self.caching, other.caching) {
                 (None, None) => None,
