@@ -28,6 +28,11 @@ The threshold for when to inline a chunk into a manifest instead of storing it a
 
 The number of concurrent requests to make when getting partial values from storage.
 
+### [`max_concurrent_requests`](./reference.md#icechunk.RepositoryConfig.max_concurrent_requests)
+
+The maximum total number of concurrent requests this repo will allow.
+See [./performance#Concurrency](Performance | Concurrency) for details.
+
 ### [`compression`](./reference.md#icechunk.RepositoryConfig.compression)
 
 Icechunk uses Zstd compression to compress its metadata files. [`CompressionConfig`](./reference.md#icechunk.CompressionConfig) allows you to configure the [compression level](./reference.md#icechunk.CompressionConfig.level) and [algorithm](./reference.md#icechunk.CompressionConfig.algorithm). Currently, the only algorithm available is [`Zstd`](https://facebook.github.io/zstd/).

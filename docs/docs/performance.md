@@ -1,9 +1,92 @@
 # Performance
 
-!!! info
+## Concurrency
 
-    This is advanced material, and you will need it only if you have arrays with more than a million chunks.
-    Icechunk aims to provide an excellent experience out of the box.
+Optimal I/O throughput with object storage is achieved when there are many HTTP requests running concurrently.
+Icechunk supports this by using Rust's high-performance Tokio asynchronous runtime to issue these requests.
+
+### Setting Zarr's Async Concurrency Configuration
+
+Icechunk is used in conjunction with Zarr Python.
+The level of concurrency used in each request is controlled by the zarr `async.concurrency` config parameter.
+
+```python
+import zarr
+print(zarr.config.get("async.concurrency"))
+# -> 10 (default)
+```
+
+Large machines in close proximity to object storage can benefit from much more concurrency. For high-performance configuration, we recommend much higher values, e.g.
+
+```python
+zarr.config.get({"async.concurrency": 128})
+```
+
+Note that this concurrency limit is _per individual Zarr Array read/write operation_
+
+```
+# chunks fetched concurrently up to async.concurrency limit
+data = array[:]
+# chunks written concurrently up to async.concurrency limit
+array[:] = data
+```
+
+### Dask and Multi-Tiered Concurrency
+
+Using Dask with Zarr introduces _another_ layer of concurrency: the number of Dask threads or workers.
+If each Dask task addresses multiple Zarr chunks, the amount of concurrency multiplies.
+In these circumstances, it is possible to generate _too much concurrency_.
+If there are **thousands** of concurrent HTTP requests in flight, they may start to stall or time out.
+To prevent this, Icechunk introduces a global concurrency limit.
+
+### Icechunk Global Concurrency Limit
+
+Each Icechunk repo has a cap on the maximum amount of concurrent requests that will be made.
+The default concurrency limit is 256.
+
+For example, the following code sets this limit to 10
+
+```python
+config = icechunk.RepositoryConfig(max_concurrent_requests=10)
+repo = icechunk.Repository.open(
+    storage=storage,
+    config=config,
+)
+```
+
+In this configuration, even if the upper layers of the stack (Dask and Zarr) issue many more concurrent requests, Icechunk will only open 10 HTTP connections to the object store at once.
+
+### Stalled Network Streams
+
+A stalled network stream is an HTTP connection which does not transfer any data over a certain period.
+Stalled connections may occur in the following situations:
+
+- When the client is connecting to a remote object store behind a slow network connection.
+- When the client is behind a VPN or proxy server which is limiting the number or throughput of connections between the client and the remote object store.
+- When the client tries to issue a hugh volume of concurrent requests. (Note that the global concurrency limit described above should help avoid this, but the precise limit is hardware- and network-dependent. )
+
+By default, Icechunk detects stalled HTTP connections and raises an error when it sees one.
+These errors typically contain lines like
+
+```
+  |-> I/O error
+  |-> streaming error
+  `-> minimum throughput was specified at 1 B/s, but throughput of 0 B/s was observed
+```
+
+This behavior is configurable when creating a new `Storage` option, via the `network_stream_timeout_seconds` parameter.
+The default is 60 seconds.
+To set a different value, you may specify as follows
+
+```python
+storage=  icechunk.s3_storage(
+    **other_storage_kwargs,
+    network_stream_timeout_seconds=50,
+)
+repo = icechunk.Repository.open(storage=storage)
+```
+
+Specifying a value of 0 disables this check entirely.
 
 ## Scalability
 
@@ -40,6 +123,12 @@ on Icechunk scalability.
     again. Increase concurrency slowly until errors disappear.
 
 ## Splitting manifests
+
+!!! info
+
+    This is advanced material, and you will need it only if you have arrays with more than a million chunks.
+    Icechunk aims to provide an excellent experience out of the box.
+
 
 Icechunk stores chunk references in a chunk manifest file stored in `manifests/`.
 By default, Icechunk stores all chunk references in a single manifest file per array.
