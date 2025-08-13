@@ -13,7 +13,7 @@ class S3Options:
         allow_http: bool = False,
         anonymous: bool = False,
         force_path_style: bool = False,
-        network_stream_timeout_seconds: int = 20,
+        network_stream_timeout_seconds: int = 60,
     ) -> None:
         """
         Create a new `S3Options` object

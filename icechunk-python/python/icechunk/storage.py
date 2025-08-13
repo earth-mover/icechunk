@@ -73,7 +73,7 @@ def s3_store(
     anonymous: bool = False,
     s3_compatible: bool = False,
     force_path_style: bool = False,
-    network_stream_timeout_seconds: int = 20,
+    network_stream_timeout_seconds: int = 60,
 ) -> ObjectStoreConfig.S3Compatible | ObjectStoreConfig.S3:
     """Build an ObjectStoreConfig instance for S3 or S3 compatible object stores."""
 
@@ -107,7 +107,7 @@ def s3_storage(
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
     force_path_style: bool = False,
-    network_stream_timeout_seconds: int = 20,
+    network_stream_timeout_seconds: int = 60,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -229,7 +229,7 @@ def tigris_storage(
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
-    network_stream_timeout_seconds: int = 20,
+    network_stream_timeout_seconds: int = 60,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -314,7 +314,7 @@ def r2_storage(
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
-    network_stream_timeout_seconds: int = 20,
+    network_stream_timeout_seconds: int = 60,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
