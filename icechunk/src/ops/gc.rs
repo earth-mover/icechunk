@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt, TryStream, TryStreamExt, stream};
 use itertools::Itertools;
 use tokio::task::{self};
-use tracing::instrument;
+use tracing::{debug, info, instrument};
 
 use crate::{
     Storage, StorageError,
@@ -608,15 +608,16 @@ pub async fn expire(
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
 ) -> GCResult<ExpireResult> {
+    info!("Expiration started");
     let (repo_info, repo_info_version) = asset_manager.fetch_repo_info().await?;
-    let tags = repo_info
+    let tags: Vec<(Ref, SnapshotId)> = repo_info
         .tags()?
-        .map(|(name, snap)| Ok::<_, GCError>((Ref::Tag(name.to_string()), snap)));
-    let branches = repo_info
+        .map(|(name, snap)| Ok::<_, GCError>((Ref::Tag(name.to_string()), snap)))
+        .try_collect()?;
+    let branches: Vec<(Ref, SnapshotId)> = repo_info
         .branches()?
-        .map(|(name, snap)| Ok((Ref::Branch(name.to_string()), snap)));
-
-    let all_tips: Vec<(Ref, SnapshotId)> = tags.chain(branches).try_collect()?;
+        .map(|(name, snap)| Ok::<_, GCError>((Ref::Branch(name.to_string()), snap)))
+        .try_collect()?;
 
     fn split_root<E>(
         mut iter: impl Iterator<Item = Result<SnapshotInfo, E>>,
@@ -631,7 +632,9 @@ pub async fn expire(
         })
     }
 
-    let root_to_snaps = all_tips.iter().try_fold(
+    debug!("Finding roots");
+    let mut all_tips = tags.iter().chain(branches.iter());
+    let root_to_snaps = all_tips.try_fold(
         HashMap::new(),
         |mut res: HashMap<SnapshotId, HashSet<SnapshotId>>, (_, tip_snap)| {
             let ancestry = repo_info.ancestry(tip_snap)?;
@@ -659,10 +662,13 @@ pub async fn expire(
         None
     };
 
+    debug!("Finding ref tips");
     let tag_tip_ids: HashSet<SnapshotId> = repo_info.tags()?.map(|(_, id)| id).collect();
     let branch_tip_ids: HashSet<SnapshotId> =
         repo_info.branches()?.map(|(_, id)| id).collect();
+    let main_pointee = repo_info.resolve_branch(Ref::DEFAULT_BRANCH)?;
 
+    debug!("Calculating released snapshots");
     let released_snapshots: HashSet<SnapshotId> = repo_info
         .all_snapshots()?
         .filter_map(|si| match si {
@@ -670,7 +676,8 @@ pub async fn expire(
             Ok(si) if si.flushed_at < older_than && si.parent_id.is_some() => {
                 use ExpiredRefAction::*;
                 if expired_tags == Ignore && tag_tip_ids.contains(&si.id)
-                    || expired_branches == Ignore && branch_tip_ids.contains(&si.id)
+                    || (expired_branches == Ignore || si.id == main_pointee)
+                        && branch_tip_ids.contains(&si.id)
                 {
                     None
                 } else {
@@ -682,6 +689,9 @@ pub async fn expire(
         })
         .try_collect()?;
 
+    let num_released_snapshots = released_snapshots.len();
+
+    debug!("Calculating retained snapshots");
     let mut edited_snapshots = HashSet::new();
     let retained: Vec<_> = repo_info
         .all_snapshots()?
@@ -708,31 +718,62 @@ pub async fn expire(
         })
         .try_collect()?;
 
-    let deleted_refs: HashSet<Ref> =
-        all_tips
-            .into_iter()
-            .filter_map(|(r, snap_id)| {
-                if released_snapshots.contains(&snap_id) { Some(r) } else { None }
-            })
-            .collect();
+    debug!("Calculating deleted refs");
+    let mut deleted_tags: HashSet<_> = tags
+        .into_iter()
+        .filter_map(|(r, snap_id)| {
+            if expired_tags == ExpiredRefAction::Delete
+                && released_snapshots.contains(&snap_id)
+            {
+                Some(r)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let deleted_branches: HashSet<_> = branches
+        .into_iter()
+        .filter_map(|(r, snap_id)| {
+            if expired_branches == ExpiredRefAction::Delete
+                && r.name() != Ref::DEFAULT_BRANCH
+                && released_snapshots.contains(&snap_id)
+            {
+                Some(r)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    info!(
+        snapshots = num_released_snapshots,
+        branches = deleted_branches.iter().map(|r| r.name()).join("/"),
+        tags = deleted_tags.iter().map(|r| r.name()).join("/"),
+        "Releasing objects"
+    );
 
     let tags = repo_info
         .tags()?
-        .filter(|(name, _)| !deleted_refs.contains(&Ref::Tag(name.to_string())));
+        .filter(|(name, _)| !deleted_tags.contains(&Ref::Tag(name.to_string())));
 
     let branches = repo_info
         .branches()?
-        .filter(|(name, _)| !deleted_refs.contains(&Ref::Branch(name.to_string())));
+        .filter(|(name, _)| !deleted_branches.contains(&Ref::Branch(name.to_string())));
 
-    let deleted_tags =
-        repo_info.deleted_tags()?.chain(deleted_refs.iter().filter_map(|r| match r {
+    let deleted_tag_names =
+        repo_info.deleted_tags()?.chain(deleted_tags.iter().filter_map(|r| match r {
             Ref::Tag(name) => Some(name.as_str()),
             Ref::Branch(_) => None,
         }));
 
-    let new_repo_info = RepoInfo::new(tags, branches, deleted_tags, retained)?;
+    debug!("Generating new repo info");
+    let new_repo_info = RepoInfo::new(tags, branches, deleted_tag_names, retained)?;
 
     asset_manager.update_repo_info(Arc::new(new_repo_info), &repo_info_version).await?;
 
-    Ok(ExpireResult { released_snapshots, edited_snapshots, deleted_refs })
+    deleted_tags.extend(deleted_branches);
+
+    debug!("Expiration done");
+    Ok(ExpireResult { released_snapshots, edited_snapshots, deleted_refs: deleted_tags })
 }

@@ -1000,7 +1000,7 @@ impl Repository {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, repo_info))]
     async fn resolve_ref_version_v2(
         &self,
         repo_info: &RepoInfo,
@@ -1064,7 +1064,7 @@ impl Repository {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, repo_info))]
     async fn resolve_version_v2(
         &self,
         repo_info: &RepoInfo,

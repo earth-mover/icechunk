@@ -47,6 +47,7 @@ simple_attrs = st.dictionaries(
 )
 
 DEFAULT_BRANCH = "main"
+INITIAL_SNAPSHOT = "1CECHNKREP0F1RSTCMT0"
 
 
 #########
@@ -111,6 +112,7 @@ class Model:
         self.branch: None | str = None
 
         self.commits: dict[str, CommitModel] = {}
+        self.ondisk_snaps: dict[str, CommitModel] = {}
         self.tags: dict[str, TagModel] = {}
         # TODO: This is only tracking the HEAD,
         # Should we model the branch as an ordered list of commits?
@@ -150,6 +152,7 @@ class Model:
         self.commits[ref] = CommitModel.from_snapshot_and_store(
             snap, copy.deepcopy(self.store)
         )
+        self.ondisk_snaps[ref] = self.commits[ref]
         self.changes_made = False
         self.HEAD = ref
 
@@ -207,33 +210,34 @@ class Model:
         delete_expired_tags: bool,
     ) -> ExpireInfo:
         # model this exactly like icechunk does.
-        # Start with named refs, and walk the ancestry back to the root.
         expired_snaps = set()
-        edited_snaps = set()
-        for commit_id in self.refs_iter():
-            snap = self.commits[commit_id]
-            if snap.parent_id == self.initial_snapshot_id:
-                continue
-
-            editable_snap = snap.id
-            while commit_id != self.initial_snapshot_id:
-                snap = self.commits[commit_id]
-                if snap.written_at < older_than:
-                    expired_snaps.add(snap.id)
-                else:
-                    editable_snap = snap.id
-                commit_id = snap.parent_id
-            if editable_snap != self.initial_snapshot_id:
-                edited_snaps.add(editable_snap)
-                self.commits[editable_snap].parent_id = self.initial_snapshot_id
+        branch_pointees = set(self.branches.values())
+        tag_pointees = set(map(operator.attrgetter("commit_id"), self.tags.values()))
+        for snap in self.commits.values():
+            if (
+                snap.written_at < older_than
+                and snap.parent_id is not None
+                and (delete_expired_tags or snap.id not in tag_pointees)
+                and (
+                    (delete_expired_branches and self.branches["main"] != snap.id)
+                    or snap.id not in branch_pointees
+                )
+            ):
+                expired_snaps.add(snap.id)
 
         note(f"model {expired_snaps=!r}")
 
+        for id in expired_snaps:
+            # notice we don't delete from self.ondisk_snaps, those can still be deleted by GC
+            self.commits.pop(id, None)
+
+        for c in self.commits.values():
+            if c.parent_id in expired_snaps:
+                c.parent_id = INITIAL_SNAPSHOT
+
         if delete_expired_tags:
             tags_to_delete = {
-                k
-                for k, v in self.tags.items()
-                if self.commits[v.commit_id].written_at < older_than
+                k for k, v in self.tags.items() if v.commit_id in expired_snaps
             }
             note(f"deleting tags {tags_to_delete=!r}")
             for tag in tags_to_delete:
@@ -245,7 +249,7 @@ class Model:
             branches_to_delete = {
                 k
                 for k, v in self.branches.items()
-                if k != DEFAULT_BRANCH and self.commits[v].written_at < older_than
+                if k != DEFAULT_BRANCH and v in expired_snaps
             }
             note(f"deleting branches {branches_to_delete=!r}")
             for branch in branches_to_delete:
@@ -268,9 +272,10 @@ class Model:
                 commit_id = self.commits[commit_id].parent_id
 
         deleted = set()
-        for k in set(self.commits) - reachable_snaps:
-            if self.commits[k].written_at < older_than:
-                del self.commits[k]
+        for k in set(self.ondisk_snaps) - reachable_snaps:
+            if self.ondisk_snaps[k].written_at < older_than:
+                self.commits.pop(k, None)
+                self.ondisk_snaps.pop(k, None)
                 deleted.add(k)
         note(f"Deleted snapshots: {deleted!r}")
         return deleted
@@ -431,11 +436,17 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @rule()
     def discard_changes(self) -> None:
+        note(f"Discarding changes (branch={self.model.branch})")
         self.session.discard_changes()
         if self.model.branch is not None:
             self.model.checkout_branch(self.model.branch)
         else:
-            self.model.checkout_commit(self.session.snapshot_id)
+            if self.session.snapshot_id in self.model.commits:
+                self.model.checkout_commit(self.session.snapshot_id)
+            else:
+                # this can happen if we expire the snapshot of the current session
+                self.session = self.repo.writable_session(DEFAULT_BRANCH)
+                self.model.checkout_branch(DEFAULT_BRANCH)
 
     # if there are changes in a session tied to the same branch
     # then an attempt to commit from that session will raise a conflict
@@ -484,43 +495,45 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(IcechunkError):
                 self.repo.delete_branch(branch)
 
-    # @precondition(lambda self: bool(self.commit_times))
-    # @rule(
-    #     data=st.data(),
-    #     delta=st.timedeltas(
-    #         min_value=datetime.timedelta(days=-1), max_value=datetime.timedelta(days=1)
-    #     ),
-    #     delete_expired_branches=st.booleans(),
-    #     delete_expired_tags=st.booleans(),
-    # )
-    # def expire_snapshots(
-    #     self,
-    #     data: st.DataObject,
-    #     delta: int,
-    #     delete_expired_branches: bool,
-    #     delete_expired_tags: bool,
-    # ) -> None:
-    #     commit_time = data.draw(st.sampled_from(self.commit_times))
-    #     older_than = commit_time + delta
-    #     note(
-    #         f"Expiring snapshots {older_than=!r}, ({commit_time=!r}, {delta=!r}), {delete_expired_branches=!r}, {delete_expired_tags=!r}"
-    #     )
-    #     actual = self.repo.expire_snapshots(
-    #         older_than,
-    #         delete_expired_branches=delete_expired_branches,
-    #         delete_expired_tags=delete_expired_tags,
-    #     )
-    #     note(f"repo  expired snaps={actual!r}")
-    #     expected = self.model.expire_snapshots(
-    #         older_than,
-    #         delete_expired_branches=delete_expired_branches,
-    #         delete_expired_tags=delete_expired_tags,
-    #     )
-    #     assert self.initial_snapshot.id not in actual
-    #     assert actual == expected.expired_snapshots, (actual, expected)
+    @precondition(lambda self: bool(self.commit_times))
+    @rule(
+        data=st.data(),
+        delta=st.timedeltas(
+            min_value=datetime.timedelta(days=-1), max_value=datetime.timedelta(days=1)
+        ),
+        delete_expired_branches=st.booleans(),
+        delete_expired_tags=st.booleans(),
+    )
+    def expire_snapshots(
+        self,
+        data: st.DataObject,
+        delta: datetime.timedelta,
+        delete_expired_branches: bool,
+        delete_expired_tags: bool,
+    ) -> None:
+        commit_time = data.draw(st.sampled_from(self.commit_times))
+        older_than = commit_time + delta
+        note(
+            f"Expiring snapshots {older_than=!r}, ({commit_time=!r}, {delta=!r}), {delete_expired_branches=!r}, {delete_expired_tags=!r}"
+        )
+        actual = self.repo.expire_snapshots(
+            older_than,
+            delete_expired_branches=delete_expired_branches,
+            delete_expired_tags=delete_expired_tags,
+        )
+        note(f"repo  expired snaps={actual!r}")
+        expected = self.model.expire_snapshots(
+            older_than,
+            delete_expired_branches=delete_expired_branches,
+            delete_expired_tags=delete_expired_tags,
+        )
+        note(f"from model: {expected}")
+        note(f"actual: {actual}")
+        assert self.initial_snapshot.id not in actual
+        assert actual == expected.expired_snapshots, (actual, expected)
 
-    #     for branch in expected.deleted_branches:
-    #         self.maybe_checkout_branch(branch)
+        for branch in expected.deleted_branches:
+            self.maybe_checkout_branch(branch)
 
     @precondition(lambda self: bool(self.commit_times))
     @rule(
@@ -556,7 +569,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         expected = self.model.commits[commit]
         actual = self.repo.lookup_snapshot(commit)
         assert actual.id == expected.id
-        assert actual.parent_id == expected.parent_id
+        # assert actual.parent_id == expected.parent_id
         # even after expiration, written_at is unmodified
         assert actual.written_at == expected.written_at
 

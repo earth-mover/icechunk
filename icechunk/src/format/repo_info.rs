@@ -3,6 +3,8 @@ use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 
+use crate::refs::Ref;
+
 use super::{
     IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
     flatbuffers::generated::{self, MetadataItem, ObjectId12},
@@ -64,9 +66,13 @@ impl RepoInfo {
             .collect::<Vec<_>>();
         let tags = builder.create_vector(&tags);
 
+        let mut main_found = false;
         let branches = sorted_branches
             .into_iter()
             .map(|(name, offset)| {
+                if name == Ref::DEFAULT_BRANCH {
+                    main_found = true;
+                }
                 let args = generated::RefArgs {
                     name: Some(builder.create_string(name)),
                     snapshot_index: offset,
@@ -74,6 +80,7 @@ impl RepoInfo {
                 generated::Ref::create(&mut builder, &args)
             })
             .collect::<Vec<_>>();
+        assert!(main_found);
         let branches = builder.create_vector(&branches);
 
         let deleted_tags = sorted_deleted_tags
