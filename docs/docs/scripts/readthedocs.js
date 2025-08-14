@@ -20,5 +20,11 @@ ${ config.versions.active.map(
 </ul>
 </div>`;
 
-document.querySelector(".md-header__topic").insertAdjacentHTML("beforeend", versioning);
-});
+    // Check if we already added versions and remove them if so
+    // from https://github.com/readthedocs/readthedocs.org/pull/12142
+    const currentVersions = document.querySelector(".md-version");
+    if (currentVersions !== null) {
+      currentVersions.remove();
+    }
+    document.querySelector(".md-header__topic").insertAdjacentHTML("beforeend", versioning);
+  });
