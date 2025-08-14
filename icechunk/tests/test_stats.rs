@@ -10,6 +10,7 @@ use chrono::Utc;
 use icechunk::{
     Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,
+    config::DEFAULT_MAX_CONCURRENT_REQUESTS,
     format::{
         ChunkIndices, Path,
         manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef},
@@ -70,6 +71,7 @@ pub async fn do_test_repo_chunks_storage(
         storage.clone(),
         storage_settings.clone(),
         1,
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
 
     let repo = Repository::create(

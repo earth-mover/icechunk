@@ -2610,8 +2610,12 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> =
             crate::new_in_memory_storage().await?;
         let storage_settings = storage.default_settings();
-        let asset_manager =
-            AssetManager::new_no_cache(Arc::clone(&storage), storage_settings.clone(), 1);
+        let asset_manager = AssetManager::new_no_cache(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            1,
+            100,
+        );
 
         let array_id = NodeId::random();
         let chunk1 = ChunkInfo {

@@ -410,31 +410,43 @@ pub struct PyS3Options {
     pub anonymous: bool,
     #[pyo3(get, set)]
     pub force_path_style: bool,
+    #[pyo3(get, set)]
+    pub network_stream_timeout_seconds: Option<u32>,
 }
 
 #[pymethods]
 impl PyS3Options {
     #[new]
-    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=false))]
+    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=false, network_stream_timeout_seconds=None))]
     pub(crate) fn new(
         region: Option<String>,
         endpoint_url: Option<String>,
         allow_http: bool,
         anonymous: bool,
         force_path_style: bool,
+        network_stream_timeout_seconds: Option<u32>,
     ) -> Self {
-        Self { region, endpoint_url, allow_http, anonymous, force_path_style }
+        Self {
+            region,
+            endpoint_url,
+            allow_http,
+            anonymous,
+            force_path_style,
+            network_stream_timeout_seconds,
+        }
     }
 
     pub fn __repr__(&self) -> String {
         // TODO: escape
         format!(
-            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon}, force_path_style={force_path_style})"#,
+            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon}, force_path_style={force_path_style}, network_stream_timeout_seconds={net_timeout})"#,
             region = format_option(self.region.as_ref()),
             url = format_option(self.endpoint_url.as_ref()),
             http = format_bool(self.allow_http),
             anon = format_bool(self.anonymous),
             force_path_style = format_bool(self.force_path_style),
+            net_timeout =
+                format_option(self.network_stream_timeout_seconds.map(|n| n.to_string())),
         )
     }
 }
@@ -447,6 +459,7 @@ impl From<&PyS3Options> for S3Options {
             allow_http: options.allow_http,
             anonymous: options.anonymous,
             force_path_style: options.force_path_style,
+            network_stream_timeout_seconds: options.network_stream_timeout_seconds,
         }
     }
 }
@@ -459,6 +472,7 @@ impl From<S3Options> for PyS3Options {
             allow_http: value.allow_http,
             anonymous: value.anonymous,
             force_path_style: value.force_path_style,
+            network_stream_timeout_seconds: value.network_stream_timeout_seconds,
         }
     }
 }
@@ -1429,6 +1443,8 @@ pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub compression: Option<Py<PyCompressionConfig>>,
     #[pyo3(get, set)]
+    pub max_concurrent_requests: Option<u16>,
+    #[pyo3(get, set)]
     pub caching: Option<Py<PyCachingConfig>>,
     #[pyo3(get, set)]
     pub storage: Option<Py<PyStorageSettings>>,
@@ -1464,6 +1480,7 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
                 inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
                 get_partial_values_concurrency: value.get_partial_values_concurrency,
                 compression: value.compression.as_ref().map(|c| (&*c.borrow(py)).into()),
+                max_concurrent_requests: value.max_concurrent_requests,
                 caching: value.caching.as_ref().map(|c| (&*c.borrow(py)).into()),
                 storage: value.storage.as_ref().map(|s| (&*s.borrow(py)).into()),
                 virtual_chunk_containers: cont,
@@ -1483,6 +1500,7 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
                 Py::new(py, Into::<PyCompressionConfig>::into(c))
                     .expect("Cannot create instance of CompressionConfig")
             }),
+            max_concurrent_requests: value.max_concurrent_requests,
             caching: value.caching.map(|c| {
                 Py::new(py, Into::<PyCachingConfig>::into(c))
                     .expect("Cannot create instance of CachingConfig")
@@ -1512,12 +1530,13 @@ impl PyRepositoryConfig {
     }
 
     #[new]
-    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None))]
+    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, max_concurrent_requests = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         inline_chunk_threshold_bytes: Option<u16>,
         get_partial_values_concurrency: Option<u16>,
         compression: Option<Py<PyCompressionConfig>>,
+        max_concurrent_requests: Option<u16>,
         caching: Option<Py<PyCachingConfig>>,
         storage: Option<Py<PyStorageSettings>>,
         virtual_chunk_containers: Option<HashMap<String, PyVirtualChunkContainer>>,
@@ -1527,6 +1546,7 @@ impl PyRepositoryConfig {
             inline_chunk_threshold_bytes,
             get_partial_values_concurrency,
             compression,
+            max_concurrent_requests,
             caching,
             storage,
             virtual_chunk_containers,

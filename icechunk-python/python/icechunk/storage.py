@@ -73,6 +73,7 @@ def s3_store(
     anonymous: bool = False,
     s3_compatible: bool = False,
     force_path_style: bool = False,
+    network_stream_timeout_seconds: int = 60,
 ) -> ObjectStoreConfig.S3Compatible | ObjectStoreConfig.S3:
     """Build an ObjectStoreConfig instance for S3 or S3 compatible object stores."""
 
@@ -81,6 +82,7 @@ def s3_store(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         force_path_style=force_path_style,
+        network_stream_timeout_seconds=network_stream_timeout_seconds,
     )
     return (
         ObjectStoreConfig.S3Compatible(options)
@@ -105,6 +107,7 @@ def s3_storage(
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
     force_path_style: bool = False,
+    network_stream_timeout_seconds: int = 60,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -142,6 +145,9 @@ def s3_storage(
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
     force_path_style: bool
         Whether to force using path-style addressing for buckets
+    network_stream_timeout_seconds: int
+        Timeout requests if no bytes can be transmitted during this period of time.
+        If set to 0, timeout is disabled.
     """
 
     credentials = s3_credentials(
@@ -159,6 +165,7 @@ def s3_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         force_path_style=force_path_style,
+        network_stream_timeout_seconds=network_stream_timeout_seconds,
     )
     return Storage.new_s3(
         config=options,
@@ -222,6 +229,7 @@ def tigris_storage(
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
+    network_stream_timeout_seconds: int = 60,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -261,6 +269,9 @@ def tigris_storage(
         ensure all those copies don't need to call get_credentials immediately. After the initial
         set of credentials has expired, the cached value is no longer used. Notice that credentials
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
+    network_stream_timeout_seconds: int
+        Timeout requests if no bytes can be transmitted during this period of time.
+        If set to 0, timeout is disabled.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -272,7 +283,12 @@ def tigris_storage(
         get_credentials=get_credentials,
         scatter_initial_credentials=scatter_initial_credentials,
     )
-    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        network_stream_timeout_seconds=network_stream_timeout_seconds,
+    )
     return Storage.new_tigris(
         config=options,
         bucket=bucket,
@@ -298,6 +314,7 @@ def r2_storage(
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
+    network_stream_timeout_seconds: int = 60,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -337,6 +354,9 @@ def r2_storage(
         ensure all those copies don't need to call get_credentials immediately. After the initial
         set of credentials has expired, the cached value is no longer used. Notice that credentials
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
+    network_stream_timeout_seconds: int
+        Timeout requests if no bytes can be transmitted during this period of time.
+        If set to 0, timeout is disabled.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -348,7 +368,12 @@ def r2_storage(
         get_credentials=get_credentials,
         scatter_initial_credentials=scatter_initial_credentials,
     )
-    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        network_stream_timeout_seconds=network_stream_timeout_seconds,
+    )
     return Storage.new_r2(
         config=options,
         bucket=bucket,

@@ -13,8 +13,8 @@ use icechunk::{
     Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,
     config::{
-        ManifestConfig, ManifestSplitCondition, ManifestSplitDim,
-        ManifestSplitDimCondition, ManifestSplittingConfig,
+        DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestConfig, ManifestSplitCondition,
+        ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
     },
     format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
     new_in_memory_storage,
@@ -362,6 +362,7 @@ pub async fn do_test_expire_and_garbage_collect(
         storage.clone(),
         storage_settings.clone(),
         1,
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
 
     let result = expire(
@@ -419,6 +420,7 @@ pub async fn do_test_expire_and_garbage_collect(
         storage.clone(),
         storage_settings.clone(),
         1,
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
 
     let summary = garbage_collect(
@@ -485,6 +487,7 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
         storage.clone(),
         storage_settings.clone(),
         1,
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
 
     let result = expire(

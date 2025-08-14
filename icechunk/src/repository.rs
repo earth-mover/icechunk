@@ -17,13 +17,16 @@ use futures::{
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{task::JoinError, try_join};
+use tokio::{sync::AcquireError, task::JoinError, try_join};
 use tracing::{Instrument, debug, error, instrument, trace};
 
 use crate::{
     Storage, StorageError,
     asset_manager::AssetManager,
-    config::{Credentials, ManifestPreloadCondition, RepositoryConfig},
+    config::{
+        Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestPreloadCondition,
+        RepositoryConfig,
+    },
     error::ICError,
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
@@ -116,6 +119,8 @@ pub enum RepositoryErrorKind {
     IOError(#[from] std::io::Error),
     #[error("a concurrent task failed")]
     ConcurrencyError(#[from] JoinError),
+    #[error("the http request semaphore cannot be acquired")]
+    AcquireError(#[from] AcquireError),
     #[error("main branch cannot be deleted")]
     CannotDeleteMain,
     #[error("the storage used by this Icechunk repository is read-only: {0}")]
@@ -200,6 +205,7 @@ impl Repository {
             storage_settings.clone(),
             config.caching(),
             config.compression().level(),
+            config.max_concurrent_requests(),
         ));
 
         if !storage.root_is_clean().await? {
@@ -293,6 +299,7 @@ impl Repository {
                 storage_settings.clone(),
                 config.caching(),
                 config.compression().level(),
+                config.max_concurrent_requests(),
             ));
 
             Self::new(
@@ -313,6 +320,7 @@ impl Repository {
                 storage_settings.clone(),
                 config.caching(),
                 config.compression().level(),
+                config.max_concurrent_requests(),
             ));
             Self::new(
                 version,
@@ -399,6 +407,7 @@ impl Repository {
                 Arc::clone(&storage),
                 storage.default_settings(),
                 1, // we are only reading, compression doesn't matter
+                DEFAULT_MAX_CONCURRENT_REQUESTS,
             ));
 
             let res = temp_asset_manager.fetch_repo_info().await;
