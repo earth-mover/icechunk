@@ -25,7 +25,10 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
   RUSTUP_MAX_RETRIES: 10
+  # update RUST_CHANNEL and CARGO_DENY in sync
+  # version 0.18.4 of cargo-deny requires rustc 1.88.0 breaks our current version on 1.87
   RUST_CHANNEL: '1.87.0'
+  CARGO_DENY_VERSION: '0.18.3'
 
 jobs:
   rust-ci:
@@ -115,7 +118,7 @@ jobs:
 
       - name: Install cargo-deny
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: cargo install --locked cargo-deny
+        run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
 
       # Basic checks that run for all pull requests (including external)
       - name: Check formatting

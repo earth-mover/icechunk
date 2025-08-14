@@ -7,7 +7,10 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
   RUSTUP_MAX_RETRIES: 10
+  # update RUST_CHANNEL and CARGO_DENY in sync
+  # version 0.18.4 of cargo-deny requires rustc 1.88.0 breaks our current version on 1.87
   RUST_CHANNEL: '1.87.0'
+  CARGO_DENY_VERSION: '0.18.3'
 
 on:
   workflow_dispatch:
@@ -48,7 +51,7 @@ jobs:
           key: ${{ env.RUST_CHANNEL }}
 
       - name: Install cargo-deny
-        run: cargo install --locked cargo-deny
+        run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
 
       - name: Check
         if: github.event_name == 'push'
