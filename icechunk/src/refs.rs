@@ -73,6 +73,13 @@ pub enum Ref {
 impl Ref {
     pub const DEFAULT_BRANCH: &'static str = "main";
 
+    pub fn name(&self) -> &str {
+        match self {
+            Ref::Tag(n) => n,
+            Ref::Branch(n) => n,
+        }
+    }
+
     fn from_path(path: &str) -> RefResult<Self> {
         match path.strip_prefix("tag.") {
             Some(name) => Ok(Ref::Tag(name.to_string())),
@@ -143,7 +150,7 @@ fn branch_key(branch_name: &str) -> RefResult<String> {
 }
 
 #[instrument(skip(storage, storage_settings))]
-pub async fn create_tag(
+async fn create_tag(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     name: &str,
@@ -171,7 +178,7 @@ pub async fn create_tag(
 
 #[async_recursion]
 #[instrument(skip(storage, storage_settings))]
-pub async fn update_branch(
+async fn update_branch(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     name: &str,
@@ -288,7 +295,7 @@ pub async fn list_branches(
 }
 
 #[instrument(skip(storage, storage_settings))]
-pub async fn delete_branch(
+async fn delete_branch(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     branch: &str,
@@ -302,7 +309,7 @@ pub async fn delete_branch(
 }
 
 #[instrument(skip(storage, storage_settings))]
-pub async fn delete_tag(
+async fn delete_tag(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     tag: &str,

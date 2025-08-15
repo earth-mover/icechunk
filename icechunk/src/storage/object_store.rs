@@ -45,10 +45,10 @@ use tracing::instrument;
 
 use super::{
     CHUNK_PREFIX, CONFIG_PATH, ConcurrencySettings, DeleteObjectsResult, ETag,
-    FetchConfigResult, Generation, GetRefResult, ListInfo, MANIFEST_PREFIX, REF_PREFIX,
+    Generation, GetRefResult, ListInfo, MANIFEST_PREFIX, REF_PREFIX, REPO_INFO_PATH,
     Reader, RetriesSettings, SNAPSHOT_PREFIX, Settings, Storage, StorageError,
-    StorageErrorKind, StorageResult, TRANSACTION_PREFIX, UpdateConfigResult, VersionInfo,
-    WriteRefResult,
+    StorageErrorKind, StorageResult, TRANSACTION_PREFIX, VersionInfo,
+    VersionedFetchResult, VersionedUpdateResult, WriteRefResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -185,6 +185,10 @@ impl ObjectStorage {
         self.get_path_str("", CONFIG_PATH)
     }
 
+    fn get_repo_info_path(&self) -> ObjectPath {
+        self.get_path_str("", REPO_INFO_PATH)
+    }
+
     fn get_snapshot_path(&self, id: &SnapshotId) -> ObjectPath {
         self.get_path(SNAPSHOT_PREFIX, id)
     }
@@ -296,7 +300,7 @@ impl Storage for ObjectStorage {
     async fn fetch_config(
         &self,
         settings: &Settings,
-    ) -> StorageResult<FetchConfigResult> {
+    ) -> StorageResult<VersionedFetchResult<Bytes>> {
         let path = self.get_config_path();
         let response = self.get_client(settings).await.get(&path).await;
 
@@ -307,22 +311,54 @@ impl Storage for ObjectStorage {
                     generation: result.meta.version.as_ref().cloned().map(Generation),
                 };
 
-                Ok(FetchConfigResult::Found {
-                    bytes: result.bytes().await.map_err(Box::new)?,
+                Ok(VersionedFetchResult::Found {
+                    result: result.bytes().await.map_err(Box::new)?,
                     version,
                 })
             }
-            Err(object_store::Error::NotFound { .. }) => Ok(FetchConfigResult::NotFound),
+            Err(object_store::Error::NotFound { .. }) => {
+                Ok(VersionedFetchResult::NotFound)
+            }
             Err(err) => Err(Box::new(err).into()),
         }
     }
+
+    #[instrument(skip_all)]
+    async fn fetch_repo_info(
+        &self,
+        settings: &Settings,
+    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncRead + Unpin + Send>>> {
+        let path = self.get_repo_info_path();
+        let response = self.get_client(settings).await.get(&path).await;
+
+        match response {
+            Ok(result) => {
+                let version = VersionInfo {
+                    etag: result.meta.e_tag.as_ref().cloned().map(ETag),
+                    generation: result.meta.version.as_ref().cloned().map(Generation),
+                };
+
+                Ok(VersionedFetchResult::Found {
+                    result: Box::new(
+                        result.into_stream().err_into().into_async_read().compat(),
+                    ),
+                    version,
+                })
+            }
+            Err(object_store::Error::NotFound { .. }) => {
+                Ok(VersionedFetchResult::NotFound)
+            }
+            Err(err) => Err(Box::new(err).into()),
+        }
+    }
+
     #[instrument(skip(self, settings, config))]
     async fn update_config(
         &self,
         settings: &Settings,
         config: Bytes,
         previous_version: &VersionInfo,
-    ) -> StorageResult<UpdateConfigResult> {
+    ) -> StorageResult<VersionedUpdateResult> {
         let path = self.get_config_path();
         let attributes = if settings.unsafe_use_metadata() {
             Attributes::from_iter(vec![(
@@ -344,10 +380,38 @@ impl Storage for ObjectStorage {
                     etag: res.e_tag.map(ETag),
                     generation: res.version.map(Generation),
                 };
-                Ok(UpdateConfigResult::Updated { new_version })
+                Ok(VersionedUpdateResult::Updated { new_version })
             }
             Err(object_store::Error::Precondition { .. }) => {
-                Ok(UpdateConfigResult::NotOnLatestVersion)
+                Ok(VersionedUpdateResult::NotOnLatestVersion)
+            }
+            Err(err) => Err(Box::new(err).into()),
+        }
+    }
+
+    async fn update_repo_info(
+        &self,
+        settings: &Settings,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+        previous_version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let path = self.get_repo_info_path();
+        let attributes = self.metadata_to_attributes(settings, metadata);
+        let mode = self.get_put_mode(settings, previous_version);
+        let options = PutOptions { mode, attributes, ..PutOptions::default() };
+        let res =
+            self.get_client(settings).await.put_opts(&path, bytes.into(), options).await;
+        match res {
+            Ok(res) => {
+                let new_version = VersionInfo {
+                    etag: res.e_tag.map(ETag),
+                    generation: res.version.map(Generation),
+                };
+                Ok(VersionedUpdateResult::Updated { new_version })
+            }
+            Err(object_store::Error::Precondition { .. }) => {
+                Ok(VersionedUpdateResult::NotOnLatestVersion)
             }
             Err(err) => Err(Box::new(err).into()),
         }
