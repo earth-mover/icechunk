@@ -1343,9 +1343,16 @@ impl PyRepository {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let lock = self.0.read().await;
-                    rewrite_manifests(&lock, branch, message, metadata)
-                        .await
-                        .map_err(PyIcechunkStoreError::ManifestOpsError)
+                    // TODO: make commit method selectable
+                    rewrite_manifests(
+                        &lock,
+                        branch,
+                        message,
+                        metadata,
+                        icechunk::session::CommitMethod::Amend,
+                    )
+                    .await
+                    .map_err(PyIcechunkStoreError::ManifestOpsError)
                 })?;
             Ok(result.to_string())
         })
@@ -1365,9 +1372,16 @@ impl PyRepository {
         let metadata = metadata.map(|m| m.into());
         pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
             let repository = repository.read().await;
-            let result = rewrite_manifests(&repository, &branch, &message, metadata)
-                .await
-                .map_err(PyIcechunkStoreError::ManifestOpsError)?;
+            // TODO: make commit method selectable
+            let result = rewrite_manifests(
+                &repository,
+                &branch,
+                &message,
+                metadata,
+                icechunk::session::CommitMethod::Amend,
+            )
+            .await
+            .map_err(PyIcechunkStoreError::ManifestOpsError)?;
             Ok(result.to_string())
         })
     }

@@ -548,7 +548,7 @@ mod tests {
         cs2.set_chunk_ref(
             chunk_added.clone(),
             ChunkIndices(vec![0]),
-            Some(ChunkPayload::Inline(Bytes::new())),
+            None,
             &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
         );
         cs2.set_chunk_ref(

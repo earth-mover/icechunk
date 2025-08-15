@@ -1,7 +1,7 @@
 use crate::{
     Repository,
     format::{SnapshotId, snapshot::SnapshotProperties},
-    session::SessionError,
+    session::{CommitMethod, SessionError},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -17,6 +17,7 @@ pub async fn rewrite_manifests(
     branch: &str,
     message: &str,
     properties: Option<SnapshotProperties>,
+    commit_method: CommitMethod,
 ) -> ManifestOpsResult<SnapshotId> {
     let mut session = repository
         .writable_session(branch)
@@ -24,7 +25,7 @@ pub async fn rewrite_manifests(
         .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e.into())))?;
 
     session
-        .rewrite_manifests(message, properties)
+        .rewrite_manifests(message, properties, commit_method)
         .await
         .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e)))
 }

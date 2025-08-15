@@ -805,7 +805,7 @@ async def test_rewrite_manifests_async() -> None:
 
     # Verify ancestry after rewrite
     new_ancestry = [snap async for snap in repo.async_ancestry(branch="main")]
-    assert len(new_ancestry) == len(initial_ancestry) + 1
+    assert len(new_ancestry) == len(initial_ancestry) + 0  # we are doing an amend
     assert new_ancestry[0].message == "rewritten manifests"
 
     # Verify data is still accessible after manifest rewrite
@@ -816,3 +816,75 @@ async def test_rewrite_manifests_async() -> None:
     # Check that data is preserved
     assert array[0, 0] == 42  # from first commit
     assert array[99, 49] == 99  # from second commit
+
+
+def test_amend() -> None:
+    config = ic.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 1
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        config=config,
+    )
+
+    session = repo.writable_session("main")
+    store = session.store
+
+    group = zarr.group(store=store, overwrite=True)
+    air_temp = group.create_array(
+        "air_temp", shape=(1000, 1000), chunks=(100, 100), dtype="i4"
+    )
+
+    air_temp[0, 0] = 42
+    _first_snapshot_id = session.commit("we will amend this")
+
+    session = repo.writable_session("main")
+    store = session.store
+    group = zarr.open_group(store=store)
+    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+
+    air_temp[0, 0] = 54
+    air_temp[500, 500] = 42
+    group = zarr.group(path="group", store=store, overwrite=True)
+    air_temp = group.create_array(
+        "foo", shape=(1000, 1000), chunks=(100, 100), dtype="i4"
+    )
+    new_snapshot_id = session.amend("the only commit")
+
+    session = repo.readonly_session(snapshot_id=new_snapshot_id)
+    store = session.store
+    group = zarr.open_group(store=store, mode="r")
+    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    assert air_temp[0, 0] == 54
+    assert air_temp[500, 500] == 42
+
+    parents = list(repo.ancestry(snapshot_id=new_snapshot_id))
+    assert [snap.message for snap in parents] == [
+        "the only commit",
+        "Repository initialized",
+    ]
+    diff = repo.diff(to_branch="main", from_snapshot_id=parents[-1].id)
+    assert diff.new_groups == {"/", "/group"}
+    assert diff.new_arrays == {"/air_temp", "/group/foo"}
+    assert list(diff.updated_chunks.keys()) == ["/air_temp"]
+    assert sorted(diff.updated_chunks["/air_temp"]) == sorted([[0, 0], [5, 5]])
+    assert diff.deleted_groups == set()
+    assert diff.deleted_arrays == set()
+    assert diff.updated_arrays == set()
+    assert diff.updated_groups == set()
+    assert (
+        repr(diff)
+        == """\
+Groups created:
+    /
+    /group
+
+Arrays created:
+    /air_temp
+    /group/foo
+
+Chunks updated:
+    /air_temp:
+        [0, 0]
+        [5, 5]
+"""
+    )

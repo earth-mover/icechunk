@@ -1395,7 +1395,7 @@ mod tests {
         },
         new_local_filesystem_storage,
         ops::manifests::rewrite_manifests,
-        session::{SessionError, get_chunk},
+        session::{CommitMethod, SessionError, get_chunk},
         storage::new_in_memory_storage,
     };
 
@@ -1939,6 +1939,7 @@ mod tests {
             "main",
             "rewrite_manifests with split-size=12",
             None,
+            CommitMethod::Amend,
         )
         .await?;
         total_manifests += 1;
@@ -1969,6 +1970,7 @@ mod tests {
             "main",
             "rewrite_manifests with split-size=4",
             None,
+            CommitMethod::Amend,
         )
         .await?;
         total_manifests += 3;

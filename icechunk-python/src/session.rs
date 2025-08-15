@@ -293,6 +293,46 @@ impl PySession {
         })
     }
 
+    pub fn amend(
+        &self,
+        py: Python<'_>,
+        message: &str,
+        metadata: Option<PySnapshotProperties>,
+    ) -> PyResult<String> {
+        let metadata = metadata.map(|m| m.into());
+        // This is blocking function, we need to release the Gil
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async {
+                let mut session = self.0.write().await;
+                let snapshot_id = session
+                    .amend(message, metadata)
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?;
+                Ok(snapshot_id.to_string())
+            })
+        })
+    }
+
+    pub fn amend_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        message: &str,
+        metadata: Option<PySnapshotProperties>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        let message = message.to_owned();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let metadata = metadata.map(|m| m.into());
+            let mut session = session.write().await;
+            let snapshot_id = session
+                .amend(&message, metadata)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(snapshot_id.to_string())
+        })
+    }
+
     pub fn rebase(&self, solver: PyConflictSolver, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {

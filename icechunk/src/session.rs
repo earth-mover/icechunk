@@ -117,6 +117,10 @@ pub enum SessionErrorKind {
     },
     #[error("`to` snapshot ancestry doesn't include `from`")]
     BadSnapshotChainForDiff,
+    #[error(
+        "the first commit in the repository cannot be an amend, create a new commit instead"
+    )]
+    NoAmendForInitialCommit,
     #[error("failed to create manifest from chunk stream")]
     ManifestCreationError(#[from] Box<SessionError>),
 }
@@ -945,7 +949,16 @@ impl Session {
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
-        self._commit(message, properties, false).await
+        self._commit(message, properties, false, CommitMethod::NewCommit).await
+    }
+
+    #[instrument(skip(self, properties))]
+    pub async fn amend(
+        &mut self,
+        message: &str,
+        properties: Option<SnapshotProperties>,
+    ) -> SessionResult<SnapshotId> {
+        self._commit(message, properties, false, CommitMethod::Amend).await
     }
 
     #[instrument(skip(self, properties))]
@@ -953,6 +966,7 @@ impl Session {
         &mut self,
         message: &str,
         properties: Option<SnapshotProperties>,
+        commit_method: CommitMethod,
     ) -> SessionResult<SnapshotId> {
         let nodes = self.list_nodes().await?.collect::<Vec<_>>();
         // We need to populate the `splits` before calling `commit`.
@@ -973,7 +987,7 @@ impl Session {
             serde_json::to_value(self.config.manifest().splitting())?;
         let mut properties = properties.unwrap_or_default();
         properties.insert("splitting_config".to_string(), splitting_config_serialized);
-        self._commit(message, Some(properties), true).await
+        self._commit(message, Some(properties), true, commit_method).await
     }
 
     #[instrument(skip(self, properties))]
@@ -982,6 +996,7 @@ impl Session {
         message: &str,
         properties: Option<SnapshotProperties>,
         rewrite_manifests: bool,
+        commit_method: CommitMethod,
     ) -> SessionResult<SnapshotId> {
         let Some(branch_name) = &self.branch_name else {
             return Err(SessionErrorKind::ReadOnlySession.into());
@@ -1005,6 +1020,7 @@ impl Session {
             Some(properties),
             &self.splits,
             rewrite_manifests,
+            commit_method,
         )
         .await?;
 
@@ -1885,11 +1901,18 @@ impl ManifestSplittingConfig {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum CommitMethod {
+    NewCommit,
+    Amend,
+}
+
 async fn flush(
     mut flush_data: FlushProcess<'_>,
     message: &str,
     properties: SnapshotProperties,
     rewrite_manifests: bool,
+    commit_method: CommitMethod,
 ) -> SessionResult<Arc<Snapshot>> {
     if !rewrite_manifests && flush_data.change_set.is_empty() {
         return Err(SessionErrorKind::NoChangesToCommit.into());
@@ -2032,11 +2055,19 @@ async fn flush(
     trace!(transaction_log_id = %new_snapshot.id(), "Creating transaction log");
     let new_snapshot_id = new_snapshot.id();
     // FIXME: this should execute in a non-blocking context
-    let tx_log = TransactionLog::new(&new_snapshot_id, flush_data.change_set);
+    let this_tx_log = TransactionLog::new(&new_snapshot_id, flush_data.change_set);
+    let new_tx_log = if commit_method == CommitMethod::NewCommit {
+        this_tx_log
+    } else {
+        let previous_log =
+            flush_data.asset_manager.fetch_transaction_log(&old_snapshot.id()).await?;
+        // FIXME: this should execute in a non-blocking context
+        TransactionLog::merge(&new_snapshot_id, [previous_log.as_ref(), &this_tx_log])
+    };
 
     flush_data
         .asset_manager
-        .write_transaction_log(new_snapshot_id.clone(), Arc::new(tx_log))
+        .write_transaction_log(new_snapshot_id.clone(), Arc::new(new_tx_log))
         .await?;
 
     let snapshot_timestamp = snapshot_timestamp
@@ -2072,12 +2103,14 @@ async fn do_commit(
     properties: Option<SnapshotProperties>,
     splits: &HashMap<NodeId, ManifestSplits>,
     rewrite_manifests: bool,
+    commit_method: CommitMethod,
 ) -> SessionResult<(SnapshotId, Arc<RepoInfo>, VersionInfo)> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
     let properties = properties.unwrap_or_default();
     let flush_data =
         FlushProcess::new(Arc::clone(&asset_manager), change_set, snapshot_id, splits);
-    let new_snapshot = flush(flush_data, message, properties, rewrite_manifests).await?;
+    let new_snapshot =
+        flush(flush_data, message, properties, rewrite_manifests, commit_method).await?;
     let new_snapshot_id = new_snapshot.id();
 
     let mut attempt = 1;
@@ -2094,13 +2127,24 @@ async fn do_commit(
             }));
         }
 
-        debug!(branch_name, %new_snapshot_id, attempt, "Generating new repo info object");
+        let parent_snapshot = repo_info.find_snapshot(snapshot_id)?;
+
+        let parent_id = match (commit_method, parent_snapshot.parent_id) {
+            (CommitMethod::NewCommit, _) => snapshot_id.clone(),
+            (CommitMethod::Amend, Some(parent_id)) => parent_id,
+            (CommitMethod::Amend, None) => {
+                return Err(SessionErrorKind::NoAmendForInitialCommit.into());
+            }
+        };
+
+        debug!(branch_name, %new_snapshot_id, %parent_id, attempt, "Generating new repo info object");
         let new_snapshot_info = SnapshotInfo {
-            parent_id: Some(snapshot_id.clone()),
+            parent_id: Some(parent_id.clone()),
             ..new_snapshot.as_ref().try_into()?
         };
         let new_repo_info =
             Arc::new(repo_info.add_snapshot(new_snapshot_info, branch_name)?);
+
         debug!(attempt, "Attempting to update repo info object");
 
         match asset_manager
@@ -2110,7 +2154,7 @@ async fn do_commit(
             Ok(new_version) => {
                 info!(
                     branch_name,
-                    old_snapshot_id=%snapshot_id,
+                    old_snapshot_id=%parent_id,
                     new_repo_info_version=?new_version,
                     %new_snapshot_id,
                     attempt,
@@ -3627,6 +3671,74 @@ mod tests {
         itertools::assert_equal(
             parents.iter().sorted_by_key(|m| m.flushed_at).rev(),
             parents.iter(),
+        );
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_amend() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session.commit("make root", None).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        session.commit("will be amended", None).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        session.amend("first amend", None).await?;
+
+        let main_version = VersionInfo::BranchTipRef("main".to_string());
+        let anc: Vec<_> = repo
+            .ancestry(&main_version)
+            .await?
+            .map_ok(|si| si.message)
+            .try_collect()
+            .await?;
+
+        // the amended commit is not in the history
+        assert_eq!(anc, vec!["first amend", "make root", "Repository initialized"]);
+
+        let session = repo.readonly_session(&main_version).await?;
+        assert!(session.get_group(&Path::root()).await.is_ok());
+        assert!(session.get_group(&"/a".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/b".try_into().unwrap()).await.is_ok());
+        assert_eq!(session.list_nodes().await?.count(), 3);
+
+        let last =
+            repo.resolve_version(&VersionInfo::BranchTipRef("main".to_string())).await?;
+
+        repo.create_tag("tag", &last).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session
+            .add_group("/error".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session.amend("second amend", None).await?;
+
+        let anc_from_tag: Vec<_> = repo
+            .ancestry(&VersionInfo::TagRef("tag".to_string()))
+            .await?
+            .map_ok(|si| si.message)
+            .try_collect()
+            .await?;
+        assert_eq!(
+            anc_from_tag,
+            vec!["first amend", "make root", "Repository initialized"]
+        );
+
+        let anc_from_main: Vec<_> = repo
+            .ancestry(&main_version)
+            .await?
+            .map_ok(|si| si.message)
+            .try_collect()
+            .await?;
+        assert_eq!(
+            anc_from_main,
+            vec!["second amend", "make root", "Repository initialized"]
         );
 
         Ok(())
