@@ -15,6 +15,8 @@ from icechunk import (
 )
 from icechunk.repository import Repository
 from tests.conftest import write_chunks_to_minio
+from zarr.core.buffer import default_buffer_prototype
+from zarr.core.buffer.cpu import Buffer
 
 
 async def write_minio_virtual_refs() -> None:
@@ -140,3 +142,58 @@ async def test_read_chunks_from_old_array() -> None:
     root = zarr.Group.open(store=store, zarr_format=3)
     array1 = root.require_array(name="array1", shape=((2,)), chunks=((1,)), dtype="i4")
     assert array1[0] == 42
+
+
+async def test_tag_with_open_session() -> None:
+    """This is an issue found by hypothesis"""
+
+    repo = Repository.create(
+        storage=in_memory_storage(),
+    )
+    session = repo.writable_session("main")
+    store = session.store
+
+    await store.set(
+        "zarr.json",
+        Buffer.from_bytes(
+            b'{\n  "shape": [\n    1\n  ],\n  "data_type": "bool",\n  "chunk_grid": {\n    "name": "regular",\n    "configuration": {\n      "chunk_shape": [\n        1\n      ]\n    }\n  },\n  "chunk_key_encoding": {\n    "name": "default",\n    "configuration": {\n      "separator": "/"\n    }\n  },\n  "fill_value": false,\n  "codecs": [\n    {\n      "name": "bytes"\n    }\n  ],\n  "attributes": {},\n  "zarr_format": 3,\n  "node_type": "array",\n  "storage_transformers": []\n}'
+        ),
+    )
+    await store.set(
+        "0/zarr.json",
+        Buffer.from_bytes(
+            b'{\n  "shape": [\n    1\n  ],\n  "data_type": "bool",\n  "chunk_grid": {\n    "name": "regular",\n    "configuration": {\n      "chunk_shape": [\n        1\n      ]\n    }\n  },\n  "chunk_key_encoding": {\n    "name": "default",\n    "configuration": {\n      "separator": "/"\n    }\n  },\n  "fill_value": false,\n  "codecs": [\n    {\n      "name": "bytes"\n    }\n  ],\n  "attributes": {},\n  "zarr_format": 3,\n  "node_type": "array",\n  "storage_transformers": []\n}'
+        ),
+    )
+    session.commit("")
+    session = repo.writable_session("main")
+    store = session.store
+
+    await store.set(
+        "0/0/zarr.json",
+        Buffer.from_bytes(
+            b'{\n  "shape": [\n    1\n  ],\n  "data_type": "bool",\n  "chunk_grid": {\n    "name": "regular",\n    "configuration": {\n      "chunk_shape": [\n        1\n      ]\n    }\n  },\n  "chunk_key_encoding": {\n    "name": "default",\n    "configuration": {\n      "separator": "/"\n    }\n  },\n  "fill_value": false,\n  "codecs": [\n    {\n      "name": "bytes"\n    }\n  ],\n  "attributes": {},\n  "zarr_format": 3,\n  "node_type": "array",\n  "storage_transformers": []\n}'
+        ),
+    )
+
+    await store.set(
+        "0/zarr.json",
+        Buffer.from_bytes(
+            b'{\n  "shape": [\n    1\n  ],\n  "data_type": "bool",\n  "chunk_grid": {\n    "name": "regular",\n    "configuration": {\n      "chunk_shape": [\n        1\n      ]\n    }\n  },\n  "chunk_key_encoding": {\n    "name": "default",\n    "configuration": {\n      "separator": "/"\n    }\n  },\n  "fill_value": false,\n  "codecs": [\n    {\n      "name": "bytes"\n    }\n  ],\n  "attributes": {},\n  "zarr_format": 3,\n  "node_type": "array",\n  "storage_transformers": []\n}'
+        ),
+    )
+
+    await store.set(
+        "0./zarr.json",
+        Buffer.from_bytes(
+            b'{\n  "shape": [\n    1\n  ],\n  "data_type": "bool",\n  "chunk_grid": {\n    "name": "regular",\n    "configuration": {\n      "chunk_shape": [\n        1\n      ]\n    }\n  },\n  "chunk_key_encoding": {\n    "name": "default",\n    "configuration": {\n      "separator": "/"\n    }\n  },\n  "fill_value": false,\n  "codecs": [\n    {\n      "name": "bytes"\n    }\n  ],\n  "attributes": {},\n  "zarr_format": 3,\n  "node_type": "array",\n  "storage_transformers": []\n}'
+        ),
+    )
+
+    session.commit("")
+    session = repo.writable_session("main")
+    store = session.store
+
+    for k in store.list_prefix(""):
+        value = await store.get(k, default_buffer_prototype())
+        assert value is not None, k
