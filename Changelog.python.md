@@ -1,5 +1,12 @@
 # Changelog
 
+## Python Icechunk Library 1.1.3
+
+### Fixes
+
+- Fix issue retrieving groups and arrays with certain special
+  characters in their names
+
 ## Python Icechunk Library 1.1.2
 
 ### Features
