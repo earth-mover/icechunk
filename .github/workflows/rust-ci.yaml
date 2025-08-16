@@ -5,8 +5,6 @@ name: Rust CI
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
-  pull_request_target:
-    types: [opened, reopened, synchronize, labeled]
   push:
     branches:
       - main
@@ -31,26 +29,20 @@ env:
   CARGO_DENY_VERSION: '0.18.3'
 
 jobs:
-  rust-ci:
+  rust:
     name: Rust CI
-    # Run for all events, but apply different logic based on the event type
-    if: |
-      github.event_name == 'pull_request' ||
-      github.event_name == 'push' ||
-      github.event_name == 'schedule' ||
-      (github.event_name == 'pull_request_target' &&
-       github.event.pull_request.head.repo.full_name != github.repository)
     timeout-minutes: 20
     runs-on: ${{ matrix.os }}
-    # Apply environment protection only for external PRs and sensitive events
-    environment: ${{
-      (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository)
-      || github.event_name == 'push'
-      || github.event_name == 'schedule'
-      && 'ci-with-secrets' || '' }}
     defaults:
       run:
         working-directory: ./
+    #permissions:
+      #contents: read
+      #actions: read
+      #pull-requests: read
+    env:
+      #CC: deny_c
+      RUST_CHANNEL: '1.87.0'
 
     strategy:
       fail-fast: false
@@ -61,30 +53,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          # For pull_request_target, checkout the PR head
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
 
-      # Docker services - only for tests that need secrets (internal/external PRs with secrets, push, schedule)
       - name: Stand up docker services
-        if: |
-          (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') &&
-          (
-            (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-            github.event_name == 'push' ||
-            github.event_name == 'schedule' ||
-            (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository)
-          )
-        run: docker compose up -d
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          docker compose up -d
 
       - name: Wait for containers to be ready
-        if: |
-          (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') &&
-          (
-            (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-            github.event_name == 'push' ||
-            github.event_name == 'schedule' ||
-            (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository)
-          )
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
           for _ in {1..10}; do
               if curl --silent --fail http://minio:9000/minio/health/live; then
@@ -100,7 +77,6 @@ jobs:
               sleep 3
           done
 
-      # Common setup steps for all scenarios
       - name: Install Just
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: sudo snap install --edge --classic just
@@ -114,76 +90,56 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
         with:
+          # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
 
       - name: Install cargo-deny
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
 
-      # Basic checks that run for all pull requests (including external)
-      - name: Check formatting
-        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Cargo deny
-        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
-        run: cargo deny check
-
-      # Full checks with secrets - for internal PRs, external PRs (with approval), push, and schedule
-      - name: Check (with secrets)
-        if: |
-          (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') &&
-          (
-            (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-            github.event_name == 'push' ||
-            github.event_name == 'schedule' ||
-            (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository)
-          )
+      - name: Check
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+
           AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
           TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
           TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
           TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-        run: just pre-commit
 
-      # Unit tests for non-Ubuntu platforms that need secrets
+        run: |
+          just pre-commit
+
       - name: Run unit tests only
-        if: |
-          (matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm') &&
-          (
-            (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-            github.event_name == 'push' ||
-            github.event_name == 'schedule' ||
-            (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository)
-          )
-        run: cargo test --lib
+        if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
+        run: |
+          cargo test --lib
 
-      # Expensive integration tests - only on schedule
       - name: Run integration tests against object stores
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'cron'
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+
           AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
           TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
           TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
           TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-        run: cargo test --all --all-targets -- --ignored
+
+        run: |
+          cargo test --all --all-targets -- --ignored
