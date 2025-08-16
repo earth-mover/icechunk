@@ -686,7 +686,7 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let res = Repository::fetch_config(storage.0.as_ref())
+                let res = Repository::fetch_config(storage.0)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(res.map(|res| res.0.into()))
@@ -702,7 +702,7 @@ impl PyRepository {
         pyo3_async_runtimes::tokio::future_into_py::<_, Option<PyRepositoryConfig>>(
             py,
             async move {
-                let res = Repository::fetch_config(storage.0.as_ref())
+                let res = Repository::fetch_config(storage.0)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(res.map(|res| res.0.into()))

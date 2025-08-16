@@ -7,7 +7,6 @@ use std::{
     sync::Arc,
 };
 
-use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto as _;
 use futures::{
@@ -43,7 +42,7 @@ use crate::{
         list_tags,
     },
     session::{Session, SessionErrorKind, SessionResult},
-    storage::{self, StorageErrorKind, VersionedFetchResult, VersionedUpdateResult},
+    storage::{self, StorageErrorKind},
     virtual_chunks::VirtualChunkResolver,
 };
 
@@ -235,7 +234,7 @@ impl Repository {
         let update_config = async move {
             if has_overriden_config {
                 let version = Repository::store_config(
-                    storage_c.as_ref(),
+                    storage_c,
                     &config_c,
                     &storage::VersionInfo::for_creation(),
                 )
@@ -269,7 +268,7 @@ impl Repository {
         debug!("Opening Repository");
         let storage_c = Arc::clone(&storage);
         let fetch_config = tokio::spawn(
-            async move { Self::fetch_config(storage_c.as_ref()).await }.in_current_span(),
+            async move { Self::fetch_config(storage_c).await }.in_current_span(),
         );
 
         let storage_c = Arc::clone(&storage);
@@ -464,21 +463,22 @@ impl Repository {
 
     #[instrument(skip_all)]
     pub async fn fetch_config(
-        storage: &(dyn Storage + Send + Sync),
+        storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<Option<(RepositoryConfig, storage::VersionInfo)>> {
-        match storage.fetch_config(&storage.default_settings()).await? {
-            VersionedFetchResult::Found { result, version } => {
-                let config = serde_yaml_ng::from_slice(&result)?;
-                Ok(Some((config, version)))
-            }
-            VersionedFetchResult::NotFound => Ok(None),
-        }
+        let settings = storage.default_settings();
+        let am = AssetManager::new_no_cache(
+            storage,
+            settings,
+            1, // we are only reading, compression doesn't matter
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+        );
+        am.fetch_config().await
     }
 
     #[instrument(skip_all)]
     pub async fn save_config(&self) -> RepositoryResult<storage::VersionInfo> {
         Repository::store_config(
-            self.storage().as_ref(),
+            self.storage().clone(),
             self.config(),
             &self.config_version,
         )
@@ -497,7 +497,7 @@ impl Repository {
 
     #[instrument(skip(storage, config))]
     pub(crate) async fn store_config(
-        storage: &(dyn Storage + Send + Sync),
+        storage: Arc<dyn Storage + Send + Sync>,
         config: &RepositoryConfig,
         previous_version: &storage::VersionInfo,
     ) -> RepositoryResult<storage::VersionInfo> {
@@ -507,15 +507,16 @@ impl Repository {
             )
             .into());
         }
-
-        let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
-        let storage_settings =
-            config.storage().cloned().unwrap_or_else(|| storage.default_settings());
-        match storage.update_config(&storage_settings, bytes, previous_version).await? {
-            VersionedUpdateResult::Updated { new_version } => Ok(new_version),
-            VersionedUpdateResult::NotOnLatestVersion => {
-                Err(RepositoryErrorKind::ConfigWasUpdated.into())
-            }
+        let settings = storage.default_settings();
+        let am = AssetManager::new_no_cache(
+            storage,
+            settings,
+            1, // we are only reading, compression doesn't matter
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+        );
+        match am.try_update_config(config, previous_version).await? {
+            Some(new_version) => Ok(new_version),
+            None => Err(RepositoryErrorKind::ConfigWasUpdated.into()),
         }
     }
 
@@ -1375,6 +1376,7 @@ fn raise_if_invalid_snapshot_id_v2(
 mod tests {
     use std::{collections::HashMap, error::Error, iter::zip, path::PathBuf, sync::Arc};
 
+    use bytes::Bytes;
     use icechunk_macros::tokio_test;
     use itertools::enumerate;
     use storage::logging::LoggingStorage;
@@ -1435,14 +1437,14 @@ mod tests {
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
         // initializing a repo does not create the config file
-        assert!(Repository::fetch_config(storage.as_ref()).await?.is_none());
+        assert!(Repository::fetch_config(Arc::clone(&storage)).await?.is_none());
         // it inits with the default config
         assert_eq!(repo.config(), &RepositoryConfig::default());
         // updating the persistent config create a new file with default values
         let version = repo.save_config().await?;
         assert_ne!(version, storage::VersionInfo::for_creation());
         assert_eq!(
-            Repository::fetch_config(storage.as_ref()).await?.unwrap().0,
+            Repository::fetch_config(Arc::clone(&storage)).await?.unwrap().0,
             RepositoryConfig::default()
         );
 
@@ -1463,7 +1465,7 @@ mod tests {
         let version = repo.save_config().await?;
         assert_ne!(version, storage::VersionInfo::for_creation());
         assert_eq!(
-            Repository::fetch_config(storage.as_ref())
+            Repository::fetch_config(Arc::clone(&storage))
                 .await?
                 .unwrap()
                 .0
@@ -1505,10 +1507,7 @@ mod tests {
         // and we can save the merge
         let version = repo.save_config().await?;
         assert_ne!(version, storage::VersionInfo::for_creation());
-        assert_eq!(
-            &Repository::fetch_config(storage.as_ref()).await?.unwrap().0,
-            repo.config()
-        );
+        assert_eq!(&Repository::fetch_config(storage).await?.unwrap().0, repo.config());
 
         Ok(())
     }

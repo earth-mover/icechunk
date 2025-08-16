@@ -64,37 +64,33 @@ impl Storage for LoggingStorage {
         self.backend.can_write()
     }
 
-    async fn fetch_config(
+    async fn fetch_versioned_object(
         &self,
-        settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Bytes>> {
-        self.backend.fetch_config(settings).await
-    }
-    async fn fetch_repo_info(
-        &self,
+        path: &str,
         settings: &Settings,
     ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncRead + Unpin + Send>>> {
-        self.backend.fetch_repo_info(settings).await
+        self.backend.fetch_versioned_object(path, settings).await
     }
-    async fn update_config(
+    async fn update_versioned_object(
         &self,
-        settings: &Settings,
-        config: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<VersionedUpdateResult> {
-        self.backend.update_config(settings, config, previous_version).await
-    }
-
-    async fn update_repo_info(
-        &self,
-        settings: &Settings,
-        metadata: Vec<(String, String)>,
+        path: &str,
         bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
         previous_version: &VersionInfo,
+        settings: &Settings,
     ) -> StorageResult<VersionedUpdateResult> {
-        self.backend.update_repo_info(settings, metadata, bytes, previous_version).await
+        self.backend
+            .update_versioned_object(
+                path,
+                bytes,
+                content_type,
+                metadata,
+                previous_version,
+                settings,
+            )
+            .await
     }
-
     async fn fetch_snapshot(
         &self,
         settings: &Settings,

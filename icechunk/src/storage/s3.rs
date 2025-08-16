@@ -44,11 +44,10 @@ use tokio::{io::AsyncRead, sync::OnceCell};
 use tracing::{error, instrument};
 
 use super::{
-    CHUNK_PREFIX, CONFIG_PATH, DeleteObjectsResult, GetRefResult, ListInfo,
-    MANIFEST_PREFIX, REF_PREFIX, REPO_INFO_PATH, Reader, SNAPSHOT_PREFIX, Settings,
-    StorageErrorKind, StorageResult, TRANSACTION_PREFIX, VersionInfo,
-    VersionedFetchResult, VersionedUpdateResult, WriteRefResult,
-    split_in_multiple_equal_requests,
+    CHUNK_PREFIX, DeleteObjectsResult, GetRefResult, ListInfo, MANIFEST_PREFIX,
+    REF_PREFIX, Reader, SNAPSHOT_PREFIX, Settings, StorageErrorKind, StorageResult,
+    TRANSACTION_PREFIX, VersionInfo, VersionedFetchResult, VersionedUpdateResult,
+    WriteRefResult, split_in_multiple_equal_requests,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -261,6 +260,10 @@ impl S3Storage {
         Ok(path_str.replace("\\", "/"))
     }
 
+    fn prefixed_path(&self, path: &str) -> String {
+        format!("{}/{path}", self.prefix)
+    }
+
     fn get_path<const SIZE: usize, T: FileTypeTag>(
         &self,
         file_prefix: &str,
@@ -268,14 +271,6 @@ impl S3Storage {
     ) -> StorageResult<String> {
         // we serialize the url using crockford
         self.get_path_str(file_prefix, id.to_string().as_str())
-    }
-
-    fn get_config_path(&self) -> StorageResult<String> {
-        self.get_path_str("", CONFIG_PATH)
-    }
-
-    fn get_repo_info_path(&self) -> StorageResult<String> {
-        self.get_path_str("", REPO_INFO_PATH)
     }
 
     fn get_snapshot_path(&self, id: &SnapshotId) -> StorageResult<String> {
@@ -507,52 +502,13 @@ impl Storage for S3Storage {
         self.can_write
     }
 
-    #[instrument(skip_all)]
-    async fn fetch_config(
+    #[instrument(skip(self, settings))]
+    async fn fetch_versioned_object(
         &self,
-        settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Bytes>> {
-        let key = self.get_config_path()?;
-        let res = self
-            .get_client(settings)
-            .await
-            .get_object()
-            .bucket(self.bucket.clone())
-            .key(key)
-            .send()
-            .await;
-
-        match res {
-            Ok(output) => match output.e_tag {
-                Some(etag) => Ok(VersionedFetchResult::Found {
-                    result: output.body.collect().await.map_err(Box::new)?.into_bytes(),
-                    version: VersionInfo::from_etag_only(etag),
-                }),
-                None => Ok(VersionedFetchResult::NotFound),
-            },
-            Err(sdk_err) => match sdk_err.as_service_error() {
-                Some(e) if e.is_no_such_key() => Ok(VersionedFetchResult::NotFound),
-                Some(_)
-                    if sdk_err
-                        .raw_response()
-                        .is_some_and(|x| x.status().as_u16() == 404) =>
-                {
-                    // needed for Cloudflare R2 public bucket URLs
-                    // if config doesn't exist we get a 404 that isn't parsed by the AWS SDK
-                    // into anything useful. So we need to parse the raw response, and match
-                    // the status code.
-                    Ok(VersionedFetchResult::NotFound)
-                }
-                _ => Err(Box::new(sdk_err).into()),
-            },
-        }
-    }
-
-    async fn fetch_repo_info(
-        &self,
+        path: &str,
         settings: &Settings,
     ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncRead + Unpin + Send>>> {
-        let key = self.get_repo_info_path()?;
+        let key = self.prefixed_path(path);
         let res = self
             .get_client(settings)
             .await
@@ -588,28 +544,37 @@ impl Storage for S3Storage {
         }
     }
 
-    #[instrument(skip(self, settings, config))]
-    async fn update_config(
+    #[instrument(skip(self, bytes, settings))]
+    async fn update_versioned_object(
         &self,
-        settings: &Settings,
-        config: Bytes,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
         previous_version: &VersionInfo,
+        settings: &Settings,
     ) -> StorageResult<VersionedUpdateResult> {
-        let key = self.get_config_path()?;
+        let key = self.prefixed_path(path);
         let mut req = self
             .get_client(settings)
             .await
             .put_object()
             .bucket(self.bucket.clone())
             .key(key)
-            .body(config.into());
+            .body(bytes.into());
 
         if settings.unsafe_use_metadata() {
-            req = req.content_type("application/yaml")
+            if let Some(content_type) = content_type {
+                req = req.content_type(content_type)
+            }
+            for (k, v) in metadata {
+                req = req.metadata(k, v);
+            }
         }
 
         if let Some(klass) = settings.metadata_storage_class() {
-            req = req.storage_class(klass.as_str().into())
+            let klass = klass.as_str().into();
+            req = req.storage_class(klass);
         }
 
         match (
@@ -629,7 +594,7 @@ impl Storage for S3Storage {
                 let new_etag = out
                     .e_tag()
                     .ok_or(StorageErrorKind::Other(
-                        "Config object should have an etag".to_string(),
+                        "Object should have an etag".to_string(),
                     ))?
                     .to_string();
                 let new_version = VersionInfo::from_etag_only(new_etag);
@@ -774,84 +739,6 @@ impl Storage for S3Storage {
             &bytes,
         )
         .await
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn update_repo_info(
-        &self,
-        settings: &Settings,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<VersionedUpdateResult> {
-        let key = self.get_repo_info_path()?;
-        let mut req = self
-            .get_client(settings)
-            .await
-            .put_object()
-            .bucket(self.bucket.clone())
-            .key(key)
-            .body(bytes.into());
-
-        if settings.unsafe_use_metadata() {
-            for (k, v) in metadata {
-                req = req.metadata(k, v);
-            }
-        }
-
-        if let Some(klass) = settings.metadata_storage_class() {
-            let klass = klass.as_str().into();
-            req = req.storage_class(klass);
-        }
-
-        match (
-            previous_version.etag(),
-            settings.unsafe_use_conditional_create(),
-            settings.unsafe_use_conditional_update(),
-        ) {
-            (None, true, _) => req = req.if_none_match("*"),
-            (Some(etag), _, true) => req = req.if_match(strip_quotes(etag)),
-            (_, _, _) => {}
-        }
-
-        let res = req.send().await;
-
-        // TODO: duplicated with update_config
-        match res {
-            Ok(out) => {
-                let new_etag = out
-                    .e_tag()
-                    .ok_or(StorageErrorKind::Other(
-                        "Config object should have an etag".to_string(),
-                    ))?
-                    .to_string();
-                let new_version = VersionInfo::from_etag_only(new_etag);
-                Ok(VersionedUpdateResult::Updated { new_version })
-            }
-            // minio returns this
-            Err(SdkError::ServiceError(err)) => {
-                if err.err().meta().code() == Some("PreconditionFailed") {
-                    Ok(VersionedUpdateResult::NotOnLatestVersion)
-                } else {
-                    Err(StorageError::from(Box::new(
-                        SdkError::<PutObjectError>::ServiceError(err),
-                    )))
-                }
-            }
-            // S3 API documents this
-            Err(SdkError::ResponseError(err)) => {
-                let status = err.raw().status().as_u16();
-                // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
-                if status == 409 || status == 412 {
-                    Ok(VersionedUpdateResult::NotOnLatestVersion)
-                } else {
-                    Err(StorageError::from(Box::new(
-                        SdkError::<PutObjectError>::ResponseError(err),
-                    )))
-                }
-            }
-            Err(err) => Err(Box::new(err).into()),
-        }
     }
 
     #[instrument(skip(self, settings, bytes))]

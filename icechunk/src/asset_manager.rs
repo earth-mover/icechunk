@@ -7,14 +7,15 @@ use std::{
     ops::Range,
     sync::{Arc, atomic::AtomicBool},
 };
-use tokio::sync::Semaphore;
+use tokio::{io::AsyncReadExt, sync::Semaphore};
 use tracing::{Span, debug, instrument, trace, warn};
 
 use crate::{
-    Storage,
+    RepositoryConfig, Storage,
     config::CachingConfig,
     format::{
-        ChunkId, ChunkOffset, IcechunkFormatErrorKind, ManifestId, SnapshotId,
+        CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatErrorKind, ManifestId,
+        REPO_INFO_FILE_PATH, SnapshotId,
         format_constants::{self, CompressionAlgorithmBin, FileTypeBin, SpecVersionBin},
         manifest::Manifest,
         repo_info::RepoInfo,
@@ -28,7 +29,7 @@ use crate::{
     },
     private,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, Reader, VersionInfo},
+    storage::{self, Reader, VersionInfo, VersionedUpdateResult},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -184,6 +185,47 @@ impl AssetManager {
 
     pub fn clear_chunk_cache(&self) {
         self.chunk_cache.clear();
+    }
+
+    pub async fn fetch_config(
+        &self,
+    ) -> RepositoryResult<Option<(RepositoryConfig, VersionInfo)>> {
+        match self
+            .storage
+            .fetch_versioned_object(CONFIG_FILE_PATH, &self.storage_settings)
+            .await?
+        {
+            storage::VersionedFetchResult::Found { mut result, version } => {
+                let mut data = Vec::with_capacity(1_024);
+                result.read_to_end(&mut data).await?;
+                let config = serde_yaml_ng::from_slice(data.as_slice())?;
+                Ok(Some((config, version)))
+            }
+            storage::VersionedFetchResult::NotFound => Ok(None),
+        }
+    }
+
+    pub async fn try_update_config(
+        &self,
+        config: &RepositoryConfig,
+        previous_version: &VersionInfo,
+    ) -> RepositoryResult<Option<VersionInfo>> {
+        let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
+        match self
+            .storage
+            .update_versioned_object(
+                CONFIG_FILE_PATH,
+                bytes,
+                Some("application/yaml"),
+                Vec::new(),
+                previous_version,
+                &self.storage_settings,
+            )
+            .await?
+        {
+            VersionedUpdateResult::Updated { new_version } => Ok(Some(new_version)),
+            VersionedUpdateResult::NotOnLatestVersion => Ok(None),
+        }
     }
 
     #[instrument(skip(self, manifest))]
@@ -801,7 +843,14 @@ async fn write_repo_info(
 
     debug!(size_bytes = buffer.len(), "Writing repo info");
     match storage
-        .update_repo_info(storage_settings, metadata, buffer.into(), version)
+        .update_versioned_object(
+            REPO_INFO_FILE_PATH,
+            buffer.into(),
+            None,
+            metadata,
+            version,
+            storage_settings,
+        )
         .await?
     {
         storage::VersionedUpdateResult::Updated { new_version } => Ok(new_version),
@@ -816,7 +865,7 @@ async fn fetch_repo_info(
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
     debug!("Downloading repo info");
-    match storage.fetch_repo_info(storage_settings).await? {
+    match storage.fetch_versioned_object(REPO_INFO_FILE_PATH, storage_settings).await? {
         storage::VersionedFetchResult::Found { result, version } => {
             let span = Span::current();
             tokio::task::spawn_blocking(move || {

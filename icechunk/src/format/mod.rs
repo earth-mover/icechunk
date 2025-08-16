@@ -42,6 +42,9 @@ pub mod serializers;
 pub mod snapshot;
 pub mod transaction_log;
 
+pub const CONFIG_FILE_PATH: &str = "config.yaml";
+pub const REPO_INFO_FILE_PATH: &str = "repo";
+
 #[serde_as]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
 pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);

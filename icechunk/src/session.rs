@@ -2738,7 +2738,7 @@ mod tests {
         // )
         // .await?;
         Repository::store_config(
-            storage.as_ref(),
+            storage.clone(),
             &RepositoryConfig::default(),
             &storage::VersionInfo::for_creation(),
         )

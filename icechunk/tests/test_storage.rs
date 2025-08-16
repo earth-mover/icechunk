@@ -2,15 +2,18 @@ use std::{collections::HashMap, env, future::Future, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
-    ObjectStorage, Repository, Storage,
-    config::{S3Credentials, S3Options, S3StaticCredentials},
+    ObjectStorage, Repository, RepositoryConfig, Storage,
+    asset_manager::AssetManager,
+    config::{
+        DEFAULT_MAX_CONCURRENT_REQUESTS, S3Credentials, S3Options, S3StaticCredentials,
+    },
     format::{ChunkId, ManifestId, SnapshotId, snapshot::Snapshot},
     new_local_filesystem_storage,
     refs::RefErrorKind,
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
-        self, ETag, Generation, StorageResult, VersionInfo, VersionedFetchResult,
-        VersionedUpdateResult, new_in_memory_storage, new_s3_storage, s3::mk_client,
+        self, ETag, Generation, StorageResult, VersionInfo, new_in_memory_storage,
+        new_s3_storage, s3::mk_client,
     },
 };
 use icechunk_macros::tokio_test;
@@ -284,42 +287,63 @@ pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::
 pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
-        let config = Bytes::copy_from_slice(b"hello");
-        let version = match storage.update_config(&storage_settings, config.clone(), &VersionInfo::for_creation()).await? {
-    VersionedUpdateResult::Updated { new_version } => new_version,
-    VersionedUpdateResult::NotOnLatestVersion => panic!(),
-};
+
+        let am = Arc::new(AssetManager::new_no_cache(
+            storage,
+            storage_settings,
+            1, // we are only reading, compression doesn't matter
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+        ));
+        let config = RepositoryConfig::default();
+        let version =
+            match am.try_update_config(&config, &VersionInfo::for_creation()).await? {
+                Some(new_version) => new_version,
+                None => panic!(),
+            };
         assert_ne!(version, VersionInfo::for_creation());
-        let res = storage.fetch_config(&storage_settings, ).await?;
-        assert!(
-            matches!(res, VersionedFetchResult::Found{result, version: actual_version} if actual_version == version && result == config )
-        );
+        let res = am.fetch_config().await?;
+        match res {
+            Some((result, actual_version)) => {
+                assert_eq!(result, config);
+                assert_eq!(actual_version, version);
+            }
+            None => panic!("Couldn't get file"),
+        }
         Ok(())
-    }).await?;
+    })
+    .await?;
     Ok(())
 }
 
 #[tokio_test]
-#[allow(clippy::panic)]
+#[allow(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let first_version = match storage.update_config(&storage_settings, Bytes::copy_from_slice(b"hello"), &VersionInfo::for_creation()).await? {
-            VersionedUpdateResult::Updated { new_version } => new_version,
-            _ => panic!(),
-        };
-        let config = Bytes::copy_from_slice(b"bye");
-        let second_version = match storage.update_config(&storage_settings, config.clone(), &first_version).await? {
-            VersionedUpdateResult::Updated { new_version } => new_version,
-            _ => panic!(),
+        let am = Arc::new(AssetManager::new_no_cache(
+            Arc::clone(&storage),
+            storage.default_settings(),
+            1, // we are only reading, compression doesn't matter
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+        ));
+        let config1 = RepositoryConfig::default();
+        let first_version =
+            match am.try_update_config(&config1, &VersionInfo::for_creation()).await? {
+                Some(new_version) => new_version,
+                None => panic!(),
+            };
+        let config2 =
+            RepositoryConfig { inline_chunk_threshold_bytes: Some(42), ..config1 };
+        let second_version = match am.try_update_config(&config2, &first_version).await? {
+            Some(new_version) => new_version,
+            None => panic!(),
         };
         assert_ne!(second_version, first_version);
-        let res = storage.fetch_config(&storage_settings, ).await?;
-        assert!(
-            matches!(res, VersionedFetchResult::Found{result, version: actual_version} if actual_version == second_version && result == config )
-        );
+        let (fetched_config, fetched_version) = am.fetch_config().await?.unwrap();
+        assert_eq!(second_version, fetched_version);
+        assert_eq!(config2, fetched_config);
         Ok(())
-    }).await?;
+    })
+    .await?;
     Ok(())
 }
 
@@ -330,66 +354,76 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing()
     #[allow(clippy::unwrap_used)]
     let storage = new_in_memory_storage().await.unwrap();
     let storage_settings = storage.default_settings();
-    let version = storage
-        .update_config(
-            &storage_settings,
-            Bytes::copy_from_slice(b"hello"),
+    let am = Arc::new(AssetManager::new_no_cache(
+        storage,
+        storage_settings,
+        1, // we are only reading, compression doesn't matter
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
+    ));
+    let config = RepositoryConfig::default();
+    let version = am
+        .try_update_config(
+            &config,
             &VersionInfo::from_etag_only("00000000000000000000000000000000".to_string()),
         )
-        .await;
-
-    assert!(matches!(version, Ok(VersionedUpdateResult::NotOnLatestVersion)));
+        .await?;
+    assert!(version.is_none());
     Ok(())
 }
 
 #[tokio_test]
-#[allow(clippy::panic)]
+#[allow(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_fails_on_bad_version_when_existing()
 -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage_type, storage| async move {
         let storage_settings = storage.default_settings();
-        let config = Bytes::copy_from_slice(b"hello");
-        let version = match storage.update_config(&storage_settings, config.clone(), &VersionInfo::for_creation()).await? {
-            VersionedUpdateResult::Updated { new_version } => new_version,
-            _ => panic!(),
-        };
-        let update_res = storage
-            .update_config(&storage_settings,
-                Bytes::copy_from_slice(b"bye"),
-            &VersionInfo{
-                etag: Some(ETag("00000000000000000000000000000000".to_string())),
-                generation: Some(Generation("0".to_string())),
-            },
+        let am = Arc::new(AssetManager::new_no_cache(
+            storage,
+            storage_settings,
+            1, // we are only reading, compression doesn't matter
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+        ));
+
+        let config1 = RepositoryConfig::default();
+        let version =
+            match am.try_update_config(&config1, &VersionInfo::for_creation()).await? {
+                Some(new_version) => new_version,
+                None => panic!(),
+            };
+        let update_res = am
+            .try_update_config(
+                &config1,
+                &VersionInfo {
+                    etag: Some(ETag("00000000000000000000000000000000".to_string())),
+                    generation: Some(Generation("0".to_string())),
+                },
             )
             .await?;
+
         if storage_type == "local_filesystem" {
             // FIXME: local file system doesn't have conditional updates yet
-            assert!(matches!(update_res, VersionedUpdateResult::Updated{..}));
-
+            assert!(update_res.is_some());
         } else {
-            assert!(matches!(update_res, VersionedUpdateResult::NotOnLatestVersion));
+            assert!(update_res.is_none());
         }
 
-        let fetch_res = storage.fetch_config(&storage_settings, ).await?;
+        let (fetched_config, fetched_version) = am.fetch_config().await?.unwrap();
         if storage_type == "local_filesystem" {
             // FIXME: local file system doesn't have conditional updates yet
-            assert!(
-                matches!(fetch_res, VersionedFetchResult::Found{result, version: actual_version}
-                    if actual_version != version && result == Bytes::copy_from_slice(b"bye"))
-            );
+            assert_ne!(fetched_version, version);
+            assert_eq!(fetched_config, config1);
         } else {
-            assert!(
-                matches!(fetch_res, VersionedFetchResult::Found{result, version: actual_version}
-                    if actual_version == version && result == config )
-            );
+            assert_eq!(fetched_version, version);
+            assert_eq!(fetched_config, config1);
         }
         Ok(())
-    }).await?;
+    })
+    .await?;
     Ok(())
 }
 
 #[tokio_test]
-#[allow(clippy::panic)]
+#[allow(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_can_overwrite_with_unsafe_config()
 -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
@@ -398,42 +432,40 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
             unsafe_use_conditional_create: Some(false),
             ..storage.default_settings()
         };
+        let am = Arc::new(AssetManager::new_no_cache(
+            storage,
+            storage_settings,
+            1, // we are only reading, compression doesn't matter
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+        ));
 
-        // create the initial version
-        let config = Bytes::copy_from_slice(b"hello");
-        match storage
-            .update_config(
-                &storage_settings,
-                config.clone(),
+        let config1 = RepositoryConfig::default();
+        match am
+            .try_update_config(
+                &config1,
                 &VersionInfo {
                     etag: Some(ETag("some-bad-etag".to_string())),
                     generation: Some(Generation("42".to_string())),
-                }
+                },
             )
             .await?
         {
-            VersionedUpdateResult::Updated { new_version } => new_version,
-            _ => panic!(),
+            Some(new_version) => new_version,
+            None => panic!(),
         };
 
         // attempt a bad change that should succeed in this config
-        let update_res = storage
-            .update_config(
-                &storage_settings,
-                Bytes::copy_from_slice(b"bye"),
+        let update_res = am
+            .try_update_config(
+                &config1,
                 &VersionInfo {
                     etag: Some(ETag("other-bad-etag".to_string())),
                     generation: Some(Generation("55".to_string())),
                 },
             )
             .await?;
-
-        assert!(matches!(update_res, VersionedUpdateResult::Updated { .. }));
-
-        let fetch_res = storage.fetch_config(&storage_settings).await?;
-        assert!(
-            matches!(fetch_res, VersionedFetchResult::Found{result, ..} if result.as_ref() == b"bye")
-        );
+        assert!(update_res.is_some());
+        assert_eq!(am.fetch_config().await?.unwrap().0, config1);
         Ok(())
     })
     .await?;

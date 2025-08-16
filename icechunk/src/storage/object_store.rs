@@ -44,11 +44,11 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::instrument;
 
 use super::{
-    CHUNK_PREFIX, CONFIG_PATH, ConcurrencySettings, DeleteObjectsResult, ETag,
-    Generation, GetRefResult, ListInfo, MANIFEST_PREFIX, REF_PREFIX, REPO_INFO_PATH,
-    Reader, RetriesSettings, SNAPSHOT_PREFIX, Settings, Storage, StorageError,
-    StorageErrorKind, StorageResult, TRANSACTION_PREFIX, VersionInfo,
-    VersionedFetchResult, VersionedUpdateResult, WriteRefResult,
+    CHUNK_PREFIX, ConcurrencySettings, DeleteObjectsResult, ETag, Generation,
+    GetRefResult, ListInfo, MANIFEST_PREFIX, REF_PREFIX, Reader, RetriesSettings,
+    SNAPSHOT_PREFIX, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
+    TRANSACTION_PREFIX, VersionInfo, VersionedFetchResult, VersionedUpdateResult,
+    WriteRefResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -172,6 +172,11 @@ impl ObjectStorage {
         ObjectPath::from(path)
     }
 
+    fn prefixed_path(&self, path: &str) -> ObjectPath {
+        let path = format!("{}/{path}", self.backend.prefix());
+        ObjectPath::from(path)
+    }
+
     fn get_path<const SIZE: usize, T: FileTypeTag>(
         &self,
         file_prefix: &str,
@@ -179,14 +184,6 @@ impl ObjectStorage {
     ) -> ObjectPath {
         // we serialize the url using crockford
         self.get_path_str(file_prefix, id.to_string().as_str())
-    }
-
-    fn get_config_path(&self) -> ObjectPath {
-        self.get_path_str("", CONFIG_PATH)
-    }
-
-    fn get_repo_info_path(&self) -> ObjectPath {
-        self.get_path_str("", REPO_INFO_PATH)
     }
 
     fn get_snapshot_path(&self, id: &SnapshotId) -> ObjectPath {
@@ -297,39 +294,13 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip_all)]
-    async fn fetch_config(
+    async fn fetch_versioned_object(
         &self,
-        settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Bytes>> {
-        let path = self.get_config_path();
-        let response = self.get_client(settings).await.get(&path).await;
-
-        match response {
-            Ok(result) => {
-                let version = VersionInfo {
-                    etag: result.meta.e_tag.as_ref().cloned().map(ETag),
-                    generation: result.meta.version.as_ref().cloned().map(Generation),
-                };
-
-                Ok(VersionedFetchResult::Found {
-                    result: result.bytes().await.map_err(Box::new)?,
-                    version,
-                })
-            }
-            Err(object_store::Error::NotFound { .. }) => {
-                Ok(VersionedFetchResult::NotFound)
-            }
-            Err(err) => Err(Box::new(err).into()),
-        }
-    }
-
-    #[instrument(skip_all)]
-    async fn fetch_repo_info(
-        &self,
+        path: &str,
         settings: &Settings,
     ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncRead + Unpin + Send>>> {
-        let path = self.get_repo_info_path();
-        let response = self.get_client(settings).await.get(&path).await;
+        let key = self.prefixed_path(path);
+        let response = self.get_client(settings).await.get(&key).await;
 
         match response {
             Ok(result) => {
@@ -352,53 +323,32 @@ impl Storage for ObjectStorage {
         }
     }
 
-    #[instrument(skip(self, settings, config))]
-    async fn update_config(
+    #[instrument(skip(self, bytes, settings))]
+    async fn update_versioned_object(
         &self,
-        settings: &Settings,
-        config: Bytes,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
         previous_version: &VersionInfo,
+        settings: &Settings,
     ) -> StorageResult<VersionedUpdateResult> {
-        let path = self.get_config_path();
-        let attributes = if settings.unsafe_use_metadata() {
-            Attributes::from_iter(vec![(
-                Attribute::ContentType,
-                AttributeValue::from("application/yaml"),
-            )])
-        } else {
-            Attributes::new()
+        let path = self.prefixed_path(path);
+        let mut attributes = Attributes::new();
+        if settings.unsafe_use_metadata() {
+            if let Some(content_type) = content_type {
+                attributes.insert(
+                    Attribute::ContentType,
+                    AttributeValue::from(content_type.to_string()),
+                );
+            }
+            for (att, value) in self.metadata_to_attributes(settings, metadata).iter() {
+                attributes.insert(att.clone(), value.clone());
+            }
         };
 
         let mode = self.get_put_mode(settings, previous_version);
 
-        let options = PutOptions { mode, attributes, ..PutOptions::default() };
-        let res =
-            self.get_client(settings).await.put_opts(&path, config.into(), options).await;
-        match res {
-            Ok(res) => {
-                let new_version = VersionInfo {
-                    etag: res.e_tag.map(ETag),
-                    generation: res.version.map(Generation),
-                };
-                Ok(VersionedUpdateResult::Updated { new_version })
-            }
-            Err(object_store::Error::Precondition { .. }) => {
-                Ok(VersionedUpdateResult::NotOnLatestVersion)
-            }
-            Err(err) => Err(Box::new(err).into()),
-        }
-    }
-
-    async fn update_repo_info(
-        &self,
-        settings: &Settings,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<VersionedUpdateResult> {
-        let path = self.get_repo_info_path();
-        let attributes = self.metadata_to_attributes(settings, metadata);
-        let mode = self.get_put_mode(settings, previous_version);
         let options = PutOptions { mode, attributes, ..PutOptions::default() };
         let res =
             self.get_client(settings).await.put_opts(&path, bytes.into(), options).await;

@@ -117,8 +117,6 @@ const MANIFEST_PREFIX: &str = "manifests/";
 const CHUNK_PREFIX: &str = "chunks/";
 const REF_PREFIX: &str = "refs";
 const TRANSACTION_PREFIX: &str = "transactions/";
-const CONFIG_PATH: &str = "config.yaml";
-const REPO_INFO_PATH: &str = "repo";
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash, PartialOrd, Ord)]
 pub struct ETag(pub String);
@@ -431,20 +429,21 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
 
     fn can_write(&self) -> bool;
 
-    async fn fetch_config(
+    async fn fetch_versioned_object(
         &self,
-        settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Bytes>>;
-    async fn update_config(
-        &self,
-        settings: &Settings,
-        config: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<VersionedUpdateResult>;
-    async fn fetch_repo_info(
-        &self,
+        path: &str,
         settings: &Settings,
     ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncRead + Unpin + Send>>>;
+    async fn update_versioned_object(
+        &self,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        previous_version: &VersionInfo,
+        settings: &Settings,
+    ) -> StorageResult<VersionedUpdateResult>;
+
     async fn fetch_snapshot(
         &self,
         settings: &Settings,
@@ -505,13 +504,6 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()>;
-    async fn update_repo_info(
-        &self,
-        settings: &Settings,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<VersionedUpdateResult>;
     async fn get_ref(
         &self,
         settings: &Settings,
