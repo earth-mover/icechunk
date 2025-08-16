@@ -3,7 +3,6 @@ use crate::{
         AzureCredentials, AzureStaticCredentials, GcsBearerCredential, GcsCredentials,
         GcsCredentialsFetcher, GcsStaticCredentials, S3Credentials, S3Options,
     },
-    format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private,
 };
 use async_trait::async_trait;
@@ -44,10 +43,9 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::instrument;
 
 use super::{
-    CHUNK_PREFIX, ConcurrencySettings, DeleteObjectsResult, ETag, Generation,
-    GetRefResult, ListInfo, MANIFEST_PREFIX, REF_PREFIX, Reader, RetriesSettings,
-    SNAPSHOT_PREFIX, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
-    TRANSACTION_PREFIX, VersionInfo, VersionedFetchResult, VersionedUpdateResult,
+    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetRefResult, ListInfo,
+    REF_PREFIX, RetriesSettings, Settings, Storage, StorageError, StorageErrorKind,
+    StorageResult, VersionInfo, VersionedFetchResult, VersionedUpdateResult,
     WriteRefResult,
 };
 
@@ -177,31 +175,6 @@ impl ObjectStorage {
         ObjectPath::from(path)
     }
 
-    fn get_path<const SIZE: usize, T: FileTypeTag>(
-        &self,
-        file_prefix: &str,
-        id: &ObjectId<SIZE, T>,
-    ) -> ObjectPath {
-        // we serialize the url using crockford
-        self.get_path_str(file_prefix, id.to_string().as_str())
-    }
-
-    fn get_snapshot_path(&self, id: &SnapshotId) -> ObjectPath {
-        self.get_path(SNAPSHOT_PREFIX, id)
-    }
-
-    fn get_manifest_path(&self, id: &ManifestId) -> ObjectPath {
-        self.get_path(MANIFEST_PREFIX, id)
-    }
-
-    fn get_transaction_path(&self, id: &SnapshotId) -> ObjectPath {
-        self.get_path(TRANSACTION_PREFIX, id)
-    }
-
-    fn get_chunk_path(&self, id: &ChunkId) -> ObjectPath {
-        self.get_path(CHUNK_PREFIX, id)
-    }
-
     fn drop_prefix(&self, prefix: &ObjectPath, path: &ObjectPath) -> Option<ObjectPath> {
         path.prefix_match(&ObjectPath::from(format!("{prefix}"))).map(|it| it.collect())
     }
@@ -209,23 +182,6 @@ impl ObjectStorage {
     fn ref_key(&self, ref_key: &str) -> ObjectPath {
         // ObjectPath knows how to deal with empty path parts: bar//foo
         ObjectPath::from(format!("{}/{}/{}", self.backend.prefix(), REF_PREFIX, ref_key))
-    }
-
-    async fn get_object_reader(
-        &self,
-        settings: &Settings,
-        path: &ObjectPath,
-    ) -> StorageResult<impl AsyncRead + use<>> {
-        Ok(self
-            .get_client(settings)
-            .await
-            .get(path)
-            .await
-            .map_err(Box::new)?
-            .into_stream()
-            .err_into()
-            .into_async_read()
-            .compat())
     }
 
     fn metadata_to_attributes(
@@ -294,7 +250,7 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip_all)]
-    async fn fetch_versioned_object(
+    async fn get_versioned_object(
         &self,
         path: &str,
         settings: &Settings,
@@ -324,7 +280,7 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self, bytes, settings))]
-    async fn update_versioned_object(
+    async fn put_versioned_object(
         &self,
         path: &str,
         bytes: Bytes,
@@ -367,132 +323,20 @@ impl Storage for ObjectStorage {
         }
     }
 
-    #[instrument(skip(self, settings))]
-    async fn fetch_snapshot(
+    async fn put_object(
         &self,
         settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let path = self.get_snapshot_path(id);
-        Ok(Box::new(self.get_object_reader(settings, &path).await?))
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_manifest_known_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-        size: u64,
-    ) -> StorageResult<Reader> {
-        let path = self.get_manifest_path(id);
-        self.get_object_concurrently(settings, path.as_ref(), &(0..size)).await
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_manifest_unknown_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let path = self.get_manifest_path(id);
-        Ok(Box::new(self.get_object_reader(settings, &path).await?))
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_transaction_log(
-        &self,
-        settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let path = self.get_transaction_path(id);
-        Ok(Box::new(self.get_object_reader(settings, &path).await?))
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn write_snapshot(
-        &self,
-        settings: &Settings,
-        id: SnapshotId,
+        path: &str,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
-        let path = self.get_snapshot_path(&id);
+        let path = self.prefixed_path(path);
         let attributes = self.metadata_to_attributes(settings, metadata);
         let options = PutOptions { attributes, ..PutOptions::default() };
         // FIXME: use multipart
         self.get_client(settings)
             .await
             .put_opts(&path, bytes.into(), options)
-            .await
-            .map_err(Box::new)?;
-        Ok(())
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn write_manifest(
-        &self,
-        settings: &Settings,
-        id: ManifestId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        let path = self.get_manifest_path(&id);
-        let attributes = self.metadata_to_attributes(settings, metadata);
-        let options = PutOptions { attributes, ..PutOptions::default() };
-        // FIXME: use multipart
-        self.get_client(settings)
-            .await
-            .put_opts(&path, bytes.into(), options)
-            .await
-            .map_err(Box::new)?;
-        Ok(())
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn write_transaction_log(
-        &self,
-        settings: &Settings,
-        id: SnapshotId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        let path = self.get_transaction_path(&id);
-        let attributes = self.metadata_to_attributes(settings, metadata);
-        let options = PutOptions { attributes, ..PutOptions::default() };
-        // FIXME: use multipart
-        self.get_client(settings)
-            .await
-            .put_opts(&path, bytes.into(), options)
-            .await
-            .map_err(Box::new)?;
-        Ok(())
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_chunk(
-        &self,
-        settings: &Settings,
-        id: &ChunkId,
-        range: &Range<ChunkOffset>,
-    ) -> Result<Bytes, StorageError> {
-        let path = self.get_chunk_path(id);
-        self.get_object_concurrently(settings, path.as_ref(), range)
-            .await?
-            .to_bytes((range.end - range.start + 16) as usize)
-            .await
-    }
-
-    #[instrument(skip(self, settings, bytes))]
-    async fn write_chunk(
-        &self,
-        settings: &Settings,
-        id: ChunkId,
-        bytes: Bytes,
-    ) -> Result<(), StorageError> {
-        let path = self.get_chunk_path(&id);
-        self.get_client(settings)
-            .await
-            .put(&path, bytes.into())
             .await
             .map_err(Box::new)?;
         Ok(())
@@ -626,31 +470,30 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self, settings))]
-    async fn get_snapshot_last_modified(
+    async fn get_object_last_modified(
         &self,
+        path: &str,
         settings: &Settings,
-        snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>> {
-        let path = self.get_snapshot_path(snapshot);
+        let path = self.prefixed_path(path);
         let res = self.get_client(settings).await.head(&path).await.map_err(Box::new)?;
         Ok(res.last_modified)
     }
 
     #[instrument(skip(self))]
-    async fn get_object_range_buf(
+    async fn get_object_buf(
         &self,
         settings: &Settings,
-        key: &str,
+        path: &str,
         range: &Range<u64>,
     ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
-        let path = ObjectPath::from(key);
-        let usize_range = range.start..range.end;
-        let range = Some(usize_range.into());
+        let full_key = self.prefixed_path(path);
+        let range = Some((range.start..range.end).into());
         let opts = GetOptions { range, ..Default::default() };
         Ok(Box::new(
             self.get_client(settings)
                 .await
-                .get_opts(&path, opts)
+                .get_opts(&full_key, opts)
                 .await
                 .map_err(Box::new)?
                 .bytes()
@@ -660,20 +503,22 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self))]
-    async fn get_object_range_read(
+    async fn get_object_read(
         &self,
         settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
+        path: &str,
+        range: Option<&Range<u64>>,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let path = ObjectPath::from(key);
-        let usize_range = range.start..range.end;
-        let range = Some(usize_range.into());
+        let full_key = self.prefixed_path(path);
+        let range = range.map(|range| {
+            let usize_range = range.start..range.end;
+            usize_range.into()
+        });
         let opts = GetOptions { range, ..Default::default() };
         let res: Box<dyn AsyncRead + Unpin + Send> = Box::new(
             self.get_client(settings)
                 .await
-                .get_opts(&path, opts)
+                .get_opts(&full_key, opts)
                 .await
                 .map_err(Box::new)?
                 .into_stream()
@@ -1227,8 +1072,6 @@ mod tests {
     use icechunk_macros::tokio_test;
     use tempfile::TempDir;
 
-    use crate::format::{ChunkId, ManifestId, SnapshotId};
-
     use super::ObjectStorage;
 
     #[tokio_test]
@@ -1288,24 +1131,5 @@ mod tests {
         let ref_key = "ref_key";
         let ref_path = store.ref_key(ref_key);
         assert_eq!(ref_path.to_string(), format!("refs/{ref_key}"));
-
-        let snapshot_id = SnapshotId::random();
-        let snapshot_path = store.get_snapshot_path(&snapshot_id);
-        assert_eq!(snapshot_path.to_string(), format!("snapshots/{snapshot_id}"));
-
-        let manifest_id = ManifestId::random();
-        let manifest_path = store.get_manifest_path(&manifest_id);
-        assert_eq!(manifest_path.to_string(), format!("manifests/{manifest_id}"));
-
-        let chunk_id = ChunkId::random();
-        let chunk_path = store.get_chunk_path(&chunk_id);
-        assert_eq!(chunk_path.to_string(), format!("chunks/{chunk_id}"));
-
-        let transaction_id = SnapshotId::random();
-        let transaction_path = store.get_transaction_path(&transaction_id);
-        assert_eq!(
-            transaction_path.to_string(),
-            format!("transactions/{transaction_id}")
-        );
     }
 }

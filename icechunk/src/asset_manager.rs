@@ -196,7 +196,7 @@ impl AssetManager {
     ) -> RepositoryResult<Option<(RepositoryConfig, VersionInfo)>> {
         match self
             .storage
-            .fetch_versioned_object(CONFIG_FILE_PATH, &self.storage_settings)
+            .get_versioned_object(CONFIG_FILE_PATH, &self.storage_settings)
             .await?
         {
             storage::VersionedFetchResult::Found { mut result, version } => {
@@ -217,7 +217,7 @@ impl AssetManager {
         let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
         match self
             .storage
-            .update_versioned_object(
+            .put_versioned_object(
                 CONFIG_FILE_PATH,
                 bytes,
                 Some("application/yaml"),
@@ -422,9 +422,14 @@ impl AssetManager {
         bytes: Bytes,
     ) -> RepositoryResult<()> {
         trace!(%chunk_id, size_bytes=bytes.len(), "Writing chunk");
+
+        let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
         let _permit = self.request_semaphore.acquire().await?;
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
-        Ok(self.storage.write_chunk(&self.storage_settings, chunk_id, bytes).await?)
+        Ok(self
+            .storage
+            .put_object(&self.storage_settings, path.as_str(), Vec::new(), bytes)
+            .await?)
     }
 
     #[instrument(skip(self))]
@@ -438,10 +443,13 @@ impl AssetManager {
             Ok(chunk) => Ok(chunk),
             Err(guard) => {
                 trace!(%chunk_id, ?range, "Downloading chunk");
+                let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
                 let permit = self.request_semaphore.acquire().await?;
                 let chunk = self
                     .storage
-                    .fetch_chunk(&self.storage_settings, chunk_id, range)
+                    .get_object(&self.storage_settings, &path, Some(range))
+                    .await?
+                    .to_bytes((range.end - range.start) as usize)
                     .await?;
                 drop(permit);
                 let _fail_is_ok = guard.insert(chunk.clone());
@@ -456,10 +464,11 @@ impl AssetManager {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<DateTime<Utc>> {
         debug!(%snapshot_id, "Getting snapshot timestamp");
+        let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
         let _permit = self.request_semaphore.acquire().await?;
         Ok(self
             .storage
-            .get_snapshot_last_modified(&self.storage_settings, snapshot_id)
+            .get_object_last_modified(path.as_str(), &self.storage_settings)
             .await?)
     }
 
@@ -712,8 +721,9 @@ async fn write_new_manifest(
 
     let len = buffer.len() as u64;
     debug!(%id, size_bytes=len, "Writing manifest");
+    let path = format!("{MANIFESTS_FILE_PATH}/{id}");
     let _permit = semaphore.acquire().await?;
-    storage.write_manifest(storage_settings, id.clone(), metadata, buffer.into()).await?;
+    storage.put_object(storage_settings, path.as_str(), metadata, buffer.into()).await?;
     Ok(len)
 }
 
@@ -726,16 +736,11 @@ async fn fetch_manifest(
 ) -> RepositoryResult<Arc<Manifest>> {
     debug!(%manifest_id, "Downloading manifest");
 
+    let path = format!("{MANIFESTS_FILE_PATH}/{manifest_id}");
+    let range = 0..manifest_size;
+    let range = if manifest_size > 0 { Some(&range) } else { None };
     let _permit = semaphore.acquire().await?;
-    let reader = if manifest_size > 0 {
-        storage
-            .fetch_manifest_known_size(storage_settings, manifest_id, manifest_size)
-            .await?
-    } else {
-        Reader::Asynchronous(
-            storage.fetch_manifest_unknown_size(storage_settings, manifest_id).await?,
-        )
-    };
+    let reader = storage.get_object(storage_settings, path.as_str(), range).await?;
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
@@ -808,8 +813,9 @@ async fn write_new_snapshot(
     .await??;
 
     debug!(%id, size_bytes=buffer.len(), "Writing snapshot");
+    let path = format!("{SNAPSHOTS_FILE_PATH}/{id}");
     let _permit = semaphore.acquire().await?;
-    storage.write_snapshot(storage_settings, id.clone(), metadata, buffer.into()).await?;
+    storage.put_object(storage_settings, path.as_str(), metadata, buffer.into()).await?;
 
     Ok(id)
 }
@@ -822,15 +828,15 @@ async fn fetch_snapshot(
 ) -> RepositoryResult<Arc<Snapshot>> {
     debug!(%snapshot_id, "Downloading snapshot");
     let _permit = semaphore.acquire().await?;
-    let read = storage.fetch_snapshot(storage_settings, snapshot_id).await?;
+
+    let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
+    let read = storage.get_object(storage_settings, path.as_str(), None).await?;
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
         let _entered = span.entered();
-        let (spec_version, decompressor) = check_and_get_decompressor(
-            Reader::Asynchronous(read),
-            FileTypeBin::Snapshot,
-        )?;
+        let (spec_version, decompressor) =
+            check_and_get_decompressor(read, FileTypeBin::Snapshot)?;
         deserialize_snapshot(spec_version, decompressor).map_err(RepositoryError::from)
     })
     .await?
@@ -882,10 +888,9 @@ async fn write_new_tx_log(
     .await??;
 
     debug!(%transaction_id, size_bytes=buffer.len(), "Writing transaction log");
+    let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
     let _permit = semaphore.acquire().await?;
-    storage
-        .write_transaction_log(storage_settings, transaction_id, metadata, buffer.into())
-        .await?;
+    storage.put_object(storage_settings, path.as_str(), metadata, buffer.into()).await?;
 
     Ok(())
 }
@@ -897,16 +902,15 @@ async fn fetch_transaction_log(
     semaphore: &Semaphore,
 ) -> RepositoryResult<Arc<TransactionLog>> {
     debug!(%transaction_id, "Downloading transaction log");
+    let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
     let _permit = semaphore.acquire().await?;
-    let read = storage.fetch_transaction_log(storage_settings, transaction_id).await?;
+    let read = storage.get_object(storage_settings, path.as_str(), None).await?;
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
         let _entered = span.entered();
-        let (spec_version, decompressor) = check_and_get_decompressor(
-            Reader::Asynchronous(read),
-            FileTypeBin::TransactionLog,
-        )?;
+        let (spec_version, decompressor) =
+            check_and_get_decompressor(read, FileTypeBin::TransactionLog)?;
         deserialize_transaction_log(spec_version, decompressor)
             .map_err(RepositoryError::from)
     })
@@ -955,7 +959,7 @@ async fn write_repo_info(
 
     debug!(size_bytes = buffer.len(), "Writing repo info");
     match storage
-        .update_versioned_object(
+        .put_versioned_object(
             REPO_INFO_FILE_PATH,
             buffer.into(),
             None,
@@ -977,7 +981,7 @@ async fn fetch_repo_info(
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
     debug!("Downloading repo info");
-    match storage.fetch_versioned_object(REPO_INFO_FILE_PATH, storage_settings).await? {
+    match storage.get_versioned_object(REPO_INFO_FILE_PATH, storage_settings).await? {
         storage::VersionedFetchResult::Found { result, version } => {
             let span = Span::current();
             tokio::task::spawn_blocking(move || {
@@ -1116,27 +1120,48 @@ mod test {
         // fetch again
         caching.fetch_manifest(&id, size).await?;
         // when we insert we cache, so no fetches
-        assert_eq!(logging.fetch_operations(), vec![]);
+        assert_eq!(
+            logging.fetch_operations(),
+            vec![("put_object".to_string(), format!("{MANIFESTS_FILE_PATH}/{id}"))]
+        );
 
         // first time it sees an ID it calls the backend
         caching.fetch_manifest(&pre_existing_id, pre_size).await?;
         assert_eq!(
             logging.fetch_operations(),
-            vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
+            vec![
+                ("put_object".to_string(), format!("{MANIFESTS_FILE_PATH}/{id}")),
+                (
+                    "get_object_read".to_string(),
+                    format!("{MANIFESTS_FILE_PATH}/{pre_existing_id}")
+                )
+            ]
         );
 
         // only calls backend once
         caching.fetch_manifest(&pre_existing_id, pre_size).await?;
         assert_eq!(
             logging.fetch_operations(),
-            vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
+            vec![
+                ("put_object".to_string(), format!("{MANIFESTS_FILE_PATH}/{id}")),
+                (
+                    "get_object_read".to_string(),
+                    format!("{MANIFESTS_FILE_PATH}/{pre_existing_id}")
+                )
+            ]
         );
 
         // other walues still cached
         caching.fetch_manifest(&id, size).await?;
         assert_eq!(
             logging.fetch_operations(),
-            vec![("fetch_manifest_splitting".to_string(), pre_existing_id.to_string())]
+            vec![
+                ("put_object".to_string(), format!("{MANIFESTS_FILE_PATH}/{id}")),
+                (
+                    "get_object_read".to_string(),
+                    format!("{MANIFESTS_FILE_PATH}/{pre_existing_id}")
+                )
+            ]
         );
         Ok(())
     }
@@ -1233,7 +1258,7 @@ mod test {
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
         let manager = Arc::new(AssetManager::new_with_config(
             logging_c.clone(),
-            logging_c.default_settings(),
+            settings,
             &CachingConfig::default(),
             1,
             100,

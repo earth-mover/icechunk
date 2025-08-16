@@ -1559,18 +1559,6 @@ async fn all_chunks<'a>(
     Ok(existing_array_chunks.chain(new_array_chunks))
 }
 
-pub async fn raise_if_invalid_snapshot_id(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
-    snapshot_id: &SnapshotId,
-) -> SessionResult<()> {
-    storage
-        .fetch_snapshot(storage_settings, snapshot_id)
-        .await
-        .map_err(|_| SessionErrorKind::SnapshotNotFound { id: snapshot_id.clone() })?;
-    Ok(())
-}
-
 // Converts the requested ByteRange to a valid ByteRange appropriate
 // to the chunk reference of known `offset` and `length`.
 pub fn construct_valid_byte_range(
@@ -3160,7 +3148,14 @@ mod tests {
                     actual_dims == new_dimension_names
         ));
 
-        let ops = logging.fetch_operations();
+        let ops =
+            Vec::from_iter(logging.fetch_operations().into_iter().filter(|(op, _)| {
+                op != "get_versioned_object"
+                    && op != "put_object"
+                    && op != "put_versioned_object"
+                    && op != "get_object_last_modified"
+                    && op != "list_objects"
+            }));
         assert_eq!(ops.len(), 0);
 
         //test the previous version is still alive

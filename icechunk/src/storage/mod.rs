@@ -50,7 +50,6 @@ pub use object_store::ObjectStorage;
 use crate::{
     config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options},
     error::ICError,
-    format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
     private,
 };
 
@@ -111,12 +110,7 @@ pub struct ListInfo<Id> {
     pub size_bytes: u64,
 }
 
-const SNAPSHOT_PREFIX: &str = "snapshots/";
-const MANIFEST_PREFIX: &str = "manifests/";
-// const ATTRIBUTES_PREFIX: &str = "attributes/";
-const CHUNK_PREFIX: &str = "chunks/";
 const REF_PREFIX: &str = "refs";
-const TRANSACTION_PREFIX: &str = "transactions/";
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash, PartialOrd, Ord)]
 pub struct ETag(pub String);
@@ -429,12 +423,34 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
 
     fn can_write(&self) -> bool;
 
-    async fn fetch_versioned_object(
+    async fn get_object(
+        &self,
+        settings: &Settings,
+        path: &str,
+        range: Option<&Range<u64>>,
+    ) -> StorageResult<Reader> {
+        if let Some(range) = range {
+            self.get_object_concurrently(settings, path, range).await
+        } else {
+            Ok(Reader::Asynchronous(self.get_object_read(settings, path, range).await?))
+        }
+    }
+
+    async fn put_object(
+        &self,
+        settings: &Settings,
+        path: &str,
+        metadata: Vec<(String, String)>,
+        bytes: Bytes,
+    ) -> StorageResult<()>;
+
+    async fn get_versioned_object(
         &self,
         path: &str,
         settings: &Settings,
     ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncRead + Unpin + Send>>>;
-    async fn update_versioned_object(
+
+    async fn put_versioned_object(
         &self,
         path: &str,
         bytes: Bytes,
@@ -443,80 +459,6 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         previous_version: &VersionInfo,
         settings: &Settings,
     ) -> StorageResult<VersionedUpdateResult>;
-
-    async fn fetch_snapshot(
-        &self,
-        settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
-    /// Returns whatever reader is more efficient.
-    ///
-    /// For example, if processed with multiple requests, it will return a synchronous `Buf`
-    /// instance pointing the different parts. If it was executed in a single request, it's more
-    /// efficient to return the network `AsyncRead` directly
-    async fn fetch_manifest_known_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-        size: u64,
-    ) -> StorageResult<Reader>;
-    async fn fetch_manifest_unknown_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
-    async fn fetch_chunk(
-        &self,
-        settings: &Settings,
-        id: &ChunkId,
-        range: &Range<ChunkOffset>,
-    ) -> StorageResult<Bytes>; // FIXME: format flags
-    async fn fetch_transaction_log(
-        &self,
-        settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
-
-    async fn write_snapshot(
-        &self,
-        settings: &Settings,
-        id: SnapshotId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()>;
-    async fn write_manifest(
-        &self,
-        settings: &Settings,
-        id: ManifestId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()>;
-    async fn write_chunk(
-        &self,
-        settings: &Settings,
-        id: ChunkId,
-        bytes: Bytes,
-    ) -> StorageResult<()>;
-    async fn write_transaction_log(
-        &self,
-        settings: &Settings,
-        id: SnapshotId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()>;
-    async fn get_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-    ) -> StorageResult<GetRefResult>;
-    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
-    async fn write_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-        bytes: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<WriteRefResult>;
 
     async fn list_objects<'a>(
         &'a self,
@@ -530,6 +472,26 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult>;
+
+    async fn get_object_last_modified(
+        &self,
+        path: &str,
+        settings: &Settings,
+    ) -> StorageResult<DateTime<Utc>>;
+
+    async fn get_ref(
+        &self,
+        settings: &Settings,
+        ref_key: &str,
+    ) -> StorageResult<GetRefResult>;
+    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
+    async fn write_ref(
+        &self,
+        settings: &Settings,
+        ref_key: &str,
+        bytes: Bytes,
+        previous_version: &VersionInfo,
+    ) -> StorageResult<WriteRefResult>;
 
     /// Delete a stream of objects, by their id string representations
     /// Input stream includes sizes to get as result the total number of bytes deleted
@@ -564,12 +526,6 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         Ok(res.clone())
     }
 
-    async fn get_snapshot_last_modified(
-        &self,
-        settings: &Settings,
-        snapshot: &SnapshotId,
-    ) -> StorageResult<DateTime<Utc>>;
-
     async fn root_is_clean(&self) -> StorageResult<bool> {
         match self.list_objects(&Settings::default(), "").await?.next().await {
             None => Ok(true),
@@ -587,18 +543,18 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         Ok(self.delete_objects(settings, REF_PREFIX, refs).await?.deleted_objects)
     }
 
-    async fn get_object_range_buf(
+    async fn get_object_buf(
         &self,
         settings: &Settings,
-        key: &str,
+        path: &str,
         range: &Range<u64>,
     ) -> StorageResult<Box<dyn Buf + Unpin + Send>>;
 
-    async fn get_object_range_read(
+    async fn get_object_read(
         &self,
         settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
+        path: &str,
+        range: Option<&Range<u64>>,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
 
     async fn get_object_concurrently_multiple(
@@ -607,13 +563,10 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         key: &str,
         parts: Vec<Range<u64>>,
     ) -> StorageResult<Box<dyn Buf + Send + Unpin>> {
-        let results =
-            parts
-                .into_iter()
-                .map(|range| async move {
-                    self.get_object_range_buf(settings, key, &range).await
-                })
-                .collect::<FuturesOrdered<_>>();
+        let results = parts
+            .into_iter()
+            .map(|range| async move { self.get_object_buf(settings, key, &range).await })
+            .collect::<FuturesOrdered<_>>();
 
         let init: Box<dyn Buf + Unpin + Send> = Box::new(&[][..]);
         let buf = results
@@ -642,7 +595,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         let res = match parts.len() {
             0 => Reader::Asynchronous(Box::new(tokio::io::empty())),
             1 => Reader::Asynchronous(
-                self.get_object_range_read(settings, key, range).await?,
+                self.get_object_read(settings, key, Some(range)).await?,
             ),
             _ => Reader::Synchronous(
                 self.get_object_concurrently_multiple(settings, key, parts).await?,

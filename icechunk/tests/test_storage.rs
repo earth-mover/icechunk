@@ -7,7 +7,10 @@ use icechunk::{
     config::{
         DEFAULT_MAX_CONCURRENT_REQUESTS, S3Credentials, S3Options, S3StaticCredentials,
     },
-    format::{ChunkId, ManifestId, SnapshotId, snapshot::Snapshot},
+    format::{
+        CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId,
+        TRANSACTION_LOGS_FILE_PATH, snapshot::Snapshot,
+    },
     new_local_filesystem_storage,
     refs::RefErrorKind,
     repository::{RepositoryError, RepositoryErrorKind},
@@ -20,7 +23,7 @@ use icechunk_macros::tokio_test;
 use object_store::azure::AzureConfigKey;
 use pretty_assertions::{assert_eq, assert_ne};
 use tempfile::tempdir;
-use tokio::io::AsyncReadExt;
+use zstd::zstd_safe::WriteBuf;
 
 mod common;
 
@@ -144,71 +147,50 @@ where
 }
 
 #[tokio_test]
-pub async fn test_snapshot_write_read() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings();
         let id = SnapshotId::random();
-        let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
-        storage
-            .write_snapshot(
-                &storage_settings,
-                id.clone(),
-                vec![("foo".to_string(), "bar".to_string())],
-                Bytes::copy_from_slice(&bytes[..]),
-            )
-            .await?;
-        let mut read = storage.fetch_snapshot(&storage_settings, &id).await?;
-        let mut bytes_back = [0; 1024];
-        read.read_exact(&mut bytes_back).await?;
-        assert_eq!(bytes_back, bytes);
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
+        let mut bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
+        bytes[42] = 42;
+        bytes[43] = 99;
 
-#[tokio_test]
-pub async fn test_manifest_write_read() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = ManifestId::random();
-        let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
-        storage
-            .write_manifest(
-                &storage_settings,
-                id.clone(),
-                vec![("foo".to_string(), "bar".to_string())],
-                Bytes::copy_from_slice(&bytes[..]),
-            )
-            .await?;
-        let mut read =
-            storage.fetch_manifest_unknown_size(&storage_settings, &id).await?;
-        let mut bytes_back = [0; 1024];
-        read.read_exact(&mut bytes_back).await?;
-        assert_eq!(bytes_back, bytes);
+        for dir in [
+            SNAPSHOTS_FILE_PATH,
+            MANIFESTS_FILE_PATH,
+            TRANSACTION_LOGS_FILE_PATH,
+            CHUNKS_FILE_PATH,
+        ] {
+            let path = format!("{dir}/{id}");
 
-        let bytes_back = storage
-            .fetch_manifest_known_size(&storage_settings, &id, 1024)
-            .await?
-            .to_bytes(1024)
-            .await?;
-        assert_eq!(bytes_back, Bytes::copy_from_slice(&bytes[..]));
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
+            storage
+                .put_object(
+                    &storage_settings,
+                    path.as_str(),
+                    vec![("foo".to_string(), "bar".to_string())],
+                    Bytes::copy_from_slice(&bytes[..]),
+                )
+                .await?;
 
-#[tokio_test]
-pub async fn test_chunk_write_read() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = ChunkId::random();
-        let bytes = Bytes::from_static(b"hello");
-        storage.write_chunk(&storage_settings, id.clone(), bytes.clone()).await?;
+            // check with unknown size
+            let read = storage.get_object(&storage_settings, path.as_str(), None).await?;
+            assert_eq!(read.to_bytes(1024).await?.as_slice(), bytes);
 
-        let back = storage.fetch_chunk(&storage_settings, &id, &(1..4)).await?;
-        assert_eq!(Bytes::from_static(b"ell"), back);
+            // check with known size
+            let read = storage
+                .get_object(&storage_settings, path.as_str(), Some(&(0..1024)))
+                .await?;
+            assert_eq!(read.to_bytes(1024).await?.as_slice(), bytes);
+
+            // check with small range
+            let read = storage
+                .get_object(&storage_settings, path.as_str(), Some(&(42..44)))
+                .await?;
+            assert_eq!(
+                read.to_bytes(1024).await?.as_slice(),
+                Bytes::copy_from_slice(&[42, 99])
+            );
+        }
         Ok(())
     })
     .await?;
@@ -490,72 +472,29 @@ pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
     .await;
 
     // we write 2 chunks in IA and one in standard, in ascending order of id
-    st.write_chunk(
+    st.put_object(
         &storage::Settings {
             chunks_storage_class: Some("STANDARD_IA".to_string()),
             ..storage::Settings::default()
         },
-        ChunkId::new([0; 12]),
-        Bytes::new(),
-    )
-    .await?;
-    st.write_chunk(
-        &storage::Settings {
-            storage_class: Some("STANDARD_IA".to_string()),
-            ..storage::Settings::default()
-        },
-        ChunkId::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-        Bytes::new(),
-    )
-    .await?;
-    st.write_chunk(
-        &storage::Settings::default(),
-        ChunkId::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]),
-        Bytes::new(),
-    )
-    .await?;
-    let out = client
-        .list_objects_v2()
-        .bucket(common::get_aws_integration_bucket()?)
-        .prefix(format!("{prefix}/chunks"))
-        .into_paginator()
-        .send()
-        .collect::<Vec<_>>()
-        .await
-        .pop()
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        out.contents()
-            .iter()
-            .map(|o| o.storage_class().unwrap().to_string())
-            .collect::<Vec<_>>(),
-        vec!["STANDARD_IA", "STANDARD_IA", "STANDARD"]
-    );
-
-    st.write_manifest(
-        &storage::Settings {
-            metadata_storage_class: Some("STANDARD_IA".to_string()),
-            ..storage::Settings::default()
-        },
-        ManifestId::new([0; 12]),
+        "chunks/000000000000",
         Vec::new(),
         Bytes::new(),
     )
     .await?;
-    st.write_manifest(
+    st.put_object(
         &storage::Settings {
             storage_class: Some("STANDARD_IA".to_string()),
             ..storage::Settings::default()
         },
-        ManifestId::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+        "chunks/000000000001",
         Vec::new(),
         Bytes::new(),
     )
     .await?;
-    st.write_manifest(
+    st.put_object(
         &storage::Settings::default(),
-        ManifestId::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]),
+        "chunks/000000000002",
         Vec::new(),
         Bytes::new(),
     )
@@ -592,10 +531,17 @@ pub async fn test_write_object_larger_than_multipart_threshold()
         };
 
         let id = ChunkId::random();
+        let path = format!("{MANIFESTS_FILE_PATH}/{id}");
         let bytes = Bytes::copy_from_slice(&[0; 1024]);
 
-        storage.write_chunk(&custom_settings, id.clone(), bytes.clone()).await?;
-        let fetched = storage.fetch_chunk(&custom_settings, &id, &(0..1024)).await?;
+        storage
+            .put_object(&custom_settings, path.as_str(), Vec::new(), bytes.clone())
+            .await?;
+        let fetched = storage
+            .get_object(&custom_settings, path.as_str(), Some(&(0..1024)))
+            .await?
+            .to_bytes(1024)
+            .await?;
         assert_eq!(fetched, bytes);
 
         Ok(())

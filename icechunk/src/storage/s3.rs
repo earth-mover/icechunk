@@ -10,7 +10,7 @@ use std::{
 use crate::{
     Storage, StorageError,
     config::{S3Credentials, S3CredentialsFetcher, S3Options},
-    format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
+    format::ChunkOffset,
     private,
 };
 use async_trait::async_trait;
@@ -44,9 +44,8 @@ use tokio::{io::AsyncRead, sync::OnceCell};
 use tracing::{error, instrument};
 
 use super::{
-    CHUNK_PREFIX, DeleteObjectsResult, GetRefResult, ListInfo, MANIFEST_PREFIX,
-    REF_PREFIX, Reader, SNAPSHOT_PREFIX, Settings, StorageErrorKind, StorageResult,
-    TRANSACTION_PREFIX, VersionInfo, VersionedFetchResult, VersionedUpdateResult,
+    DeleteObjectsResult, GetRefResult, ListInfo, REF_PREFIX, Settings, StorageErrorKind,
+    StorageResult, VersionInfo, VersionedFetchResult, VersionedUpdateResult,
     WriteRefResult, split_in_multiple_equal_requests,
 };
 
@@ -264,47 +263,12 @@ impl S3Storage {
         format!("{}/{path}", self.prefix)
     }
 
-    fn get_path<const SIZE: usize, T: FileTypeTag>(
-        &self,
-        file_prefix: &str,
-        id: &ObjectId<SIZE, T>,
-    ) -> StorageResult<String> {
-        // we serialize the url using crockford
-        self.get_path_str(file_prefix, id.to_string().as_str())
-    }
-
-    fn get_snapshot_path(&self, id: &SnapshotId) -> StorageResult<String> {
-        self.get_path(SNAPSHOT_PREFIX, id)
-    }
-
-    fn get_manifest_path(&self, id: &ManifestId) -> StorageResult<String> {
-        self.get_path(MANIFEST_PREFIX, id)
-    }
-
-    fn get_chunk_path(&self, id: &ChunkId) -> StorageResult<String> {
-        self.get_path(CHUNK_PREFIX, id)
-    }
-
-    fn get_transaction_path(&self, id: &SnapshotId) -> StorageResult<String> {
-        self.get_path(TRANSACTION_PREFIX, id)
-    }
-
     fn ref_key(&self, ref_key: &str) -> StorageResult<String> {
         let path = PathBuf::from_iter([self.prefix.as_str(), REF_PREFIX, ref_key]);
         let path_str =
             path.into_os_string().into_string().map_err(StorageErrorKind::BadPrefix)?;
 
         Ok(path_str.replace("\\", "/"))
-    }
-
-    async fn get_object_reader(
-        &self,
-        settings: &Settings,
-        key: &str,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let client = self.get_client(settings).await;
-        let b = client.get_object().bucket(self.bucket.as_str()).key(key);
-        Ok(Box::new(b.send().await.map_err(Box::new)?.body.into_async_read()))
     }
 
     async fn put_object_single<
@@ -451,7 +415,7 @@ impl S3Storage {
     >(
         &self,
         settings: &Settings,
-        key: &str,
+        full_key: &str,
         content_type: Option<impl Into<String>>,
         metadata: I,
         storage_class: Option<&String>,
@@ -460,7 +424,7 @@ impl S3Storage {
         if bytes.len() >= settings.minimum_size_for_multipart_upload() as usize {
             self.put_object_multipart(
                 settings,
-                key,
+                full_key,
                 content_type,
                 metadata,
                 storage_class,
@@ -470,7 +434,7 @@ impl S3Storage {
         } else {
             self.put_object_single(
                 settings,
-                key,
+                full_key,
                 content_type,
                 metadata,
                 storage_class,
@@ -503,7 +467,7 @@ impl Storage for S3Storage {
     }
 
     #[instrument(skip(self, settings))]
-    async fn fetch_versioned_object(
+    async fn get_versioned_object(
         &self,
         path: &str,
         settings: &Settings,
@@ -545,7 +509,7 @@ impl Storage for S3Storage {
     }
 
     #[instrument(skip(self, bytes, settings))]
-    async fn update_versioned_object(
+    async fn put_versioned_object(
         &self,
         path: &str,
         bytes: Bytes,
@@ -626,136 +590,20 @@ impl Storage for S3Storage {
         }
     }
 
-    #[instrument(skip(self, settings))]
-    async fn fetch_snapshot(
+    async fn put_object(
         &self,
         settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let key = self.get_snapshot_path(id)?;
-        self.get_object_reader(settings, key.as_str()).await
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_manifest_known_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-        size: u64,
-    ) -> StorageResult<Reader> {
-        let key = self.get_manifest_path(id)?;
-        self.get_object_concurrently(settings, key.as_str(), &(0..size)).await
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_manifest_unknown_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let key = self.get_manifest_path(id)?;
-        self.get_object_reader(settings, key.as_str()).await
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_transaction_log(
-        &self,
-        settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let key = self.get_transaction_path(id)?;
-        self.get_object_reader(settings, key.as_str()).await
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_chunk(
-        &self,
-        settings: &Settings,
-        id: &ChunkId,
-        range: &Range<ChunkOffset>,
-    ) -> StorageResult<Bytes> {
-        let key = self.get_chunk_path(id)?;
-        self.get_object_concurrently(settings, key.as_str(), range)
-            .await?
-            .to_bytes((range.end - range.start) as usize)
-            .await
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn write_snapshot(
-        &self,
-        settings: &Settings,
-        id: SnapshotId,
+        path: &str,
         metadata: Vec<(String, String)>,
         bytes: Bytes,
     ) -> StorageResult<()> {
-        let key = self.get_snapshot_path(&id)?;
+        let path = self.prefixed_path(path);
         self.put_object(
             settings,
-            key.as_str(),
+            path.as_str(),
             None::<String>,
             metadata,
             settings.metadata_storage_class(),
-            &bytes,
-        )
-        .await
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn write_manifest(
-        &self,
-        settings: &Settings,
-        id: ManifestId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        let key = self.get_manifest_path(&id)?;
-        self.put_object(
-            settings,
-            key.as_str(),
-            None::<String>,
-            metadata.into_iter(),
-            settings.metadata_storage_class(),
-            &bytes,
-        )
-        .await
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn write_transaction_log(
-        &self,
-        settings: &Settings,
-        id: SnapshotId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        let key = self.get_transaction_path(&id)?;
-        self.put_object(
-            settings,
-            key.as_str(),
-            None::<String>,
-            metadata.into_iter(),
-            settings.metadata_storage_class(),
-            &bytes,
-        )
-        .await
-    }
-
-    #[instrument(skip(self, settings, bytes))]
-    async fn write_chunk(
-        &self,
-        settings: &Settings,
-        id: ChunkId,
-        bytes: bytes::Bytes,
-    ) -> Result<(), StorageError> {
-        let key = self.get_chunk_path(&id)?;
-        let metadata: [(String, String); 0] = [];
-        self.put_object(
-            settings,
-            key.as_str(),
-            None::<String>,
-            metadata,
-            settings.chunks_storage_class(),
             &bytes,
         )
         .await
@@ -963,12 +811,12 @@ impl Storage for S3Storage {
     }
 
     #[instrument(skip(self, settings))]
-    async fn get_snapshot_last_modified(
+    async fn get_object_last_modified(
         &self,
+        path: &str,
         settings: &Settings,
-        snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>> {
-        let key = self.get_snapshot_path(snapshot)?;
+        let key = self.prefixed_path(path);
         let res = self
             .get_client(settings)
             .await
@@ -990,12 +838,13 @@ impl Storage for S3Storage {
     }
 
     #[instrument(skip(self))]
-    async fn get_object_range_buf(
+    async fn get_object_buf(
         &self,
         settings: &Settings,
-        key: &str,
+        path: &str,
         range: &Range<u64>,
     ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
+        let key = self.prefixed_path(path);
         let b = self
             .get_client(settings)
             .await
@@ -1009,15 +858,18 @@ impl Storage for S3Storage {
     }
 
     #[instrument(skip(self))]
-    async fn get_object_range_read(
+    async fn get_object_read(
         &self,
         settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
+        path: &str,
+        range: Option<&Range<u64>>,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let client = self.get_client(settings).await;
         let bucket = self.bucket.clone();
-        Ok(Box::new(get_object_range(client.as_ref(), bucket, key, range).await?))
+        let key = self.prefixed_path(path);
+        Ok(Box::new(
+            get_object_range(client.as_ref(), bucket, key.as_str(), range).await?,
+        ))
     }
 }
 
@@ -1068,10 +920,13 @@ impl ProvideRefreshableCredentials {
 async fn get_object_range(
     client: &Client,
     bucket: String,
-    key: &str,
-    range: &Range<ChunkOffset>,
+    full_key: &str,
+    range: Option<&Range<ChunkOffset>>,
 ) -> StorageResult<impl AsyncRead + use<>> {
-    let b = client.get_object().bucket(bucket).key(key).range(range_to_header(range));
+    let mut b = client.get_object().bucket(bucket).key(full_key);
+    if let Some(range) = range {
+        b = b.range(range_to_header(range));
+    }
     Ok(b.send().await.map_err(Box::new)?.body.into_async_read())
 }
 
@@ -1148,21 +1003,5 @@ mod tests {
 
         let ref_path = storage.ref_key("ref_key").unwrap();
         assert_eq!(ref_path, "prefix/refs/ref_key");
-
-        let snapshot_id = SnapshotId::random();
-        let snapshot_path = storage.get_snapshot_path(&snapshot_id).unwrap();
-        assert_eq!(snapshot_path, format!("prefix/snapshots/{snapshot_id}"));
-
-        let manifest_id = ManifestId::random();
-        let manifest_path = storage.get_manifest_path(&manifest_id).unwrap();
-        assert_eq!(manifest_path, format!("prefix/manifests/{manifest_id}"));
-
-        let chunk_id = ChunkId::random();
-        let chunk_path = storage.get_chunk_path(&chunk_id).unwrap();
-        assert_eq!(chunk_path, format!("prefix/chunks/{chunk_id}"));
-
-        let transaction_id = SnapshotId::random();
-        let transaction_path = storage.get_transaction_path(&transaction_id).unwrap();
-        assert_eq!(transaction_path, format!("prefix/transactions/{transaction_id}"));
     }
 }

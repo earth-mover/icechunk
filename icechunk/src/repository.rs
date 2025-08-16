@@ -976,12 +976,8 @@ impl Repository {
     ) -> RepositoryResult<SnapshotId> {
         match version {
             RefVersionInfo::SnapshotId(sid) => {
-                raise_if_invalid_snapshot_id_v1(
-                    self.storage.as_ref(),
-                    &self.storage_settings,
-                    sid,
-                )
-                .await?;
+                raise_if_invalid_snapshot_id_v1(self.asset_manager().as_ref(), sid)
+                    .await?;
                 Ok(sid.clone())
             }
             RefVersionInfo::TagRef(tag) => {
@@ -1352,12 +1348,11 @@ fn validate_credentials(
 }
 
 async fn raise_if_invalid_snapshot_id_v1(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    asset_manager: &AssetManager,
     snapshot_id: &SnapshotId,
 ) -> RepositoryResult<()> {
-    storage
-        .fetch_snapshot(storage_settings, snapshot_id)
+    asset_manager
+        .fetch_snapshot(snapshot_id)
         .await
         .map_err(|_| RepositoryErrorKind::SnapshotNotFound { id: snapshot_id.clone() })?;
     Ok(())
@@ -1391,7 +1386,7 @@ mod tests {
         },
         conflicts::basic_solver::BasicConflictSolver,
         format::{
-            ByteRange, ChunkIndices,
+            ByteRange, ChunkIndices, MANIFESTS_FILE_PATH,
             manifest::{ChunkPayload, ManifestSplits},
             snapshot::{ArrayShape, DimensionName},
         },
@@ -2047,6 +2042,7 @@ mod tests {
         let storage2: Arc<dyn Storage + Send + Sync> = logging2.clone();
         let config = RepositoryConfig {
             manifest: Some(ManifestConfig::empty()),
+            storage: Some(Default::default()),
             ..RepositoryConfig::default()
         };
         let read_repo = Repository::open(Some(config), storage2, HashMap::new()).await?;
@@ -2067,10 +2063,7 @@ mod tests {
         .unwrap()
         .unwrap();
         let ops = logging2.fetch_operations();
-        assert_eq!(
-            ops.iter().filter(|(op, _)| op == "fetch_manifest_splitting").count(),
-            1
-        );
+        assert_eq!(ops.iter().filter(|(_, key)| key.starts_with("manifests")).count(), 1);
 
         // fetching a chunk that wasn't written shouldn't fetch any more manifests
         logging2.clear();
@@ -2779,7 +2772,7 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Writes four arrays to a repo arrays, checks preloading of the manifests
+    /// Writes four arrays to a repo, checks preloading of the manifests
     ///
     /// Three of the arrays have a preload name. But on of them (time) is larger
     /// than what we allow for preload (via config).
@@ -2900,11 +2893,17 @@ mod tests {
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
+            storage: Some(Default::default()),
             ..RepositoryConfig::default()
         };
         let repository = Repository::open(Some(config), storage, HashMap::new()).await?;
 
-        let ops = logging.fetch_operations();
+        let ops = Vec::from_iter(
+            logging
+                .fetch_operations()
+                .into_iter()
+                .filter(|(op, _)| op != "get_versioned_object"),
+        );
         assert!(ops.is_empty());
 
         let session = repository
@@ -2913,11 +2912,21 @@ mod tests {
 
         // give some time for manifests to load
         let mut retries = 0;
-        while retries < 50 && logging.fetch_operations().is_empty() {
+        while retries < 50
+            && !logging
+                .fetch_operations()
+                .iter()
+                .any(|(op, _)| op != "get_versioned_object")
+        {
             tokio::time::sleep(std::time::Duration::from_secs_f32(0.1)).await;
             retries += 1
         }
-        let ops = logging.fetch_operations();
+        let ops = Vec::from_iter(
+            logging
+                .fetch_operations()
+                .into_iter()
+                .filter(|(op, _)| op != "get_versioned_object"),
+        );
 
         let lat_manifest_id = match session.get_node(&lat_path).await?.node_data {
             NodeData::Array { manifests, .. } => manifests[0].object_id.to_string(),
@@ -2927,10 +2936,22 @@ mod tests {
             NodeData::Array { manifests, .. } => manifests[0].object_id.to_string(),
             NodeData::Group => panic!(),
         };
-        assert_eq!(ops[0].0, "fetch_snapshot");
+        assert!(ops[0].1.starts_with("snapshots"));
         // nodes sorted lexicographically
-        assert_eq!(ops[1], ("fetch_manifest_splitting".to_string(), lat_manifest_id));
-        assert_eq!(ops[2], ("fetch_manifest_splitting".to_string(), lon_manifest_id));
+        assert_eq!(
+            ops[1],
+            (
+                "get_object_read".to_string(),
+                format!("{MANIFESTS_FILE_PATH}/{lat_manifest_id}")
+            )
+        );
+        assert_eq!(
+            ops[2],
+            (
+                "get_object_read".to_string(),
+                format!("{MANIFESTS_FILE_PATH}/{lon_manifest_id}")
+            )
+        );
 
         Ok(())
     }
