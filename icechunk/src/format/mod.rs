@@ -44,6 +44,10 @@ pub mod transaction_log;
 
 pub const CONFIG_FILE_PATH: &str = "config.yaml";
 pub const REPO_INFO_FILE_PATH: &str = "repo";
+pub const CHUNKS_FILE_PATH: &str = "chunks";
+pub const MANIFESTS_FILE_PATH: &str = "manifests";
+pub const SNAPSHOTS_FILE_PATH: &str = "snapshots";
+pub const TRANSACTION_LOGS_FILE_PATH: &str = "transactions";
 
 #[serde_as]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]

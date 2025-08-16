@@ -1489,22 +1489,13 @@ impl PyRepository {
                         max_concurrent_manifest_fetches,
                         dry_run,
                     );
-                    let (storage, storage_settings, asset_manager) = {
+                    let asset_manager = {
                         let lock = self.0.read().await;
-                        (
-                            Arc::clone(lock.storage()),
-                            lock.storage_settings().clone(),
-                            Arc::clone(lock.asset_manager()),
-                        )
+                        Arc::clone(lock.asset_manager())
                     };
-                    let result = garbage_collect(
-                        storage.as_ref(),
-                        &storage_settings,
-                        asset_manager,
-                        &gc_config,
-                    )
-                    .await
-                    .map_err(PyIcechunkStoreError::GCError)?;
+                    let result = garbage_collect(asset_manager, &gc_config)
+                        .await
+                        .map_err(PyIcechunkStoreError::GCError)?;
                     Ok::<_, PyIcechunkStoreError>(result.into())
                 })?;
 
@@ -1532,22 +1523,13 @@ impl PyRepository {
                 max_concurrent_manifest_fetches,
                 dry_run,
             );
-            let (storage, storage_settings, asset_manager) = {
+            let asset_manager = {
                 let lock = repository.read().await;
-                (
-                    Arc::clone(lock.storage()),
-                    lock.storage_settings().clone(),
-                    Arc::clone(lock.asset_manager()),
-                )
+                Arc::clone(lock.asset_manager())
             };
-            let result = garbage_collect(
-                storage.as_ref(),
-                &storage_settings,
-                asset_manager,
-                &gc_config,
-            )
-            .await
-            .map_err(PyIcechunkStoreError::GCError)?;
+            let result = garbage_collect(asset_manager, &gc_config)
+                .await
+                .map_err(PyIcechunkStoreError::GCError)?;
             Ok(result.into())
         })
     }

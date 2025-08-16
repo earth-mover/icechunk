@@ -12,7 +12,6 @@ use tokio::task::{self};
 use tracing::{debug, info, instrument};
 
 use crate::{
-    Storage, StorageError,
     asset_manager::AssetManager,
     format::{
         ChunkId, FileTypeTag, IcechunkFormatError, ManifestId, ObjectId, SnapshotId,
@@ -23,7 +22,7 @@ use crate::{
     ops::pointed_snapshots,
     refs::{Ref, RefError},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, DeleteObjectsResult, ListInfo, VersionInfo},
+    storage::{DeleteObjectsResult, ListInfo, VersionInfo},
     stream_utils::{StreamLimiter, try_unique_stream},
 };
 
@@ -175,8 +174,6 @@ pub struct GCSummary {
 pub enum GCError {
     #[error("ref error {0}")]
     Ref(#[from] RefError),
-    #[error("storage error {0}")]
-    Storage(#[from] StorageError),
     #[error("repository error {0}")]
     Repository(#[from] RepositoryError),
     #[error("format error {0}")]
@@ -317,12 +314,10 @@ async fn find_retained(
 }
 
 pub async fn garbage_collect(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
 ) -> GCResult<GCSummary> {
-    if !storage.can_write() {
+    if !asset_manager.can_write_to_storage() {
         return Err(GCError::Repository(
             RepositoryErrorKind::ReadonlyStorage("Cannot garbage collect".to_string())
                 .into(),
@@ -379,44 +374,24 @@ pub async fn garbage_collect(
             )
             .await?;
         }
-        let res = gc_snapshots(
-            asset_manager.as_ref(),
-            storage,
-            storage_settings,
-            config,
-            &keep_snapshots,
-        )
-        .await?;
+        let res = gc_snapshots(asset_manager.as_ref(), config, &keep_snapshots).await?;
         summary.snapshots_deleted = res.deleted_objects;
         summary.bytes_deleted += res.deleted_bytes;
     }
     if config.deletes_transaction_logs() {
-        let res = gc_transaction_logs(
-            asset_manager.as_ref(),
-            storage,
-            storage_settings,
-            config,
-            &keep_snapshots,
-        )
-        .await?;
+        let res =
+            gc_transaction_logs(asset_manager.as_ref(), config, &keep_snapshots).await?;
         summary.transaction_logs_deleted = res.deleted_objects;
         summary.bytes_deleted += res.deleted_bytes;
     }
     if config.deletes_manifests() {
-        let res = gc_manifests(
-            asset_manager.as_ref(),
-            storage,
-            storage_settings,
-            config,
-            &keep_manifests,
-        )
-        .await?;
+        let res = gc_manifests(asset_manager.as_ref(), config, &keep_manifests).await?;
         summary.manifests_deleted = res.deleted_objects;
         summary.bytes_deleted += res.deleted_bytes;
     }
     if config.deletes_chunks() {
         asset_manager.clear_chunk_cache();
-        let res = gc_chunks(storage, storage_settings, config, &keep_chunks).await?;
+        let res = gc_chunks(asset_manager.as_ref(), config, &keep_chunks).await?;
         summary.chunks_deleted = res.deleted_objects;
         summary.bytes_deleted += res.deleted_bytes;
     }
@@ -458,16 +433,15 @@ async fn fake_delete_result<const SIZE: usize, T: FileTypeTag>(
         .await
 }
 
-#[instrument(skip(storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
+#[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_chunks(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
+    asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<ChunkId>,
 ) -> GCResult<DeleteObjectsResult> {
     tracing::info!("Deleting chunks");
-    let to_delete = storage
-        .list_chunks(storage_settings)
+    let to_delete = asset_manager
+        .list_chunks()
         .await?
         // TODO: don't skip over errors
         .filter_map(move |chunk| {
@@ -483,21 +457,19 @@ async fn gc_chunks(
     if config.dry_run {
         Ok(fake_delete_result(to_delete).await)
     } else {
-        Ok(storage.delete_chunks(storage_settings, to_delete).await?)
+        Ok(asset_manager.delete_chunks(to_delete).await?)
     }
 }
 
-#[instrument(skip(asset_manager, storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
+#[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_manifests(
     asset_manager: &AssetManager,
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
     config: &GCConfig,
     keep_ids: &HashSet<ManifestId>,
 ) -> GCResult<DeleteObjectsResult> {
     tracing::info!("Deleting manifests");
-    let to_delete = storage
-        .list_manifests(storage_settings)
+    let to_delete = asset_manager
+        .list_manifests()
         .await?
         // TODO: don't skip over errors
         .filter_map(move |manifest| {
@@ -516,21 +488,19 @@ async fn gc_manifests(
     if config.dry_run {
         Ok(fake_delete_result(to_delete).await)
     } else {
-        Ok(storage.delete_manifests(storage_settings, to_delete).await?)
+        Ok(asset_manager.delete_manifests(to_delete).await?)
     }
 }
 
-#[instrument(skip(asset_manager, storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
+#[instrument(skip(asset_manager,  config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_snapshots(
     asset_manager: &AssetManager,
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
 ) -> GCResult<DeleteObjectsResult> {
     tracing::info!("Deleting snapshots");
-    let to_delete = storage
-        .list_snapshots(storage_settings)
+    let to_delete = asset_manager
+        .list_snapshots()
         .await?
         // TODO: don't skip over errors
         .filter_map(move |snapshot| {
@@ -549,21 +519,19 @@ async fn gc_snapshots(
     if config.dry_run {
         Ok(fake_delete_result(to_delete).await)
     } else {
-        Ok(storage.delete_snapshots(storage_settings, to_delete).await?)
+        Ok(asset_manager.delete_snapshots(to_delete).await?)
     }
 }
 
-#[instrument(skip(asset_manager, storage, storage_settings, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
+#[instrument(skip(asset_manager,  config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 async fn gc_transaction_logs(
     asset_manager: &AssetManager,
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
 ) -> GCResult<DeleteObjectsResult> {
     tracing::info!("Deleting transaction logs");
-    let to_delete = storage
-        .list_transaction_logs(storage_settings)
+    let to_delete = asset_manager
+        .list_transaction_logs()
         .await?
         // TODO: don't skip over errors
         .filter_map(move |tx| {
@@ -580,7 +548,7 @@ async fn gc_transaction_logs(
     if config.dry_run {
         Ok(fake_delete_result(to_delete).await)
     } else {
-        Ok(storage.delete_transaction_logs(storage_settings, to_delete).await?)
+        Ok(asset_manager.delete_transaction_logs(to_delete).await?)
     }
 }
 
@@ -622,6 +590,11 @@ pub async fn expire(
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
 ) -> GCResult<ExpireResult> {
+    if !asset_manager.can_write_to_storage() {
+        return Err(GCError::Repository(
+            RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into(),
+        ));
+    }
     info!("Expiration started");
     let (repo_info, repo_info_version) = asset_manager.fetch_repo_info().await?;
     let tags: Vec<(Ref, SnapshotId)> = repo_info

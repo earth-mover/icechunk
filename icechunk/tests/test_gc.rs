@@ -64,8 +64,6 @@ pub async fn test_gc_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
 pub async fn do_test_gc(
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let storage_settings = storage.default_settings();
-
     let shape = ArrayShape::new(vec![(1100, 1)]).unwrap();
     // intentionally small to create garbage
     let manifest_split_size = 10;
@@ -108,8 +106,8 @@ pub async fn do_test_gc(
     }
 
     let first_snap_id = ds.commit("first", None).await?;
-    assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1100);
-    assert_eq!(storage.list_manifests(&storage_settings).await?.count().await, 110);
+    assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1100);
+    assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 110);
 
     let mut ds = repo.writable_session("main").await?;
 
@@ -122,8 +120,8 @@ pub async fn do_test_gc(
             .await?;
     }
     let _second_snap_id = ds.commit("second", None).await?;
-    assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
-    assert_eq!(storage.list_manifests(&storage_settings).await?.count().await, 111);
+    assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);
+    assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 111);
 
     // verify doing gc without dangling objects doesn't change the repo
     let now = Utc::now();
@@ -136,15 +134,9 @@ pub async fn do_test_gc(
         NonZeroU16::new(500).unwrap(),
         false,
     );
-    let summary = garbage_collect(
-        storage.as_ref(),
-        &storage_settings,
-        repo.asset_manager().clone(),
-        &gc_config,
-    )
-    .await?;
+    let summary = garbage_collect(repo.asset_manager().clone(), &gc_config).await?;
     assert_eq!(summary, GCSummary::default());
-    assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
+    assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);
     for idx in 0..10 {
         let bytes = get_chunk(
             ds.get_chunk_reader(&array_path, &ChunkIndices(vec![idx]), &ByteRange::ALL)
@@ -159,16 +151,10 @@ pub async fn do_test_gc(
     repo.reset_branch("main", &first_snap_id).await?;
 
     // we still have all the chunks
-    assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1110);
-    assert_eq!(storage.list_manifests(&storage_settings).await?.count().await, 111);
+    assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);
+    assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 111);
 
-    let summary = garbage_collect(
-        storage.as_ref(),
-        &storage_settings,
-        repo.asset_manager().clone(),
-        &gc_config,
-    )
-    .await?;
+    let summary = garbage_collect(repo.asset_manager().clone(), &gc_config).await?;
     assert_eq!(summary.chunks_deleted, 10);
     // only one manifest was re-created, so there is only one garbage manifest
     assert_eq!(summary.manifests_deleted, 1);
@@ -176,9 +162,9 @@ pub async fn do_test_gc(
     assert!(summary.bytes_deleted > summary.chunks_deleted);
 
     // 10 chunks should be drop
-    assert_eq!(storage.list_chunks(&storage_settings).await?.count().await, 1100);
-    assert_eq!(storage.list_manifests(&storage_settings).await?.count().await, 110);
-    assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 2);
+    assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1100);
+    assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 110);
+    assert_eq!(repo.asset_manager().list_snapshots().await?.count().await, 2);
 
     // Opening the repo on main should give the right data
     let ds =
@@ -423,49 +409,31 @@ pub async fn do_test_expire_and_garbage_collect(
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
 
-    let summary = garbage_collect(
-        storage.as_ref(),
-        &storage_settings,
-        asset_manager.clone(),
-        &gc_config,
-    )
-    .await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config).await?;
     // other expired snapshots are pointed by tags
     assert_eq!(summary.snapshots_deleted, 5);
 
     // the non expired snapshots + the 2 expired but pointed by tags snapshots
-    assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 10);
+    assert_eq!(repo.asset_manager().list_snapshots().await?.count().await, 10);
 
     repo.delete_tag("tag1").await?;
 
-    let summary = garbage_collect(
-        storage.as_ref(),
-        &storage_settings,
-        asset_manager.clone(),
-        &gc_config,
-    )
-    .await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config).await?;
     // other expired snapshots are pointed by tag2
     assert_eq!(summary.snapshots_deleted, 1);
 
     // the non expired snapshots + the 1 pointed by tag2 snapshots
-    assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 9);
+    assert_eq!(repo.asset_manager().list_snapshots().await?.count().await, 9);
 
     repo.delete_tag("tag2").await?;
 
-    let summary = garbage_collect(
-        storage.as_ref(),
-        &storage_settings,
-        asset_manager.clone(),
-        &gc_config,
-    )
-    .await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config).await?;
     // tag2 snapshosts are not released yet because it's in the path to root from main
     // this behavior changed in IC 2.0
     assert_eq!(summary.snapshots_deleted, 0);
 
     // only the non expired snapshots left
-    assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 9);
+    assert_eq!(repo.asset_manager().list_snapshots().await?.count().await, 9);
 
     Ok(())
 }
@@ -512,18 +480,12 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
         NonZeroU16::new(500).unwrap(),
         false,
     );
-    let summary = garbage_collect(
-        storage.as_ref(),
-        &storage_settings,
-        asset_manager.clone(),
-        &gc_config,
-    )
-    .await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config).await?;
 
     assert_eq!(summary.snapshots_deleted, 7);
     assert_eq!(summary.transaction_logs_deleted, 7);
 
     // only the non expired snapshots left
-    assert_eq!(storage.list_snapshots(&storage_settings).await?.count().await, 8);
+    assert_eq!(repo.asset_manager().list_snapshots().await?.count().await, 8);
     Ok(())
 }

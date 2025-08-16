@@ -14,7 +14,7 @@ use aws_sdk_s3::{
 use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{
-    Stream, StreamExt, TryStreamExt,
+    StreamExt, TryStreamExt,
     stream::{BoxStream, FuturesOrdered},
 };
 use itertools::Itertools;
@@ -578,86 +578,6 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         }
     }
 
-    async fn list_chunks(
-        &self,
-        settings: &Settings,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ChunkId>>>> {
-        Ok(translate_list_infos(self.list_objects(settings, CHUNK_PREFIX).await?))
-    }
-
-    async fn list_manifests(
-        &self,
-        settings: &Settings,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ManifestId>>>> {
-        Ok(translate_list_infos(self.list_objects(settings, MANIFEST_PREFIX).await?))
-    }
-
-    async fn list_snapshots(
-        &self,
-        settings: &Settings,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
-        Ok(translate_list_infos(self.list_objects(settings, SNAPSHOT_PREFIX).await?))
-    }
-
-    async fn list_transaction_logs(
-        &self,
-        settings: &Settings,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
-        Ok(translate_list_infos(self.list_objects(settings, TRANSACTION_PREFIX).await?))
-    }
-
-    async fn delete_chunks(
-        &self,
-        settings: &Settings,
-        chunks: BoxStream<'_, (ChunkId, u64)>,
-    ) -> StorageResult<DeleteObjectsResult> {
-        self.delete_objects(
-            settings,
-            CHUNK_PREFIX,
-            chunks.map(|(id, size)| (id.to_string(), size)).boxed(),
-        )
-        .await
-    }
-
-    async fn delete_manifests(
-        &self,
-        settings: &Settings,
-        manifests: BoxStream<'_, (ManifestId, u64)>,
-    ) -> StorageResult<DeleteObjectsResult> {
-        self.delete_objects(
-            settings,
-            MANIFEST_PREFIX,
-            manifests.map(|(id, size)| (id.to_string(), size)).boxed(),
-        )
-        .await
-    }
-
-    async fn delete_snapshots(
-        &self,
-        settings: &Settings,
-        snapshots: BoxStream<'_, (SnapshotId, u64)>,
-    ) -> StorageResult<DeleteObjectsResult> {
-        self.delete_objects(
-            settings,
-            SNAPSHOT_PREFIX,
-            snapshots.map(|(id, size)| (id.to_string(), size)).boxed(),
-        )
-        .await
-    }
-
-    async fn delete_transaction_logs(
-        &self,
-        settings: &Settings,
-        transaction_logs: BoxStream<'_, (SnapshotId, u64)>,
-    ) -> StorageResult<DeleteObjectsResult> {
-        self.delete_objects(
-            settings,
-            TRANSACTION_PREFIX,
-            transaction_logs.map(|(id, size)| (id.to_string(), size)).boxed(),
-        )
-        .await
-    }
-
     async fn delete_refs(
         &self,
         settings: &Settings,
@@ -730,31 +650,6 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         };
         Ok(res)
     }
-}
-
-fn convert_list_item<Id>(item: ListInfo<String>) -> Option<ListInfo<Id>>
-where
-    Id: for<'b> TryFrom<&'b str>,
-{
-    let id = Id::try_from(item.id.as_str()).ok()?;
-    let created_at = item.created_at;
-    Some(ListInfo { created_at, id, size_bytes: item.size_bytes })
-}
-
-fn translate_list_infos<'a, Id>(
-    s: impl Stream<Item = StorageResult<ListInfo<String>>> + Send + 'a,
-) -> BoxStream<'a, StorageResult<ListInfo<Id>>>
-where
-    Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'a,
-{
-    s.try_filter_map(|info| async move {
-        let info = convert_list_item(info);
-        if info.is_none() {
-            tracing::error!(list_info=?info, "Error processing list item metadata");
-        }
-        Ok(info)
-    })
-    .boxed()
 }
 
 /// Split an object request into multiple byte range requests

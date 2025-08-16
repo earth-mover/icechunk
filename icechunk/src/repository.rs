@@ -1415,15 +1415,10 @@ mod tests {
     }
 
     async fn assert_manifest_count(
-        storage: &Arc<dyn Storage + Send + Sync>,
+        asset_manager: &Arc<AssetManager>,
         total_manifests: usize,
     ) {
-        let expected = storage
-            .list_manifests(&storage.default_settings())
-            .await
-            .unwrap()
-            .count()
-            .await;
+        let expected = asset_manager.list_manifests().await.unwrap().count().await;
         assert_eq!(
             total_manifests, expected,
             "Mismatch in manifest count: expected {expected}, but got {total_manifests}",
@@ -1698,7 +1693,7 @@ mod tests {
                 .await?;
         }
         session.commit("first commit", None).await?;
-        assert_manifest_count(&storage, 1).await;
+        assert_manifest_count(repo.asset_manager(), 1).await;
 
         // Important we are not issuing any chunk deletes here (which is what Zarr does)
         // Note we are still rewriting the manifest even without chunk changes
@@ -1714,7 +1709,7 @@ mod tests {
             )
             .await?;
         session.commit("second commit", None).await?;
-        assert_manifest_count(&storage, 2).await;
+        assert_manifest_count(repo.asset_manager(), 2).await;
 
         // Now we expand the size, but don't write chunks.
         // No new manifests need to be written
@@ -1729,7 +1724,7 @@ mod tests {
             )
             .await?;
         session.commit("second commit", None).await?;
-        assert_manifest_count(&storage, 2).await;
+        assert_manifest_count(repo.asset_manager(), 2).await;
 
         Ok(())
     }
@@ -1878,7 +1873,7 @@ mod tests {
         .await?;
 
         let mut total_manifests = 0;
-        assert_manifest_count(&storage, total_manifests).await;
+        assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         let mut session = repository.writable_session("main").await?;
         for i in 0..dim_size {
@@ -1892,7 +1887,7 @@ mod tests {
         }
         session.commit("first split", None).await?;
         total_manifests += 4;
-        assert_manifest_count(&storage, total_manifests).await;
+        assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // make sure data is correct
         let validate_data = async || {
@@ -1942,7 +1937,7 @@ mod tests {
         )
         .await?;
         total_manifests += 1;
-        assert_manifest_count(&storage, total_manifests).await;
+        assert_manifest_count(new_repo.asset_manager(), total_manifests).await;
         validate_data().await;
         assert!(
             repository
@@ -1973,7 +1968,7 @@ mod tests {
         )
         .await?;
         total_manifests += 3;
-        assert_manifest_count(&storage, total_manifests).await;
+        assert_manifest_count(new_repo.asset_manager(), total_manifests).await;
         validate_data().await;
         assert!(
             repository
@@ -2012,7 +2007,7 @@ mod tests {
         .await?;
 
         let mut total_manifests = 0;
-        assert_manifest_count(&backend, total_manifests).await;
+        assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         logging.clear();
         let ops = logging.fetch_operations();
@@ -2031,7 +2026,7 @@ mod tests {
         }
         session.commit("first split", None).await?;
         total_manifests += 1;
-        assert_manifest_count(&storage, total_manifests).await;
+        assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // now only last split
         let last_chunk = dim_size - 1;
@@ -2045,7 +2040,7 @@ mod tests {
             .await?;
         session.commit("last split", None).await?;
         total_manifests += 1;
-        assert_manifest_count(&storage, total_manifests).await;
+        assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // check that reads are optimized; we should only fetch the last split for this query
         let logging2 = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
@@ -2110,7 +2105,7 @@ mod tests {
                 .await?
         }
         session.commit("wrote all splits", None).await?;
-        assert_manifest_count(&storage, total_manifests).await;
+        assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         let mut session = repository.writable_session("main").await?;
         for i in 0..dim_size {
@@ -2126,7 +2121,7 @@ mod tests {
         // So we keep a running count of the total and update that at each step.
         total_manifests += dim_size.div_ceil(split_size) as usize;
         session.commit("full overwrite", None).await?;
-        assert_manifest_count(&storage, total_manifests).await;
+        assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // test reads
         for i in 0..dim_size {
@@ -2155,7 +2150,7 @@ mod tests {
         }
         total_manifests += 0;
         session.commit("clear existing array", None).await?;
-        assert_manifest_count(&storage, total_manifests).await;
+        assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // add a new array
         let def = Bytes::from_static(br#"{"this":"array"}"#);
@@ -2184,7 +2179,7 @@ mod tests {
             .await?;
         total_manifests += 0;
         session.commit("clear new array", None).await?;
-        assert_manifest_count(&storage, total_manifests).await;
+        assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         Ok(())
     }
@@ -2305,7 +2300,7 @@ mod tests {
         let repo_clone = repository.reopen(None, None)?;
 
         let mut total_manifests = 0;
-        assert_manifest_count(&backend, total_manifests).await;
+        assert_manifest_count(repo_clone.asset_manager(), total_manifests).await;
 
         logging.clear();
         let ops = logging.fetch_operations();
@@ -2374,7 +2369,7 @@ mod tests {
             total_manifests +=
                 (axis_size as u32).div_ceil(expected_split_sizes[ax]) as usize;
             session.commit(format!("finished axis {ax}").as_ref(), None).await?;
-            assert_manifest_count(&backend, total_manifests).await;
+            assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
             verify_data(ax, &session).await;
         }
@@ -2408,7 +2403,7 @@ mod tests {
         // are not modified we preserve all the old manifests
         total_manifests += 1;
         session.commit("finished time again".to_string().as_ref(), None).await?;
-        assert_manifest_count(&backend, total_manifests).await;
+        assert_manifest_count(repository.asset_manager(), total_manifests).await;
         verify_all_data(&repository).await;
 
         // now modify all splits to trigger a full rewrite
@@ -2427,7 +2422,7 @@ mod tests {
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
         session.commit("finished time again".to_string().as_ref(), None).await?;
-        assert_manifest_count(&backend, total_manifests).await;
+        assert_manifest_count(repository.asset_manager(), total_manifests).await;
         verify_all_data(&repository).await;
 
         //=========================================================
@@ -2444,7 +2439,7 @@ mod tests {
         // Important: now we rewrite one split per dimension
         total_manifests += 3;
         session.commit("finished time again".to_string().as_ref(), None).await?;
-        assert_manifest_count(&backend, total_manifests).await;
+        assert_manifest_count(repository.asset_manager(), total_manifests).await;
         verify_all_data(&repo_clone).await;
         verify_all_data(&repository).await;
 
@@ -2463,7 +2458,7 @@ mod tests {
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
         session.commit("finished time again".to_string().as_ref(), None).await?;
-        assert_manifest_count(&backend, total_manifests).await;
+        assert_manifest_count(repo_clone.asset_manager(), total_manifests).await;
         verify_all_data(&repo_clone).await;
 
         // do that again, but with different values and test those specifically
@@ -2481,7 +2476,7 @@ mod tests {
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
         session.commit("finished time again".to_string().as_ref(), None).await?;
-        assert_manifest_count(&backend, total_manifests).await;
+        assert_manifest_count(repo_clone.asset_manager(), total_manifests).await;
         for idx in [0, 12, 24] {
             let actual = get_chunk(
                 session

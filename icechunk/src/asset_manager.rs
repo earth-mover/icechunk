@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -14,8 +15,9 @@ use crate::{
     RepositoryConfig, Storage,
     config::CachingConfig,
     format::{
-        CONFIG_FILE_PATH, ChunkId, ChunkOffset, IcechunkFormatErrorKind, ManifestId,
-        REPO_INFO_FILE_PATH, SnapshotId,
+        CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset,
+        IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, REPO_INFO_FILE_PATH,
+        SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
         format_constants::{self, CompressionAlgorithmBin, FileTypeBin, SpecVersionBin},
         manifest::Manifest,
         repo_info::RepoInfo,
@@ -29,7 +31,9 @@ use crate::{
     },
     private,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, Reader, VersionInfo, VersionedUpdateResult},
+    storage::{
+        self, DeleteObjectsResult, ListInfo, Reader, VersionInfo, VersionedUpdateResult,
+    },
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -467,6 +471,114 @@ impl AssetManager {
         let snapshot = self.fetch_snapshot(snapshot_id).await?;
         let info = snapshot.as_ref().try_into()?;
         Ok(info)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn list_chunks(
+        &self,
+    ) -> RepositoryResult<BoxStream<RepositoryResult<ListInfo<ChunkId>>>> {
+        Ok(translate_list_infos(
+            self.storage
+                .list_objects(&self.storage_settings, CHUNKS_FILE_PATH)
+                .await?
+                .err_into(),
+        ))
+    }
+
+    #[instrument(skip(self))]
+    pub async fn list_manifests(
+        &self,
+    ) -> RepositoryResult<BoxStream<RepositoryResult<ListInfo<ManifestId>>>> {
+        Ok(translate_list_infos(
+            self.storage
+                .list_objects(&self.storage_settings, MANIFESTS_FILE_PATH)
+                .await?
+                .err_into(),
+        ))
+    }
+
+    #[instrument(skip(self))]
+    pub async fn list_snapshots(
+        &self,
+    ) -> RepositoryResult<BoxStream<RepositoryResult<ListInfo<SnapshotId>>>> {
+        Ok(translate_list_infos(
+            self.storage
+                .list_objects(&self.storage_settings, SNAPSHOTS_FILE_PATH)
+                .await?
+                .err_into(),
+        ))
+    }
+
+    #[instrument(skip(self))]
+    pub async fn list_transaction_logs(
+        &self,
+    ) -> RepositoryResult<BoxStream<RepositoryResult<ListInfo<SnapshotId>>>> {
+        Ok(translate_list_infos(
+            self.storage
+                .list_objects(&self.storage_settings, TRANSACTION_LOGS_FILE_PATH)
+                .await?
+                .err_into(),
+        ))
+    }
+
+    pub async fn delete_chunks(
+        &self,
+        chunks: BoxStream<'_, (ChunkId, u64)>,
+    ) -> RepositoryResult<DeleteObjectsResult> {
+        Ok(self
+            .storage
+            .delete_objects(
+                &self.storage_settings,
+                CHUNKS_FILE_PATH,
+                chunks.map(|(id, size)| (id.to_string(), size)).boxed(),
+            )
+            .await?)
+    }
+
+    pub async fn delete_manifests(
+        &self,
+        manifests: BoxStream<'_, (ManifestId, u64)>,
+    ) -> RepositoryResult<DeleteObjectsResult> {
+        Ok(self
+            .storage
+            .delete_objects(
+                &self.storage_settings,
+                MANIFESTS_FILE_PATH,
+                manifests.map(|(id, size)| (id.to_string(), size)).boxed(),
+            )
+            .await?)
+    }
+
+    pub async fn delete_snapshots(
+        &self,
+        snapshots: BoxStream<'_, (SnapshotId, u64)>,
+    ) -> RepositoryResult<DeleteObjectsResult> {
+        Ok(self
+            .storage
+            .delete_objects(
+                &self.storage_settings,
+                SNAPSHOTS_FILE_PATH,
+                snapshots.map(|(id, size)| (id.to_string(), size)).boxed(),
+            )
+            .await?)
+    }
+
+    pub async fn delete_transaction_logs(
+        &self,
+        transaction_logs: BoxStream<'_, (SnapshotId, u64)>,
+    ) -> RepositoryResult<DeleteObjectsResult> {
+        Ok(self
+            .storage
+            .delete_objects(
+                &self.storage_settings,
+                TRANSACTION_LOGS_FILE_PATH,
+                transaction_logs.map(|(id, size)| (id.to_string(), size)).boxed(),
+            )
+            .await?)
+    }
+
+    pub fn can_write_to_storage(&self) -> bool {
+        self.storage.can_write()
     }
 }
 
@@ -911,6 +1023,31 @@ impl Weighter<SnapshotId, Arc<TransactionLog>> for FileWeighter {
     fn weight(&self, _: &SnapshotId, val: &Arc<TransactionLog>) -> u64 {
         val.len() as u64
     }
+}
+
+fn convert_list_item<Id>(item: ListInfo<String>) -> Option<ListInfo<Id>>
+where
+    Id: for<'b> TryFrom<&'b str>,
+{
+    let id = Id::try_from(item.id.as_str()).ok()?;
+    let created_at = item.created_at;
+    Some(ListInfo { created_at, id, size_bytes: item.size_bytes })
+}
+
+fn translate_list_infos<'a, Id>(
+    s: impl Stream<Item = RepositoryResult<ListInfo<String>>> + Send + 'a,
+) -> BoxStream<'a, RepositoryResult<ListInfo<Id>>>
+where
+    Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'a,
+{
+    s.try_filter_map(|info| async move {
+        let info = convert_list_item(info);
+        if info.is_none() {
+            tracing::error!(list_info=?info, "Error processing list item metadata");
+        }
+        Ok(info)
+    })
+    .boxed()
 }
 
 #[cfg(test)]
