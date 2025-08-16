@@ -16,9 +16,39 @@ use chrono::{DateTime, Utc};
 use flatbuffers::{VerifierOptions, WIPOffset};
 
 // TODO: should we not implement serialize and let the session fetch the repo info?
-#[derive(PartialEq, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Serialize, Deserialize)]
 pub struct RepoInfo {
     buffer: Vec<u8>,
+}
+
+impl std::fmt::Debug for RepoInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tags = self.tags().map(Vec::from_iter).unwrap_or_default();
+        let tags =
+            tags.into_iter().map(|(name, snap)| format!("{name} -> {snap}")).join(", ");
+        let branches = self.branches().map(Vec::from_iter).unwrap_or_default();
+        let branches = branches
+            .into_iter()
+            .map(|(name, snap)| format!("{name} -> {snap}"))
+            .join(", ");
+        let snaps = self.all_snapshots().map(Vec::from_iter).unwrap_or_default();
+        let snaps = snaps
+            .into_iter()
+            .map(|ms| match ms {
+                Ok(snap) => format!(
+                    "{} -> {}",
+                    snap.id,
+                    snap.parent_id.map(|s| s.to_string()).unwrap_or_default()
+                ),
+                Err(_) => "#err".to_string(),
+            })
+            .join(", ");
+        f.debug_struct("RepoInfo")
+            .field("tags", &tags)
+            .field("branches", &branches)
+            .field("snapshots", &snaps)
+            .finish_non_exhaustive()
+    }
 }
 
 // TODO: implement custom debug instance for RepoInfo

@@ -338,8 +338,22 @@ pub async fn garbage_collect(
     let (repo_info, repo_info_version) = asset_manager.fetch_repo_info().await?;
 
     tracing::info!("Finding GC roots");
-    let (keep_chunks, keep_manifests, keep_snapshots) =
+    let (keep_chunks, keep_manifests, mut keep_snapshots) =
         find_retained(Arc::clone(&asset_manager), config).await?;
+
+    let snap_deadline =
+        if let Action::DeleteIfCreatedBefore(date_time) = config.dangling_snapshots {
+            date_time
+        } else {
+            DateTime::<Utc>::MIN_UTC
+        };
+    let non_pointed_but_new: HashSet<_> = repo_info
+        .all_snapshots()?
+        .filter_map_ok(
+            |si| if si.flushed_at >= snap_deadline { Some(si.id) } else { None },
+        )
+        .try_collect()?;
+    keep_snapshots.extend(non_pointed_but_new);
 
     tracing::info!(
         snapshots = keep_snapshots.len(),

@@ -277,7 +277,7 @@ class Model:
                 self.commits.pop(k, None)
                 self.ondisk_snaps.pop(k, None)
                 deleted.add(k)
-        note(f"Deleted snapshots: {deleted!r}")
+        note(f"Deleted snapshots in model: {deleted!r}")
         return deleted
 
 
@@ -550,6 +550,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             f"running garbage_collect for {older_than=!r}, ({commit_time=!r}, {delta=!r})"
         )
         summary = self.repo.garbage_collect(older_than)
+        note(f"actual GC result {summary=!r}")
         expected = self.model.garbage_collect(older_than)
         assert summary.snapshots_deleted == len(expected), (
             summary.snapshots_deleted,
@@ -623,5 +624,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             assert ancestry[-1] == self.initial_snapshot
 
 
-VersionControlStateMachine.TestCase.settings = Settings(deadline=None)
+VersionControlStateMachine.TestCase.settings = Settings(
+    deadline=None,
+    # stateful_step_count=100,
+    # report_multiple_bugs=False,
+)
 VersionControlTest = VersionControlStateMachine.TestCase
