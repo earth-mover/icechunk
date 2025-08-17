@@ -110,10 +110,6 @@ impl Storage for LoggingStorage {
         self.backend.put_object(settings, path, metadata, bytes).await
     }
 
-    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>> {
-        self.backend.ref_names(settings).await
-    }
-
     async fn list_objects<'a>(
         &'a self,
         settings: &Settings,

@@ -1,10 +1,5 @@
 use std::{
-    collections::HashMap,
-    fmt,
-    future::ready,
-    ops::Range,
-    path::{Path, PathBuf},
-    sync::Arc,
+    collections::HashMap, fmt, future::ready, ops::Range, path::PathBuf, sync::Arc,
 };
 
 use crate::{
@@ -40,9 +35,10 @@ use futures::{
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncRead, sync::OnceCell};
 use tracing::{error, instrument};
+use typed_path::Utf8UnixPath;
 
 use super::{
-    DeleteObjectsResult, ListInfo, REF_PREFIX, Settings, StorageErrorKind, StorageResult,
+    DeleteObjectsResult, ListInfo, Settings, StorageErrorKind, StorageResult,
     VersionInfo, VersionedFetchResult, VersionedUpdateResult,
     split_in_multiple_equal_requests,
 };
@@ -216,11 +212,13 @@ impl S3Storage {
         extra_write_headers: Vec<(String, String)>,
     ) -> Result<S3Storage, StorageError> {
         let client = OnceCell::new();
+        let prefix = prefix.unwrap_or_default();
+        let prefix = prefix.strip_suffix("/").unwrap_or(prefix.as_str()).to_string();
         Ok(S3Storage {
             client,
             config,
             bucket,
-            prefix: prefix.unwrap_or_default(),
+            prefix,
             credentials,
             can_write,
             extra_read_headers,
@@ -259,14 +257,6 @@ impl S3Storage {
 
     fn prefixed_path(&self, path: &str) -> String {
         format!("{}/{path}", self.prefix)
-    }
-
-    fn ref_key(&self, ref_key: &str) -> StorageResult<String> {
-        let path = PathBuf::from_iter([self.prefix.as_str(), REF_PREFIX, ref_key]);
-        let path_str =
-            path.into_os_string().into_string().map_err(StorageErrorKind::BadPrefix)?;
-
-        Ok(path_str.replace("\\", "/"))
     }
 
     async fn put_object_single<
@@ -441,14 +431,6 @@ impl S3Storage {
             .await
         }
     }
-
-    fn get_ref_name<'a>(&self, key: Option<&'a str>) -> Option<&'a str> {
-        let key = key?;
-        let prefix = self.ref_key("").ok()?;
-        let relative_key = key.strip_prefix(&prefix)?;
-        let ref_name = relative_key.split('/').next()?;
-        Some(ref_name)
-    }
 }
 
 pub fn range_to_header(range: &Range<ChunkOffset>) -> String {
@@ -607,34 +589,6 @@ impl Storage for S3Storage {
         .await
     }
 
-    #[instrument(skip_all)]
-    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>> {
-        let prefix = self.ref_key("")?;
-        let mut paginator = self
-            .get_client(settings)
-            .await
-            .list_objects_v2()
-            .bucket(self.bucket.clone())
-            .prefix(prefix.clone())
-            .into_paginator()
-            .send();
-
-        let mut res = Vec::new();
-
-        while let Some(page) = paginator.try_next().await.map_err(Box::new)? {
-            for obj in page.contents.unwrap_or_else(Vec::new) {
-                let name = self.get_ref_name(obj.key());
-                if let Some(name) = name {
-                    res.push(name.to_string());
-                } else {
-                    tracing::error!(object = ?obj, "Bad ref name")
-                }
-            }
-        }
-
-        Ok(res)
-    }
-
     #[instrument(skip(self, settings))]
     async fn list_objects<'a>(
         &'a self,
@@ -647,7 +601,7 @@ impl Storage for S3Storage {
             .await
             .list_objects_v2()
             .bucket(self.bucket.clone())
-            .prefix(prefix)
+            .prefix(prefix.clone())
             .into_paginator()
             .send()
             .into_stream_03x()
@@ -657,12 +611,15 @@ impl Storage for S3Storage {
                 ready(Ok(contents))
             })
             .try_flatten()
-            .try_filter_map(|object| async move {
-                let info = object_to_list_info(&object);
-                if info.is_none() {
-                    tracing::error!(object=?object, "Found bad object while listing");
+            .try_filter_map(move |object| {
+                let prefix = prefix.clone();
+                async move {
+                    let info = object_to_list_info(prefix.as_str(), &object);
+                    if info.is_none() {
+                        tracing::error!(object=?object, "Found bad object while listing");
+                    }
+                    Ok(info)
                 }
-                Ok(info)
             });
         Ok(stream.boxed())
     }
@@ -783,11 +740,12 @@ impl Storage for S3Storage {
     }
 }
 
-fn object_to_list_info(object: &Object) -> Option<ListInfo<String>> {
+fn object_to_list_info(prefix: &str, object: &Object) -> Option<ListInfo<String>> {
     let key = object.key()?;
     let last_modified = object.last_modified()?;
     let created_at = last_modified.to_chrono_utc().ok()?;
-    let id = Path::new(key).file_name().and_then(|s| s.to_str())?.to_string();
+    let prefix = Utf8UnixPath::new(prefix);
+    let id = Utf8UnixPath::new(key).strip_prefix(prefix).ok()?.to_string();
     let size_bytes = object.size.unwrap_or(0) as u64;
     Some(ListInfo { id, created_at, size_bytes })
 }
@@ -889,29 +847,5 @@ mod tests {
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
         assert_eq!(storage.config, deserialized.config);
-    }
-
-    #[tokio_test]
-    async fn test_s3_paths() {
-        let storage = S3Storage::new(
-            S3Options {
-                region: Some("us-west-2".to_string()),
-                endpoint_url: None,
-                allow_http: true,
-                anonymous: false,
-                force_path_style: false,
-                network_stream_timeout_seconds: None,
-            },
-            "bucket".to_string(),
-            Some("prefix".to_string()),
-            S3Credentials::FromEnv,
-            true,
-            Vec::new(),
-            Vec::new(),
-        )
-        .unwrap();
-
-        let ref_path = storage.ref_key("ref_key").unwrap();
-        assert_eq!(ref_path, "prefix/refs/ref_key");
     }
 }

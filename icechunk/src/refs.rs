@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, future::ready};
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use futures::{
-    FutureExt, StreamExt,
+    FutureExt, StreamExt, TryStreamExt as _,
     stream::{FuturesOrdered, FuturesUnordered},
 };
 use itertools::Itertools;
@@ -245,14 +245,29 @@ async fn update_branch(
     }
 }
 
+fn ref_name_from_object_name(key: String) -> Option<String> {
+    let ref_name = key.split('/').next()?;
+    Some(ref_name.to_string())
+}
+
 #[instrument(skip(storage, storage_settings))]
 pub async fn list_refs(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RefResult<BTreeSet<Ref>> {
-    let all = storage.ref_names(storage_settings).await?;
-    let candidate_refs: BTreeSet<_> =
-        all.iter().map(|path| Ref::from_path(path.as_str())).try_collect()?;
+    let all = storage
+        .list_objects(storage_settings, format!("{V1_REFS_FILE_PATH}/").as_str())
+        .await?
+        .map_ok(|li| ref_name_from_object_name(li.id));
+    //let all = storage.ref_names(storage_settings).await?;
+    let candidate_refs: BTreeSet<_> = all
+        .err_into()
+        .try_filter_map(|path| match path {
+            Some(path) => ready(Ref::from_path(path.as_str()).map(Some)),
+            None => ready(Ok(None)),
+        })
+        .try_collect()
+        .await?;
     // we have all the candidate refs, but we need to filter out deleted tags
     // we try to resolve all tags in parallel, and filter out the ones that don't resolve
     // TODO: this can probably be optimized by smarter `ref_names`
@@ -317,7 +332,13 @@ async fn delete_branch(
     _ = fetch_branch_tip(storage, storage_settings, branch).await?;
 
     let key = branch_key(branch)?;
-    storage.delete_refs(storage_settings, futures::stream::iter([key]).boxed()).await?;
+    storage
+        .delete_objects(
+            storage_settings,
+            V1_REFS_FILE_PATH,
+            futures::stream::iter([(key, 0)]).boxed(),
+        )
+        .await?;
     Ok(())
 }
 

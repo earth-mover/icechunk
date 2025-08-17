@@ -104,13 +104,11 @@ where
 pub type StorageResult<A> = Result<A, StorageError>;
 
 #[derive(Debug)]
-pub struct ListInfo<Id> {
-    pub id: Id,
+pub struct ListInfo<A> {
+    pub id: A,
     pub created_at: DateTime<Utc>,
     pub size_bytes: u64,
 }
-
-const REF_PREFIX: &str = "refs";
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash, PartialOrd, Ord)]
 pub struct ETag(pub String);
@@ -481,8 +479,6 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>>;
 
-    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
-
     /// Delete a stream of objects, by their id string representations
     /// Input stream includes sizes to get as result the total number of bytes deleted
     #[instrument(skip(self, settings, ids))]
@@ -522,15 +518,6 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
             Some(Ok(_)) => Ok(false),
             Some(Err(err)) => Err(err),
         }
-    }
-
-    async fn delete_refs(
-        &self,
-        settings: &Settings,
-        refs: BoxStream<'_, String>,
-    ) -> StorageResult<u64> {
-        let refs = refs.map(|s| (s, 0)).boxed();
-        Ok(self.delete_objects(settings, REF_PREFIX, refs).await?.deleted_objects)
     }
 
     async fn get_object_concurrently_multiple(

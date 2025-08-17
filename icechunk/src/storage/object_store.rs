@@ -43,7 +43,7 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::instrument;
 
 use super::{
-    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, ListInfo, REF_PREFIX,
+    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, ListInfo,
     RetriesSettings, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
     VersionInfo, VersionedFetchResult, VersionedUpdateResult,
 };
@@ -164,23 +164,9 @@ impl ObjectStorage {
             .map_err(Box::new)?)
     }
 
-    fn get_path_str(&self, file_prefix: &str, id: &str) -> ObjectPath {
-        let path = format!("{}/{}/{}", self.backend.prefix(), file_prefix, id);
-        ObjectPath::from(path)
-    }
-
     fn prefixed_path(&self, path: &str) -> ObjectPath {
         let path = format!("{}/{path}", self.backend.prefix());
         ObjectPath::from(path)
-    }
-
-    fn drop_prefix(&self, prefix: &ObjectPath, path: &ObjectPath) -> Option<ObjectPath> {
-        path.prefix_match(&ObjectPath::from(format!("{prefix}"))).map(|it| it.collect())
-    }
-
-    fn ref_key(&self, ref_key: &str) -> ObjectPath {
-        // ObjectPath knows how to deal with empty path parts: bar//foo
-        ObjectPath::from(format!("{}/{}/{}", self.backend.prefix(), REF_PREFIX, ref_key))
     }
 
     fn metadata_to_attributes(
@@ -198,12 +184,6 @@ impl ObjectStorage {
         } else {
             Attributes::new()
         }
-    }
-
-    fn get_ref_name(&self, prefix: &ObjectPath, meta: &ObjectMeta) -> Option<String> {
-        let relative_key = self.drop_prefix(prefix, &meta.location)?;
-        let parent = relative_key.parts().next()?;
-        Some(parent.as_ref().to_string())
     }
 
     fn get_put_mode(
@@ -343,26 +323,6 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self, settings))]
-    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>> {
-        let prefix = &self.ref_key("");
-
-        Ok(self
-            .get_client(settings)
-            .await
-            .list(Some(prefix.clone()).as_ref())
-            .try_filter_map(|meta| async move {
-                let name = self.get_ref_name(prefix, &meta);
-                if name.is_none() {
-                    tracing::error!(object = ?meta, "Bad ref name")
-                }
-                Ok(name)
-            })
-            .try_collect()
-            .await
-            .map_err(Box::new)?)
-    }
-
-    #[instrument(skip(self, settings))]
     async fn list_objects<'a>(
         &'a self,
         settings: &Settings,
@@ -374,12 +334,15 @@ impl Storage for ObjectStorage {
             .await
             .list(Some(&prefix))
             // TODO: we should signal error instead of filtering
-            .try_filter_map(|object| async move {
-                let info = object_to_list_info(&object);
-                if info.is_none() {
-                    tracing::error!(object=?object, "Found bad object while listing");
+            .try_filter_map(move |object| {
+                let prefix = prefix.clone();
+                async move {
+                    let info = object_to_list_info(&prefix, &object);
+                    if info.is_none() {
+                        tracing::error!(object=?object, "Found bad object while listing");
+                    }
+                    Ok(info)
                 }
-                Ok(info)
             })
             .map_err(Box::new)
             .err_into();
@@ -396,7 +359,7 @@ impl Storage for ObjectStorage {
         let mut sizes = HashMap::new();
         let mut ids = Vec::new();
         for (id, size) in batch {
-            let path = self.get_path_str(prefix, id.as_str());
+            let path = self.prefixed_path(format!("{prefix}/{}", id.as_str()).as_str());
             ids.push(Ok(path.clone()));
             sizes.insert(path, size);
         }
@@ -1009,9 +972,12 @@ impl CredentialProvider for GcsRefreshableCredentialProvider {
     }
 }
 
-fn object_to_list_info(object: &ObjectMeta) -> Option<ListInfo<String>> {
+fn object_to_list_info(
+    prefix: &ObjectPath,
+    object: &ObjectMeta,
+) -> Option<ListInfo<String>> {
     let created_at = object.last_modified;
-    let id = object.location.filename()?.to_string();
+    let id = ObjectPath::from_iter(object.location.prefix_match(prefix)?).to_string();
     let size_bytes = object.size;
     Some(ListInfo { id, created_at, size_bytes })
 }
@@ -1072,16 +1038,5 @@ mod tests {
         let store =
             ObjectStorage::new_local_filesystem(PathBuf::from(&rel_path).as_path()).await;
         assert!(store.is_ok());
-    }
-
-    #[tokio_test]
-    async fn test_object_store_paths() {
-        let store = ObjectStorage::new_local_filesystem(PathBuf::from(".").as_path())
-            .await
-            .unwrap();
-
-        let ref_key = "ref_key";
-        let ref_path = store.ref_key(ref_key);
-        assert_eq!(ref_path.to_string(), format!("refs/{ref_key}"));
     }
 }
