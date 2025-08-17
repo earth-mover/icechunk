@@ -385,12 +385,6 @@ pub enum VersionedUpdateResult {
     NotOnLatestVersion,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WriteRefResult {
-    Written,
-    WontOverwrite,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DeleteObjectsResult {
     pub deleted_objects: u64,
@@ -488,13 +482,6 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     ) -> StorageResult<DateTime<Utc>>;
 
     async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
-    async fn write_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-        bytes: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<WriteRefResult>;
 
     /// Delete a stream of objects, by their id string representations
     /// Input stream includes sizes to get as result the total number of bytes deleted

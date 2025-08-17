@@ -18,7 +18,7 @@ use crate::{
     error::ICError,
     format::{SnapshotId, V1_REFS_FILE_PATH},
     storage::{
-        self, StorageErrorKind, VersionInfo, VersionedFetchResult, WriteRefResult,
+        self, StorageErrorKind, VersionInfo, VersionedFetchResult, VersionedUpdateResult,
     },
 };
 
@@ -163,19 +163,22 @@ async fn create_tag(
     snapshot: SnapshotId,
 ) -> RefResult<()> {
     let key = tag_key(name)?;
+    let path = format!("{V1_REFS_FILE_PATH}/{key}");
     let data = RefData { snapshot };
     let content = serde_json::to_vec(&data)?;
     match storage
-        .write_ref(
-            storage_settings,
-            key.as_str(),
-            Bytes::copy_from_slice(&content),
+        .put_versioned_object(
+            path.as_str(),
+            Bytes::from_owner(content),
+            Some("application/json"),
+            Default::default(),
             &VersionInfo::for_creation(),
+            storage_settings,
         )
         .await
     {
-        Ok(WriteRefResult::Written) => Ok(()),
-        Ok(WriteRefResult::WontOverwrite) => {
+        Ok(VersionedUpdateResult::Updated { .. }) => Ok(()),
+        Ok(VersionedUpdateResult::NotOnLatestVersion) => {
             Err(RefErrorKind::TagAlreadyExists(name.to_string()).into())
         }
         Err(err) => Err(err.into()),
@@ -210,19 +213,22 @@ async fn update_branch(
     }
 
     let key = branch_key(name)?;
+    let path = format!("{V1_REFS_FILE_PATH}/{key}");
     let data = RefData { snapshot: new_snapshot };
     let content = serde_json::to_vec(&data)?;
     match storage
-        .write_ref(
-            storage_settings,
-            key.as_str(),
-            Bytes::copy_from_slice(&content),
+        .put_versioned_object(
+            path.as_str(),
+            Bytes::from_owner(content),
+            Some("application/json"),
+            Default::default(),
             &version,
+            storage_settings,
         )
         .await
     {
-        Ok(WriteRefResult::Written) => Ok(()),
-        Ok(WriteRefResult::WontOverwrite) => {
+        Ok(VersionedUpdateResult::Updated { .. }) => Ok(()),
+        Ok(VersionedUpdateResult::NotOnLatestVersion) => {
             // If the already exists, an update happened since we checked
             // we can just try again and the conflict will be reported
             update_branch(
@@ -234,6 +240,7 @@ async fn update_branch(
             )
             .await
         }
+
         Err(err) => Err(err.into()),
     }
 }
@@ -325,19 +332,23 @@ async fn delete_tag(
 
     // no race condition: delete_tag ^ 2 = delete_tag
     let key = tag_delete_marker_key(tag)?;
+    let path = format!("{V1_REFS_FILE_PATH}/{key}");
     match storage
-        .write_ref(
-            storage_settings,
-            key.as_str(),
-            Bytes::from_static(&[]),
+        .put_versioned_object(
+            path.as_str(),
+            Bytes::new(),
+            None,
+            Default::default(),
             &VersionInfo::for_creation(),
+            storage_settings,
         )
         .await
     {
-        Ok(WriteRefResult::Written) => Ok(()),
-        Ok(WriteRefResult::WontOverwrite) => {
+        Ok(VersionedUpdateResult::Updated { .. }) => Ok(()),
+        Ok(VersionedUpdateResult::NotOnLatestVersion) => {
             Err(RefErrorKind::RefNotFound(tag.to_string()).into())
         }
+
         Err(err) => Err(err.into()),
     }
 }

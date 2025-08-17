@@ -15,9 +15,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use aws_config::{
-    AppName, BehaviorVersion,
-    meta::region::RegionProviderChain,
-    retry::{ProvideErrorKind, RetryConfig},
+    AppName, BehaviorVersion, meta::region::RegionProviderChain, retry::RetryConfig,
 };
 use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_s3::{
@@ -45,7 +43,7 @@ use tracing::{error, instrument};
 
 use super::{
     DeleteObjectsResult, ListInfo, REF_PREFIX, Settings, StorageErrorKind, StorageResult,
-    VersionInfo, VersionedFetchResult, VersionedUpdateResult, WriteRefResult,
+    VersionInfo, VersionedFetchResult, VersionedUpdateResult,
     split_in_multiple_equal_requests,
 };
 
@@ -635,57 +633,6 @@ impl Storage for S3Storage {
         }
 
         Ok(res)
-    }
-
-    #[instrument(skip(self, settings, bytes))]
-    async fn write_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-        bytes: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<WriteRefResult> {
-        let key = self.ref_key(ref_key)?;
-        let mut builder = self
-            .get_client(settings)
-            .await
-            .put_object()
-            .bucket(self.bucket.clone())
-            .key(key.clone());
-
-        match (
-            previous_version.etag(),
-            settings.unsafe_use_conditional_create(),
-            settings.unsafe_use_conditional_update(),
-        ) {
-            (None, true, _) => {
-                builder = builder.if_none_match("*");
-            }
-            (Some(etag), _, true) => {
-                builder = builder.if_match(strip_quotes(etag));
-            }
-            (_, _, _) => {}
-        }
-
-        if let Some(klass) = settings.metadata_storage_class() {
-            builder = builder.storage_class(klass.as_str().into())
-        }
-
-        let res = builder.body(bytes.into()).send().await;
-
-        match res {
-            Ok(_) => Ok(WriteRefResult::Written),
-            Err(err) => {
-                let code = err.as_service_error().and_then(|e| e.code()).unwrap_or("");
-                if code.contains("PreconditionFailed")
-                    || code.contains("ConditionalRequestConflict")
-                {
-                    Ok(WriteRefResult::WontOverwrite)
-                } else {
-                    Err(Box::new(err).into())
-                }
-            }
-        }
     }
 
     #[instrument(skip(self, settings))]

@@ -13,7 +13,7 @@ use tokio::io::AsyncRead;
 
 use super::{
     DeleteObjectsResult, ListInfo, Settings, Storage, StorageResult, VersionInfo,
-    VersionedFetchResult, VersionedUpdateResult, WriteRefResult,
+    VersionedFetchResult, VersionedUpdateResult,
 };
 use crate::private;
 
@@ -112,16 +112,6 @@ impl Storage for LoggingStorage {
 
     async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>> {
         self.backend.ref_names(settings).await
-    }
-
-    async fn write_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-        bytes: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<WriteRefResult> {
-        self.backend.write_ref(settings, ref_key, bytes, previous_version).await
     }
 
     async fn list_objects<'a>(

@@ -15,7 +15,7 @@ use futures::{
 use object_store::{
     Attribute, AttributeValue, Attributes, BackoffConfig, ClientConfigKey,
     CredentialProvider, GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions,
-    PutPayload, RetryConfig, StaticCredentialProvider, UpdateVersion,
+    RetryConfig, StaticCredentialProvider, UpdateVersion,
     aws::AmazonS3Builder,
     azure::{AzureConfigKey, MicrosoftAzureBuilder},
     gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey},
@@ -45,7 +45,7 @@ use tracing::instrument;
 use super::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, ListInfo, REF_PREFIX,
     RetriesSettings, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
-    VersionInfo, VersionedFetchResult, VersionedUpdateResult, WriteRefResult,
+    VersionInfo, VersionedFetchResult, VersionedUpdateResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -315,7 +315,8 @@ impl Storage for ObjectStorage {
                 };
                 Ok(VersionedUpdateResult::Updated { new_version })
             }
-            Err(object_store::Error::Precondition { .. }) => {
+            Err(object_store::Error::Precondition { .. })
+            | Err(object_store::Error::AlreadyExists { .. }) => {
                 Ok(VersionedUpdateResult::NotOnLatestVersion)
             }
             Err(err) => Err(Box::new(err).into()),
@@ -359,33 +360,6 @@ impl Storage for ObjectStorage {
             .try_collect()
             .await
             .map_err(Box::new)?)
-    }
-
-    #[instrument(skip(self, settings, bytes))]
-    async fn write_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-        bytes: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<WriteRefResult> {
-        let key = self.ref_key(ref_key);
-        let mode = self.get_put_mode(settings, previous_version);
-        let opts = PutOptions { mode, ..PutOptions::default() };
-
-        match self
-            .get_client(settings)
-            .await
-            .put_opts(&key, PutPayload::from_bytes(bytes), opts)
-            .await
-        {
-            Ok(_) => Ok(WriteRefResult::Written),
-            Err(object_store::Error::Precondition { .. })
-            | Err(object_store::Error::AlreadyExists { .. }) => {
-                Ok(WriteRefResult::WontOverwrite)
-            }
-            Err(err) => Err(Box::new(err).into()),
-        }
     }
 
     #[instrument(skip(self, settings))]
