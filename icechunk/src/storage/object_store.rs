@@ -43,10 +43,9 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::instrument;
 
 use super::{
-    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetRefResult, ListInfo,
-    REF_PREFIX, RetriesSettings, Settings, Storage, StorageError, StorageErrorKind,
-    StorageResult, VersionInfo, VersionedFetchResult, VersionedUpdateResult,
-    WriteRefResult,
+    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, ListInfo, REF_PREFIX,
+    RetriesSettings, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
+    VersionInfo, VersionedFetchResult, VersionedUpdateResult, WriteRefResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -340,27 +339,6 @@ impl Storage for ObjectStorage {
             .await
             .map_err(Box::new)?;
         Ok(())
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn get_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-    ) -> StorageResult<GetRefResult> {
-        let key = self.ref_key(ref_key);
-        match self.get_client(settings).await.get(&key).await {
-            Ok(res) => {
-                let etag = res.meta.e_tag.clone().map(ETag);
-                let generation = res.meta.version.clone().map(Generation);
-                Ok(GetRefResult::Found {
-                    bytes: res.bytes().await.map_err(Box::new)?,
-                    version: VersionInfo { etag, generation },
-                })
-            }
-            Err(object_store::Error::NotFound { .. }) => Ok(GetRefResult::NotFound),
-            Err(err) => Err(Box::new(err).into()),
-        }
     }
 
     #[instrument(skip(self, settings))]

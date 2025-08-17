@@ -44,9 +44,9 @@ use tokio::{io::AsyncRead, sync::OnceCell};
 use tracing::{error, instrument};
 
 use super::{
-    DeleteObjectsResult, GetRefResult, ListInfo, REF_PREFIX, Settings, StorageErrorKind,
-    StorageResult, VersionInfo, VersionedFetchResult, VersionedUpdateResult,
-    WriteRefResult, split_in_multiple_equal_requests,
+    DeleteObjectsResult, ListInfo, REF_PREFIX, Settings, StorageErrorKind, StorageResult,
+    VersionInfo, VersionedFetchResult, VersionedUpdateResult, WriteRefResult,
+    split_in_multiple_equal_requests,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -607,43 +607,6 @@ impl Storage for S3Storage {
             &bytes,
         )
         .await
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn get_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-    ) -> StorageResult<GetRefResult> {
-        let key = self.ref_key(ref_key)?;
-        let res = self
-            .get_client(settings)
-            .await
-            .get_object()
-            .bucket(self.bucket.clone())
-            .key(key.clone())
-            .send()
-            .await;
-
-        match res {
-            Ok(res) => {
-                let bytes = res.body.collect().await.map_err(Box::new)?.into_bytes();
-                if let Some(version) = res.e_tag.map(VersionInfo::from_etag_only) {
-                    Ok(GetRefResult::Found { bytes, version })
-                } else {
-                    Ok(GetRefResult::NotFound)
-                }
-            }
-            Err(err)
-                if err
-                    .as_service_error()
-                    .map(|e| e.is_no_such_key())
-                    .unwrap_or(false) =>
-            {
-                Ok(GetRefResult::NotFound)
-            }
-            Err(err) => Err(Box::new(err).into()),
-        }
     }
 
     #[instrument(skip_all)]

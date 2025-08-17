@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncRead;
 
 use super::{
-    DeleteObjectsResult, GetRefResult, ListInfo, Settings, Storage, StorageResult,
-    VersionInfo, VersionedFetchResult, VersionedUpdateResult, WriteRefResult,
+    DeleteObjectsResult, ListInfo, Settings, Storage, StorageResult, VersionInfo,
+    VersionedFetchResult, VersionedUpdateResult, WriteRefResult,
 };
 use crate::private;
 
@@ -108,14 +108,6 @@ impl Storage for LoggingStorage {
             .expect("poison lock")
             .push(("put_object".to_string(), path.to_string()));
         self.backend.put_object(settings, path, metadata, bytes).await
-    }
-
-    async fn get_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-    ) -> StorageResult<GetRefResult> {
-        self.backend.get_ref(settings, ref_key).await
     }
 
     async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>> {

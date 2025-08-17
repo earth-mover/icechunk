@@ -386,12 +386,6 @@ pub enum VersionedUpdateResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GetRefResult {
-    Found { bytes: Bytes, version: VersionInfo },
-    NotFound,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteRefResult {
     Written,
     WontOverwrite,
@@ -460,6 +454,20 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
     ) -> StorageResult<VersionedUpdateResult>;
 
+    async fn get_object_buf(
+        &self,
+        settings: &Settings,
+        path: &str,
+        range: &Range<u64>,
+    ) -> StorageResult<Box<dyn Buf + Unpin + Send>>;
+
+    async fn get_object_read(
+        &self,
+        settings: &Settings,
+        path: &str,
+        range: Option<&Range<u64>>,
+    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
+
     async fn list_objects<'a>(
         &'a self,
         settings: &Settings,
@@ -479,11 +487,6 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>>;
 
-    async fn get_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-    ) -> StorageResult<GetRefResult>;
     async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
     async fn write_ref(
         &self,
@@ -542,20 +545,6 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         let refs = refs.map(|s| (s, 0)).boxed();
         Ok(self.delete_objects(settings, REF_PREFIX, refs).await?.deleted_objects)
     }
-
-    async fn get_object_buf(
-        &self,
-        settings: &Settings,
-        path: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn Buf + Unpin + Send>>;
-
-    async fn get_object_read(
-        &self,
-        settings: &Settings,
-        path: &str,
-        range: Option<&Range<u64>>,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
 
     async fn get_object_concurrently_multiple(
         &self,

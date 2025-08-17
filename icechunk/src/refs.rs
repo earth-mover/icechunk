@@ -10,13 +10,16 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_with::{TryFromInto, serde_as};
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt as _};
 use tracing::instrument;
 
 use crate::{
     Storage, StorageError,
     error::ICError,
-    format::SnapshotId,
-    storage::{self, GetRefResult, StorageErrorKind, VersionInfo, WriteRefResult},
+    format::{SnapshotId, V1_REFS_FILE_PATH},
+    storage::{
+        self, StorageErrorKind, VersionInfo, VersionedFetchResult, WriteRefResult,
+    },
 };
 
 #[derive(Debug, Error)]
@@ -35,6 +38,9 @@ pub enum RefErrorKind {
 
     #[error("tag already exists, tags are immutable: `{0}`")]
     TagAlreadyExists(String),
+
+    #[error("I/O error")]
+    IOError(#[from] std::io::Error),
 
     #[error("cannot serialize ref json")]
     Serialization(#[from] serde_json::Error),
@@ -336,6 +342,14 @@ async fn delete_tag(
     }
 }
 
+async fn async_read_to_bytes(
+    mut read: Box<dyn AsyncRead + Send + Unpin>,
+) -> RefResult<Bytes> {
+    let mut data = Vec::with_capacity(1_024);
+    read.read_to_end(&mut data).await?;
+    Ok(Bytes::from_owner(data))
+}
+
 #[instrument(skip(storage, storage_settings))]
 pub async fn fetch_tag(
     storage: &(dyn Storage + Send + Sync),
@@ -346,9 +360,12 @@ pub async fn fetch_tag(
     let delete_marker_path = tag_delete_marker_key(name)?;
 
     let fut1 = async move {
-        match storage.get_ref(storage_settings, ref_path.as_str()).await {
-            Ok(GetRefResult::Found { bytes, .. }) => Ok(bytes),
-            Ok(GetRefResult::NotFound) => {
+        let path = format!("{V1_REFS_FILE_PATH}/{ref_path}");
+        match storage.get_versioned_object(path.as_str(), storage_settings).await {
+            Ok(VersionedFetchResult::Found { result, .. }) => {
+                Ok(async_read_to_bytes(result).await?)
+            }
+            Ok(VersionedFetchResult::NotFound) => {
                 Err(RefErrorKind::RefNotFound(name.to_string()).into())
             }
             Err(err) => Err(err.into()),
@@ -356,9 +373,10 @@ pub async fn fetch_tag(
     }
     .boxed();
     let fut2 = async move {
-        match storage.get_ref(storage_settings, delete_marker_path.as_str()).await {
-            Ok(GetRefResult::Found { .. }) => Ok(Bytes::new()),
-            Ok(GetRefResult::NotFound) => {
+        let path = format!("{V1_REFS_FILE_PATH}/{delete_marker_path}");
+        match storage.get_versioned_object(path.as_str(), storage_settings).await {
+            Ok(VersionedFetchResult::Found { .. }) => Ok(Bytes::new()),
+            Ok(VersionedFetchResult::NotFound) => {
                 Err(RefErrorKind::RefNotFound(name.to_string()).into())
             }
             Err(err) => Err(err.into()),
@@ -392,12 +410,14 @@ async fn fetch_branch(
     name: &str,
 ) -> RefResult<(RefData, VersionInfo)> {
     let ref_key = branch_key(name)?;
-    match storage.get_ref(storage_settings, ref_key.as_str()).await {
-        Ok(GetRefResult::Found { bytes, version }) => {
+    let path = format!("{V1_REFS_FILE_PATH}/{ref_key}");
+    match storage.get_versioned_object(path.as_str(), storage_settings).await {
+        Ok(VersionedFetchResult::Found { result, version }) => {
+            let bytes = async_read_to_bytes(result).await?;
             let data = serde_json::from_slice(bytes.as_ref())?;
             Ok((data, version))
         }
-        Ok(GetRefResult::NotFound) => {
+        Ok(VersionedFetchResult::NotFound) => {
             Err(RefErrorKind::RefNotFound(name.to_string()).into())
         }
         Err(err) => Err(err.into()),
