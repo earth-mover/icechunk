@@ -9,7 +9,7 @@ use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncRead;
+use tokio::io::AsyncBufRead;
 
 use super::{
     DeleteObjectsResult, ListInfo, Settings, Storage, StorageResult, VersionInfo,
@@ -64,7 +64,7 @@ impl Storage for LoggingStorage {
         &self,
         path: &str,
         settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncRead + Unpin + Send>>> {
+    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncBufRead + Unpin + Send>>> {
         self.fetch_log
             .lock()
             .expect("poison lock")
@@ -165,7 +165,7 @@ impl Storage for LoggingStorage {
         settings: &Settings,
         key: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+    ) -> StorageResult<Box<dyn AsyncBufRead + Unpin + Send>> {
         self.fetch_log
             .lock()
             .expect("poison lock")

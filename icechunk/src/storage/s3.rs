@@ -33,7 +33,7 @@ use futures::{
     stream::{self, BoxStream, FuturesOrdered},
 };
 use serde::{Deserialize, Serialize};
-use tokio::{io::AsyncRead, sync::OnceCell};
+use tokio::{io::AsyncBufRead, sync::OnceCell};
 use tracing::{error, instrument};
 use typed_path::Utf8UnixPath;
 
@@ -451,7 +451,7 @@ impl Storage for S3Storage {
         &self,
         path: &str,
         settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncRead + Unpin + Send>>> {
+    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncBufRead + Unpin + Send>>> {
         let key = self.prefixed_path(path);
         let res = self
             .get_client(settings)
@@ -516,7 +516,7 @@ impl Storage for S3Storage {
             }
         }
 
-        if let Some(klass) = settings.metadata_storage_class() {
+        if let Some(klass) = settings.storage_class() {
             let klass = klass.as_str().into();
             req = req.storage_class(klass);
         }
@@ -583,7 +583,7 @@ impl Storage for S3Storage {
             path.as_str(),
             None::<String>,
             metadata,
-            settings.metadata_storage_class(),
+            settings.storage_class(),
             &bytes,
         )
         .await
@@ -730,7 +730,7 @@ impl Storage for S3Storage {
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+    ) -> StorageResult<Box<dyn AsyncBufRead + Unpin + Send>> {
         let client = self.get_client(settings).await;
         let bucket = self.bucket.clone();
         let key = self.prefixed_path(path);
@@ -790,7 +790,7 @@ async fn get_object_range(
     bucket: String,
     full_key: &str,
     range: Option<&Range<ChunkOffset>>,
-) -> StorageResult<impl AsyncRead + use<>> {
+) -> StorageResult<impl AsyncBufRead + use<>> {
     let mut b = client.get_object().bucket(bucket).key(full_key);
     if let Some(range) = range {
         b = b.range(range_to_header(range));

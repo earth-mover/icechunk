@@ -657,7 +657,7 @@ pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
     // we write 2 chunks in IA and one in standard, in ascending order of id
     st.put_object(
         &storage::Settings {
-            chunks_storage_class: Some("STANDARD_IA".to_string()),
+            storage_class: Some("STANDARD_IA".to_string()),
             ..storage::Settings::default()
         },
         "chunks/000000000000",

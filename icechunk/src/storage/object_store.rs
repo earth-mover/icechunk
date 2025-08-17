@@ -36,7 +36,7 @@ use std::{
     sync::Arc,
 };
 use tokio::{
-    io::AsyncRead,
+    io::AsyncBufRead,
     sync::{OnceCell, RwLock},
 };
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -233,7 +233,7 @@ impl Storage for ObjectStorage {
         &self,
         path: &str,
         settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncRead + Unpin + Send>>> {
+    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncBufRead + Unpin + Send>>> {
         let key = self.prefixed_path(path);
         let response = self.get_client(settings).await.get(&key).await;
 
@@ -423,14 +423,14 @@ impl Storage for ObjectStorage {
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+    ) -> StorageResult<Box<dyn AsyncBufRead + Unpin + Send>> {
         let full_key = self.prefixed_path(path);
         let range = range.map(|range| {
             let usize_range = range.start..range.end;
             usize_range.into()
         });
         let opts = GetOptions { range, ..Default::default() };
-        let res: Box<dyn AsyncRead + Unpin + Send> = Box::new(
+        let res: Box<dyn AsyncBufRead + Unpin + Send> = Box::new(
             self.get_client(settings)
                 .await
                 .get_opts(&full_key, opts)

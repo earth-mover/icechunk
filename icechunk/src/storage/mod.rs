@@ -31,7 +31,7 @@ use std::{
     path::Path,
     sync::{Arc, Mutex, OnceLock},
 };
-use tokio::io::AsyncRead;
+use tokio::io::AsyncBufRead;
 use tokio_util::io::SyncIoBridge;
 use tracing::{instrument, warn};
 
@@ -255,6 +255,10 @@ impl Settings {
         self.metadata_storage_class.as_ref().or(self.storage_class.as_ref())
     }
 
+    pub fn storage_class(&self) -> Option<&String> {
+        self.storage_class.as_ref()
+    }
+
     pub fn chunks_storage_class(&self) -> Option<&String> {
         self.chunks_storage_class.as_ref().or(self.storage_class.as_ref())
     }
@@ -343,7 +347,7 @@ impl Settings {
 }
 
 pub enum Reader {
-    Asynchronous(Box<dyn AsyncRead + Unpin + Send>),
+    Asynchronous(Box<dyn AsyncBufRead + Unpin + Send>),
     Synchronous(Box<dyn Buf + Unpin + Send>),
 }
 
@@ -434,7 +438,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         &self,
         path: &str,
         settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncRead + Unpin + Send>>>;
+    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncBufRead + Unpin + Send>>>;
 
     async fn put_versioned_object(
         &self,
@@ -458,7 +462,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
+    ) -> StorageResult<Box<dyn AsyncBufRead + Unpin + Send>>;
 
     async fn list_objects<'a>(
         &'a self,
