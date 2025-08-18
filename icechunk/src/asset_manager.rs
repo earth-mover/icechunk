@@ -223,14 +223,7 @@ impl AssetManager {
     ) -> RepositoryResult<Option<VersionInfo>> {
         let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
         let content_type = Some("application/yaml");
-
-        let last: u64 = 32503680000000;
-        let now = Utc::now().timestamp_millis() as u64;
-        let time_index = last - now;
-        let random = ChunkId::random().to_string();
-        let backup_path = format!(
-            "{OVERWRITTEN_FILES_PATH}/{CONFIG_FILE_PATH}.{time_index:014}.{random}"
-        );
+        let backup_path = backup_destination(CONFIG_FILE_PATH);
         if !previous_version.is_create() {
             match self
                 .storage
@@ -627,6 +620,19 @@ impl AssetManager {
     pub fn can_write_to_storage(&self) -> bool {
         self.storage.can_write()
     }
+
+    pub async fn list_overwritten_objects(
+        &self,
+    ) -> RepositoryResult<BoxStream<'_, RepositoryResult<String>>> {
+        let stream = self
+            .storage
+            .list_objects(&self.storage_settings, OVERWRITTEN_FILES_PATH)
+            .await?
+            .map_ok(|li| li.id)
+            .err_into()
+            .boxed();
+        Ok(stream)
+    }
 }
 
 fn binary_file_header(
@@ -1021,6 +1027,26 @@ async fn write_repo_info(
     .await??;
 
     debug!(size_bytes = buffer.len(), "Writing repo info");
+
+    let backup_path = backup_destination(REPO_INFO_FILE_PATH);
+    if !version.is_create() {
+        match storage
+            .copy_object(
+                storage_settings,
+                REPO_INFO_FILE_PATH,
+                &backup_path,
+                None,
+                version,
+            )
+            .await?
+        {
+            VersionedUpdateResult::Updated { .. } => {}
+            VersionedUpdateResult::NotOnLatestVersion => {
+                return Err(RepositoryErrorKind::RepoInfoUpdated.into());
+            }
+        }
+    }
+
     match storage
         .put_object(
             storage_settings,
@@ -1124,6 +1150,14 @@ pub async fn async_reader_to_bytes(
     let mut buffer = Vec::with_capacity(expected_size + 16);
     tokio::io::copy(&mut read, &mut buffer).await?;
     Ok(buffer.into())
+}
+
+fn backup_destination(source_path: &str) -> String {
+    let last: u64 = 32503680000000;
+    let now = Utc::now().timestamp_millis() as u64;
+    let time_index = last - now;
+    let random = ChunkId::random().to_string();
+    format!("{OVERWRITTEN_FILES_PATH}/{source_path}.{time_index:014}.{random}")
 }
 
 #[cfg(test)]

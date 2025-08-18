@@ -2916,7 +2916,12 @@ mod tests {
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
         let storage = Arc::clone(&logging_c);
 
-        let repository = Repository::create(None, storage, HashMap::new()).await?;
+        let config = RepositoryConfig {
+            inline_chunk_threshold_bytes: Some(0),
+            ..Default::default()
+        };
+        let repository =
+            Repository::create(Some(config), storage, HashMap::new()).await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -3221,6 +3226,24 @@ mod tests {
         );
         assert_eq!(&diff.updated_arrays, &[new_array_path.clone()].into());
         assert_eq!(&diff.updated_groups, &[].into());
+
+        repository.save_config().await?;
+
+        let overwritten = repository
+            .asset_manager()
+            .list_overwritten_objects()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        // 6 commits
+        assert_eq!(overwritten.iter().filter(|s| s.starts_with("repo")).count(), 6);
+
+        // 1 config save
+        assert_eq!(
+            overwritten.iter().filter(|s| s.starts_with("config.yaml")).count(),
+            1
+        );
         Ok(())
     }
 
