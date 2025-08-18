@@ -1,0 +1,216 @@
+# Modularizing icechunk-python's namespace structure
+
+## Problem
+
+The top-level python namespace `icechunk` is really polluted, which makes it harder to navigate the library. There's [~80 things](https://github.com/earth-mover/icechunk/blob/main/icechunk-python/python/icechunk/__init__.py) in it. For example, both the ubiquitous class `Repository` and the extremely niche class `ManifestSplitDimCondition` are in the top-level `icechunk` namespace.
+
+## Solution
+
+It would be better practice to split this up into sub-modules. That would improve the user experience in a few ways:
+
+- auto-complete would be more helpful
+- the API docs would be easier to navigate (see also [#1095](https://github.com/earth-mover/icechunk/issues/1095))
+- the key classes would be the only ones in the top-level namespace (e.g. `Repo`, `Session`, `IcechunkStore`), making it more immediately obvious how icechunk is structured
+- the words "store"/"storage" would become a bit less overloaded (e.g. `icechunk.Storage`, `icechunk.s3_store`, and `icechunk.IcechunkStore` are all currently in the same namespace, but mean totally different things)
+
+## Options for namespace groupings
+
+1. **Group by related functionality**
+
+I.e. everything related to storage together, everything related to virtual chunks together...
+
+2. **Group by cloud provider / storage type**
+
+I.e. everything for Azure together, everything for GCS together...
+
+Are there any others?
+
+## User experience for icechunk beginners
+
+We don't want it to be too hard for beginners to find the imports they need to get started. There is therefore a tension between strict modularization and initial ease-of-use.
+
+## Specific proposal with rationale
+
+Here's a specific proposal. The rationale is that opening or creating should be top-level, but otherwise everything else should be in specific modules.
+
+Some opinionated notes about the rationale used:
+- This proposal is aggressive: it reduces the number of things in the top-level namespace from 78 to 5.
+- This proposal chooses to group by related functionality.
+- The location of classes that are only really returned to the user, and rarely directly called by the user (e.g. `Diff`), doesn't really matter.
+  - Similarly classes with no constructor methods (e.g. `Session`) don't need to be in the top-level namespace.
+- Modules with only one member are fine if they add clarity.
+- Adding an extra intermediate namespace doesn't make things much harder for users to find. In other words this:
+
+```python
+import icechunk
+storage = icechunk.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
+repo = icechunk.Repository.create(storage)
+```
+
+is not significantly harder than this:
+
+```python
+import icechunk
+storage = icechunk.storage.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
+repo = icechunk.Repository.create(storage)
+```
+
+Also note that this is already valid API:
+
+```python
+import icechunk
+storage = icechunk.Storage.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=True)
+repo = icechunk.Repository.create(storage)
+```
+
+### Top-level `icechunk` module:
+
+- `icechunk.Repository` (also available in `icechunk.repository.Repository`)
+- `icechunk.IcechunkStore` (also available in `icechunk.store.IcechunkStore`)
+- `icechunk.spec_version`
+- `icechunk.print_debug_info`
+- `icechunk.__version__`
+
+### Sub-modules
+
+Existing namespaces, with new members added:
+
+- `credentials`
+  - `credentials.Credentials`
+  - `credentials.azure_credentials`
+  - `credentials.azure_from_env_credentials`
+  - `credentials.azure_static_credentials`
+  - `credentials.containers_credentials`
+  - `credentials.gcs_credentials`
+  - `credentials.gcs_from_env_credentials`
+  - `credentials.gcs_refreshable_credentials`
+  - `credentials.gcs_static_credentials`
+  - `credentials.s3_anonymous_credentials`
+  - `credentials.s3_credentials`
+  - `credentials.s3_from_env_credentials`
+  - `credentials.s3_refreshable_credentials`
+  - `credentials.s3_static_credentials`
+- `dask`
+  - `dask.computing_meta`
+  - `dask.store_dask`
+- `distributed`
+  - `distributed.extract_sessions`
+  - `distributed.merge_sessions`
+- `garbage`
+  - `garbage.GCSummary`
+- `repository`
+  - `repository.Repository`
+- `session`
+  - `session.Session`
+  - `session.ForkSession`
+- `storage`
+  - `storage.S3Options`
+  - `storage.Storage`
+  - `storage.StorageConcurrencySettings`
+  - `storage.StorageRetriesSettings`
+  - `storage.StorageSettings`
+  - `storage.AnyObjectStoreConfig`
+  - `storage.azure_storage`
+  - `storage.gcs_storage`
+  - `storage.gcs_store`
+  - `storage.http_store`
+  - `storage.in_memory_storage`
+  - `storage.local_filesystem_storage`
+  - `storage.local_filesystem_store`
+  - `storage.r2_storage`
+  - `storage.s3_storage`
+  - `storage.s3_store`
+  - `storage.tigris_storage`
+- `store`
+  - `store.IcechunkStore`
+- `xarray`
+  - `xarray.to_icechunk`
+
+New namespaces:
+
+- `config`
+  - `config.CachingConfig`
+  - `config.CompressionConfig`
+  - `config.CompressionAlgorithm`
+  - `config.ObjectStoreConfig`
+  - `config.RepositoryConfig`
+- `conflict`
+  - `conflict.BasicConflictSolver`
+  - `conflict.Conflict`
+  - `conflict.ConflictDetector`
+  - `conflict.ConflictSolver`
+  - `conflict.ConflictType`
+  - `conflict.VersionSelection`
+- `exceptions`
+  - `exceptions.ConflictError`
+  - `exceptions.IcechunkError`
+  - `exceptions.RebaseFailedError`
+- `logging`
+  - `logging.initialize_logs`,
+  - `logging.set_logs_filter`,
+- `manifests`
+  - `manifests.ManifestConfig`
+  - `manifests.ManifestFileInfo`
+  - `manifests.ManifestPreloadCondition`
+  - `manifests.ManifestPreloadConfig`
+  - `manifests.ManifestSplitCondition`
+  - `manifests.ManifestSplitDimCondition`
+  - `manifests.ManifestSplittingConfig`
+- `snapshots`
+  - `snapshots.SnapshotInfo`
+  - `snapshots.Diff`
+- `virtual`
+  - `virtual.VirtualChunkContainer`
+  - `virtual.VirtualChunkSpec`
+
+## Outstanding questions
+
+- It's generally a bit confusing that there are multiple ways to make most classes, e.g. `local_filesystem_store` and `Storage.new_local_filesystem`. Do we really need both?
+  - If we only kept `Storage` we could get rid of a _lot_ of functions in favour of methods...
+  - Alternatively should base classes that aren't really meant to be called by the user (e.g. `Storage`) be public API at all?
+- What's the difference between `storage.local_filesystem_storage` and `storage.local_filesystem_store`?
+  - Similarly how can we better disambiguate `storage.s3_storage` and `storage.s3_store`?
+- Is there a similar question for credentials?
+- Should cloud-provider-specific classes be further grouped together within `.storage`/`.credentials`?
+- Should all configs live together?
+  - Should `StorageSettings` really be a `StorageConfig`? Should it live with configs or in `storage`?
+  - Similarly should `S3Options` really be `S3Config`?
+- Should summary dataclasses such as `Diff` and `GCSummary` live in the top-level?
+- Is `distributed` meant to be a public module at all? Why is it's API defined in a different place? Should it be merged with `dask`?
+- Union types like `AnyCredential` are re-exported as top-level API for importing, but it seems like they are only useful for internal type-hinting purposes?
+
+## Implementation steps (including deprecation cycle)
+
+We need to implement this in multiple steps, including a deprecation cycle which maintains backwards-compatibility until the cycle is complete.
+
+1. **Decide on public API structure (i.e. review then merge this design doc)**
+
+2. **Move everything into desired locations whilst keeping all top-level imports**
+
+We should add tests that both import paths work.
+
+3. **Change how docs render to display using fine-grained namespaces instead of single top-level namespace**
+
+We can probably configure the API docs to display the submodules first and ignore the top-level imports, even whilst the top-level imports are still available.
+
+4. **Add deprecation warning pointing users to specific fine-grained import**
+
+User experience should look like this:
+
+```python
+# works, but emits a warning
+from icechunk import ManifestSplitDimCondition
+```
+```
+DeprecationWarning: Importing class ``ManifestSplitDimCondition`` via top-level ``icechunk`` namespace is deprecated. Instead of importing as ``from icechunk import ManifestSplitDimCondition``, please import from the ``manifests`` module from now on, e.g. ``from icechunk.manifests import ManifestSplitDimCondition``.
+```
+```python
+# user changes code to this - now doesn't emit a warning
+from icechunk.manifests import ManifestSplitDimCondition
+```
+
+While doing this we should also add deprecation warnings to any other API we decide we don't need.
+
+5. **Eventually actually remove top-level import in favour of specific fine-grained import.**
+
+We could potentially even capture and re-emit a `ModuleNotFoundError` with a note that points to the new location.
