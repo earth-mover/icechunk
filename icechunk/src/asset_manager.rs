@@ -6,9 +6,14 @@ use serde::{Deserialize, Serialize};
 use std::{
     io::{BufReader, Read},
     ops::Range,
+    pin::Pin,
     sync::{Arc, atomic::AtomicBool},
 };
-use tokio::{io::AsyncReadExt, sync::Semaphore};
+use tokio::{
+    io::{AsyncBufRead, AsyncReadExt},
+    sync::Semaphore,
+};
+use tokio_util::io::SyncIoBridge;
 use tracing::{Span, debug, instrument, trace, warn};
 
 use crate::{
@@ -31,9 +36,7 @@ use crate::{
     },
     private,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{
-        self, DeleteObjectsResult, ListInfo, Reader, VersionInfo, VersionedUpdateResult,
-    },
+    storage::{self, DeleteObjectsResult, ListInfo, VersionInfo, VersionedUpdateResult},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -446,12 +449,13 @@ impl AssetManager {
                 trace!(%chunk_id, ?range, "Downloading chunk");
                 let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
                 let permit = self.request_semaphore.acquire().await?;
-                let chunk = self
+                let read = self
                     .storage
                     .get_object(&self.storage_settings, &path, Some(range))
-                    .await?
-                    .to_bytes((range.end - range.start) as usize)
                     .await?;
+                let chunk =
+                    async_reader_to_bytes(read, (range.end - range.start) as usize)
+                        .await?;
                 drop(permit);
                 let _fail_is_ok = guard.insert(chunk.clone());
                 Ok(chunk)
@@ -614,7 +618,7 @@ fn binary_file_header(
 }
 
 fn check_header(
-    read: &mut (dyn Read + Unpin + Send),
+    read: &mut (dyn Read),
     file_type: FileTypeBin,
 ) -> RepositoryResult<(SpecVersionBin, CompressionAlgorithmBin)> {
     let mut buf = [0; 12];
@@ -736,7 +740,7 @@ async fn write_new_manifest(
 async fn fetch_manifest(
     manifest_id: &ManifestId,
     manifest_size: u64,
-    storage: &(dyn Storage + Send + Sync),
+    storage: &(dyn Storage + Send),
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<Arc<Manifest>> {
@@ -746,13 +750,15 @@ async fn fetch_manifest(
     let range = 0..manifest_size;
     let range = if manifest_size > 0 { Some(&range) } else { None };
     let _permit = semaphore.acquire().await?;
-    let reader = storage.get_object(storage_settings, path.as_str(), range).await?;
+
+    //let storage = Arc::clone(&storage);
+    let read = storage.get_object(storage_settings, path.as_str(), range).await?;
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
         let _entered = span.entered();
         let (spec_version, decompressor) =
-            check_and_get_decompressor(reader, FileTypeBin::Manifest)?;
+            check_and_get_decompressor(read, FileTypeBin::Manifest)?;
         deserialize_manifest(spec_version, decompressor).map_err(RepositoryError::from)
     })
     .await?
@@ -760,11 +766,12 @@ async fn fetch_manifest(
 }
 
 fn check_and_get_decompressor(
-    data: Reader,
+    read: Pin<Box<dyn AsyncBufRead + Send>>,
     file_type: FileTypeBin,
 ) -> RepositoryResult<(SpecVersionBin, Box<dyn Read + Send>)> {
-    let mut sync_read = data.into_read();
-    let (spec_version, compression) = check_header(sync_read.as_mut(), file_type)?;
+    // TODO: use async compression
+    let mut sync_read = SyncIoBridge::new(read);
+    let (spec_version, compression) = check_header(&mut sync_read, file_type)?;
     debug_assert_eq!(compression, CompressionAlgorithmBin::Zstd);
     // We find a performance impact if we don't buffer here
     let decompressor =
@@ -1001,10 +1008,8 @@ async fn fetch_repo_info(
             let span = Span::current();
             tokio::task::spawn_blocking(move || {
                 let _entered = span.entered();
-                let (spec_version, decompressor) = check_and_get_decompressor(
-                    Reader::Asynchronous(result),
-                    FileTypeBin::RepoInfo,
-                )?;
+                let (spec_version, decompressor) =
+                    check_and_get_decompressor(result, FileTypeBin::RepoInfo)?;
                 deserialize_repo_info(spec_version, decompressor)
                     .map(|ri| (Arc::new(ri), version))
                     .map_err(RepositoryError::from)
@@ -1067,6 +1072,16 @@ where
         Ok(info)
     })
     .boxed()
+}
+
+pub async fn async_reader_to_bytes(
+    mut read: impl AsyncBufRead + Unpin,
+    expected_size: usize,
+) -> Result<Bytes, std::io::Error> {
+    // add some extra space to the buffer to optimize conversion to bytes
+    let mut buffer = Vec::with_capacity(expected_size + 16);
+    tokio::io::copy(&mut read, &mut buffer).await?;
+    Ok(buffer.into())
 }
 
 #[cfg(test)]
@@ -1147,7 +1162,7 @@ mod test {
             vec![
                 ("put_object".to_string(), format!("{MANIFESTS_FILE_PATH}/{id}")),
                 (
-                    "get_object_read".to_string(),
+                    "get_object_range".to_string(),
                     format!("{MANIFESTS_FILE_PATH}/{pre_existing_id}")
                 )
             ]
@@ -1160,7 +1175,7 @@ mod test {
             vec![
                 ("put_object".to_string(), format!("{MANIFESTS_FILE_PATH}/{id}")),
                 (
-                    "get_object_read".to_string(),
+                    "get_object_range".to_string(),
                     format!("{MANIFESTS_FILE_PATH}/{pre_existing_id}")
                 )
             ]
@@ -1173,7 +1188,7 @@ mod test {
             vec![
                 ("put_object".to_string(), format!("{MANIFESTS_FILE_PATH}/{id}")),
                 (
-                    "get_object_read".to_string(),
+                    "get_object_range".to_string(),
                     format!("{MANIFESTS_FILE_PATH}/{pre_existing_id}")
                 )
             ]

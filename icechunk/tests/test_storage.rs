@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, future::Future, sync::Arc};
+use std::{collections::HashMap, env, future::Future, pin::Pin, sync::Arc};
 
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt, stream};
@@ -24,6 +24,7 @@ use icechunk_macros::tokio_test;
 use object_store::azure::AzureConfigKey;
 use pretty_assertions::{assert_eq, assert_ne};
 use tempfile::tempdir;
+use tokio::io::{AsyncRead, AsyncReadExt as _};
 use zstd::zstd_safe::WriteBuf;
 
 mod common;
@@ -184,6 +185,14 @@ where
     Ok(())
 }
 
+async fn async_read_to_bytes(
+    mut read: Pin<Box<dyn AsyncRead + Send>>,
+) -> Result<Bytes, std::io::Error> {
+    let mut data = Vec::with_capacity(1_024);
+    read.read_to_end(&mut data).await?;
+    Ok(Bytes::from_owner(data))
+}
+
 #[tokio_test]
 pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
@@ -212,20 +221,20 @@ pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> 
 
             // check with unknown size
             let read = storage.get_object(&storage_settings, path.as_str(), None).await?;
-            assert_eq!(read.to_bytes(1024).await?.as_slice(), bytes);
+            assert_eq!(async_read_to_bytes(read).await?.as_slice(), bytes);
 
             // check with known size
             let read = storage
                 .get_object(&storage_settings, path.as_str(), Some(&(0..1024)))
                 .await?;
-            assert_eq!(read.to_bytes(1024).await?.as_slice(), bytes);
+            assert_eq!(async_read_to_bytes(read).await?.as_slice(), bytes);
 
             // check with small range
             let read = storage
                 .get_object(&storage_settings, path.as_str(), Some(&(42..44)))
                 .await?;
             assert_eq!(
-                read.to_bytes(1024).await?.as_slice(),
+                async_read_to_bytes(read).await?.as_slice(),
                 Bytes::copy_from_slice(&[42, 99])
             );
         }
@@ -720,11 +729,10 @@ pub async fn test_write_object_larger_than_multipart_threshold()
         storage
             .put_object(&custom_settings, path.as_str(), Vec::new(), bytes.clone())
             .await?;
-        let fetched = storage
-            .get_object(&custom_settings, path.as_str(), Some(&(0..1024)))
-            .await?
-            .to_bytes(1024)
-            .await?;
+        let fetched = async_read_to_bytes(
+            storage.get_object(&custom_settings, path.as_str(), Some(&(0..1024))).await?,
+        )
+        .await?;
         assert_eq!(fetched, bytes);
 
         Ok(())

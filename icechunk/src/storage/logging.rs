@@ -1,19 +1,20 @@
 use std::{
     fmt,
     ops::Range,
+    pin::Pin,
     sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::stream::BoxStream;
+use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufRead;
 
 use super::{
-    DeleteObjectsResult, ListInfo, Settings, Storage, StorageResult, VersionInfo,
-    VersionedFetchResult, VersionedUpdateResult,
+    DeleteObjectsResult, ListInfo, Settings, Storage, StorageError, StorageResult,
+    VersionInfo, VersionedFetchResult, VersionedUpdateResult,
 };
 use crate::private;
 
@@ -64,7 +65,7 @@ impl Storage for LoggingStorage {
         &self,
         path: &str,
         settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncBufRead + Unpin + Send>>> {
+    ) -> StorageResult<VersionedFetchResult<Pin<Box<dyn AsyncBufRead + Send>>>> {
         self.fetch_log
             .lock()
             .expect("poison lock")
@@ -147,29 +148,17 @@ impl Storage for LoggingStorage {
         self.backend.get_object_last_modified(path, settings).await
     }
 
-    async fn get_object_buf(
-        &self,
+    async fn get_object_range<'a>(
+        &'a self,
         settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
-        self.fetch_log
-            .lock()
-            .expect("poison lock")
-            .push(("get_object_buf".to_string(), key.to_string()));
-        self.backend.get_object_buf(settings, key, range).await
-    }
-
-    async fn get_object_read(
-        &self,
-        settings: &Settings,
-        key: &str,
+        path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Box<dyn AsyncBufRead + Unpin + Send>> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         self.fetch_log
             .lock()
             .expect("poison lock")
-            .push(("get_object_read".to_string(), key.to_string()));
-        self.backend.get_object_read(settings, key, range).await
+            .push(("get_object_range".to_string(), path.to_string()));
+        self.backend.get_object_range(settings, path, range).await
     }
 }

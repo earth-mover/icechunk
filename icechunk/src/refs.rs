@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, future::ready};
+use std::{collections::BTreeSet, future::ready, pin::Pin};
 
 use async_recursion::async_recursion;
 use bytes::Bytes;
@@ -375,7 +375,7 @@ async fn delete_tag(
 }
 
 async fn async_read_to_bytes(
-    mut read: Box<dyn AsyncRead + Send + Unpin>,
+    mut read: Pin<Box<dyn AsyncRead + Send>>,
 ) -> RefResult<Bytes> {
     let mut data = Vec::with_capacity(1_024);
     read.read_to_end(&mut data).await?;

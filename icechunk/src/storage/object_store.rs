@@ -6,10 +6,10 @@ use crate::{
     private,
 };
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::{
-    StreamExt, TryStreamExt,
+    Stream, StreamExt, TryStreamExt,
     stream::{self, BoxStream},
 };
 use object_store::{
@@ -33,6 +33,7 @@ use std::{
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::{Path as StdPath, PathBuf},
+    pin::Pin,
     sync::Arc,
 };
 use tokio::{
@@ -233,7 +234,7 @@ impl Storage for ObjectStorage {
         &self,
         path: &str,
         settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncBufRead + Unpin + Send>>> {
+    ) -> StorageResult<VersionedFetchResult<Pin<Box<dyn AsyncBufRead + Send>>>> {
         let key = self.prefixed_path(path);
         let response = self.get_client(settings).await.get(&key).await;
 
@@ -245,7 +246,7 @@ impl Storage for ObjectStorage {
                 };
 
                 Ok(VersionedFetchResult::Found {
-                    result: Box::new(
+                    result: Box::pin(
                         result.into_stream().err_into().into_async_read().compat(),
                     ),
                     version,
@@ -396,52 +397,28 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self))]
-    async fn get_object_buf(
-        &self,
-        settings: &Settings,
-        path: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
-        let full_key = self.prefixed_path(path);
-        let range = Some((range.start..range.end).into());
-        let opts = GetOptions { range, ..Default::default() };
-        Ok(Box::new(
-            self.get_client(settings)
-                .await
-                .get_opts(&full_key, opts)
-                .await
-                .map_err(Box::new)?
-                .bytes()
-                .await
-                .map_err(Box::new)?,
-        ))
-    }
-
-    #[instrument(skip(self))]
-    async fn get_object_read(
-        &self,
+    async fn get_object_range<'a>(
+        &'a self,
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Box<dyn AsyncBufRead + Unpin + Send>> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         let full_key = self.prefixed_path(path);
         let range = range.map(|range| {
             let usize_range = range.start..range.end;
             usize_range.into()
         });
         let opts = GetOptions { range, ..Default::default() };
-        let res: Box<dyn AsyncBufRead + Unpin + Send> = Box::new(
-            self.get_client(settings)
-                .await
-                .get_opts(&full_key, opts)
-                .await
-                .map_err(Box::new)?
-                .into_stream()
-                .err_into()
-                .into_async_read()
-                .compat(),
-        );
-        Ok(res)
+        let res = self
+            .get_client(settings)
+            .await
+            .get_opts(&full_key, opts)
+            .await
+            .map_err(Box::new)?
+            .into_stream()
+            .map_err(|e| Box::new(e).into());
+        Ok(Box::pin(res))
     }
 }
 

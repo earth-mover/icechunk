@@ -2941,14 +2941,14 @@ mod tests {
         assert_eq!(
             ops[1],
             (
-                "get_object_read".to_string(),
+                "get_object_range".to_string(),
                 format!("{MANIFESTS_FILE_PATH}/{lat_manifest_id}")
             )
         );
         assert_eq!(
             ops[2],
             (
-                "get_object_read".to_string(),
+                "get_object_range".to_string(),
                 format!("{MANIFESTS_FILE_PATH}/{lon_manifest_id}")
             )
         );

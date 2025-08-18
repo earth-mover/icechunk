@@ -1,5 +1,6 @@
 use std::{
-    collections::HashMap, fmt, future::ready, ops::Range, path::PathBuf, sync::Arc,
+    collections::HashMap, fmt, future::ready, ops::Range, path::PathBuf, pin::Pin,
+    sync::Arc,
 };
 
 use crate::{
@@ -26,10 +27,10 @@ use aws_sdk_s3::{
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
 };
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{
-    StreamExt, TryStreamExt,
+    Stream, StreamExt, TryStreamExt,
     stream::{self, BoxStream, FuturesOrdered},
 };
 use serde::{Deserialize, Serialize};
@@ -199,6 +200,16 @@ pub async fn mk_client(
     let config = s3_builder.build();
 
     Client::from_conf(config)
+}
+
+fn stream2stream(
+    s: ByteStream,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
+    let res = stream::try_unfold(s, move |mut stream| async move {
+        let next = stream.try_next().await?;
+        Ok(next.map(|bytes| (bytes, stream)))
+    });
+    Box::pin(res)
 }
 
 impl S3Storage {
@@ -451,7 +462,7 @@ impl Storage for S3Storage {
         &self,
         path: &str,
         settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Box<dyn AsyncBufRead + Unpin + Send>>> {
+    ) -> StorageResult<VersionedFetchResult<Pin<Box<dyn AsyncBufRead + Send>>>> {
         let key = self.prefixed_path(path);
         let res = self
             .get_client(settings)
@@ -465,7 +476,7 @@ impl Storage for S3Storage {
         match res {
             Ok(output) => match output.e_tag {
                 Some(etag) => Ok(VersionedFetchResult::Found {
-                    result: Box::new(output.body.into_async_read()),
+                    result: Box::pin(output.body.into_async_read()),
                     version: VersionInfo::from_etag_only(etag),
                 }),
                 None => Ok(VersionedFetchResult::NotFound),
@@ -704,39 +715,23 @@ impl Storage for S3Storage {
         Ok(res)
     }
 
-    #[instrument(skip(self))]
-    async fn get_object_buf(
-        &self,
-        settings: &Settings,
-        path: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
-        let key = self.prefixed_path(path);
-        let b = self
-            .get_client(settings)
-            .await
-            .get_object()
-            .bucket(self.bucket.clone())
-            .key(key)
-            .range(range_to_header(range));
-        Ok(Box::new(
-            b.send().await.map_err(Box::new)?.body.collect().await.map_err(Box::new)?,
-        ))
-    }
-
-    #[instrument(skip(self))]
-    async fn get_object_read(
+    async fn get_object_range(
         &self,
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Box<dyn AsyncBufRead + Unpin + Send>> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         let client = self.get_client(settings).await;
         let bucket = self.bucket.clone();
         let key = self.prefixed_path(path);
-        Ok(Box::new(
-            get_object_range(client.as_ref(), bucket, key.as_str(), range).await?,
-        ))
+        let mut b = client.get_object().bucket(bucket).key(key);
+        if let Some(range) = range {
+            b = b.range(range_to_header(range));
+        }
+        let byte_stream = b.send().await.map_err(Box::new)?.body;
+        let stream = stream2stream(byte_stream).err_into();
+        Ok(Box::pin(stream))
     }
 }
 
@@ -783,19 +778,6 @@ impl ProvideRefreshableCredentials {
         );
         Ok(creds)
     }
-}
-
-async fn get_object_range(
-    client: &Client,
-    bucket: String,
-    full_key: &str,
-    range: Option<&Range<ChunkOffset>>,
-) -> StorageResult<impl AsyncBufRead + use<>> {
-    let mut b = client.get_object().bucket(bucket).key(full_key);
-    if let Some(range) = range {
-        b = b.range(range_to_header(range));
-    }
-    Ok(b.send().await.map_err(Box::new)?.body.into_async_read())
 }
 
 fn strip_quotes(s: &str) -> &str {
