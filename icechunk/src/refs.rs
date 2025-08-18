@@ -17,9 +17,7 @@ use crate::{
     Storage, StorageError,
     error::ICError,
     format::{SnapshotId, V1_REFS_FILE_PATH},
-    storage::{
-        self, StorageErrorKind, VersionInfo, VersionedFetchResult, VersionedUpdateResult,
-    },
+    storage::{self, StorageErrorKind, VersionInfo, VersionedUpdateResult},
 };
 
 #[derive(Debug, Error)]
@@ -167,13 +165,13 @@ async fn create_tag(
     let data = RefData { snapshot };
     let content = serde_json::to_vec(&data)?;
     match storage
-        .put_versioned_object(
+        .put_object(
+            storage_settings,
             path.as_str(),
             Bytes::from_owner(content),
             Some("application/json"),
             Default::default(),
-            &VersionInfo::for_creation(),
-            storage_settings,
+            Some(&VersionInfo::for_creation()),
         )
         .await
     {
@@ -217,13 +215,13 @@ async fn update_branch(
     let data = RefData { snapshot: new_snapshot };
     let content = serde_json::to_vec(&data)?;
     match storage
-        .put_versioned_object(
+        .put_object(
+            storage_settings,
             path.as_str(),
             Bytes::from_owner(content),
             Some("application/json"),
             Default::default(),
-            &version,
-            storage_settings,
+            Some(&version),
         )
         .await
     {
@@ -355,13 +353,13 @@ async fn delete_tag(
     let key = tag_delete_marker_key(tag)?;
     let path = format!("{V1_REFS_FILE_PATH}/{key}");
     match storage
-        .put_versioned_object(
+        .put_object(
+            storage_settings,
             path.as_str(),
             Bytes::new(),
             None,
             Default::default(),
-            &VersionInfo::for_creation(),
-            storage_settings,
+            Some(&VersionInfo::for_creation()),
         )
         .await
     {
@@ -393,11 +391,9 @@ pub async fn fetch_tag(
 
     let fut1 = async move {
         let path = format!("{V1_REFS_FILE_PATH}/{ref_path}");
-        match storage.get_versioned_object(path.as_str(), storage_settings).await {
-            Ok(VersionedFetchResult::Found { result, .. }) => {
-                Ok(async_read_to_bytes(result).await?)
-            }
-            Ok(VersionedFetchResult::NotFound) => {
+        match storage.get_object(storage_settings, path.as_str(), None).await {
+            Ok((result, ..)) => Ok(async_read_to_bytes(result).await?),
+            Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
                 Err(RefErrorKind::RefNotFound(name.to_string()).into())
             }
             Err(err) => Err(err.into()),
@@ -406,9 +402,9 @@ pub async fn fetch_tag(
     .boxed();
     let fut2 = async move {
         let path = format!("{V1_REFS_FILE_PATH}/{delete_marker_path}");
-        match storage.get_versioned_object(path.as_str(), storage_settings).await {
-            Ok(VersionedFetchResult::Found { .. }) => Ok(Bytes::new()),
-            Ok(VersionedFetchResult::NotFound) => {
+        match storage.get_object(storage_settings, path.as_str(), None).await {
+            Ok(_) => Ok(Bytes::new()),
+            Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
                 Err(RefErrorKind::RefNotFound(name.to_string()).into())
             }
             Err(err) => Err(err.into()),
@@ -443,13 +439,13 @@ async fn fetch_branch(
 ) -> RefResult<(RefData, VersionInfo)> {
     let ref_key = branch_key(name)?;
     let path = format!("{V1_REFS_FILE_PATH}/{ref_key}");
-    match storage.get_versioned_object(path.as_str(), storage_settings).await {
-        Ok(VersionedFetchResult::Found { result, version }) => {
+    match storage.get_object(storage_settings, path.as_str(), None).await {
+        Ok((result, version)) => {
             let bytes = async_read_to_bytes(result).await?;
             let data = serde_json::from_slice(bytes.as_ref())?;
             Ok((data, version))
         }
-        Ok(VersionedFetchResult::NotFound) => {
+        Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
             Err(RefErrorKind::RefNotFound(name.to_string()).into())
         }
         Err(err) => Err(err.into()),

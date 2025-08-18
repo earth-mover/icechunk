@@ -2898,12 +2898,10 @@ mod tests {
         };
         let repository = Repository::open(Some(config), storage, HashMap::new()).await?;
 
-        let ops = Vec::from_iter(
-            logging
-                .fetch_operations()
-                .into_iter()
-                .filter(|(op, _)| op != "get_versioned_object"),
-        );
+        let ops =
+            Vec::from_iter(logging.fetch_operations().into_iter().filter(|(_, key)| {
+                key != "repo" && key != "config.yaml" && !key.contains("ref.json")
+            }));
         assert!(ops.is_empty());
 
         let session = repository
@@ -2916,17 +2914,15 @@ mod tests {
             && !logging
                 .fetch_operations()
                 .iter()
-                .any(|(op, _)| op != "get_versioned_object")
+                .any(|(_, key)| key.starts_with("manifests"))
         {
             tokio::time::sleep(std::time::Duration::from_secs_f32(0.1)).await;
             retries += 1
         }
-        let ops = Vec::from_iter(
-            logging
-                .fetch_operations()
-                .into_iter()
-                .filter(|(op, _)| op != "get_versioned_object"),
-        );
+        let ops =
+            Vec::from_iter(logging.fetch_operations().into_iter().filter(|(_, key)| {
+                key.starts_with("manifests") || key.starts_with("snapshots")
+            }));
 
         let lat_manifest_id = match session.get_node(&lat_path).await?.node_data {
             NodeData::Array { manifests, .. } => manifests[0].object_id.to_string(),

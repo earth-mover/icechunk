@@ -22,9 +22,7 @@ def test_error_message_when_snapshot_deleted(tmpdir: Path) -> None:
     # we check error includes the spans for fetch_snapshot and missing object
     with pytest.raises(
         ic.IcechunkError,
-        match=re.compile(
-            "fetch_snapshot.*snapshots/1CECHNKREP0F1RSTCMT0 not found.*", re.DOTALL
-        ),
+        match=re.compile("object not found.*1CECHNKREP0F1RSTCMT0.*", re.DOTALL),
     ):
         zarr.group(store=session.store, overwrite=True)
 

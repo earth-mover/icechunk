@@ -10,11 +10,10 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncBufRead;
 
 use super::{
     DeleteObjectsResult, ListInfo, Settings, Storage, StorageError, StorageResult,
-    VersionInfo, VersionedFetchResult, VersionedUpdateResult,
+    VersionInfo, VersionedUpdateResult,
 };
 use crate::private;
 
@@ -61,54 +60,22 @@ impl Storage for LoggingStorage {
         self.backend.can_write()
     }
 
-    async fn get_versioned_object(
-        &self,
-        path: &str,
-        settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Pin<Box<dyn AsyncBufRead + Send>>>> {
-        self.fetch_log
-            .lock()
-            .expect("poison lock")
-            .push(("get_versioned_object".to_string(), path.to_string()));
-        self.backend.get_versioned_object(path, settings).await
-    }
-    async fn put_versioned_object(
-        &self,
-        path: &str,
-        bytes: Bytes,
-        content_type: Option<&str>,
-        metadata: Vec<(String, String)>,
-        previous_version: &VersionInfo,
-        settings: &Settings,
-    ) -> StorageResult<VersionedUpdateResult> {
-        self.fetch_log
-            .lock()
-            .expect("poison lock")
-            .push(("put_versioned_object".to_string(), path.to_string()));
-        self.backend
-            .put_versioned_object(
-                path,
-                bytes,
-                content_type,
-                metadata,
-                previous_version,
-                settings,
-            )
-            .await
-    }
-
     async fn put_object(
         &self,
         settings: &Settings,
         path: &str,
-        metadata: Vec<(String, String)>,
         bytes: Bytes,
-    ) -> StorageResult<()> {
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
         self.fetch_log
             .lock()
             .expect("poison lock")
             .push(("put_object".to_string(), path.to_string()));
-        self.backend.put_object(settings, path, metadata, bytes).await
+        self.backend
+            .put_object(settings, path, bytes, content_type, metadata, previous_version)
+            .await
     }
 
     async fn list_objects<'a>(
@@ -148,13 +115,15 @@ impl Storage for LoggingStorage {
         self.backend.get_object_last_modified(path, settings).await
     }
 
-    async fn get_object_range<'a>(
-        &'a self,
+    async fn get_object_range(
+        &self,
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
-    {
+    ) -> StorageResult<(
+        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+        VersionInfo,
+    )> {
         self.fetch_log
             .lock()
             .expect("poison lock")

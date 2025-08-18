@@ -214,23 +214,27 @@ pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> 
                 .put_object(
                     &storage_settings,
                     path.as_str(),
-                    vec![("foo".to_string(), "bar".to_string())],
                     Bytes::copy_from_slice(&bytes[..]),
+                    Some("application/foo"),
+                    vec![("foo".to_string(), "bar".to_string())],
+                    None,
                 )
-                .await?;
+                .await?
+                .must_write()?;
 
             // check with unknown size
-            let read = storage.get_object(&storage_settings, path.as_str(), None).await?;
+            let (read, _) =
+                storage.get_object(&storage_settings, path.as_str(), None).await?;
             assert_eq!(async_read_to_bytes(read).await?.as_slice(), bytes);
 
             // check with known size
-            let read = storage
+            let (read, _) = storage
                 .get_object(&storage_settings, path.as_str(), Some(&(0..1024)))
                 .await?;
             assert_eq!(async_read_to_bytes(read).await?.as_slice(), bytes);
 
             // check with small range
-            let read = storage
+            let (read, _) = storage
                 .get_object(&storage_settings, path.as_str(), Some(&(42..44)))
                 .await?;
             assert_eq!(
@@ -299,15 +303,43 @@ pub async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let settings = storage.default_settings();
         storage
-            .put_object(&settings, "foo/bar/1", Default::default(), Bytes::new())
-            .await?;
+            .put_object(
+                &settings,
+                "foo/bar/1",
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await?
+            .must_write()?;
         storage
-            .put_object(&settings, "foo/bar/2", Default::default(), Bytes::new())
-            .await?;
-        storage.put_object(&settings, "foo/3", Default::default(), Bytes::new()).await?;
-        storage.put_object(&settings, "foo/4", Default::default(), Bytes::new()).await?;
-        storage.put_object(&settings, "5", Default::default(), Bytes::new()).await?;
-        storage.put_object(&settings, "6", Default::default(), Bytes::new()).await?;
+            .put_object(
+                &settings,
+                "foo/bar/2",
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&settings, "foo/3", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&settings, "foo/4", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&settings, "5", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&settings, "6", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
 
         for prefix in ["foo/bar", "foo/bar/"] {
             let mut obs: Vec<_> = storage
@@ -371,15 +403,43 @@ pub async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
         let settings = storage.default_settings();
         storage
-            .put_object(&settings, "foo/bar/1", Default::default(), Bytes::new())
-            .await?;
+            .put_object(
+                &settings,
+                "foo/bar/1",
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await?
+            .must_write()?;
         storage
-            .put_object(&settings, "foo/bar/2", Default::default(), Bytes::new())
-            .await?;
-        storage.put_object(&settings, "foo/3", Default::default(), Bytes::new()).await?;
-        storage.put_object(&settings, "foo/4", Default::default(), Bytes::new()).await?;
-        storage.put_object(&settings, "5", Default::default(), Bytes::new()).await?;
-        storage.put_object(&settings, "6", Default::default(), Bytes::new()).await?;
+            .put_object(
+                &settings,
+                "foo/bar/2",
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&settings, "foo/3", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&settings, "foo/4", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&settings, "5", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&settings, "6", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
 
         // passing a prefix without slash
         let res = storage
@@ -670,27 +730,36 @@ pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
             ..storage::Settings::default()
         },
         "chunks/000000000000",
-        Vec::new(),
         Bytes::new(),
+        None,
+        Default::default(),
+        None,
     )
-    .await?;
+    .await?
+    .must_write()?;
     st.put_object(
         &storage::Settings {
             storage_class: Some("STANDARD_IA".to_string()),
             ..storage::Settings::default()
         },
         "chunks/000000000001",
-        Vec::new(),
         Bytes::new(),
+        None,
+        Default::default(),
+        None,
     )
-    .await?;
+    .await?
+    .must_write()?;
     st.put_object(
         &storage::Settings::default(),
         "chunks/000000000002",
-        Vec::new(),
         Bytes::new(),
+        None,
+        Default::default(),
+        None,
     )
-    .await?;
+    .await?
+    .must_write()?;
     let out = client
         .list_objects_v2()
         .bucket(common::get_aws_integration_bucket()?)
@@ -727,10 +796,21 @@ pub async fn test_write_object_larger_than_multipart_threshold()
         let bytes = Bytes::copy_from_slice(&[0; 1024]);
 
         storage
-            .put_object(&custom_settings, path.as_str(), Vec::new(), bytes.clone())
-            .await?;
+            .put_object(
+                &custom_settings,
+                path.as_str(),
+                bytes.clone(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await?
+            .must_write()?;
         let fetched = async_read_to_bytes(
-            storage.get_object(&custom_settings, path.as_str(), Some(&(0..1024))).await?,
+            storage
+                .get_object(&custom_settings, path.as_str(), Some(&(0..1024)))
+                .await?
+                .0,
         )
         .await?;
         assert_eq!(fetched, bytes);

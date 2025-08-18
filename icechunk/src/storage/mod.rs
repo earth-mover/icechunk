@@ -55,6 +55,8 @@ use crate::{
 
 #[derive(Debug, Error)]
 pub enum StorageErrorKind {
+    #[error("object not found")]
+    ObjectNotFound,
     #[error("object store error {0}")]
     ObjectStore(#[from] Box<::object_store::Error>),
     #[error("bad object store prefix {0:?}")]
@@ -347,15 +349,20 @@ impl Settings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VersionedFetchResult<R> {
-    Found { result: R, version: VersionInfo },
-    NotFound,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionedUpdateResult {
     Updated { new_version: VersionInfo },
     NotOnLatestVersion,
+}
+
+impl VersionedUpdateResult {
+    pub fn must_write(self) -> StorageResult<VersionInfo> {
+        match self {
+            VersionedUpdateResult::Updated { new_version } => Ok(new_version),
+            VersionedUpdateResult::NotOnLatestVersion => {
+                Err(StorageErrorKind::ObjectNotFound.into())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -389,7 +396,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
+    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
         if let Some(range) = range {
             self.get_object_concurrently(settings, path, range).await
         } else {
@@ -402,13 +409,10 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
-        let stream = self
-            .get_object_range(settings, path, range)
-            .await?
-            .map_err(std::io::Error::other);
-        let reader = StreamReader::new(stream);
-        Ok(Box::pin(reader))
+    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+        let (stream, version) = self.get_object_range(settings, path, range).await?;
+        let reader = StreamReader::new(stream.map_err(std::io::Error::other));
+        Ok((Box::pin(reader), version))
     }
 
     async fn get_object_range(
@@ -416,30 +420,19 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>;
+    ) -> StorageResult<(
+        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+        VersionInfo,
+    )>;
 
     async fn put_object(
         &self,
         settings: &Settings,
         path: &str,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()>;
-
-    async fn get_versioned_object(
-        &self,
-        path: &str,
-        settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Pin<Box<dyn AsyncBufRead + Send>>>>;
-
-    async fn put_versioned_object(
-        &self,
-        path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: &VersionInfo,
-        settings: &Settings,
+        previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult>;
 
     async fn list_objects<'a>(
@@ -507,7 +500,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
         key: &str,
         parts: Vec<Range<u64>>,
-    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
+    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
         let settings2 = settings.clone();
         let key2 = key.to_string();
         let results = parts
@@ -516,25 +509,30 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
                 let key = key2.clone();
                 let settings = settings2.clone();
                 async move {
-                    let all_bytes: Vec<_> = self
+                    let (stream, version) = self
                         .get_object_range(&settings, key.as_ref(), Some(&range))
-                        .await?
-                        .try_collect()
                         .await?;
-                    Ok::<_, StorageError>(all_bytes)
+                    let all_bytes: Vec<_> = stream.try_collect().await?;
+                    Ok::<_, StorageError>((all_bytes, version))
                 }
             })
             .collect::<FuturesOrdered<_>>();
 
+        let results = results.peekable();
+        tokio::pin!(results);
+        let version = match results.as_mut().peek().await {
+            Some(Ok((_, version))) => version.clone(),
+            _ => VersionInfo::for_creation(),
+        };
         let all_bytes = results
-            .map_ok(|x| stream::iter(x).map(Ok::<_, StorageError>))
+            .map_ok(|(all_bytes, _)| stream::iter(all_bytes).map(Ok::<_, StorageError>))
             .try_flatten()
             .map_err(std::io::Error::other)
             .try_collect::<Vec<_>>()
             .await?;
 
         let res = StreamReader::new(stream::iter(all_bytes).map(Ok::<_, std::io::Error>));
-        Ok(Box::pin(res))
+        Ok((Box::pin(res), version))
     }
 
     async fn get_object_concurrently(
@@ -542,7 +540,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
         key: &str,
         range: &Range<u64>,
-    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
+    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
         let parts = split_in_multiple_requests(
             range,
             settings.concurrency().ideal_concurrent_request_size().get(),
@@ -550,8 +548,8 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         )
         .collect::<Vec<_>>();
 
-        let res: Pin<Box<dyn AsyncBufRead + Send>> = match parts.len() {
-            0 => Box::pin(tokio::io::empty()),
+        let res: (Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo) = match parts.len() {
+            0 => (Box::pin(tokio::io::empty()), VersionInfo::for_creation()),
             1 => self.get_object_range_read(settings, key, Some(range)).await?,
             _ => self.get_object_concurrently_multiple(settings, key, parts).await?,
         };

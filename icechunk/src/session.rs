@@ -3149,12 +3149,9 @@ mod tests {
         ));
 
         let ops =
-            Vec::from_iter(logging.fetch_operations().into_iter().filter(|(op, _)| {
-                op != "get_versioned_object"
-                    && op != "put_object"
-                    && op != "put_versioned_object"
-                    && op != "get_object_last_modified"
-                    && op != "list_objects"
+            Vec::from_iter(logging.fetch_operations().into_iter().filter(|(op, key)| {
+                op == "get_object_range"
+                    && (key.starts_with("snapshots") || key.starts_with("manifests"))
             }));
         assert_eq!(ops.len(), 0);
 

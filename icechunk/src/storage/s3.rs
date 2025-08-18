@@ -22,7 +22,10 @@ use aws_sdk_s3::{
         interceptors::BeforeTransmitInterceptorContextMut,
     },
     error::{BoxError, SdkError},
-    operation::put_object::PutObjectError,
+    operation::{
+        complete_multipart_upload::CompleteMultipartUploadError,
+        put_object::PutObjectError,
+    },
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
 };
@@ -34,14 +37,13 @@ use futures::{
     stream::{self, BoxStream, FuturesOrdered},
 };
 use serde::{Deserialize, Serialize};
-use tokio::{io::AsyncBufRead, sync::OnceCell};
+use tokio::sync::OnceCell;
 use tracing::{error, instrument};
 use typed_path::Utf8UnixPath;
 
 use super::{
     DeleteObjectsResult, ListInfo, Settings, StorageErrorKind, StorageResult,
-    VersionInfo, VersionedFetchResult, VersionedUpdateResult,
-    split_in_multiple_equal_requests,
+    VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -276,240 +278,11 @@ impl S3Storage {
         &self,
         settings: &Settings,
         key: &str,
-        content_type: Option<impl Into<String>>,
-        metadata: I,
-        storage_class: Option<&String>,
-        bytes: impl Into<ByteStream>,
-    ) -> StorageResult<()> {
-        let mut b = self
-            .get_client(settings)
-            .await
-            .put_object()
-            .bucket(self.bucket.clone())
-            .key(key);
-
-        if settings.unsafe_use_metadata() {
-            if let Some(ct) = content_type {
-                b = b.content_type(ct)
-            };
-        }
-
-        if settings.unsafe_use_metadata() {
-            for (k, v) in metadata {
-                b = b.metadata(k, v);
-            }
-        }
-
-        if let Some(klass) = storage_class {
-            let klass = klass.as_str().into();
-            b = b.storage_class(klass);
-        }
-
-        b.body(bytes.into()).send().await.map_err(Box::new)?;
-        Ok(())
-    }
-
-    async fn put_object_multipart<
-        I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
-    >(
-        &self,
-        settings: &Settings,
-        key: &str,
-        content_type: Option<impl Into<String>>,
-        metadata: I,
-        storage_class: Option<&String>,
-        bytes: &Bytes,
-    ) -> StorageResult<()> {
-        let mut multi = self
-            .get_client(settings)
-            .await
-            .create_multipart_upload()
-            // We would like this, but it fails in MinIO
-            //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
-            //.checksum_algorithm(aws_sdk_s3::types::ChecksumAlgorithm::Crc64Nvme)
-            .bucket(self.bucket.clone())
-            .key(key);
-
-        if settings.unsafe_use_metadata() {
-            if let Some(ct) = content_type {
-                multi = multi.content_type(ct)
-            };
-            for (k, v) in metadata {
-                multi = multi.metadata(k, v);
-            }
-        }
-
-        if let Some(klass) = storage_class {
-            let klass = klass.as_str().into();
-            multi = multi.storage_class(klass);
-        }
-
-        let create_res = multi.send().await.map_err(Box::new)?;
-        let upload_id =
-            create_res.upload_id().ok_or(StorageError::from(StorageErrorKind::Other(
-                "No upload_id in create multipart upload result".to_string(),
-            )))?;
-
-        // We need to ensure all requests are the same size except for the last one, which can be
-        // smaller. This is a requirement for R2 compatibility
-        let parts = split_in_multiple_equal_requests(
-            &(0..bytes.len() as u64),
-            settings.concurrency().ideal_concurrent_request_size().get(),
-            settings.concurrency().max_concurrent_requests_for_object().get(),
-        )
-        .collect::<Vec<_>>();
-
-        let results = parts
-            .into_iter()
-            .enumerate()
-            .map(|(part_idx, range)| async move {
-                let body = bytes.slice(range.start as usize..range.end as usize).into();
-                let idx = part_idx as i32 + 1;
-                self.get_client(settings)
-                    .await
-                    .upload_part()
-                    .upload_id(upload_id)
-                    .bucket(self.bucket.clone())
-                    .key(key)
-                    .part_number(idx)
-                    .body(body)
-                    .send()
-                    .await
-                    .map(|res| (idx, res))
-            })
-            .collect::<FuturesOrdered<_>>();
-
-        let completed_parts = results
-            .map_ok(|(idx, res)| {
-                let etag = res.e_tag().unwrap_or("");
-                CompletedPart::builder()
-                    .e_tag(strip_quotes(etag))
-                    .part_number(idx)
-                    .build()
-            })
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(Box::new)?;
-
-        let completed_parts =
-            CompletedMultipartUpload::builder().set_parts(Some(completed_parts)).build();
-
-        self.get_client(settings)
-            .await
-            .complete_multipart_upload()
-            .bucket(self.bucket.clone())
-            .key(key)
-            .upload_id(upload_id)
-            //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
-            .multipart_upload(completed_parts)
-            .send()
-            .await
-            .map_err(Box::new)?;
-
-        Ok(())
-    }
-
-    async fn put_object<
-        I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
-    >(
-        &self,
-        settings: &Settings,
-        full_key: &str,
-        content_type: Option<impl Into<String>>,
-        metadata: I,
-        storage_class: Option<&String>,
-        bytes: &Bytes,
-    ) -> StorageResult<()> {
-        if bytes.len() >= settings.minimum_size_for_multipart_upload() as usize {
-            self.put_object_multipart(
-                settings,
-                full_key,
-                content_type,
-                metadata,
-                storage_class,
-                bytes,
-            )
-            .await
-        } else {
-            self.put_object_single(
-                settings,
-                full_key,
-                content_type,
-                metadata,
-                storage_class,
-                bytes.clone(),
-            )
-            .await
-        }
-    }
-}
-
-pub fn range_to_header(range: &Range<ChunkOffset>) -> String {
-    format!("bytes={}-{}", range.start, range.end - 1)
-}
-
-impl private::Sealed for S3Storage {}
-
-#[async_trait]
-#[typetag::serde]
-impl Storage for S3Storage {
-    fn can_write(&self) -> bool {
-        self.can_write
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn get_versioned_object(
-        &self,
-        path: &str,
-        settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Pin<Box<dyn AsyncBufRead + Send>>>> {
-        let key = self.prefixed_path(path);
-        let res = self
-            .get_client(settings)
-            .await
-            .get_object()
-            .bucket(self.bucket.clone())
-            .key(key)
-            .send()
-            .await;
-
-        match res {
-            Ok(output) => match output.e_tag {
-                Some(etag) => Ok(VersionedFetchResult::Found {
-                    result: Box::pin(output.body.into_async_read()),
-                    version: VersionInfo::from_etag_only(etag),
-                }),
-                None => Ok(VersionedFetchResult::NotFound),
-            },
-            Err(sdk_err) => match sdk_err.as_service_error() {
-                Some(e) if e.is_no_such_key() => Ok(VersionedFetchResult::NotFound),
-                Some(_)
-                    if sdk_err
-                        .raw_response()
-                        .is_some_and(|x| x.status().as_u16() == 404) =>
-                {
-                    // needed for Cloudflare R2 public bucket URLs
-                    // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
-                    // into anything useful. So we need to parse the raw response, and match
-                    // the status code.
-                    Ok(VersionedFetchResult::NotFound)
-                }
-                _ => Err(Box::new(sdk_err).into()),
-            },
-        }
-    }
-
-    #[instrument(skip(self, bytes, settings))]
-    async fn put_versioned_object(
-        &self,
-        path: &str,
         bytes: Bytes,
-        content_type: Option<&str>,
-        metadata: Vec<(String, String)>,
-        previous_version: &VersionInfo,
-        settings: &Settings,
+        content_type: Option<impl Into<String>>,
+        metadata: I,
+        previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
-        let key = self.prefixed_path(path);
         let mut req = self
             .get_client(settings)
             .await
@@ -519,9 +292,10 @@ impl Storage for S3Storage {
             .body(bytes.into());
 
         if settings.unsafe_use_metadata() {
-            if let Some(content_type) = content_type {
-                req = req.content_type(content_type)
-            }
+            if let Some(ct) = content_type {
+                req = req.content_type(ct)
+            };
+
             for (k, v) in metadata {
                 req = req.metadata(k, v);
             }
@@ -532,19 +306,19 @@ impl Storage for S3Storage {
             req = req.storage_class(klass);
         }
 
-        match (
-            previous_version.etag(),
-            settings.unsafe_use_conditional_create(),
-            settings.unsafe_use_conditional_update(),
-        ) {
-            (None, true, _) => req = req.if_none_match("*"),
-            (Some(etag), _, true) => req = req.if_match(strip_quotes(etag)),
-            (_, _, _) => {}
+        if let Some(previous_version) = previous_version.as_ref() {
+            match (
+                previous_version.etag(),
+                settings.unsafe_use_conditional_create(),
+                settings.unsafe_use_conditional_update(),
+            ) {
+                (None, true, _) => req = req.if_none_match("*"),
+                (Some(etag), _, true) => req = req.if_match(strip_quotes(etag)),
+                (_, _, _) => {}
+            }
         }
 
-        let res = req.send().await;
-
-        match res {
+        match req.send().await {
             Ok(out) => {
                 let new_etag = out
                     .e_tag()
@@ -581,23 +355,197 @@ impl Storage for S3Storage {
         }
     }
 
+    async fn put_object_multipart<
+        I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    >(
+        &self,
+        settings: &Settings,
+        key: &str,
+        bytes: &Bytes,
+        content_type: Option<impl Into<String>>,
+        metadata: I,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let mut multi = self
+            .get_client(settings)
+            .await
+            .create_multipart_upload()
+            // We would like this, but it fails in MinIO
+            //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
+            //.checksum_algorithm(aws_sdk_s3::types::ChecksumAlgorithm::Crc64Nvme)
+            .bucket(self.bucket.clone())
+            .key(key);
+
+        if settings.unsafe_use_metadata() {
+            if let Some(ct) = content_type {
+                multi = multi.content_type(ct)
+            };
+            for (k, v) in metadata {
+                multi = multi.metadata(k, v);
+            }
+        }
+
+        if let Some(klass) = settings.storage_class() {
+            let klass = klass.as_str().into();
+            multi = multi.storage_class(klass);
+        }
+
+        let create_res = multi.send().await.map_err(Box::new)?;
+        let upload_id =
+            create_res.upload_id().ok_or(StorageError::from(StorageErrorKind::Other(
+                "No upload_id in create multipart upload result".to_string(),
+            )))?;
+
+        // We need to ensure all requests are the same size except for the last one, which can be
+        // smaller. This is a requirement for R2 compatibility
+        let parts = split_in_multiple_equal_requests(
+            &(0..bytes.len() as u64),
+            settings.concurrency().ideal_concurrent_request_size().get(),
+            settings.concurrency().max_concurrent_requests_for_object().get(),
+        )
+        .collect::<Vec<_>>();
+
+        let results = parts
+            .into_iter()
+            .enumerate()
+            .map(|(part_idx, range)| async move {
+                let body = bytes.slice(range.start as usize..range.end as usize).into();
+                let idx = part_idx as i32 + 1;
+                let req = self
+                    .get_client(settings)
+                    .await
+                    .upload_part()
+                    .upload_id(upload_id)
+                    .bucket(self.bucket.clone())
+                    .key(key)
+                    .part_number(idx)
+                    .body(body);
+
+                req.send().await.map(|res| (idx, res))
+            })
+            .collect::<FuturesOrdered<_>>();
+
+        let completed_parts = results
+            .map_ok(|(idx, res)| {
+                let etag = res.e_tag().unwrap_or("");
+                CompletedPart::builder()
+                    .e_tag(strip_quotes(etag))
+                    .part_number(idx)
+                    .build()
+            })
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(Box::new)?;
+
+        let completed_parts =
+            CompletedMultipartUpload::builder().set_parts(Some(completed_parts)).build();
+
+        let mut req = self
+            .get_client(settings)
+            .await
+            .complete_multipart_upload()
+            .bucket(self.bucket.clone())
+            .key(key)
+            .upload_id(upload_id)
+            //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
+            .multipart_upload(completed_parts);
+
+        if let Some(previous_version) = previous_version.as_ref() {
+            match (
+                previous_version.etag(),
+                settings.unsafe_use_conditional_create(),
+                settings.unsafe_use_conditional_update(),
+            ) {
+                (None, true, _) => req = req.if_none_match("*"),
+                (Some(etag), _, true) => req = req.if_match(strip_quotes(etag)),
+                (_, _, _) => {}
+            }
+        }
+
+        match req.send().await {
+            Ok(out) => {
+                let new_etag = out
+                    .e_tag()
+                    .ok_or(StorageErrorKind::Other(
+                        "Object should have an etag".to_string(),
+                    ))?
+                    .to_string();
+                let new_version = VersionInfo::from_etag_only(new_etag);
+                Ok(VersionedUpdateResult::Updated { new_version })
+            }
+            // minio returns this
+            Err(SdkError::ServiceError(err)) => {
+                if err.err().meta().code() == Some("PreconditionFailed") {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    Err(StorageError::from(Box::new(SdkError::<
+                        CompleteMultipartUploadError,
+                    >::ServiceError(
+                        err
+                    ))))
+                }
+            }
+            // S3 API documents this
+            Err(SdkError::ResponseError(err)) => {
+                let status = err.raw().status().as_u16();
+                // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
+                if status == 409 || status == 412 {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    Err(StorageError::from(Box::new(
+                        SdkError::<PutObjectError>::ResponseError(err),
+                    )))
+                }
+            }
+            Err(err) => Err(Box::new(err).into()),
+        }
+    }
+}
+
+pub fn range_to_header(range: &Range<ChunkOffset>) -> String {
+    format!("bytes={}-{}", range.start, range.end - 1)
+}
+
+impl private::Sealed for S3Storage {}
+
+#[async_trait]
+#[typetag::serde]
+impl Storage for S3Storage {
+    fn can_write(&self) -> bool {
+        self.can_write
+    }
+
     async fn put_object(
         &self,
         settings: &Settings,
         path: &str,
-        metadata: Vec<(String, String)>,
         bytes: Bytes,
-    ) -> StorageResult<()> {
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
         let path = self.prefixed_path(path);
-        self.put_object(
-            settings,
-            path.as_str(),
-            None::<String>,
-            metadata,
-            settings.storage_class(),
-            &bytes,
-        )
-        .await
+        if bytes.len() >= settings.minimum_size_for_multipart_upload() as usize {
+            self.put_object_multipart(
+                settings,
+                path.as_str(),
+                &bytes,
+                content_type,
+                metadata,
+                previous_version,
+            )
+            .await
+        } else {
+            self.put_object_single(
+                settings,
+                path.as_str(),
+                bytes,
+                content_type,
+                metadata,
+                previous_version,
+            )
+            .await
+        }
     }
 
     #[instrument(skip(self, settings))]
@@ -720,8 +668,10 @@ impl Storage for S3Storage {
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
-    {
+    ) -> StorageResult<(
+        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+        VersionInfo,
+    )> {
         let client = self.get_client(settings).await;
         let bucket = self.bucket.clone();
         let key = self.prefixed_path(path);
@@ -729,9 +679,35 @@ impl Storage for S3Storage {
         if let Some(range) = range {
             b = b.range(range_to_header(range));
         }
-        let byte_stream = b.send().await.map_err(Box::new)?.body;
-        let stream = stream2stream(byte_stream).err_into();
-        Ok(Box::pin(stream))
+        match b.send().await {
+            Ok(output) => match output.e_tag {
+                Some(etag) => {
+                    let stream = stream2stream(output.body).err_into();
+                    Ok((Box::pin(stream), VersionInfo::from_etag_only(etag)))
+                }
+                None => {
+                    Err(StorageErrorKind::Other("Object should have an etag".to_string())
+                        .into())
+                }
+            },
+            Err(sdk_err) => match sdk_err.as_service_error() {
+                Some(e) if e.is_no_such_key() => {
+                    Err(StorageErrorKind::ObjectNotFound.into())
+                }
+                Some(_)
+                    if sdk_err
+                        .raw_response()
+                        .is_some_and(|x| x.status().as_u16() == 404) =>
+                {
+                    // needed for Cloudflare R2 public bucket URLs
+                    // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
+                    // into anything useful. So we need to parse the raw response, and match
+                    // the status code.
+                    Err(StorageErrorKind::ObjectNotFound.into())
+                }
+                _ => Err(Box::new(sdk_err).into()),
+            },
+        }
     }
 }
 

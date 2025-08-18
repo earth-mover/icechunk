@@ -17,7 +17,7 @@ use tokio_util::io::SyncIoBridge;
 use tracing::{Span, debug, instrument, trace, warn};
 
 use crate::{
-    RepositoryConfig, Storage,
+    RepositoryConfig, Storage, StorageError,
     config::CachingConfig,
     format::{
         CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset,
@@ -36,7 +36,10 @@ use crate::{
     },
     private,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, DeleteObjectsResult, ListInfo, VersionInfo, VersionedUpdateResult},
+    storage::{
+        self, DeleteObjectsResult, ListInfo, StorageErrorKind, VersionInfo,
+        VersionedUpdateResult,
+    },
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -199,16 +202,17 @@ impl AssetManager {
     ) -> RepositoryResult<Option<(RepositoryConfig, VersionInfo)>> {
         match self
             .storage
-            .get_versioned_object(CONFIG_FILE_PATH, &self.storage_settings)
-            .await?
+            .get_object(&self.storage_settings, CONFIG_FILE_PATH, None)
+            .await
         {
-            storage::VersionedFetchResult::Found { mut result, version } => {
+            Ok((mut result, version)) => {
                 let mut data = Vec::with_capacity(1_024);
                 result.read_to_end(&mut data).await?;
                 let config = serde_yaml_ng::from_slice(data.as_slice())?;
                 Ok(Some((config, version)))
             }
-            storage::VersionedFetchResult::NotFound => Ok(None),
+            Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => Ok(None),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -220,13 +224,13 @@ impl AssetManager {
         let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
         match self
             .storage
-            .put_versioned_object(
+            .put_object(
+                &self.storage_settings,
                 CONFIG_FILE_PATH,
                 bytes,
                 Some("application/yaml"),
                 Vec::new(),
-                previous_version,
-                &self.storage_settings,
+                Some(previous_version),
             )
             .await?
         {
@@ -433,7 +437,11 @@ impl AssetManager {
             ..self.storage_settings.clone()
         };
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
-        Ok(self.storage.put_object(&settings, path.as_str(), Vec::new(), bytes).await?)
+        self.storage
+            .put_object(&settings, path.as_str(), bytes, None, Default::default(), None)
+            .await?
+            .must_write()?;
+        Ok(())
     }
 
     #[instrument(skip(self))]
@@ -449,7 +457,7 @@ impl AssetManager {
                 trace!(%chunk_id, ?range, "Downloading chunk");
                 let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
                 let permit = self.request_semaphore.acquire().await?;
-                let read = self
+                let (read, _) = self
                     .storage
                     .get_object(&self.storage_settings, &path, Some(range))
                     .await?;
@@ -733,7 +741,10 @@ async fn write_new_manifest(
     };
 
     let _permit = semaphore.acquire().await?;
-    storage.put_object(&settings, path.as_str(), metadata, buffer.into()).await?;
+    storage
+        .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
+        .await?
+        .must_write()?;
     Ok(len)
 }
 
@@ -751,8 +762,7 @@ async fn fetch_manifest(
     let range = if manifest_size > 0 { Some(&range) } else { None };
     let _permit = semaphore.acquire().await?;
 
-    //let storage = Arc::clone(&storage);
-    let read = storage.get_object(storage_settings, path.as_str(), range).await?;
+    let (read, _) = storage.get_object(storage_settings, path.as_str(), range).await?;
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
@@ -832,7 +842,10 @@ async fn write_new_snapshot(
         ..storage_settings.clone()
     };
     let _permit = semaphore.acquire().await?;
-    storage.put_object(&settings, path.as_str(), metadata, buffer.into()).await?;
+    storage
+        .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
+        .await?
+        .must_write()?;
 
     Ok(id)
 }
@@ -847,7 +860,7 @@ async fn fetch_snapshot(
     let _permit = semaphore.acquire().await?;
 
     let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
-    let read = storage.get_object(storage_settings, path.as_str(), None).await?;
+    let (read, _) = storage.get_object(storage_settings, path.as_str(), None).await?;
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
@@ -912,7 +925,10 @@ async fn write_new_tx_log(
     };
 
     let _permit = semaphore.acquire().await?;
-    storage.put_object(&settings, path.as_str(), metadata, buffer.into()).await?;
+    storage
+        .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
+        .await?
+        .must_write()?;
 
     Ok(())
 }
@@ -926,7 +942,7 @@ async fn fetch_transaction_log(
     debug!(%transaction_id, "Downloading transaction log");
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
     let _permit = semaphore.acquire().await?;
-    let read = storage.get_object(storage_settings, path.as_str(), None).await?;
+    let (read, _) = storage.get_object(storage_settings, path.as_str(), None).await?;
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
@@ -981,13 +997,13 @@ async fn write_repo_info(
 
     debug!(size_bytes = buffer.len(), "Writing repo info");
     match storage
-        .put_versioned_object(
+        .put_object(
+            storage_settings,
             REPO_INFO_FILE_PATH,
             buffer.into(),
             None,
             metadata,
-            version,
-            storage_settings,
+            Some(version),
         )
         .await?
     {
@@ -1003,8 +1019,8 @@ async fn fetch_repo_info(
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
     debug!("Downloading repo info");
-    match storage.get_versioned_object(REPO_INFO_FILE_PATH, storage_settings).await? {
-        storage::VersionedFetchResult::Found { result, version } => {
+    match storage.get_object(storage_settings, REPO_INFO_FILE_PATH, None).await {
+        Ok((result, version)) => {
             let span = Span::current();
             tokio::task::spawn_blocking(move || {
                 let _entered = span.entered();
@@ -1016,9 +1032,10 @@ async fn fetch_repo_info(
             })
             .await?
         }
-        storage::VersionedFetchResult::NotFound => {
+        Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
             Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
         }
+        Err(e) => Err(e.into()),
     }
 }
 

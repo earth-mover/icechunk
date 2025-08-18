@@ -36,17 +36,13 @@ use std::{
     pin::Pin,
     sync::Arc,
 };
-use tokio::{
-    io::AsyncBufRead,
-    sync::{OnceCell, RwLock},
-};
-use tokio_util::compat::FuturesAsyncReadCompatExt;
+use tokio::sync::{OnceCell, RwLock};
 use tracing::instrument;
 
 use super::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, ListInfo,
     RetriesSettings, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
-    VersionInfo, VersionedFetchResult, VersionedUpdateResult,
+    VersionInfo, VersionedUpdateResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -190,21 +186,25 @@ impl ObjectStorage {
     fn get_put_mode(
         &self,
         settings: &Settings,
-        previous_version: &VersionInfo,
+        previous_version: Option<&VersionInfo>,
     ) -> PutMode {
-        match (
-            previous_version.is_create(),
-            settings.unsafe_use_conditional_create(),
-            settings.unsafe_use_conditional_update(),
-        ) {
-            (true, true, _) => PutMode::Create,
-            (true, false, _) => PutMode::Overwrite,
+        if let Some(previous_version) = previous_version {
+            match (
+                previous_version.is_create(),
+                settings.unsafe_use_conditional_create(),
+                settings.unsafe_use_conditional_update(),
+            ) {
+                (true, true, _) => PutMode::Create,
+                (true, false, _) => PutMode::Overwrite,
 
-            (false, _, true) => PutMode::Update(UpdateVersion {
-                e_tag: previous_version.etag().cloned(),
-                version: previous_version.generation().cloned(),
-            }),
-            (false, _, false) => PutMode::Overwrite,
+                (false, _, true) => PutMode::Update(UpdateVersion {
+                    e_tag: previous_version.etag().cloned(),
+                    version: previous_version.generation().cloned(),
+                }),
+                (false, _, false) => PutMode::Overwrite,
+            }
+        } else {
+            PutMode::Overwrite
         }
     }
 }
@@ -229,45 +229,14 @@ impl Storage for ObjectStorage {
         self.backend.default_settings()
     }
 
-    #[instrument(skip_all)]
-    async fn get_versioned_object(
+    async fn put_object(
         &self,
-        path: &str,
         settings: &Settings,
-    ) -> StorageResult<VersionedFetchResult<Pin<Box<dyn AsyncBufRead + Send>>>> {
-        let key = self.prefixed_path(path);
-        let response = self.get_client(settings).await.get(&key).await;
-
-        match response {
-            Ok(result) => {
-                let version = VersionInfo {
-                    etag: result.meta.e_tag.as_ref().cloned().map(ETag),
-                    generation: result.meta.version.as_ref().cloned().map(Generation),
-                };
-
-                Ok(VersionedFetchResult::Found {
-                    result: Box::pin(
-                        result.into_stream().err_into().into_async_read().compat(),
-                    ),
-                    version,
-                })
-            }
-            Err(object_store::Error::NotFound { .. }) => {
-                Ok(VersionedFetchResult::NotFound)
-            }
-            Err(err) => Err(Box::new(err).into()),
-        }
-    }
-
-    #[instrument(skip(self, bytes, settings))]
-    async fn put_versioned_object(
-        &self,
         path: &str,
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: &VersionInfo,
-        settings: &Settings,
+        previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
         let path = self.prefixed_path(path);
         let mut attributes = Attributes::new();
@@ -284,8 +253,8 @@ impl Storage for ObjectStorage {
         };
 
         let mode = self.get_put_mode(settings, previous_version);
-
         let options = PutOptions { mode, attributes, ..PutOptions::default() };
+        // FIXME: use multipart
         let res =
             self.get_client(settings).await.put_opts(&path, bytes.into(), options).await;
         match res {
@@ -302,25 +271,6 @@ impl Storage for ObjectStorage {
             }
             Err(err) => Err(Box::new(err).into()),
         }
-    }
-
-    async fn put_object(
-        &self,
-        settings: &Settings,
-        path: &str,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        let path = self.prefixed_path(path);
-        let attributes = self.metadata_to_attributes(settings, metadata);
-        let options = PutOptions { attributes, ..PutOptions::default() };
-        // FIXME: use multipart
-        self.get_client(settings)
-            .await
-            .put_opts(&path, bytes.into(), options)
-            .await
-            .map_err(Box::new)?;
-        Ok(())
     }
 
     #[instrument(skip(self, settings))]
@@ -397,28 +347,38 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self))]
-    async fn get_object_range<'a>(
-        &'a self,
+    async fn get_object_range(
+        &self,
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
-    {
+    ) -> StorageResult<(
+        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+        VersionInfo,
+    )> {
         let full_key = self.prefixed_path(path);
         let range = range.map(|range| {
             let usize_range = range.start..range.end;
             usize_range.into()
         });
         let opts = GetOptions { range, ..Default::default() };
-        let res = self
-            .get_client(settings)
-            .await
-            .get_opts(&full_key, opts)
-            .await
-            .map_err(Box::new)?
-            .into_stream()
-            .map_err(|e| Box::new(e).into());
-        Ok(Box::pin(res))
+        let res = self.get_client(settings).await.get_opts(&full_key, opts).await;
+
+        match res {
+            Ok(result) => {
+                let version = VersionInfo {
+                    etag: result.meta.e_tag.as_ref().cloned().map(ETag),
+                    generation: result.meta.version.as_ref().cloned().map(Generation),
+                };
+                let stream =
+                    Box::pin(result.into_stream().map_err(|e| Box::new(e).into()));
+                Ok((stream, version))
+            }
+            Err(object_store::Error::NotFound { .. }) => {
+                Err(StorageErrorKind::ObjectNotFound.into())
+            }
+            Err(err) => Err(Box::new(err).into()),
+        }
     }
 }
 
