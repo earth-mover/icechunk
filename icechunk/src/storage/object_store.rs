@@ -273,6 +273,26 @@ impl Storage for ObjectStorage {
         }
     }
 
+    async fn copy_object(
+        &self,
+        settings: &Settings,
+        from: &str,
+        to: &str,
+        _content_type: Option<&str>,
+        version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult> {
+        // FIXME: add support for content type, version check and metadata
+        let from = self.prefixed_path(from);
+        let to = self.prefixed_path(to);
+        match self.get_client(settings).await.copy(&from, &to).await {
+            Ok(_) => Ok(VersionedUpdateResult::Updated { new_version: version.clone() }),
+            Err(object_store::Error::NotFound { .. }) => {
+                Err(StorageErrorKind::ObjectNotFound.into())
+            }
+            Err(err) => Err(Box::new(err).into()),
+        }
+    }
+
     #[instrument(skip(self, settings))]
     async fn list_objects<'a>(
         &'a self,

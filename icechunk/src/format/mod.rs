@@ -48,6 +48,7 @@ pub const CHUNKS_FILE_PATH: &str = "chunks";
 pub const MANIFESTS_FILE_PATH: &str = "manifests";
 pub const SNAPSHOTS_FILE_PATH: &str = "snapshots";
 pub const TRANSACTION_LOGS_FILE_PATH: &str = "transactions";
+pub const OVERWRITTEN_FILES_PATH: &str = "overwritten";
 pub const V1_REFS_FILE_PATH: &str = "refs";
 
 #[serde_as]

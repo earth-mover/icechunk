@@ -16,8 +16,8 @@ use icechunk::{
     refs::RefErrorKind,
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
-        self, ETag, Generation, StorageResult, VersionInfo, new_in_memory_storage,
-        new_s3_storage, s3::mk_client,
+        self, ETag, Generation, StorageErrorKind, StorageResult, VersionInfo,
+        new_in_memory_storage, new_s3_storage, s3::mk_client,
     },
 };
 use icechunk_macros::tokio_test;
@@ -595,13 +595,19 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing()
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
     let config = RepositoryConfig::default();
-    let version = am
+    let err = am
         .try_update_config(
             &config,
             &VersionInfo::from_etag_only("00000000000000000000000000000000".to_string()),
         )
-        .await?;
-    assert!(version.is_none());
+        .await;
+    assert!(matches!(
+        err,
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::StorageError(StorageErrorKind::ObjectNotFound,),
+            ..
+        })
+    ));
     Ok(())
 }
 
@@ -674,16 +680,7 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
         ));
 
         let config1 = RepositoryConfig::default();
-        match am
-            .try_update_config(
-                &config1,
-                &VersionInfo {
-                    etag: Some(ETag("some-bad-etag".to_string())),
-                    generation: Some(Generation("42".to_string())),
-                },
-            )
-            .await?
-        {
+        match am.try_update_config(&config1, &VersionInfo::for_creation()).await? {
             Some(new_version) => new_version,
             None => panic!(),
         };

@@ -78,6 +78,21 @@ impl Storage for LoggingStorage {
             .await
     }
 
+    async fn copy_object(
+        &self,
+        settings: &Settings,
+        from: &str,
+        to: &str,
+        content_type: Option<&str>,
+        version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("copy_object".to_string(), format!("{from} -> {to}")));
+        self.backend.copy_object(settings, from, to, content_type, version).await
+    }
+
     async fn list_objects<'a>(
         &'a self,
         settings: &Settings,

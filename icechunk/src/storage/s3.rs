@@ -24,7 +24,7 @@ use aws_sdk_s3::{
     error::{BoxError, SdkError},
     operation::{
         complete_multipart_upload::CompleteMultipartUploadError,
-        put_object::PutObjectError,
+        copy_object::CopyObjectError, put_object::PutObjectError,
     },
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
@@ -545,6 +545,75 @@ impl Storage for S3Storage {
                 previous_version,
             )
             .await
+        }
+    }
+
+    async fn copy_object(
+        &self,
+        settings: &Settings,
+        from: &str,
+        to: &str,
+        content_type: Option<&str>,
+        version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let from = format!("{}/{}", self.bucket, self.prefixed_path(from));
+        let to = self.prefixed_path(to);
+        let mut req = self
+            .get_client(settings)
+            .await
+            .copy_object()
+            .bucket(self.bucket.clone())
+            .key(to)
+            .copy_source(from);
+        if settings.unsafe_use_conditional_update() {
+            if let Some(etag) = version.etag() {
+                req = req.copy_source_if_match(strip_quotes(etag));
+            }
+        }
+        if let Some(klass) = settings.storage_class() {
+            let klass = klass.as_str().into();
+            req = req.storage_class(klass);
+        }
+        if let Some(ct) = content_type {
+            req = req.content_type(ct);
+        }
+        match req.send().await {
+            Ok(_) => Ok(VersionedUpdateResult::Updated { new_version: version.clone() }),
+            Err(SdkError::ServiceError(err)) => {
+                if err.err().meta().code() == Some("PreconditionFailed") {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    Err(StorageError::from(Box::new(
+                        SdkError::<CopyObjectError>::ServiceError(err),
+                    )))
+                }
+            }
+            // S3 API documents this
+            Err(SdkError::ResponseError(err)) => {
+                let status = err.raw().status().as_u16();
+                // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
+                if status == 409 || status == 412 {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    Err(StorageError::from(Box::new(
+                        SdkError::<PutObjectError>::ResponseError(err),
+                    )))
+                }
+            }
+            Err(sdk_err) => match sdk_err.as_service_error() {
+                Some(_)
+                    if sdk_err
+                        .raw_response()
+                        .is_some_and(|x| x.status().as_u16() == 404) =>
+                {
+                    // needed for Cloudflare R2 public bucket URLs
+                    // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
+                    // into anything useful. So we need to parse the raw response, and match
+                    // the status code.
+                    Err(StorageErrorKind::ObjectNotFound.into())
+                }
+                _ => Err(Box::new(sdk_err).into()),
+            },
         }
     }
 

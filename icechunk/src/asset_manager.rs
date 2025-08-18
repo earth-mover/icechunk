@@ -21,8 +21,8 @@ use crate::{
     config::CachingConfig,
     format::{
         CHUNKS_FILE_PATH, CONFIG_FILE_PATH, ChunkId, ChunkOffset,
-        IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, REPO_INFO_FILE_PATH,
-        SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
+        IcechunkFormatErrorKind, MANIFESTS_FILE_PATH, ManifestId, OVERWRITTEN_FILES_PATH,
+        REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId, TRANSACTION_LOGS_FILE_PATH,
         format_constants::{self, CompressionAlgorithmBin, FileTypeBin, SpecVersionBin},
         manifest::Manifest,
         repo_info::RepoInfo,
@@ -222,13 +222,38 @@ impl AssetManager {
         previous_version: &VersionInfo,
     ) -> RepositoryResult<Option<VersionInfo>> {
         let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
+        let content_type = Some("application/yaml");
+
+        let last: u64 = 32503680000000;
+        let now = Utc::now().timestamp_millis() as u64;
+        let time_index = last - now;
+        let random = ChunkId::random().to_string();
+        let backup_path = format!(
+            "{OVERWRITTEN_FILES_PATH}/{CONFIG_FILE_PATH}.{time_index:014}.{random}"
+        );
+        if !previous_version.is_create() {
+            match self
+                .storage
+                .copy_object(
+                    &self.storage_settings,
+                    CONFIG_FILE_PATH,
+                    &backup_path,
+                    content_type,
+                    previous_version,
+                )
+                .await?
+            {
+                VersionedUpdateResult::Updated { .. } => {}
+                VersionedUpdateResult::NotOnLatestVersion => return Ok(None),
+            }
+        }
         match self
             .storage
             .put_object(
                 &self.storage_settings,
                 CONFIG_FILE_PATH,
                 bytes,
-                Some("application/yaml"),
+                content_type,
                 Vec::new(),
                 Some(previous_version),
             )

@@ -4,6 +4,7 @@ use aws_sdk_s3::{
     error::SdkError,
     operation::{
         complete_multipart_upload::CompleteMultipartUploadError,
+        copy_object::CopyObjectError,
         create_multipart_upload::CreateMultipartUploadError,
         delete_objects::DeleteObjectsError, get_object::GetObjectError,
         head_object::HeadObjectError, list_objects_v2::ListObjectsV2Error,
@@ -75,6 +76,8 @@ pub enum StorageErrorKind {
     S3CompleteMultipartUploadError(
         #[from] Box<SdkError<CompleteMultipartUploadError, HttpResponse>>,
     ),
+    #[error("error copying object in object store {0}")]
+    S3CopyObjectError(#[from] Box<SdkError<CopyObjectError, HttpResponse>>),
     #[error("error getting object metadata from object store {0}")]
     S3HeadObjectError(#[from] Box<SdkError<HeadObjectError, HttpResponse>>),
     #[error("error listing objects in object store {0}")]
@@ -433,6 +436,15 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
         previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult>;
+
+    async fn copy_object(
+        &self,
+        settings: &Settings,
+        from: &str,
+        to: &str,
+        content_type: Option<&str>,
+        version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult>;
 
     async fn list_objects<'a>(
