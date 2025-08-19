@@ -47,7 +47,7 @@ storage = icechunk.s3_storage(bucket="my-bucket", prefix="my-prefix", from_env=T
 repo = icechunk.Repository.create(storage)
 ```
 
-is not significantly harder than this:
+is not significantly easier than this:
 
 ```python
 import icechunk
