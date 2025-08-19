@@ -288,6 +288,26 @@ pub async fn list_refs(
     Ok(candidate_refs.difference(&deleted_tags).cloned().collect())
 }
 
+#[instrument(skip(storage, storage_settings))]
+pub async fn list_deleted_tags(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+) -> RefResult<BTreeSet<String>> {
+    storage
+        .list_objects(storage_settings, V1_REFS_FILE_PATH)
+        .await?
+        .try_filter_map(|li| {
+            ready(if li.id.ends_with("ref.json.deleted") {
+                Ok(Some(li.id))
+            } else {
+                Ok(None)
+            })
+        })
+        .try_collect()
+        .await
+        .map_err(|e| e.into())
+}
+
 pub async fn list_tags(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,

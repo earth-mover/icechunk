@@ -25,6 +25,7 @@ pub mod conflicts;
 pub mod error;
 pub mod format;
 pub mod inspect;
+pub mod migrations;
 pub mod ops;
 pub mod refs;
 pub mod repository;

@@ -545,6 +545,10 @@ impl Repository {
         &self.asset_manager
     }
 
+    pub fn spec_version(&self) -> SpecVersionBin {
+        self.spec_version
+    }
+
     /// Returns the sequence of parents of the current session, in order of latest first.
     /// Output stream includes snapshot_id argument
     #[instrument(skip(self))]

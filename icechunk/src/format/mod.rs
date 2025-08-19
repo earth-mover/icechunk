@@ -380,6 +380,16 @@ pub mod format_constants {
         }
     }
 
+    impl std::fmt::Display for SpecVersionBin {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let s = match self {
+                SpecVersionBin::V1dot0 => "1.0",
+                SpecVersionBin::V2dot0 => "2.0",
+            };
+            write!(f, "{s}")
+        }
+    }
+
     #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum CompressionAlgorithmBin {
