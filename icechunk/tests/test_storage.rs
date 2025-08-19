@@ -529,11 +529,13 @@ pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Erro
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));
         let config = RepositoryConfig::default();
-        let version =
-            match am.try_update_config(&config, &VersionInfo::for_creation()).await? {
-                Some(new_version) => new_version,
-                None => panic!(),
-            };
+        let version = match am
+            .try_update_config(&config, &VersionInfo::for_creation(), None)
+            .await?
+        {
+            Some(new_version) => new_version,
+            None => panic!(),
+        };
         assert_ne!(version, VersionInfo::for_creation());
         let res = am.fetch_config().await?;
         match res {
@@ -560,14 +562,19 @@ pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::E
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));
         let config1 = RepositoryConfig::default();
-        let first_version =
-            match am.try_update_config(&config1, &VersionInfo::for_creation()).await? {
-                Some(new_version) => new_version,
-                None => panic!(),
-            };
+        let first_version = match am
+            .try_update_config(&config1, &VersionInfo::for_creation(), None)
+            .await?
+        {
+            Some(new_version) => new_version,
+            None => panic!(),
+        };
         let config2 =
             RepositoryConfig { inline_chunk_threshold_bytes: Some(42), ..config1 };
-        let second_version = match am.try_update_config(&config2, &first_version).await? {
+        let second_version = match am
+            .try_update_config(&config2, &first_version, Some("foo/baz"))
+            .await?
+        {
             Some(new_version) => new_version,
             None => panic!(),
         };
@@ -599,6 +606,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing()
         .try_update_config(
             &config,
             &VersionInfo::from_etag_only("00000000000000000000000000000000".to_string()),
+            Some("foo/bar"),
         )
         .await;
     assert!(matches!(
@@ -625,11 +633,13 @@ pub async fn test_write_config_fails_on_bad_version_when_existing()
         ));
 
         let config1 = RepositoryConfig::default();
-        let version =
-            match am.try_update_config(&config1, &VersionInfo::for_creation()).await? {
-                Some(new_version) => new_version,
-                None => panic!(),
-            };
+        let version = match am
+            .try_update_config(&config1, &VersionInfo::for_creation(), None)
+            .await?
+        {
+            Some(new_version) => new_version,
+            None => panic!(),
+        };
         let update_res = am
             .try_update_config(
                 &config1,
@@ -637,6 +647,7 @@ pub async fn test_write_config_fails_on_bad_version_when_existing()
                     etag: Some(ETag("00000000000000000000000000000000".to_string())),
                     generation: Some(Generation("0".to_string())),
                 },
+                Some("foo/bar"),
             )
             .await?;
 
@@ -680,7 +691,7 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
         ));
 
         let config1 = RepositoryConfig::default();
-        match am.try_update_config(&config1, &VersionInfo::for_creation()).await? {
+        match am.try_update_config(&config1, &VersionInfo::for_creation(), None).await? {
             Some(new_version) => new_version,
             None => panic!(),
         };
@@ -693,6 +704,7 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
                     etag: Some(ETag("other-bad-etag".to_string())),
                     generation: Some(Generation("55".to_string())),
                 },
+                Some("foo/bar"),
             )
             .await?;
         assert!(update_res.is_some());

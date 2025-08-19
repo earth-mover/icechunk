@@ -409,14 +409,24 @@ async fn delete_snapshots_from_repo_info(
         .all_snapshots()?
         .filter_ok(|si| keep_snapshots.contains(&si.id))
         .try_collect()?;
+    let backup_path = if repo_info_version.is_create() {
+        None
+    } else {
+        Some(asset_manager.backup_path_for_repo_info())
+    };
     let new_repo_info = RepoInfo::new(
         repo_info.tags()?,
         repo_info.branches()?,
         repo_info.deleted_tags()?,
         kept_snaps,
+        backup_path.as_deref(),
     )?;
     let _ = asset_manager
-        .update_repo_info(Arc::new(new_repo_info), repo_info_version)
+        .update_repo_info(
+            Arc::new(new_repo_info),
+            repo_info_version,
+            backup_path.as_deref(),
+        )
         .await?;
     Ok(())
 }
@@ -754,10 +764,27 @@ pub async fn expire(
             Ref::Branch(_) => None,
         }));
 
+    let backup_path = if repo_info_version.is_create() {
+        None
+    } else {
+        Some(asset_manager.backup_path_for_repo_info())
+    };
     debug!("Generating new repo info");
-    let new_repo_info = RepoInfo::new(tags, branches, deleted_tag_names, retained)?;
+    let new_repo_info = RepoInfo::new(
+        tags,
+        branches,
+        deleted_tag_names,
+        retained,
+        backup_path.as_deref(),
+    )?;
 
-    asset_manager.update_repo_info(Arc::new(new_repo_info), &repo_info_version).await?;
+    asset_manager
+        .update_repo_info(
+            Arc::new(new_repo_info),
+            &repo_info_version,
+            backup_path.as_deref(),
+        )
+        .await?;
 
     deleted_tags.extend(deleted_branches);
 

@@ -223,6 +223,7 @@ impl Repository {
                 .update_repo_info(
                     Arc::clone(&repo_info),
                     &storage::VersionInfo::for_creation(),
+                    None,
                 )
                 .await?;
             Ok::<_, RepositoryError>(())
@@ -514,7 +515,15 @@ impl Repository {
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
-        match am.try_update_config(config, previous_version).await? {
+        let backup_path = if previous_version.is_create() {
+            None
+        } else {
+            Some(am.backup_path_for_config())
+        };
+        match am
+            .try_update_config(config, previous_version, backup_path.as_deref())
+            .await?
+        {
             Some(new_version) => Ok(new_version),
             None => Err(RepositoryErrorKind::ConfigWasUpdated.into()),
         }
@@ -646,7 +655,16 @@ impl Repository {
 
         let (repo_info, version) = self.get_repo_info().await?;
         raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
-        let new_repo_info = match repo_info.add_branch(branch_name, snapshot_id) {
+        let backup_path = if version.is_create() {
+            None
+        } else {
+            Some(self.asset_manager.backup_path_for_repo_info())
+        };
+        let new_repo_info = match repo_info.add_branch(
+            branch_name,
+            snapshot_id,
+            backup_path.as_deref(),
+        ) {
             Ok(new) => Ok(new),
             Err(IcechunkFormatError {
                 kind:
@@ -664,7 +682,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(Arc::new(new_repo_info), &version)
+            .update_repo_info(Arc::new(new_repo_info), &version, backup_path.as_deref())
             .await?;
         Ok(())
     }
@@ -781,11 +799,16 @@ impl Repository {
             .into());
         }
         let (ri, version) = self.get_repo_info().await?;
-        match ri.update_branch(branch, snapshot_id) {
+        let backup_path = if version.is_create() {
+            None
+        } else {
+            Some(self.asset_manager.backup_path_for_repo_info())
+        };
+        match ri.update_branch(branch, snapshot_id, backup_path.as_deref()) {
             Ok(new_ri) => {
                 let _ = self
                     .asset_manager
-                    .update_repo_info(Arc::new(new_ri), &version)
+                    .update_repo_info(Arc::new(new_ri), &version, backup_path.as_deref())
                     .await?;
                 Ok(())
             }
@@ -820,11 +843,20 @@ impl Repository {
         }
         if branch != Ref::DEFAULT_BRANCH {
             let (ri, version) = self.get_repo_info().await?;
-            match ri.delete_branch(branch) {
+            let backup_path = if version.is_create() {
+                None
+            } else {
+                Some(self.asset_manager.backup_path_for_repo_info())
+            };
+            match ri.delete_branch(branch, backup_path.as_deref()) {
                 Ok(new_ri) => {
                     let _ = self
                         .asset_manager
-                        .update_repo_info(Arc::new(new_ri), &version)
+                        .update_repo_info(
+                            Arc::new(new_ri),
+                            &version,
+                            backup_path.as_deref(),
+                        )
                         .await?;
                     Ok(())
                 }
@@ -862,11 +894,16 @@ impl Repository {
             .into());
         }
         let (ri, version) = self.get_repo_info().await?;
-        match ri.delete_tag(tag) {
+        let backup_path = if version.is_create() {
+            None
+        } else {
+            Some(self.asset_manager.backup_path_for_repo_info())
+        };
+        match ri.delete_tag(tag, backup_path.as_deref()) {
             Ok(new_ri) => {
                 let _ = self
                     .asset_manager
-                    .update_repo_info(Arc::new(new_ri), &version)
+                    .update_repo_info(Arc::new(new_ri), &version, backup_path.as_deref())
                     .await?;
                 Ok(())
             }
@@ -902,11 +939,16 @@ impl Repository {
         let (ri, version) = self.get_repo_info().await?;
         raise_if_invalid_snapshot_id_v2(ri.as_ref(), snapshot_id)?;
 
-        match ri.add_tag(tag_name, snapshot_id) {
+        let backup_path = if version.is_create() {
+            None
+        } else {
+            Some(self.asset_manager.backup_path_for_repo_info())
+        };
+        match ri.add_tag(tag_name, snapshot_id, backup_path.as_deref()) {
             Ok(new_ri) => {
                 let _ = self
                     .asset_manager
-                    .update_repo_info(Arc::new(new_ri), &version)
+                    .update_repo_info(Arc::new(new_ri), &version, backup_path.as_deref())
                     .await?;
                 Ok(())
             }

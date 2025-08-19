@@ -27,6 +27,8 @@ table RepoStatus {
 
 table Repo {
 
+  spec_version: uint8;
+
   // sorted by name
   tags: [Ref] (required);
 
@@ -39,14 +41,14 @@ table Repo {
   // sorted by id
   snapshots: [SnapshotInfo] (required);
 
-  spec_version: uint8;
-
   // micros since epoch
   last_updated_at: uint64;
 
   status: RepoStatus (required);
 
   metadata: [MetadataItem];
+
+  previous_file: string;
 }
 
 root_type Repo;

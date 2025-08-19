@@ -66,6 +66,7 @@ impl RepoInfo {
         branches: impl IntoIterator<Item = (&'a str, SnapshotId)>,
         deleted_tags: impl IntoIterator<Item = &'a str>,
         snapshots: impl IntoIterator<Item = SnapshotInfo>,
+        previous_file: Option<&str>,
     ) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = snapshots.into_iter().collect();
         snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
@@ -73,7 +74,7 @@ impl RepoInfo {
         let branches = resolve_ref_iter(&snapshots, branches)?;
         let mut deleted_tags: Vec<_> = deleted_tags.into_iter().collect();
         deleted_tags.sort();
-        Self::from_parts(tags, branches, deleted_tags, snapshots, None)
+        Self::from_parts(tags, branches, deleted_tags, snapshots, None, previous_file)
     }
 
     fn from_parts<'a>(
@@ -82,6 +83,7 @@ impl RepoInfo {
         sorted_deleted_tags: impl IntoIterator<Item = &'a str>,
         sorted_snapshots: impl IntoIterator<Item = SnapshotInfo>,
         updated_at: Option<DateTime<Utc>>,
+        previous_file: Option<&str>,
     ) -> IcechunkResult<Self> {
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
         let tags = sorted_tags
@@ -190,6 +192,7 @@ impl RepoInfo {
 
         // TODO: repo metadata
         let metadata = builder.create_vector(&[] as &[WIPOffset<MetadataItem>]);
+        let previous_file = previous_file.map(|s| builder.create_string(s));
 
         // TODO: provide accessors for last_updated_at, status, metadata, etc.
         let repo_args = generated::RepoArgs {
@@ -202,6 +205,7 @@ impl RepoInfo {
                 as u64,
             status: Some(status),
             metadata: Some(metadata),
+            previous_file,
         };
         let repo = generated::Repo::create(&mut builder, &repo_args);
         builder.finish(repo, Some("Ichk"));
@@ -215,7 +219,7 @@ impl RepoInfo {
         let last_updated_at = snapshot.flushed_at;
         #[allow(clippy::expect_used)]
         // This method is basically constant, so it's OK to unwrap in it
-        Self::from_parts([], [("main", 0)], [], [snapshot], Some(last_updated_at))
+        Self::from_parts([], [("main", 0)], [], [snapshot], Some(last_updated_at), None)
             .expect("Cannot generate initial snapshot")
     }
 
@@ -238,7 +242,12 @@ impl RepoInfo {
         Ok(root.snapshots().iter().map(move |snap| mk_snapshot_info(&root, &snap)))
     }
 
-    pub fn add_snapshot(&self, snap: SnapshotInfo, branch: &str) -> IcechunkResult<Self> {
+    pub fn add_snapshot(
+        &self,
+        snap: SnapshotInfo,
+        branch: &str,
+        previous_file: Option<&str>,
+    ) -> IcechunkResult<Self> {
         let flushed_at = snap.flushed_at;
         let mut snapshots: Vec<_> = self.all_snapshots()?.try_collect()?;
         let new_index = match snapshots.binary_search_by_key(&&snap.id, |snap| &snap.id) {
@@ -271,11 +280,17 @@ impl RepoInfo {
             self.deleted_tags()?,
             snapshots,
             Some(flushed_at),
+            previous_file,
         )?;
         Ok(res)
     }
 
-    pub fn add_branch(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Self> {
+    pub fn add_branch(
+        &self,
+        name: &str,
+        snap: &SnapshotId,
+        previous_file: Option<&str>,
+    ) -> IcechunkResult<Self> {
         if let Ok(snapshot_id) = self.resolve_branch(name) {
             return Err(IcechunkFormatErrorKind::BranchAlreadyExists {
                 branch: name.to_string(),
@@ -296,6 +311,7 @@ impl RepoInfo {
                     self.deleted_tags()?,
                     snaps,
                     None,
+                    previous_file,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -305,7 +321,11 @@ impl RepoInfo {
         }
     }
 
-    pub fn delete_branch(&self, name: &str) -> IcechunkResult<Self> {
+    pub fn delete_branch(
+        &self,
+        name: &str,
+        previous_file: Option<&str>,
+    ) -> IcechunkResult<Self> {
         if matches!(
             self.resolve_branch(name),
             Err(IcechunkFormatError {
@@ -323,10 +343,22 @@ impl RepoInfo {
         // retain preserves order
         branches.retain(|(n, _)| n != &name);
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-        Self::from_parts(self.all_tags()?, branches, self.deleted_tags()?, snaps, None)
+        Self::from_parts(
+            self.all_tags()?,
+            branches,
+            self.deleted_tags()?,
+            snaps,
+            None,
+            previous_file,
+        )
     }
 
-    pub fn update_branch(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Self> {
+    pub fn update_branch(
+        &self,
+        name: &str,
+        snap: &SnapshotId,
+        previous_file: Option<&str>,
+    ) -> IcechunkResult<Self> {
         if matches!(
             self.resolve_branch(name),
             Err(IcechunkFormatError {
@@ -351,6 +383,7 @@ impl RepoInfo {
                     self.deleted_tags()?,
                     snaps,
                     None,
+                    previous_file,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -360,7 +393,12 @@ impl RepoInfo {
         }
     }
 
-    pub fn add_tag(&self, name: &str, snap: &SnapshotId) -> IcechunkResult<Self> {
+    pub fn add_tag(
+        &self,
+        name: &str,
+        snap: &SnapshotId,
+        previous_file: Option<&str>,
+    ) -> IcechunkResult<Self> {
         if self.resolve_tag(name).is_ok() || self.tag_was_deleted(name)? {
             // TODO: better error on tag already deleted
             return Err(IcechunkFormatErrorKind::TagAlreadyExists {
@@ -381,6 +419,7 @@ impl RepoInfo {
                     self.deleted_tags()?,
                     snaps,
                     None,
+                    previous_file,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -390,7 +429,11 @@ impl RepoInfo {
         }
     }
 
-    pub fn delete_tag(&self, name: &str) -> IcechunkResult<Self> {
+    pub fn delete_tag(
+        &self,
+        name: &str,
+        previous_file: Option<&str>,
+    ) -> IcechunkResult<Self> {
         if matches!(
             self.resolve_tag(name),
             Err(IcechunkFormatError {
@@ -411,7 +454,14 @@ impl RepoInfo {
         deleted_tags.insert(name);
 
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
-        Self::from_parts(tags, self.all_branches()?, deleted_tags, snaps, None)
+        Self::from_parts(
+            tags,
+            self.all_branches()?,
+            deleted_tags,
+            snaps,
+            None,
+            previous_file,
+        )
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {
@@ -543,6 +593,10 @@ impl RepoInfo {
         }
     }
 
+    pub fn previous_file(&self) -> IcechunkResult<Option<&str>> {
+        Ok(self.root()?.previous_file())
+    }
+
     fn resolve_snapshot_index(&self, id: &SnapshotId) -> IcechunkResult<Option<usize>> {
         // TODO: replace by binary search
         Ok(self.root()?.snapshots().iter().position(|snap| snap.id().0 == id.0))
@@ -645,8 +699,9 @@ mod tests {
             message: "snap 2".to_string(),
             ..snap1.clone()
         };
-        let repo = repo.add_snapshot(snap2.clone(), "main")?;
+        let repo = repo.add_snapshot(snap2.clone(), "main", Some("foo/bar"))?;
         assert_eq!(&repo.resolve_branch("main")?, &snap2.id);
+        assert_eq!(repo.previous_file()?, Some("foo/bar"));
 
         let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
         assert_eq!(all, HashSet::from_iter([snap1.clone(), snap2.clone()]));
@@ -666,7 +721,7 @@ mod tests {
             message: "snap 3".to_string(),
             ..snap2.clone()
         };
-        let repo = repo.add_snapshot(snap3.clone(), "main")?;
+        let repo = repo.add_snapshot(snap3.clone(), "main", None)?;
         assert_eq!(&repo.resolve_branch("main")?, &snap3.id);
         let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
         assert_eq!(
@@ -697,10 +752,10 @@ mod tests {
             metadata: Default::default(),
         };
         let repo = RepoInfo::initial(snap1.clone());
-        let repo = repo.add_branch("foo", &id1)?;
-        let repo = repo.add_branch("bar", &id1)?;
+        let repo = repo.add_branch("foo", &id1, None)?;
+        let repo = repo.add_branch("bar", &id1, None)?;
         assert!(matches!(
-            repo.add_branch("bad-snap", &SnapshotId::random()),
+            repo.add_branch("bad-snap", &SnapshotId::random(), None),
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::SnapshotIdNotFound { .. },
                 ..
@@ -708,7 +763,7 @@ mod tests {
         ));
         // cannot add existing
         assert!(matches!(
-            repo.add_branch("bar", &id1),
+            repo.add_branch("bar", &id1, Some("/foo/bar")),
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::BranchAlreadyExists { .. },
                 ..
@@ -727,27 +782,27 @@ mod tests {
             message: "snap 2".to_string(),
             ..snap1.clone()
         };
-        let repo = repo.add_snapshot(snap2, "main")?;
-        let repo = repo.add_branch("baz", &id2)?;
+        let repo = repo.add_snapshot(snap2, "main", None)?;
+        let repo = repo.add_branch("baz", &id2, Some("/foo/bar"))?;
         assert_eq!(repo.resolve_branch("main")?, id2.clone());
         assert_eq!(repo.resolve_branch("foo")?, id1.clone());
         assert_eq!(repo.resolve_branch("bar")?, id1.clone());
         assert_eq!(repo.resolve_branch("baz")?, id2.clone());
 
-        let repo = repo.delete_branch("bar")?;
+        let repo = repo.delete_branch("bar", None)?;
         assert!(repo.resolve_branch("bar").is_err());
         assert_eq!(
             repo.all_branches()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["main", "foo", "baz"].into()
         );
 
-        assert!(repo.delete_branch("bad-branch").is_err());
+        assert!(repo.delete_branch("bad-branch", None).is_err());
 
         // tags
-        let repo = repo.add_tag("tag1", &id1)?;
-        let repo = repo.add_tag("tag2", &id2)?;
-        assert!(repo.add_tag("bad-snap", &SnapshotId::random()).is_err());
-        assert!(repo.add_tag("tag1", &id1).is_err());
+        let repo = repo.add_tag("tag1", &id1, None)?;
+        let repo = repo.add_tag("tag2", &id2, None)?;
+        assert!(repo.add_tag("bad-snap", &SnapshotId::random(), None).is_err());
+        assert!(repo.add_tag("tag1", &id1, None).is_err());
         assert_eq!(repo.resolve_tag("tag1")?, id1.clone());
         assert_eq!(repo.resolve_tag("tag2")?, id2.clone());
         assert_eq!(
@@ -756,16 +811,16 @@ mod tests {
         );
 
         // delete tags
-        let repo = repo.add_tag("tag3", &id1)?;
-        let repo = repo.delete_tag("tag3")?;
+        let repo = repo.add_tag("tag3", &id1, None)?;
+        let repo = repo.delete_tag("tag3", None)?;
         assert_eq!(
             repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["tag1", "tag2"].into()
         );
         // cannot add deleted
-        assert!(repo.add_tag("tag3", &id1).is_err());
+        assert!(repo.add_tag("tag3", &id1, None).is_err());
         // cannot delete deleted
-        assert!(repo.delete_tag("tag3").is_err());
+        assert!(repo.delete_tag("tag3", None).is_err());
         assert_eq!(
             repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["tag1", "tag2"].into()

@@ -371,6 +371,7 @@ pub struct RepositoryConfig {
     pub virtual_chunk_containers: Option<HashMap<String, VirtualChunkContainer>>,
 
     pub manifest: Option<ManifestConfig>,
+    pub previous_file: Option<String>,
 }
 
 static DEFAULT_COMPRESSION: OnceLock<CompressionConfig> = OnceLock::new();
@@ -463,6 +464,12 @@ impl RepositoryConfig {
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            previous_file: match (&self.previous_file, other.previous_file) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(_), Some(theirs)) => Some(theirs),
             },
         }
     }

@@ -3717,14 +3717,15 @@ pub mod generated {
     }
 
     impl<'a> Repo<'a> {
-        pub const VT_TAGS: flatbuffers::VOffsetT = 4;
-        pub const VT_BRANCHES: flatbuffers::VOffsetT = 6;
-        pub const VT_DELETED_TAGS: flatbuffers::VOffsetT = 8;
-        pub const VT_SNAPSHOTS: flatbuffers::VOffsetT = 10;
-        pub const VT_SPEC_VERSION: flatbuffers::VOffsetT = 12;
+        pub const VT_SPEC_VERSION: flatbuffers::VOffsetT = 4;
+        pub const VT_TAGS: flatbuffers::VOffsetT = 6;
+        pub const VT_BRANCHES: flatbuffers::VOffsetT = 8;
+        pub const VT_DELETED_TAGS: flatbuffers::VOffsetT = 10;
+        pub const VT_SNAPSHOTS: flatbuffers::VOffsetT = 12;
         pub const VT_LAST_UPDATED_AT: flatbuffers::VOffsetT = 14;
         pub const VT_STATUS: flatbuffers::VOffsetT = 16;
         pub const VT_METADATA: flatbuffers::VOffsetT = 18;
+        pub const VT_PREVIOUS_FILE: flatbuffers::VOffsetT = 20;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -3742,6 +3743,9 @@ pub mod generated {
         ) -> flatbuffers::WIPOffset<Repo<'bldr>> {
             let mut builder = RepoBuilder::new(_fbb);
             builder.add_last_updated_at(args.last_updated_at);
+            if let Some(x) = args.previous_file {
+                builder.add_previous_file(x);
+            }
             if let Some(x) = args.metadata {
                 builder.add_metadata(x);
             }
@@ -3764,6 +3768,13 @@ pub mod generated {
             builder.finish()
         }
 
+        #[inline]
+        pub fn spec_version(&self) -> u8 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<u8>(Repo::VT_SPEC_VERSION, Some(0)).unwrap() }
+        }
         #[inline]
         pub fn tags(
             &self,
@@ -3829,13 +3840,6 @@ pub mod generated {
             }
         }
         #[inline]
-        pub fn spec_version(&self) -> u8 {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe { self._tab.get::<u8>(Repo::VT_SPEC_VERSION, Some(0)).unwrap() }
-        }
-        #[inline]
         pub fn last_updated_at(&self) -> u64 {
             // Safety:
             // Created from valid Table for this object
@@ -3870,6 +3874,18 @@ pub mod generated {
                 >>(Repo::VT_METADATA, None)
             }
         }
+        #[inline]
+        pub fn previous_file(&self) -> Option<&'a str> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(
+                    Repo::VT_PREVIOUS_FILE,
+                    None,
+                )
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for Repo<'_> {
@@ -3880,6 +3896,7 @@ pub mod generated {
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
+                .visit_field::<u8>("spec_version", Self::VT_SPEC_VERSION, false)?
                 .visit_field::<flatbuffers::ForwardsUOffset<
                     flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>,
                 >>("tags", Self::VT_TAGS, true)?
@@ -3892,7 +3909,6 @@ pub mod generated {
                 .visit_field::<flatbuffers::ForwardsUOffset<
                     flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SnapshotInfo>>,
                 >>("snapshots", Self::VT_SNAPSHOTS, true)?
-                .visit_field::<u8>("spec_version", Self::VT_SPEC_VERSION, false)?
                 .visit_field::<u64>("last_updated_at", Self::VT_LAST_UPDATED_AT, false)?
                 .visit_field::<flatbuffers::ForwardsUOffset<RepoStatus>>(
                     "status",
@@ -3902,11 +3918,17 @@ pub mod generated {
                 .visit_field::<flatbuffers::ForwardsUOffset<
                     flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MetadataItem>>,
                 >>("metadata", Self::VT_METADATA, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "previous_file",
+                    Self::VT_PREVIOUS_FILE,
+                    false,
+                )?
                 .finish();
             Ok(())
         }
     }
     pub struct RepoArgs<'a> {
+        pub spec_version: u8,
         pub tags: Option<
             flatbuffers::WIPOffset<
                 flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Ref<'a>>>,
@@ -3927,7 +3949,6 @@ pub mod generated {
                 flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SnapshotInfo<'a>>>,
             >,
         >,
-        pub spec_version: u8,
         pub last_updated_at: u64,
         pub status: Option<flatbuffers::WIPOffset<RepoStatus<'a>>>,
         pub metadata: Option<
@@ -3935,19 +3956,21 @@ pub mod generated {
                 flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MetadataItem<'a>>>,
             >,
         >,
+        pub previous_file: Option<flatbuffers::WIPOffset<&'a str>>,
     }
     impl<'a> Default for RepoArgs<'a> {
         #[inline]
         fn default() -> Self {
             RepoArgs {
+                spec_version: 0,
                 tags: None,         // required field
                 branches: None,     // required field
                 deleted_tags: None, // required field
                 snapshots: None,    // required field
-                spec_version: 0,
                 last_updated_at: 0,
                 status: None, // required field
                 metadata: None,
+                previous_file: None,
             }
         }
     }
@@ -3957,6 +3980,10 @@ pub mod generated {
         start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
     }
     impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> RepoBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_spec_version(&mut self, spec_version: u8) {
+            self.fbb_.push_slot::<u8>(Repo::VT_SPEC_VERSION, spec_version, 0);
+        }
         #[inline]
         pub fn add_tags(
             &mut self,
@@ -4003,10 +4030,6 @@ pub mod generated {
             );
         }
         #[inline]
-        pub fn add_spec_version(&mut self, spec_version: u8) {
-            self.fbb_.push_slot::<u8>(Repo::VT_SPEC_VERSION, spec_version, 0);
-        }
-        #[inline]
         pub fn add_last_updated_at(&mut self, last_updated_at: u64) {
             self.fbb_.push_slot::<u64>(Repo::VT_LAST_UPDATED_AT, last_updated_at, 0);
         }
@@ -4027,6 +4050,16 @@ pub mod generated {
             self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
                 Repo::VT_METADATA,
                 metadata,
+            );
+        }
+        #[inline]
+        pub fn add_previous_file(
+            &mut self,
+            previous_file: flatbuffers::WIPOffset<&'b str>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Repo::VT_PREVIOUS_FILE,
+                previous_file,
             );
         }
         #[inline]
@@ -4051,14 +4084,15 @@ pub mod generated {
     impl core::fmt::Debug for Repo<'_> {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             let mut ds = f.debug_struct("Repo");
+            ds.field("spec_version", &self.spec_version());
             ds.field("tags", &self.tags());
             ds.field("branches", &self.branches());
             ds.field("deleted_tags", &self.deleted_tags());
             ds.field("snapshots", &self.snapshots());
-            ds.field("spec_version", &self.spec_version());
             ds.field("last_updated_at", &self.last_updated_at());
             ds.field("status", &self.status());
             ds.field("metadata", &self.metadata());
+            ds.field("previous_file", &self.previous_file());
             ds.finish()
         }
     }

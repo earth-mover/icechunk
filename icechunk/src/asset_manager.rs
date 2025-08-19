@@ -220,17 +220,17 @@ impl AssetManager {
         &self,
         config: &RepositoryConfig,
         previous_version: &VersionInfo,
+        backup_path: Option<&str>,
     ) -> RepositoryResult<Option<VersionInfo>> {
         let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
         let content_type = Some("application/yaml");
-        let backup_path = backup_destination(CONFIG_FILE_PATH);
-        if !previous_version.is_create() {
+        if let Some(backup_path) = backup_path {
             match self
                 .storage
                 .copy_object(
                     &self.storage_settings,
                     CONFIG_FILE_PATH,
-                    &backup_path,
+                    backup_path,
                     content_type,
                     previous_version,
                 )
@@ -429,11 +429,13 @@ impl AssetManager {
         &self,
         info: Arc<RepoInfo>,
         version: &VersionInfo,
+        backup_path: Option<&str>,
     ) -> RepositoryResult<VersionInfo> {
         write_repo_info(
             info,
             version,
             self.compression_level,
+            backup_path,
             self.storage.as_ref(),
             &self.storage_settings,
         )
@@ -632,6 +634,14 @@ impl AssetManager {
             .err_into()
             .boxed();
         Ok(stream)
+    }
+
+    pub fn backup_path_for_config(&self) -> String {
+        backup_destination(CONFIG_FILE_PATH)
+    }
+
+    pub fn backup_path_for_repo_info(&self) -> String {
+        backup_destination(REPO_INFO_FILE_PATH)
     }
 }
 
@@ -991,6 +1001,7 @@ async fn write_repo_info(
     info: Arc<RepoInfo>,
     version: &VersionInfo,
     compression_level: u8,
+    backup_path: Option<&str>,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<VersionInfo> {
@@ -1028,13 +1039,12 @@ async fn write_repo_info(
 
     debug!(size_bytes = buffer.len(), "Writing repo info");
 
-    let backup_path = backup_destination(REPO_INFO_FILE_PATH);
-    if !version.is_create() {
+    if let Some(backup_path) = backup_path {
         match storage
             .copy_object(
                 storage_settings,
                 REPO_INFO_FILE_PATH,
-                &backup_path,
+                backup_path,
                 None,
                 version,
             )

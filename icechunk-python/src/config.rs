@@ -1452,6 +1452,8 @@ pub struct PyRepositoryConfig {
     pub virtual_chunk_containers: Option<HashMap<String, PyVirtualChunkContainer>>,
     #[pyo3(get, set)]
     pub manifest: Option<Py<PyManifestConfig>>,
+    #[pyo3(get)]
+    pub previous_file: Option<String>,
 }
 
 impl PartialEq for PyRepositoryConfig {
@@ -1485,6 +1487,7 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
                 storage: value.storage.as_ref().map(|s| (&*s.borrow(py)).into()),
                 virtual_chunk_containers: cont,
                 manifest: value.manifest.as_ref().map(|c| (&*c.borrow(py)).into()),
+                previous_file: value.previous_file.clone(),
             })
         })
     }
@@ -1517,6 +1520,7 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
                 Py::new(py, Into::<PyManifestConfig>::into(c))
                     .expect("Cannot create instance of ManifestConfig")
             }),
+            previous_file: value.previous_file,
         })
     }
 }
@@ -1551,6 +1555,7 @@ impl PyRepositoryConfig {
             storage,
             virtual_chunk_containers,
             manifest,
+            previous_file: None,
         }
     }
 
@@ -1615,13 +1620,14 @@ impl PyRepositoryConfig {
             }));
             // TODO: virtual chunk containers
             format!(
-                r#"RepositoryConfig(inline_chunk_threshold_bytes={inl}, get_partial_values_concurrency={partial}, compression={comp}, caching={caching}, storage={storage}, manifest={manifest})"#,
+                r#"RepositoryConfig(inline_chunk_threshold_bytes={inl}, get_partial_values_concurrency={partial}, compression={comp}, caching={caching}, storage={storage}, manifest={manifest}, previous_file={previous_file})"#,
                 inl = format_option_to_string(self.inline_chunk_threshold_bytes),
                 partial = format_option_to_string(self.get_partial_values_concurrency),
                 comp = comp,
                 caching = caching,
                 storage = storage,
                 manifest = manifest,
+                previous_file = format_option_to_string(self.previous_file.clone()),
             )
         })
     }

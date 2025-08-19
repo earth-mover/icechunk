@@ -2131,13 +2131,27 @@ async fn do_commit(
             parent_id: Some(parent_id.clone()),
             ..new_snapshot.as_ref().try_into()?
         };
-        let new_repo_info =
-            Arc::new(repo_info.add_snapshot(new_snapshot_info, branch_name)?);
+
+        let backup_path = if repo_info_version.is_create() {
+            None
+        } else {
+            Some(asset_manager.backup_path_for_repo_info())
+        };
+
+        let new_repo_info = Arc::new(repo_info.add_snapshot(
+            new_snapshot_info,
+            branch_name,
+            backup_path.as_deref(),
+        )?);
 
         debug!(attempt, "Attempting to update repo info object");
 
         match asset_manager
-            .update_repo_info(Arc::clone(&new_repo_info), &repo_info_version)
+            .update_repo_info(
+                Arc::clone(&new_repo_info),
+                &repo_info_version,
+                backup_path.as_deref(),
+            )
             .await
         {
             Ok(new_version) => {
@@ -2731,10 +2745,17 @@ mod tests {
             &storage::VersionInfo::for_creation(),
         )
         .await?;
-        let repo_info = RepoInfo::initial((&initial).try_into()?)
-            .add_snapshot(snapshot.as_ref().try_into()?, "main")?;
+        let repo_info = RepoInfo::initial((&initial).try_into()?).add_snapshot(
+            snapshot.as_ref().try_into()?,
+            "main",
+            None,
+        )?;
         asset_manager
-            .update_repo_info(Arc::new(repo_info), &storage::VersionInfo::for_creation())
+            .update_repo_info(
+                Arc::new(repo_info),
+                &storage::VersionInfo::for_creation(),
+                None,
+            )
             .await?;
 
         let repo = Repository::open(None, storage, HashMap::new()).await?;
