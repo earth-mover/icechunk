@@ -213,18 +213,31 @@ impl ConcurrencySettings {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub concurrency: Option<ConcurrencySettings>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub retries: Option<RetriesSettings>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub unsafe_use_conditional_update: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub unsafe_use_conditional_create: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub unsafe_use_metadata: Option<bool>,
-    #[serde(default)]
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub storage_class: Option<String>,
-    #[serde(default)]
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub metadata_storage_class: Option<String>,
-    #[serde(default)]
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub chunks_storage_class: Option<String>,
-    #[serde(default)]
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub minimum_size_for_multipart_upload: Option<u64>,
 }
 
