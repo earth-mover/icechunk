@@ -108,7 +108,6 @@ Existing namespaces, with new members added:
   - `storage.StorageConcurrencySettings`
   - `storage.StorageRetriesSettings`
   - `storage.StorageSettings`
-  - `storage.AnyObjectStoreConfig`
   - `storage.azure_storage`
   - `storage.gcs_storage`
   - `storage.gcs_store`
