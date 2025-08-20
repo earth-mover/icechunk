@@ -16,10 +16,10 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
 
 We are going to create a virtual dataset pointing to all of the [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) data for August 2024. This data is distributed publicly as netCDF files on AWS S3, with one netCDF file containing the Sea Surface Temperature (SST) data for each day of the month. We are going to use `VirtualiZarr` to combine all of these files into a single virtual dataset spanning the entire month, then write that dataset to Icechunk for use in analysis.
 
-Before we get started, we need to install `virtualizarr`, and `icechunk`. We also need to install `fsspec` and `s3fs` for working with data on s3.
+Before we get started, we need to install `virtualizarr`, and `icechunk`. We also need to install `fsspec`, `s3fs`, and `obstore` for working with data on s3.
 
 ```shell
-pip install virtualizarr icechunk fsspec s3fs
+pip install virtualizarr icechunk fsspec s3fs obstore
 ```
 
 First, we need to find all of the files we are interested in, we will do this with fsspec using a `glob` expression to find every netcdf file in the August 2024 folder in the bucket:
@@ -29,7 +29,8 @@ import fsspec
 
 fs = fsspec.filesystem('s3')
 
-oisst_files = fs.glob('s3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds/data/v2.1/avhrr/202408/oisst-avhrr-v02r01.*.nc')
+bucket_name = "s3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds"
+oisst_files = fs.glob(f"{bucket_name}/data/v2.1/avhrr/202408/oisst-avhrr-v02r01.*.nc")
 
 oisst_files = sorted(['s3://'+f for f in oisst_files])
 #['s3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds/data/v2.1/avhrr/201001/oisst-avhrr-v02r01.20100101.nc',
@@ -38,20 +39,31 @@ oisst_files = sorted(['s3://'+f for f in oisst_files])
 # 's3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds/data/v2.1/avhrr/201001/oisst-avhrr-v02r01.20100104.nc',
 #...
 #]
+
+
+
 ```
 
-Now that we have the filenames of the data we need, we can create virtual datasets with `VirtualiZarr`. This may take a minute.
+Now that we have the filenames of the data we need, we can create virtual datasets with `VirtualiZarr`, using their `ObjectStoreRegistry` (for more details, see [`Virtualizarr`'s documentation on opening files](https://virtualizarr.readthedocs.io/en/latest/usage.html#opening-files-as-virtual-datasets)). Creating these virtual datasets may take a minute.
 
 ```python
+from obstore.store import from_url
 from virtualizarr import open_virtual_dataset
+from virtualizarr.parsers import HDFParser
+from virtualizarr.registry import ObjectStoreRegistry
 
-virtual_datasets =[
-    open_virtual_dataset(url, indexes={})
+store = from_url(bucket_name, region=bucket_region, skip_signature=True)
+registry = ObjectStoreRegistry({bucket: store})
+parser = HDFParser()
+
+virtual_datasets = [
+    open_virtual_dataset(url=url, parser=parser, registry=registry) 
     for url in oisst_files
 ]
+
 ```
 
-We can now use `xarray` to combine these virtual datasets into one large virtual dataset (For more details on this operation see [`VirtualiZarr`'s documentation](https://virtualizarr.readthedocs.io/en/latest/usage.html#combining-virtual-datasets)). We know that each of our files share the same structure but with a different date. So we are going to concatenate these datasets on the `time` dimension.
+We can now use `xarray` to combine these virtual datasets into one large virtual dataset (For more details on this operation see [`VirtualiZarr`'s documentation on combining virtual datasets](https://virtualizarr.readthedocs.io/en/latest/usage.html#combining-virtual-datasets)). We know that each of our files share the same structure but with a different date. So we are going to concatenate these datasets on the `time` dimension.
 
 ```python
 import xarray as xr
@@ -224,7 +236,7 @@ Here is how we can set the chunk at key `c/0` to point to a file on my local fil
 
 ```python
 config = icechunk.RepositoryConfig.default()
-config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("s3://mybucket/my/data", icechunk.local_filesystem_store("/path/to/my")))
+config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("file:///path/to/my", icechunk.local_filesystem_store("/path/to/my")))
 repo = icechunk.Repository.create(storage, config)
 session = repo.writable_session("main")
 session.store.set_virtual_ref('c/0', 'file:///path/to/my/file.nc', offset=20, length=100)
