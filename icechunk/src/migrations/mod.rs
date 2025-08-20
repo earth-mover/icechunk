@@ -302,7 +302,7 @@ async fn pointed_snapshots<'a>(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::path::Path;
+    use std::{collections::HashMap, path::Path};
 
     use icechunk_macros::tokio_test;
     use tempfile::tempdir;
@@ -313,14 +313,60 @@ mod tests {
 
     #[tokio_test]
     /// Copy the source tree 1.0 repository to a temp dir, then migrate it
-    async fn test_migrating() -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_1_to_2_migration() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempdir().expect("cannot create temp dir");
         let source_path = Path::new("../icechunk-python/tests/data/test-repo");
         fs_extra::copy_items(&[source_path], &dir, &Default::default())?;
         let storage =
             new_local_filesystem_storage(dir.path().join("test-repo").as_path()).await?;
-        let mut repo = Repository::open(None, storage, Default::default()).await?;
+        let mut repo =
+            Repository::open(None, storage.clone(), Default::default()).await?;
+
+        let mut tag_ancestries_before = HashMap::new();
+        for tag in repo.list_tags().await? {
+            let anc = repo
+                .ancestry(&VersionInfo::TagRef(tag.clone()))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            tag_ancestries_before.insert(tag, anc);
+        }
+
+        let mut branch_ancestries_before = HashMap::new();
+        for branch in repo.list_branches().await? {
+            let anc = repo
+                .ancestry(&VersionInfo::BranchTipRef(branch.clone()))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            branch_ancestries_before.insert(branch, anc);
+        }
+
         migrate_1_to_2(&mut repo).await.unwrap();
+        let repo = Repository::open(None, storage, Default::default()).await?;
+
+        let mut tag_ancestries_after = HashMap::new();
+        for tag in repo.list_tags().await? {
+            let anc = repo
+                .ancestry(&VersionInfo::TagRef(tag.clone()))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            tag_ancestries_after.insert(tag, anc);
+        }
+
+        let mut branch_ancestries_after = HashMap::new();
+        for branch in repo.list_branches().await? {
+            let anc = repo
+                .ancestry(&VersionInfo::BranchTipRef(branch.clone()))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            branch_ancestries_after.insert(branch, anc);
+        }
+
+        assert_eq!(tag_ancestries_before, tag_ancestries_after);
+        assert_eq!(branch_ancestries_before, branch_ancestries_after);
         Ok(())
     }
 }
