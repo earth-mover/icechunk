@@ -112,6 +112,7 @@ impl RepoInfo {
                 generated::Ref::create(&mut builder, &args)
             })
             .collect::<Vec<_>>();
+        // FIXME: shouldn't be assert
         assert!(main_found);
         let branches = builder.create_vector(&branches);
 

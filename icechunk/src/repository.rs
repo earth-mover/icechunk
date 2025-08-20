@@ -417,7 +417,8 @@ impl Repository {
 
         let (is_v1, after_v1) = try_join!(is_v1, after_v1)?;
         match after_v1 {
-            // FIXME: what to do if we have both
+            // if we have both configuration, this is an unfinished migration
+            // but still a V2+ repo
             Ok(v) => Ok(Some(v)),
             Err(_) => {
                 if is_v1 {

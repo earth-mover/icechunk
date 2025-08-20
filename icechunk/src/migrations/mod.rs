@@ -1,9 +1,9 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, sync::Arc, time::Instant};
 
 use async_stream::try_stream;
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use thiserror::Error;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     Repository, StorageError,
@@ -91,7 +91,7 @@ impl From<StorageError> for MigrationError {
     }
 }
 
-pub async fn migrate_1_to_2(repo: &mut Repository) -> MigrationResult<()> {
+fn validate_start(repo: &Repository) -> MigrationResult<()> {
     if repo.spec_version() != SpecVersionBin::V1dot0 {
         error!("Target repository must be a 1.X Icechunk repository");
         return Err(MigrationErrorKind::InvalidRepositoryMigration {
@@ -105,48 +105,21 @@ pub async fn migrate_1_to_2(repo: &mut Repository) -> MigrationResult<()> {
         error!("Storage instance must be writable");
         return Err(MigrationErrorKind::ReadonlyRepo.into());
     }
+    Ok(())
+}
 
-    info!("Starting migration");
-    info!("Collecting refs");
-    let refs = all_roots(repo).await?.try_collect::<Vec<_>>().await?;
-    let tags = Vec::from_iter(refs.iter().filter_map(|(r, id)| {
-        if r.is_tag() { Some((r.name(), id.clone())) } else { None }
-    }));
-    let branches = Vec::from_iter(refs.iter().filter_map(|(r, id)| {
-        if r.is_branch() { Some((r.name(), id.clone())) } else { None }
-    }));
-
-    let deleted_tags =
-        list_deleted_tags(repo.storage().as_ref(), repo.storage_settings()).await?;
-
-    info!(
-        "Found {} refs: {} tags, {} branches, {} deleted tags",
-        refs.len(),
-        tags.len(),
-        branches.len(),
-        deleted_tags.len()
-    );
-
-    info!("Collecting pointed snapshots");
-    let snap_ids = refs.iter().map(|(_, id)| id);
-    let all_snapshots =
-        pointed_snapshots(repo, snap_ids).await?.try_collect::<Vec<_>>().await?;
-    info!("Found {} pointed snapshots", all_snapshots.len());
-
-    info!("Creating repository info file");
-    let repo_info = Arc::new(RepoInfo::new(
-        tags,
-        branches,
-        deleted_tags.iter().map(|s| s.as_str()),
-        all_snapshots,
-        None,
-    )?);
-
+async fn do_migrate(
+    repo: &Repository,
+    repo_info: Arc<RepoInfo>,
+    start_time: Instant,
+    delete_unused_v1_files: bool,
+) -> MigrationResult<()> {
     info!("Writing new repository info file");
     let new_version_info = repo
         .asset_manager()
         .update_repo_info(repo_info, &storage::VersionInfo::for_creation(), None)
         .await?;
+
     info!(version=?new_version_info, "Written repository info file");
 
     info!("Opening migrated repo");
@@ -173,40 +146,98 @@ pub async fn migrate_1_to_2(repo: &mut Repository) -> MigrationResult<()> {
         error!("Migration failed");
         return Err(MigrationErrorKind::Unknown.into());
     }
+    if delete_unused_v1_files {
+        if let Err(err) = delete_v1_refs(repo).await {
+            delete_repo_info(repo).await?;
+            error!("Migration failed");
+            return Err(err);
+        }
+        info!("Opening migrated repo");
+        let migrated = match Repository::open(
+            Some(repo.config().clone()),
+            repo.storage().clone(),
+            Default::default(),
+        )
+        .await
+        {
+            Ok(repo) => repo,
+            Err(_) => {
+                error!("Unknown error during migration. Repository doesn't open");
+                delete_repo_info(repo).await?;
+                error!("Migration failed");
+                return Err(MigrationErrorKind::Unknown.into());
+            }
+        };
 
-    if let Err(err) = delete_v1_refs(repo).await {
-        delete_repo_info(repo).await?;
-        error!("Migration failed");
-        return Err(err);
-    }
-
-    info!("Opening migrated repo");
-    let migrated = match Repository::open(
-        Some(repo.config().clone()),
-        repo.storage().clone(),
-        Default::default(),
-    )
-    .await
-    {
-        Ok(repo) => repo,
-        Err(_) => {
-            error!("Unknown error during migration. Repository doesn't open");
+        let new_spec_version = migrated.spec_version();
+        if new_spec_version != SpecVersionBin::V2dot0 {
+            error!("Unknown error during migration. Repository doesn't open as 2.0");
             delete_repo_info(repo).await?;
             error!("Migration failed");
             return Err(MigrationErrorKind::Unknown.into());
         }
-    };
-
-    let new_spec_version = migrated.spec_version();
-    if new_spec_version != SpecVersionBin::V2dot0 {
-        error!("Unknown error during migration. Repository doesn't open as 2.0");
-        delete_repo_info(repo).await?;
-        error!("Migration failed");
-        return Err(MigrationErrorKind::Unknown.into());
     }
 
-    info!("Migration completed, you can use the repository now");
+    info!(
+        "Migration completed in {} seconds, you can use the repository now",
+        start_time.elapsed().as_secs()
+    );
     Ok(())
+}
+
+pub async fn migrate_1_to_2(
+    repo: &mut Repository,
+    dry_run: bool,
+    delete_unused_v1_files: bool,
+) -> MigrationResult<()> {
+    let start_time = Instant::now();
+    validate_start(repo)?;
+
+    info!("Starting migration");
+    info!("Collecting refs");
+    let refs = all_roots(repo).await?.try_collect::<Vec<_>>().await?;
+    let tags = Vec::from_iter(refs.iter().filter_map(|(r, id)| {
+        if r.is_tag() { Some((r.name(), id.clone())) } else { None }
+    }));
+    let branches = Vec::from_iter(refs.iter().filter_map(|(r, id)| {
+        if r.is_branch() { Some((r.name(), id.clone())) } else { None }
+    }));
+
+    let deleted_tags =
+        list_deleted_tags(repo.storage().as_ref(), repo.storage_settings()).await?;
+
+    info!(
+        "Found {} refs: {} tags, {} branches, {} deleted tags",
+        refs.len(),
+        tags.len(),
+        branches.len(),
+        deleted_tags.len()
+    );
+
+    info!("Collecting non-dangling snapshots, this make take a few minutes");
+    let snap_ids = refs.iter().map(|(_, id)| id);
+    let all_snapshots =
+        pointed_snapshots(repo, snap_ids).await?.try_collect::<Vec<_>>().await?;
+    info!("Found {} non-dangling snapshots", all_snapshots.len());
+
+    info!("Creating repository info file");
+    let repo_info = Arc::new(RepoInfo::new(
+        tags,
+        branches,
+        deleted_tags.iter().map(|s| s.as_str()),
+        all_snapshots,
+        None,
+    )?);
+
+    if dry_run {
+        info!(
+            "Migration dry-run completed in {} seconds, your repository wasn't modified, run with `dry_run=False` to actually migrate",
+            start_time.elapsed().as_secs()
+        );
+        Ok(())
+    } else {
+        do_migrate(repo, repo_info, start_time, delete_unused_v1_files).await
+    }
 }
 
 async fn delete_repo_info(repo: &Repository) -> MigrationResult<()> {
@@ -283,6 +314,7 @@ async fn pointed_snapshots<'a>(
                 for await parent in parents {
                     let parent = parent?;
                     if seen.insert(parent.id.clone()) {
+                        debug!("Found snapshot {}", parent.id);
                         // it's a new snapshot
                         yield parent
                     } else {
@@ -305,22 +337,27 @@ mod tests {
     use std::{collections::HashMap, path::Path};
 
     use icechunk_macros::tokio_test;
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
 
-    use crate::new_local_filesystem_storage;
+    use crate::{new_local_filesystem_storage, refs};
 
     use super::*;
 
-    #[tokio_test]
-    /// Copy the source tree 1.0 repository to a temp dir, then migrate it
-    async fn test_1_to_2_migration() -> Result<(), Box<dyn std::error::Error>> {
+    async fn prepare_v1_repo() -> Result<(Repository, TempDir), Box<dyn std::error::Error>>
+    {
         let dir = tempdir().expect("cannot create temp dir");
         let source_path = Path::new("../icechunk-python/tests/data/test-repo");
         fs_extra::copy_items(&[source_path], &dir, &Default::default())?;
         let storage =
             new_local_filesystem_storage(dir.path().join("test-repo").as_path()).await?;
-        let mut repo =
-            Repository::open(None, storage.clone(), Default::default()).await?;
+        let repo = Repository::open(None, storage.clone(), Default::default()).await?;
+        Ok((repo, dir))
+    }
+
+    #[tokio_test]
+    /// Copy the source tree 1.0 repository to a temp dir, then migrate it
+    async fn test_1_to_2_migration() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut repo, _tmp) = prepare_v1_repo().await?;
 
         let mut tag_ancestries_before = HashMap::new();
         for tag in repo.list_tags().await? {
@@ -342,8 +379,9 @@ mod tests {
             branch_ancestries_before.insert(branch, anc);
         }
 
-        migrate_1_to_2(&mut repo).await.unwrap();
-        let repo = Repository::open(None, storage, Default::default()).await?;
+        migrate_1_to_2(&mut repo, false, true).await.unwrap();
+        let repo =
+            Repository::open(None, repo.storage().clone(), Default::default()).await?;
 
         let mut tag_ancestries_after = HashMap::new();
         for tag in repo.list_tags().await? {
@@ -367,6 +405,38 @@ mod tests {
 
         assert_eq!(tag_ancestries_before, tag_ancestries_after);
         assert_eq!(branch_ancestries_before, branch_ancestries_after);
+        Ok(())
+    }
+
+    #[tokio_test]
+    /// Copy the source tree 1.0 repository to a temp dir, then migrate it in dry-run mode
+    async fn test_1_to_2_migration_dry_run() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut repo, _tmp) = prepare_v1_repo().await?;
+
+        migrate_1_to_2(&mut repo, true, true).await.unwrap();
+        let repo =
+            Repository::open(None, repo.storage().clone(), Default::default()).await?;
+
+        assert_eq!(repo.spec_version(), SpecVersionBin::V1dot0);
+        Ok(())
+    }
+
+    #[tokio_test]
+    /// Copy the source tree 1.0 repository to a temp dir, then migrate it in dry-run mode
+    async fn test_1_to_2_migration_without_delete()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut repo, _tmp) = prepare_v1_repo().await?;
+
+        migrate_1_to_2(&mut repo, false, false).await.unwrap();
+        let repo =
+            Repository::open(None, repo.storage().clone(), Default::default()).await?;
+
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
+
+        assert_eq!(
+            refs::list_branches(repo.storage().as_ref(), repo.storage_settings()).await?,
+            ["main".to_string(), "my-branch".to_string()].into()
+        );
         Ok(())
     }
 }
