@@ -2027,7 +2027,8 @@ async fn flush(
     })
     .try_collect()?;
 
-    all_nodes.sort_by(|a, b| a.path.cmp(&b.path));
+    all_nodes
+        .sort_by(|a, b| a.path.to_string().as_str().cmp(b.path.to_string().as_str()));
 
     let new_snapshot = Snapshot::from_iter(
         None,
