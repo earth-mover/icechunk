@@ -133,6 +133,8 @@ New namespaces:
   - `config.CompressionAlgorithm`
   - `config.ObjectStoreConfig`
   - `config.RepositoryConfig`
+  - `config.initialize_logs`,
+  - `config.set_logs_filter`,
 - `conflict`
   - `conflict.BasicConflictSolver`
   - `conflict.Conflict`
@@ -144,9 +146,6 @@ New namespaces:
   - `exceptions.ConflictError`
   - `exceptions.IcechunkError`
   - `exceptions.RebaseFailedError`
-- `logging`
-  - `logging.initialize_logs`,
-  - `logging.set_logs_filter`,
 - `manifests`
   - `manifests.ManifestConfig`
   - `manifests.ManifestFileInfo`
