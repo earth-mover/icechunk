@@ -587,3 +587,87 @@ pub enum Credentials {
     Gcs(GcsCredentials),
     Azure(AzureCredentials),
 }
+
+#[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use crate::{
+        ObjectStoreConfig, RepositoryConfig, config::S3Options,
+        strategies::repository_config, virtual_chunks::VirtualChunkContainer,
+    };
+
+    use proptest::prelude::*;
+
+    #[icechunk_macros::test]
+    fn test_config_serialization() {
+        let mut config = RepositoryConfig::default();
+        let bytes = rmp_serde::to_vec(&config).unwrap();
+        let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(config, roundtrip);
+
+        config.set_virtual_chunk_container(
+            VirtualChunkContainer::new(
+                "s3://foo/bar/".to_string(),
+                ObjectStoreConfig::S3(S3Options {
+                    region: Some("us-east-1".to_string()),
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
+                }),
+            )
+            .unwrap(),
+        );
+        let bytes = rmp_serde::to_vec(&config).unwrap();
+        let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(config, roundtrip);
+    }
+
+    #[icechunk_macros::test]
+    fn test_virtual_container_serialization() {
+        let container = VirtualChunkContainer::new(
+            "s3://foo/bar/".to_string(),
+            ObjectStoreConfig::S3(S3Options {
+                region: Some("us-east-1".to_string()),
+                endpoint_url: None,
+                anonymous: false,
+                allow_http: false,
+                force_path_style: false,
+                network_stream_timeout_seconds: None,
+            }),
+        )
+        .unwrap();
+        let bytes = rmp_serde::to_vec(&container).unwrap();
+        let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(container, roundtrip);
+    }
+
+    #[icechunk_macros::test]
+    fn test_object_store_config_serialization() {
+        let config = ObjectStoreConfig::S3(S3Options {
+            region: Some("us-east-1".to_string()),
+            endpoint_url: None,
+            anonymous: false,
+            allow_http: false,
+            force_path_style: false,
+            network_stream_timeout_seconds: None,
+        });
+        let bytes = rmp_serde::to_vec(&config).unwrap();
+        let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(config, roundtrip);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 50, .. ProptestConfig::default()
+        })]
+
+        #[icechunk_macros::test]
+        fn test_config_roundtrip(config in repository_config() ) {
+            let bytes = rmp_serde::to_vec(&config).unwrap();
+            let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
+            assert_eq!(config, roundtrip);
+        }
+    }
+}

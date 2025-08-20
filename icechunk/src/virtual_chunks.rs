@@ -44,8 +44,6 @@ pub type ContainerName = String;
 pub struct VirtualChunkContainer {
     // name is no longer needed, but we keep it for compatibility with
     // old serialized configurations
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
     pub name: Option<ContainerName>,
 
     url_prefix: String,
@@ -122,9 +120,9 @@ impl VirtualChunkContainer {
                     );
                 }
             }
-            (scheme, _) => {
+            (scheme, store) => {
                 return Err(format!(
-                    "Invalid url prefix scheme ({scheme}) for this object store config"
+                    "Invalid url prefix scheme ({scheme}) for this object store config: ({store:?})"
                 ));
             }
         };
