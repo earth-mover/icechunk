@@ -103,6 +103,17 @@ fn spec_version() -> u8 {
     SpecVersionBin::current() as u8
 }
 
+#[pyfunction]
+#[pyo3(signature = (repo, *, dry_run = true, delete_unused_v1_files = true))]
+fn _upgrade_icechunk_repository(
+    py: Python,
+    repo: &PyRepository,
+    dry_run: bool,
+    delete_unused_v1_files: bool,
+) -> PyResult<()> {
+    repo.migrate_1_to_2(py, dry_run, delete_unused_v1_files)
+}
+
 fn pep440_version() -> String {
     let cargo_version = env!("CARGO_PKG_VERSION");
     cargo_version.replace("-rc.", "rc").replace("-alpha.", "a").replace("-beta.", "b")
@@ -153,6 +164,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
+    m.add_function(wrap_pyfunction!(_upgrade_icechunk_repository, m)?)?;
     m.add("__version__", pep440_version())?;
 
     // Exceptions

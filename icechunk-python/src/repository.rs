@@ -18,6 +18,7 @@ use icechunk::{
         transaction_log::Diff,
     },
     inspect::snapshot_json,
+    migrations,
     ops::{
         gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
         manifests::rewrite_manifests,
@@ -411,6 +412,25 @@ impl_pickle!(PyGCSummary);
 
 #[pyclass]
 pub struct PyRepository(Arc<RwLock<Repository>>);
+
+impl PyRepository {
+    pub fn migrate_1_to_2(
+        &self,
+        py: Python<'_>,
+        dry_run: bool,
+        delete_unused_v1_files: bool,
+    ) -> PyResult<()> {
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let mut repo = self.0.write().await;
+                migrations::migrate_1_to_2(&mut repo, dry_run, delete_unused_v1_files)
+                    .await
+                    .map_err(PyIcechunkStoreError::MigrationError)?;
+                Ok(())
+            })
+        })
+    }
+}
 
 #[pymethods]
 /// Most functions in this class call `Runtime.block_on` so they need to `allow_threads` so other
@@ -1623,6 +1643,13 @@ impl PyRepository {
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(res)
         })
+    }
+
+    fn spec_version(&self) -> u8 {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let repo = self.0.read().await;
+            repo.spec_version()
+        }) as u8
     }
 }
 

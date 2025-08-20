@@ -1397,3 +1397,6 @@ class Repository:
         self, snapshot_id: str, *, pretty: bool = True
     ) -> str:
         return await self._repository.inspect_snapshot_async(snapshot_id, pretty=pretty)
+
+    def spec_version(self) -> int:
+        return self._repository.spec_version()

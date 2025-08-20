@@ -1499,6 +1499,7 @@ class PyRepository:
     async def inspect_snapshot_async(
         self, snapshot_id: str, *, pretty: bool = True
     ) -> str: ...
+    def spec_version(self) -> int: ...
 
 class PySession:
     @classmethod
@@ -2225,5 +2226,23 @@ def spec_version() -> int:
 
     Returns:
         int: The version of the Icechunk specification that the library is compatible with
+    """
+    ...
+
+def _upgrade_icechunk_repository(
+    repo: PyRepository, *, dry_run: bool = True, delete_unused_v1_files: bool = False
+) -> None:
+    """
+    Migrate a repository to the latest version of Icechunk.
+
+    This is an administrative operation, and must be executed in isolation from
+    other readers and writers. Other processes running concurrently on the same
+    repo may see undefined behavior.
+
+    At this time, this function supports only migration from Icechunk spec version 1
+    to Icechunk spec version 2. This means Icechunk versions 1.x to 2.x.
+
+    The operation is usually fast, but it can take several minutes if there is a very
+    large version history (thousands of snapshots).
     """
     ...

@@ -43,6 +43,7 @@ from icechunk._icechunk_python import (
     VirtualChunkContainer,
     VirtualChunkSpec,
     __version__,
+    _upgrade_icechunk_repository,
     initialize_logs,
     set_logs_filter,
     spec_version,
@@ -138,6 +139,7 @@ __all__ = [
     "VirtualChunkContainer",
     "VirtualChunkSpec",
     "__version__",
+    "_upgrade_icechunk_repository",
     "azure_credentials",
     "azure_from_env_credentials",
     "azure_static_credentials",
@@ -209,6 +211,27 @@ def to_dict(config: ManifestSplittingConfig) -> SplitSizesDict:
         split_condition: dict(dim_conditions)
         for split_condition, dim_conditions in config.split_sizes
     }
+
+
+def upgrade_icechunk_repository(
+    repo: Repository, *, dry_run: bool = True, delete_unused_v1_files: bool = False
+) -> None:
+    """
+    Migrate a repository to the latest version of Icechunk.
+
+    This is an administrative operation, and must be executed in isolation from
+    other readers and writers. Other processes running concurrently on the same
+    repo may see undefined behavior.
+
+    At this time, this function supports only migration from Icechunk spec version 1
+    to Icechunk spec version 2. This means Icechunk versions 1.x to 2.x.
+
+    The operation is usually fast, but it can take several minutes if there is a very
+    large version history (thousands of snapshots).
+    """
+    _upgrade_icechunk_repository(
+        repo._repository, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
+    )
 
 
 ManifestSplittingConfig.from_dict = from_dict  # type: ignore[method-assign]
