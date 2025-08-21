@@ -214,7 +214,7 @@ def to_dict(config: ManifestSplittingConfig) -> SplitSizesDict:
 
 
 def upgrade_icechunk_repository(
-    repo: Repository, *, dry_run: bool = True, delete_unused_v1_files: bool = False
+    repo: Repository, *, dry_run: bool = True, delete_unused_v1_files: bool = True
 ) -> None:
     """
     Migrate a repository to the latest version of Icechunk.

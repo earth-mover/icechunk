@@ -1,0 +1,19 @@
+inline_chunk_threshold_bytes: 12
+get_partial_values_concurrency: null
+compression: null
+max_concurrent_requests: null
+caching: null
+storage: null
+virtual_chunk_containers:
+  s3://testbucket/:
+    name: null
+    url_prefix: s3://testbucket/
+    store: !s3_compatible
+      region: us-east-1
+      endpoint_url: http://localhost:9000
+      anonymous: false
+      allow_http: true
+      force_path_style: true
+      network_stream_timeout_seconds: 60
+manifest: null
+previous_file: null
