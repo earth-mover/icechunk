@@ -1,5 +1,6 @@
 import functools
 import json
+import pickle
 from typing import Any
 
 import hypothesis.extra.numpy as npst
@@ -344,6 +345,14 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                 matches.add(node)
         self.all_groups = self.all_groups - matches
         self.all_arrays = self.all_arrays - matches
+
+    @rule()
+    def pickle_objects(self) -> None:
+        if not self.store.session.has_uncommitted_changes:
+            session = self.store.session.fork()
+            pickle.loads(pickle.dumps(session))
+
+        pickle.loads(pickle.dumps(self.repo))
 
     @invariant()
     def check_list_prefix_from_root(self) -> None:
