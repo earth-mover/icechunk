@@ -1,5 +1,12 @@
 # Changelog
 
+## Python Icechunk Library 1.1.4
+
+### Fixes
+
+- Msgpack format error when trying to pickle distributed stores in repositories with
+  virtual chunk containers.
+
 ## Python Icechunk Library 1.1.3
 
 ### Fixes

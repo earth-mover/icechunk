@@ -27,7 +27,7 @@ First, we need to find all of the files we are interested in, we will do this wi
 ```python
 import fsspec
 
-fs = fsspec.filesystem('s3')
+fs = fsspec.filesystem('s3', anon=True)
 
 oisst_files = fs.glob('s3://noaa-cdr-sea-surface-temp-optimum-interpolation-pds/data/v2.1/avhrr/202408/oisst-avhrr-v02r01.*.nc')
 
