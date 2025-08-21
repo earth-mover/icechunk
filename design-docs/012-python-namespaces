@@ -95,8 +95,6 @@ Existing namespaces, with new members added:
 - `distributed`
   - `distributed.extract_sessions`
   - `distributed.merge_sessions`
-- `garbage`
-  - `garbage.GCSummary`
 - `repository`
   - `repository.Repository`
 - `session`
@@ -134,6 +132,8 @@ New namespaces:
   - `exceptions.ConflictError`
   - `exceptions.IcechunkError`
   - `exceptions.RebaseFailedError`
+- `garbage`
+  - `garbage.GCSummary`
 - `manifests`
   - `manifests.ManifestConfig`
   - `manifests.ManifestFileInfo`
