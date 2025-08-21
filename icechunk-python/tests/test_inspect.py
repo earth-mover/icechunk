@@ -5,7 +5,7 @@ import icechunk as ic
 
 def test_inspect_snapshot() -> None:
     repo = ic.Repository.open(
-        storage=ic.local_filesystem_storage("./tests/data/split-repo")
+        storage=ic.local_filesystem_storage("./tests/data/split-repo-v2")
     )
     snap = next(repo.ancestry(branch="main")).id
     pretty_str = repo.inspect_snapshot(snap, pretty=True)
@@ -21,7 +21,7 @@ def test_inspect_snapshot() -> None:
 
 async def test_inspect_snapshot_async() -> None:
     repo = await ic.Repository.open_async(
-        storage=ic.local_filesystem_storage("./tests/data/split-repo")
+        storage=ic.local_filesystem_storage("./tests/data/split-repo-v2")
     )
     snap = next(repo.ancestry(branch="main")).id
     pretty_str = await repo.inspect_snapshot_async(snap, pretty=True)

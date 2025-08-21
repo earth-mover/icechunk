@@ -5,7 +5,7 @@ import icechunk as ic
 
 
 def test_migration_1_to_2_dry_run(tmpdir: Path) -> None:
-    shutil.copytree("tests/data/test-repo", tmpdir, dirs_exist_ok=True)
+    shutil.copytree("tests/data/test-repo-v1", tmpdir, dirs_exist_ok=True)
     storage = ic.local_filesystem_storage(str(tmpdir))
     repo = ic.Repository.open(storage)
     assert repo.spec_version() == 1
@@ -23,7 +23,7 @@ def test_migration_1_to_2_dry_run(tmpdir: Path) -> None:
 
 
 def test_migration_1_to_2(tmpdir: Path) -> None:
-    shutil.copytree("tests/data/test-repo", tmpdir, dirs_exist_ok=True)
+    shutil.copytree("tests/data/test-repo-v1", tmpdir, dirs_exist_ok=True)
     storage = ic.local_filesystem_storage(str(tmpdir))
     repo = ic.Repository.open(storage)
     assert repo.spec_version() == 1
