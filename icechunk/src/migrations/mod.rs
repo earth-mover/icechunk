@@ -346,10 +346,11 @@ mod tests {
     async fn prepare_v1_repo() -> Result<(Repository, TempDir), Box<dyn std::error::Error>>
     {
         let dir = tempdir().expect("cannot create temp dir");
-        let source_path = Path::new("../icechunk-python/tests/data/test-repo");
+        let source_path = Path::new("../icechunk-python/tests/data/test-repo-v1");
         fs_extra::copy_items(&[source_path], &dir, &Default::default())?;
         let storage =
-            new_local_filesystem_storage(dir.path().join("test-repo").as_path()).await?;
+            new_local_filesystem_storage(dir.path().join("test-repo-v1").as_path())
+                .await?;
         let repo = Repository::open(None, storage.clone(), Default::default()).await?;
         Ok((repo, dir))
     }

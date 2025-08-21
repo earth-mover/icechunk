@@ -133,7 +133,7 @@ mod tests {
     async fn test_print_snapshot() -> Result<(), Box<dyn std::error::Error>> {
         let st = Arc::new(
             ObjectStorage::new_local_filesystem(&PathBuf::from(
-                "../icechunk-python/tests/data/split-repo",
+                "../icechunk-python/tests/data/split-repo-v2",
             ))
             .await?,
         );
