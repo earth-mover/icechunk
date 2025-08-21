@@ -4,3 +4,8 @@ from icechunk._icechunk_python import (
     RebaseFailedError
 )
 
+__all__ = [
+    "ConflictError",
+    "IcechunkError",
+    "RebaseFailedError"
+]

@@ -7,3 +7,13 @@ from icechunk._icechunk_python import (
     ManifestSplitDimCondition,
     ManifestSplittingConfig,
 )
+
+__all__ = [
+    "ManifestConfig",
+    "ManifestFileInfo",
+    "ManifestPreloadCondition",
+    "ManifestPreloadConfig",
+    "ManifestSplitCondition",
+    "ManifestSplitDimCondition",
+    "ManifestSplittingConfig"
+]

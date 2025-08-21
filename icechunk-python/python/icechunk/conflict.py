@@ -6,3 +6,12 @@ from icechunk._icechunk_python import (
     ConflictType,
     VersionSelection
 )
+
+__all__ = [
+    "BasicConflictSolver",
+    "Conflict",
+    "ConflictDetector",
+    "ConflictSolver",
+    "ConflictType",
+    "VersionSelection"
+]
