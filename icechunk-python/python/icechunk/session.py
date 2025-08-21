@@ -318,6 +318,90 @@ class Session:
             message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
         )
 
+    def amend(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Commit the changes in the session to the repository, by amending/overwriting the previous commit.
+
+        When successful, the writable session is completed and the session is now read-only and based on the new commit. The snapshot ID of the new commit is returned.
+
+        If the session is out of date, this will raise a ConflictError exception depicting the conflict that occurred. The session will need to be rebased before committing.
+
+        This operation doesn't create a new commit in the repo ancestry. It replaces the previous commit.
+
+        The first commit to the repo cannot be amended.
+
+        Parameters
+        ----------
+        message : str
+            The message to write with the commit.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+
+        Returns
+        -------
+        str
+            The snapshot ID of the new commit.
+
+        Raises
+        ------
+        icechunk.ConflictError
+            If the session is out of date and a conflict occurs.
+        """
+        if self._allow_changes:
+            warnings.warn(
+                "Committing a session after forking, and without merging will not work. "
+                "Merge back in the remote changes first using Session.merge().",
+                UserWarning,
+                stacklevel=2,
+            )
+        return self._session.amend(message, metadata)
+
+    async def amend_async(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Commit the changes in the session to the repository, by amending/overwriting the previous commit.
+
+        When successful, the writable session is completed and the session is now read-only and based on the new commit. The snapshot ID of the new commit is returned.
+
+        If the session is out of date, this will raise a ConflictError exception depicting the conflict that occurred. The session will need to be rebased before committing.
+
+        This operation doesn't create a new commit in the repo ancestry. It replaces the previous commit.
+
+        The first commit to the repo cannot be amended.
+
+        Parameters
+        ----------
+        message : str
+            The message to write with the commit.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+
+        Returns
+        -------
+        str
+            The snapshot ID of the new commit.
+
+        Raises
+        ------
+        icechunk.ConflictError
+            If the session is out of date and a conflict occurs.
+        """
+        if self._allow_changes:
+            warnings.warn(
+                "Committing a session after forking, and without merging will not work. "
+                "Merge back in the remote changes first using Session.merge().",
+                UserWarning,
+                stacklevel=2,
+            )
+        return await self._session.amend_async(message, metadata)
+
     def rebase(self, solver: ConflictSolver) -> None:
         """
         Rebase the session to the latest ancestry of the branch.

@@ -6,7 +6,7 @@ use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use icechunk::{
-    Repository, Storage,
+    Repository, RepositoryConfig, Storage,
     format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
     repository::VersionInfo,
     session::{Session, get_chunk},
@@ -22,7 +22,11 @@ async fn mk_repo(
     init: bool,
 ) -> Result<Repository, Box<dyn std::error::Error>> {
     if init {
-        Ok(Repository::create(None, storage, HashMap::new()).await?)
+        let config = RepositoryConfig {
+            inline_chunk_threshold_bytes: Some(0),
+            ..RepositoryConfig::default()
+        };
+        Ok(Repository::create(Some(config), storage, HashMap::new()).await?)
     } else {
         Ok(Repository::open(None, storage, HashMap::new()).await?)
     }
@@ -170,7 +174,16 @@ where
 
     // We have completed all the chunk writes
     assert!(write_results.len() == 4);
-    assert!(write_results.iter().all(|r| r.is_ok()));
+    assert!(write_results.iter().all(|r| {
+        r.as_ref()
+            .inspect_err(
+                #[allow(clippy::dbg_macro)]
+                |e| {
+                    dbg!(e);
+                },
+            )
+            .is_ok()
+    }));
 
     // We recover our repo instances (the may be numbered in a different order, doesn't matter)
     let mut ds1 = write_results.pop().unwrap().unwrap();
