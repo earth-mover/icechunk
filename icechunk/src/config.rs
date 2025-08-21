@@ -70,9 +70,9 @@ pub enum CompressionAlgorithm {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct CompressionConfig {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub algorithm: Option<CompressionAlgorithm>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub level: Option<u8>,
 }
 
@@ -95,19 +95,19 @@ impl CompressionConfig {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct CachingConfig {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub num_snapshot_nodes: Option<u64>,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub num_chunk_refs: Option<u64>,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub num_transaction_changes: Option<u64>,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub num_bytes_attributes: Option<u64>,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub num_bytes_chunks: Option<u64>,
 }
 
@@ -320,9 +320,9 @@ static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ManifestConfig {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub preload: Option<ManifestPreloadConfig>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub splitting: Option<ManifestSplittingConfig>,
 }
 
@@ -365,37 +365,37 @@ impl ManifestConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepositoryConfig {
     /// Chunks smaller than this will be stored inline in the manifest
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub inline_chunk_threshold_bytes: Option<u16>,
 
     /// Concurrency used by the get_partial_values operation to fetch different keys in parallel
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub get_partial_values_concurrency: Option<u16>,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub compression: Option<CompressionConfig>,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub max_concurrent_requests: Option<u16>,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub caching: Option<CachingConfig>,
 
     // If not set it will use the Storage implementation default
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub storage: Option<storage::Settings>,
 
     // Compatibility note:
     // The key is this hashmap used to be the ContainerName, which
     // we have eliminated. We maintain the types for compatibility
     // with persisted configurations
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub virtual_chunk_containers: Option<HashMap<String, VirtualChunkContainer>>,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub manifest: Option<ManifestConfig>,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(default)]
     pub previous_file: Option<String>,
 }
 
