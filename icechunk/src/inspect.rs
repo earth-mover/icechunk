@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     asset_manager::AssetManager,
     format::{
-        ManifestId, SnapshotId,
-        manifest::ManifestRef,
+        IcechunkFormatError, ManifestId, SnapshotId,
+        manifest::{Manifest, ManifestRef},
         snapshot::{
             ManifestFileInfo, NodeData, NodeSnapshot, NodeType, SnapshotProperties,
         },
@@ -94,20 +94,45 @@ struct SnapshotInfoInspect {
 #[derive(Debug, Serialize, Deserialize)]
 struct ArrayManifestInspect {
     node_id: String,
-    num_chunks: u64,
+    num_chunk_refs: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ManifestInfoInspect {
     id: String,
+    size_bytes: u64,
+    total_chunk_refs: u64,
     arrays: Vec<ArrayManifestInspect>,
+}
+
+impl TryFrom<&Manifest> for ManifestInfoInspect {
+    type Error = IcechunkFormatError;
+
+    fn try_from(value: &Manifest) -> Result<Self, Self::Error> {
+        let arrays = value
+            .nodes()
+            .filter_map(|node_id| {
+                value.node_refs(&node_id).map(|num_chunk_refs| ArrayManifestInspect {
+                    node_id: node_id.to_string(),
+                    num_chunk_refs: num_chunk_refs as u64,
+                })
+            })
+            .collect();
+        Ok(Self {
+            id: value.id().to_string(),
+            size_bytes: value.bytes().len() as u64,
+            total_chunk_refs: value.len() as u64,
+            arrays,
+        })
+    }
 }
 
 async fn inspect_manifest(
     asset_manager: &AssetManager,
     id: &ManifestId,
 ) -> RepositoryResult<ManifestInfoInspect> {
-    todo!()
+    let manifest = asset_manager.fetch_manifest_unknown_size(id).await?;
+    Ok(manifest.as_ref().try_into()?)
 }
 
 pub async fn manifest_json(
