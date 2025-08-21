@@ -44,6 +44,10 @@ pub type ContainerName = String;
 pub struct VirtualChunkContainer {
     // name is no longer needed, but we keep it for compatibility with
     // old serialized configurations
+    // We use default because for a while after 1.0 we were skipping
+    // serialization if None. Then we learned rmp_serde doesn't really
+    // support optional fields, so serialization was broken
+    #[serde(default)]
     pub name: Option<ContainerName>,
 
     url_prefix: String,
