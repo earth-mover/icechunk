@@ -108,7 +108,7 @@ pub fn deserialize_snapshot(
             let mut buffer = Vec::with_capacity(8_192);
             read.read_to_end(&mut buffer)?;
             buffer.shrink_to_fit();
-            Snapshot::from_buffer(buffer)
+            Snapshot::from_buffer(version, buffer)
         }
     }
 }

@@ -279,10 +279,14 @@ pub enum IcechunkFormatErrorKind {
     InvalidCompressionAlgorithm, // TODO: add more info
     #[error("Invalid Icechunk metadata file")]
     InvalidFlatBuffer(#[from] InvalidFlatbuffer),
-    #[error("error during metadata file deserialization")]
+    #[error("error during metadata deserialization")]
     DeserializationError(#[from] Box<rmp_serde::decode::Error>),
-    #[error("error during metadata file serialization")]
+    #[error("error during metadata serialization")]
     SerializationError(#[from] Box<rmp_serde::encode::Error>),
+    #[error("error during metadata serialization")]
+    SerializationErrorFlexBuffers(#[from] Box<flexbuffers::SerializationError>),
+    #[error("error during metadata deserialization")]
+    DeserializationErrorFlexBuffers(#[from] Box<flexbuffers::DeserializationError>),
     #[error("I/O error")]
     IO(#[from] std::io::Error),
     #[error("path error")]

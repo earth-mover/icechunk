@@ -12,6 +12,7 @@ use super::{
     AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind,
     IcechunkResult, ManifestId, NodeId, Path, SnapshotId,
     flatbuffers::generated,
+    format_constants::SpecVersionBin,
     manifest::{Manifest, ManifestExtents, ManifestRef},
 };
 
@@ -282,6 +283,7 @@ impl ManifestFileInfo {
 #[derive(PartialEq)]
 pub struct Snapshot {
     buffer: Vec<u8>,
+    spec_version: SpecVersionBin,
 }
 
 impl std::fmt::Debug for Snapshot {
@@ -345,12 +347,15 @@ impl Snapshot {
         0x34, // Decodes as 1CECHNKREP0F1RSTCMT0
     ]);
 
-    pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<Snapshot> {
+    pub fn from_buffer(
+        spec_version: SpecVersionBin,
+        buffer: Vec<u8>,
+    ) -> IcechunkResult<Snapshot> {
         let _ = flatbuffers::root_with_opts::<generated::Snapshot>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;
-        Ok(Snapshot { buffer })
+        Ok(Snapshot { buffer, spec_version })
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -387,7 +392,8 @@ impl Snapshot {
             .iter()
             .map(|(k, v)| {
                 let name = builder.create_shared_string(k.as_str());
-                let serialized = rmp_serde::to_vec(v).map_err(Box::new)?;
+                let serialized = flexbuffers::to_vec(v).map_err(Box::new)?;
+
                 let value = builder.create_vector(serialized.as_slice());
                 Ok::<_, IcechunkFormatError>(generated::MetadataItem::create(
                     &mut builder,
@@ -427,7 +433,7 @@ impl Snapshot {
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Ok(Snapshot { buffer })
+        Ok(Snapshot { buffer, spec_version: SpecVersionBin::current() })
     }
 
     pub fn initial() -> IcechunkResult<Self> {
@@ -467,8 +473,11 @@ impl Snapshot {
             .iter()
             .map(|item| {
                 let key = item.name().to_string();
-                let value =
-                    rmp_serde::from_slice(item.value().bytes()).map_err(Box::new)?;
+                let value = if self.spec_version == SpecVersionBin::V1dot0 {
+                    rmp_serde::from_slice(item.value().bytes()).map_err(Box::new)?
+                } else {
+                    flexbuffers::from_slice(item.value().bytes()).map_err(Box::new)?
+                };
                 Ok((key, value))
             })
             .try_collect()
