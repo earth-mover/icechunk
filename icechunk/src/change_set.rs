@@ -1,6 +1,8 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
     iter,
+    sync::LazyLock,
 };
 
 use bytes::Bytes;
@@ -13,7 +15,7 @@ use crate::{
         manifest::{ChunkInfo, ChunkPayload, ManifestExtents, ManifestSplits, Overlap},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
     },
-    session::{SessionResult, find_coord},
+    session::{SessionErrorKind, SessionResult, find_coord},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,8 +26,9 @@ pub struct ArrayData {
 }
 
 type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
+
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct ChangeSet {
+pub struct EditChanges {
     new_groups: HashMap<Path, (NodeId, Bytes)>,
     new_arrays: HashMap<Path, (NodeId, ArrayData)>,
     updated_arrays: HashMap<NodeId, ArrayData>,
@@ -39,76 +42,252 @@ pub struct ChangeSet {
     deleted_arrays: HashSet<(Path, NodeId)>,
 }
 
+impl EditChanges {
+    fn is_empty(&self) -> bool {
+        self == &Default::default()
+    }
+    fn merge(&mut self, other: EditChanges) {
+        // FIXME: this should detect conflict, for example, if different writers added on the same
+        // path, different objects, or if the same path is added and deleted, etc.
+        // TODO: optimize
+        self.new_groups.extend(other.new_groups);
+        self.new_arrays.extend(other.new_arrays);
+        self.updated_groups.extend(other.updated_groups);
+        self.updated_arrays.extend(other.updated_arrays);
+        self.deleted_groups.extend(other.deleted_groups);
+        self.deleted_arrays.extend(other.deleted_arrays);
+        // FIXME: do we even test this?
+        self.deleted_chunks_outside_bounds.extend(other.deleted_chunks_outside_bounds);
+
+        other.set_chunks.into_iter().for_each(|(node, other_splits)| {
+            let manifests = self.set_chunks.entry(node).or_insert_with(|| {
+                HashMap::<ManifestExtents, SplitManifest>::with_capacity(
+                    other_splits.len(),
+                )
+            });
+            other_splits.into_iter().for_each(|(extent, their_manifest)| {
+                manifests.entry(extent).or_default().extend(their_manifest)
+            })
+        });
+    }
+}
+
+pub static EMPTY_EDITS: LazyLock<EditChanges> = LazyLock::new(|| Default::default());
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Move {
+    pub from: Path,
+    pub to: Path,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct MoveTracker(Vec<Move>);
+
+pub static EMPTY_MOVE_TRACKER: LazyLock<MoveTracker> =
+    LazyLock::new(|| Default::default());
+
+impl MoveTracker {
+    pub fn record(&mut self, from: Path, to: Path) {
+        self.0.push(Move { from, to })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn moved_to<'a>(&self, path: &'a Path) -> Option<Cow<'a, Path>> {
+        let mut res = Cow::Borrowed(path);
+        for Move { from, to } in self.0.iter() {
+            if let Ok(rest) = res.as_ref().buf().strip_prefix(from.buf()) {
+                res = Cow::Owned(
+                    Path::new(to.buf().join(rest).to_string().as_str()).unwrap(),
+                );
+            } else if res.buf().starts_with(to.buf()) {
+                // the path has been overwritten by the moves
+                // calling code should check for overwrittes before moving
+                return None;
+            }
+        }
+        Some(res)
+    }
+
+    pub fn moved_from<'a>(&self, path: &'a Path) -> Option<Cow<'a, Path>> {
+        let mut res = Cow::Borrowed(path);
+        for Move { from, to } in self.0.iter().rev() {
+            if let Ok(rest) = res.as_ref().buf().strip_prefix(to.buf()) {
+                res = Cow::Owned(
+                    Path::new(from.buf().join(rest).to_string().as_str()).unwrap(),
+                );
+            } else if res.buf().starts_with(from.buf()) {
+                // the moves have deleted this path
+                // calling code should check for overwrittes before moving
+                return None;
+            }
+        }
+        Some(res)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChangeSet {
+    Edit(EditChanges),
+    Rearrange(MoveTracker),
+}
+
 impl ChangeSet {
+    pub fn for_edits() -> Self {
+        ChangeSet::Edit(Default::default())
+    }
+
+    pub fn for_rearranging() -> Self {
+        ChangeSet::Rearrange(Default::default())
+    }
+
+    fn edits(&self) -> &EditChanges {
+        match self {
+            ChangeSet::Edit(edit_changes) => edit_changes,
+            ChangeSet::Rearrange(_) => &EMPTY_EDITS,
+        }
+    }
+
+    fn edits_mut(&mut self) -> SessionResult<&mut EditChanges> {
+        match self {
+            ChangeSet::Edit(edit_changes) => Ok(edit_changes),
+            ChangeSet::Rearrange(_) => Err(SessionErrorKind::RearrangeSessionOnly.into()),
+        }
+    }
+
+    fn move_tracker(&self) -> &MoveTracker {
+        match self {
+            ChangeSet::Edit(_) => &EMPTY_MOVE_TRACKER,
+            ChangeSet::Rearrange(move_tracker) => move_tracker,
+        }
+    }
+
+    fn move_tracker_mut(&mut self) -> SessionResult<&mut MoveTracker> {
+        match self {
+            ChangeSet::Edit(_) => Err(SessionErrorKind::NonRearrangeSession.into()),
+            ChangeSet::Rearrange(move_tracker) => Ok(move_tracker),
+        }
+    }
+
+    pub fn discard_changes(&mut self) {
+        match self {
+            ChangeSet::Edit(_) => *self = Self::for_edits(),
+            ChangeSet::Rearrange(_) => *self = Self::for_rearranging(),
+        }
+    }
+
+    pub fn fresh(&self) -> Self {
+        match self {
+            ChangeSet::Edit(_) => Self::for_edits(),
+            ChangeSet::Rearrange(_) => Self::for_rearranging(),
+        }
+    }
+
     pub fn deleted_arrays(&self) -> impl Iterator<Item = &(Path, NodeId)> {
-        self.deleted_arrays.iter()
+        self.edits().deleted_arrays.iter()
     }
 
     pub fn deleted_groups(&self) -> impl Iterator<Item = &(Path, NodeId)> {
-        self.deleted_groups.iter()
+        self.edits().deleted_groups.iter()
     }
 
     pub fn updated_arrays(&self) -> impl Iterator<Item = &NodeId> {
-        self.updated_arrays.keys()
+        self.edits().updated_arrays.keys()
     }
 
     pub fn updated_groups(&self) -> impl Iterator<Item = &NodeId> {
-        self.updated_groups.keys()
+        self.edits().updated_groups.keys()
     }
 
     pub fn array_is_deleted(&self, path_and_id: &(Path, NodeId)) -> bool {
-        self.deleted_arrays.contains(path_and_id)
+        self.edits().deleted_arrays.contains(path_and_id)
     }
 
     pub fn changed_chunks(
         &self,
     ) -> impl Iterator<Item = (&NodeId, impl Iterator<Item = &ChunkIndices>)> {
-        self.set_chunks.iter().map(|(node_id, split_map)| {
+        self.edits().set_chunks.iter().map(|(node_id, split_map)| {
             (node_id, split_map.values().flat_map(|x| x.keys()))
         })
     }
 
     pub fn is_updated_array(&self, node: &NodeId) -> bool {
-        self.updated_arrays.contains_key(node)
+        self.edits().updated_arrays.contains_key(node)
     }
 
     pub fn has_chunk_changes(&self, node: &NodeId) -> bool {
-        self.set_chunks.get(node).map(|m| !m.is_empty()).unwrap_or(false)
+        self.edits().set_chunks.get(node).map(|m| !m.is_empty()).unwrap_or(false)
     }
 
     pub fn arrays_with_chunk_changes(&self) -> impl Iterator<Item = &NodeId> {
-        self.set_chunks.keys()
+        self.edits().set_chunks.keys()
     }
 
     pub fn is_empty(&self) -> bool {
-        self == &ChangeSet::default()
+        match self {
+            ChangeSet::Edit(edit_changes) => edit_changes.is_empty(),
+            ChangeSet::Rearrange(move_tracker) => move_tracker.is_empty(),
+        }
     }
 
-    pub fn add_group(&mut self, path: Path, node_id: NodeId, definition: Bytes) {
-        debug_assert!(!self.updated_groups.contains_key(&node_id));
-        self.new_groups.insert(path, (node_id, definition));
+    pub fn move_node(&mut self, from: Path, to: Path) -> SessionResult<()> {
+        self.move_tracker_mut()?.record(from, to);
+        Ok(())
+    }
+
+    pub fn moved_to<'a>(&self, path: &'a Path) -> Option<Cow<'a, Path>> {
+        self.move_tracker().moved_to(path)
+    }
+
+    pub fn moved_from<'a>(&self, path: &'a Path) -> Option<Cow<'a, Path>> {
+        self.move_tracker().moved_from(path)
+    }
+
+    // pub fn has_moves(&self) -> bool {
+    //     !self.moved_nodes.is_empty()
+    // }
+
+    pub fn add_group(
+        &mut self,
+        path: Path,
+        node_id: NodeId,
+        definition: Bytes,
+    ) -> SessionResult<()> {
+        debug_assert!(!self.edits().updated_groups.contains_key(&node_id));
+        self.edits_mut()?.new_groups.insert(path, (node_id, definition));
+        Ok(())
     }
 
     pub fn get_group(&self, path: &Path) -> Option<&(NodeId, Bytes)> {
-        self.new_groups.get(path)
+        self.edits().new_groups.get(path)
     }
 
     pub fn get_array(&self, path: &Path) -> Option<&(NodeId, ArrayData)> {
-        self.new_arrays.get(path)
+        self.edits().new_arrays.get(path)
     }
 
     /// IMPORTANT: This method does not delete children. The caller
     /// is responsible for doing that
-    pub fn delete_group(&mut self, path: Path, node_id: &NodeId) {
-        self.updated_groups.remove(node_id);
-        if self.new_groups.remove(&path).is_none() {
+    pub fn delete_group(&mut self, path: Path, node_id: &NodeId) -> SessionResult<()> {
+        let edits = self.edits_mut()?;
+        edits.updated_groups.remove(node_id);
+        if edits.new_groups.remove(&path).is_none() {
             // it's an old group, we need to flag it as deleted
-            self.deleted_groups.insert((path, node_id.clone()));
+            edits.deleted_groups.insert((path, node_id.clone()));
         }
+        Ok(())
     }
 
-    pub fn add_array(&mut self, path: Path, node_id: NodeId, array_data: ArrayData) {
-        self.new_arrays.insert(path, (node_id, array_data));
+    pub fn add_array(
+        &mut self,
+        path: Path,
+        node_id: NodeId,
+        array_data: ArrayData,
+    ) -> SessionResult<()> {
+        self.edits_mut()?.new_arrays.insert(path, (node_id, array_data));
+        Ok(())
     }
 
     pub fn update_array(
@@ -117,20 +296,21 @@ impl ChangeSet {
         path: &Path,
         array_data: ArrayData,
         new_splits: &ManifestSplits,
-    ) {
-        match self.new_arrays.get(path) {
+    ) -> SessionResult<()> {
+        let edits = self.edits_mut()?;
+        match edits.new_arrays.get(path) {
             Some((id, _)) => {
-                debug_assert!(!self.updated_arrays.contains_key(id));
-                self.new_arrays.insert(path.clone(), (node_id.clone(), array_data));
+                debug_assert!(!edits.updated_arrays.contains_key(id));
+                edits.new_arrays.insert(path.clone(), (node_id.clone(), array_data));
             }
             None => {
-                self.updated_arrays.insert(node_id.clone(), array_data);
+                edits.updated_arrays.insert(node_id.clone(), array_data);
             }
         }
 
         // update existing splits
         let mut to_remove = HashSet::<ChunkIndices>::new();
-        if let Some(manifests) = self.set_chunks.remove(node_id) {
+        if let Some(manifests) = edits.set_chunks.remove(node_id) {
             let mut new_deleted_chunks = HashSet::<ChunkIndices>::new();
             let mut new_manifests =
                 HashMap::<ManifestExtents, SplitManifest>::with_capacity(
@@ -165,7 +345,7 @@ impl ChangeSet {
             }
 
             // bring back any previously tracked deletes
-            if let Some(deletes) = self.deleted_chunks_outside_bounds.get_mut(node_id) {
+            if let Some(deletes) = edits.deleted_chunks_outside_bounds.get_mut(node_id) {
                 for coord in deletes.iter() {
                     if let Some(extents) = new_splits.find(coord) {
                         new_manifests
@@ -178,47 +358,59 @@ impl ChangeSet {
                 deletes.retain(|item| !to_remove.contains(item));
                 to_remove.drain();
             };
-            self.set_chunks.insert(node_id.clone(), new_manifests);
+            edits.set_chunks.insert(node_id.clone(), new_manifests);
 
             // keep track of any deletes not inserted in to set_chunks
-            self.deleted_chunks_outside_bounds
+            edits
+                .deleted_chunks_outside_bounds
                 .entry(node_id.clone())
                 .or_default()
                 .extend(new_deleted_chunks);
         }
+        Ok(())
     }
 
-    pub fn update_group(&mut self, node_id: &NodeId, path: &Path, definition: Bytes) {
-        match self.new_groups.get(path) {
+    pub fn update_group(
+        &mut self,
+        node_id: &NodeId,
+        path: &Path,
+        definition: Bytes,
+    ) -> SessionResult<()> {
+        let edits = self.edits_mut()?;
+        match edits.new_groups.get(path) {
             Some((id, _)) => {
-                debug_assert!(!self.updated_groups.contains_key(id));
-                self.new_groups.insert(path.clone(), (node_id.clone(), definition));
+                debug_assert!(!edits.updated_groups.contains_key(id));
+                edits.new_groups.insert(path.clone(), (node_id.clone(), definition));
             }
             None => {
-                self.updated_groups.insert(node_id.clone(), definition);
+                edits.updated_groups.insert(node_id.clone(), definition);
             }
         }
+        Ok(())
     }
 
-    pub fn delete_array(&mut self, path: Path, node_id: &NodeId) {
+    pub fn delete_array(&mut self, path: Path, node_id: &NodeId) -> SessionResult<()> {
         // if deleting a new array created in this session, just remove the entry
         // from new_arrays
-        let node_and_meta = self.new_arrays.remove(&path);
+        let edits = self.edits_mut()?;
+        let node_and_meta = edits.new_arrays.remove(&path);
         let is_new_array = node_and_meta.is_some();
         debug_assert!(
             !is_new_array || node_and_meta.map(|n| n.0).as_ref() == Some(node_id)
         );
 
-        self.updated_arrays.remove(node_id);
-        self.set_chunks.remove(node_id);
+        edits.updated_arrays.remove(node_id);
+        edits.set_chunks.remove(node_id);
         if !is_new_array {
-            self.deleted_arrays.insert((path, node_id.clone()));
+            edits.deleted_arrays.insert((path, node_id.clone()));
         }
+        Ok(())
     }
 
     pub fn is_deleted(&self, path: &Path, node_id: &NodeId) -> bool {
         let key = (path.clone(), node_id.clone());
-        self.deleted_groups.contains(&key) || self.deleted_arrays.contains(&key)
+        let edits = self.edits();
+        edits.deleted_groups.contains(&key) || edits.deleted_arrays.contains(&key)
     }
 
     //pub fn has_updated_definition(&self, node_id: &NodeId) -> bool {
@@ -226,11 +418,11 @@ impl ChangeSet {
     //}
 
     pub fn get_updated_array(&self, node_id: &NodeId) -> Option<&ArrayData> {
-        self.updated_arrays.get(node_id)
+        self.edits().updated_arrays.get(node_id)
     }
 
     pub fn get_updated_group(&self, node_id: &NodeId) -> Option<&Bytes> {
-        self.updated_groups.get(node_id)
+        self.edits().updated_groups.get(node_id)
     }
 
     pub fn set_chunk_ref(
@@ -239,12 +431,13 @@ impl ChangeSet {
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
         splits: &ManifestSplits,
-    ) {
+    ) -> SessionResult<()> {
         #[allow(clippy::expect_used)]
         let extent = splits.find(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
-        self.set_chunks
+        self.edits_mut()?
+            .set_chunks
             .entry(node_id)
             .or_insert_with(|| {
                 HashMap::<
@@ -255,6 +448,7 @@ impl ChangeSet {
             .entry(extent.clone())
             .or_default()
             .insert(coord, data);
+        Ok(())
     }
 
     pub fn get_chunk_ref(
@@ -262,7 +456,7 @@ impl ChangeSet {
         node_id: &NodeId,
         coords: &ChunkIndices,
     ) -> Option<&Option<ChunkPayload>> {
-        self.set_chunks.get(node_id).and_then(|node_chunks| {
+        self.edits().set_chunks.get(node_id).and_then(|node_chunks| {
             find_coord(node_chunks.keys(), coords).and_then(|(_, extent)| {
                 node_chunks.get(extent).and_then(|s| s.get(coords))
             })
@@ -275,19 +469,20 @@ impl ChangeSet {
         &mut self,
         node_id: &NodeId,
         predicate: impl Fn(&ChunkIndices) -> bool,
-    ) {
-        if let Some(changes) = self.set_chunks.get_mut(node_id) {
+    ) -> SessionResult<()> {
+        if let Some(changes) = self.edits_mut()?.set_chunks.get_mut(node_id) {
             for split in changes.values_mut() {
                 split.retain(|coord, _| !predicate(coord));
             }
         }
+        Ok(())
     }
 
     pub fn deleted_chunks_iterator(
         &self,
         node_id: &NodeId,
     ) -> impl Iterator<Item = &ChunkIndices> {
-        match self.deleted_chunks_outside_bounds.get(node_id) {
+        match self.edits().deleted_chunks_outside_bounds.get(node_id) {
             Some(deletes) => Either::Right(deletes.iter()),
             None => Either::Left(iter::empty()),
         }
@@ -302,7 +497,7 @@ impl ChangeSet {
         if self.is_deleted(node_path, node_id) {
             return Either::Left(iter::empty());
         }
-        match self.set_chunks.get(node_id) {
+        match self.edits().set_chunks.get(node_id) {
             None => Either::Left(iter::empty()),
             Some(h) => Either::Right(
                 h.iter()
@@ -315,7 +510,7 @@ impl ChangeSet {
     pub fn new_arrays_chunk_iterator(
         &self,
     ) -> impl Iterator<Item = (Path, ChunkInfo)> + use<'_> {
-        self.new_arrays.iter().flat_map(|(path, (node_id, _))| {
+        self.edits().new_arrays.iter().flat_map(|(path, (node_id, _))| {
             self.new_array_chunk_iterator(node_id, path, ManifestExtents::ALL)
                 .map(|ci| (path.clone(), ci))
         })
@@ -346,7 +541,7 @@ impl ChangeSet {
         if self.is_deleted(node_path, node_id) {
             return Either::Left(iter::empty());
         }
-        match self.set_chunks.get(node_id) {
+        match self.edits().set_chunks.get(node_id) {
             None => Either::Left(iter::empty()),
             Some(h) => Either::Right(h.keys()),
         }
@@ -357,7 +552,7 @@ impl ChangeSet {
         node_id: &NodeId,
         extent: &ManifestExtents,
     ) -> Option<&SplitManifest> {
-        self.set_chunks.get(node_id).and_then(|x| x.get(extent))
+        self.edits().set_chunks.get(node_id).and_then(|x| x.get(extent))
     }
 
     pub fn new_nodes(&self) -> impl Iterator<Item = (&Path, &NodeId)> {
@@ -365,40 +560,25 @@ impl ChangeSet {
     }
 
     pub fn new_groups(&self) -> impl Iterator<Item = (&Path, &NodeId)> {
-        self.new_groups.iter().map(|(path, (node_id, _))| (path, node_id))
+        self.edits().new_groups.iter().map(|(path, (node_id, _))| (path, node_id))
     }
 
     pub fn new_arrays(&self) -> impl Iterator<Item = (&Path, &NodeId)> {
-        self.new_arrays.iter().map(|(path, (node_id, _))| (path, node_id))
+        self.edits().new_arrays.iter().map(|(path, (node_id, _))| (path, node_id))
     }
 
     /// Merge this ChangeSet with `other`.
     ///
     /// Results of the merge are applied to `self`. Changes present in `other` take precedence over
     /// `self` changes.
-    pub fn merge(&mut self, other: ChangeSet) {
-        // FIXME: this should detect conflict, for example, if different writers added on the same
-        // path, different objects, or if the same path is added and deleted, etc.
-        // TODO: optimize
-        self.new_groups.extend(other.new_groups);
-        self.new_arrays.extend(other.new_arrays);
-        self.updated_groups.extend(other.updated_groups);
-        self.updated_arrays.extend(other.updated_arrays);
-        self.deleted_groups.extend(other.deleted_groups);
-        self.deleted_arrays.extend(other.deleted_arrays);
-        // FIXME: do we even test this?
-        self.deleted_chunks_outside_bounds.extend(other.deleted_chunks_outside_bounds);
-
-        other.set_chunks.into_iter().for_each(|(node, other_splits)| {
-            let manifests = self.set_chunks.entry(node).or_insert_with(|| {
-                HashMap::<ManifestExtents, SplitManifest>::with_capacity(
-                    other_splits.len(),
-                )
-            });
-            other_splits.into_iter().for_each(|(extent, their_manifest)| {
-                manifests.entry(extent).or_default().extend(their_manifest)
-            })
-        });
+    pub fn merge(&mut self, other: ChangeSet) -> SessionResult<()> {
+        match (self, other) {
+            (ChangeSet::Edit(my_edit_changes), ChangeSet::Edit(other_changes)) => {
+                my_edit_changes.merge(other_changes);
+                Ok(())
+            }
+            _ => Err(SessionErrorKind::RearrangeSessionOnly.into()),
+        }
     }
 
     pub fn merge_many<T: IntoIterator<Item = ChangeSet>>(&mut self, others: T) {
@@ -441,7 +621,7 @@ impl ChangeSet {
 
     pub fn get_new_array(&self, path: &Path) -> Option<NodeSnapshot> {
         self.get_array(path).map(|(id, array_data)| {
-            debug_assert!(!self.updated_arrays.contains_key(id));
+            debug_assert!(!self.edits().updated_arrays.contains_key(id));
             NodeSnapshot {
                 id: id.clone(),
                 path: path.clone(),
@@ -459,7 +639,7 @@ impl ChangeSet {
 
     pub fn get_new_group(&self, path: &Path) -> Option<NodeSnapshot> {
         self.get_group(path).map(|(id, definition)| {
-            debug_assert!(!self.updated_groups.contains_key(id));
+            debug_assert!(!self.edits().updated_groups.contains_key(id));
             NodeSnapshot {
                 id: id.clone(),
                 path: path.clone(),
@@ -484,19 +664,25 @@ impl ChangeSet {
 
     // Applies the changeset to an existing node, yielding a new node if it hasn't been deleted
     pub fn update_existing_node(&self, node: NodeSnapshot) -> Option<NodeSnapshot> {
-        if self.is_deleted(&node.path, &node.id) {
+        let new_path = self.moved_to(&node.path).unwrap();
+        if self.is_deleted(new_path.as_ref(), &node.id) {
             return None;
         }
 
+        let edits = self.edits();
         match node.node_data {
             NodeData::Group => {
                 let new_definition =
-                    self.updated_groups.get(&node.id).cloned().unwrap_or(node.user_data);
-                Some(NodeSnapshot { user_data: new_definition, ..node })
+                    edits.updated_groups.get(&node.id).cloned().unwrap_or(node.user_data);
+                Some(NodeSnapshot {
+                    user_data: new_definition,
+                    path: new_path.into_owned(),
+                    ..node
+                })
             }
             NodeData::Array { shape, dimension_names, manifests } => {
                 let new_data =
-                    self.updated_arrays.get(&node.id).cloned().unwrap_or_else(|| {
+                    edits.updated_arrays.get(&node.id).cloned().unwrap_or_else(|| {
                         ArrayData { shape, dimension_names, user_data: node.user_data }
                     });
                 Some(NodeSnapshot {
@@ -506,16 +692,17 @@ impl ChangeSet {
                         dimension_names: new_data.dimension_names,
                         manifests,
                     },
+                    path: new_path.into_owned(),
                     ..node
                 })
             }
         }
     }
 
-    pub fn undo_update(&mut self, node_id: &NodeId) {
-        self.updated_arrays.remove(node_id);
-        self.updated_groups.remove(node_id);
-    }
+    //pub fn undo_update(&mut self, node_id: &NodeId) {
+    //    self.updated_arrays.remove(node_id);
+    //    self.updated_groups.remove(node_id);
+    //}
 }
 
 #[cfg(test)]
@@ -527,9 +714,9 @@ mod tests {
     use super::ChangeSet;
 
     use crate::{
-        change_set::ArrayData,
+        change_set::{ArrayData, MoveTracker},
         format::{
-            ChunkIndices, NodeId,
+            ChunkIndices, NodeId, Path,
             manifest::{ChunkInfo, ChunkPayload, ManifestSplits},
             snapshot::ArrayShape,
         },
@@ -537,7 +724,7 @@ mod tests {
 
     #[icechunk_macros::test]
     fn test_new_arrays_chunk_iterator() {
-        let mut change_set = ChangeSet::default();
+        let mut change_set = ChangeSet::Edit(Default::default());
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         let shape = ArrayShape::new(vec![(2, 1), (2, 1), (2, 1)]).unwrap();
@@ -641,5 +828,138 @@ mod tests {
             .into();
             assert_eq!(all_chunks, expected_chunks);
         }
+    }
+
+    #[icechunk_macros::test]
+    fn test_new_path_for_simple() {
+        let mut mt = MoveTracker::default();
+        mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
+        mt.record(
+            Path::new("/foo/bar/new/inner-old1").unwrap(),
+            Path::new("/foo/bar/new/inner-new").unwrap(),
+        );
+        mt.record(
+            Path::new("/foo/bar/new/inner-old2").unwrap(),
+            Path::new("/inner-new2").unwrap(),
+        );
+
+        assert_eq!(
+            mt.moved_to(&Path::new("/foo").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo").unwrap()
+        );
+        assert_eq!(
+            mt.moved_to(&Path::new("/foo/bar").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo/bar").unwrap()
+        );
+        assert_eq!(
+            mt.moved_to(&Path::new("/foo/bar/old").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo/bar/new").unwrap()
+        );
+        assert_eq!(
+            mt.moved_to(&Path::new("/foo/bar/old/more").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo/bar/new/more").unwrap()
+        );
+        assert_eq!(
+            mt.moved_to(&Path::new("/foo/bar/old/more/andmore").unwrap())
+                .unwrap()
+                .as_ref(),
+            &Path::new("/foo/bar/new/more/andmore").unwrap()
+        );
+        assert_eq!(
+            mt.moved_to(&Path::new("/other").unwrap()).unwrap().as_ref(),
+            &Path::new("/other").unwrap()
+        );
+    }
+
+    #[icechunk_macros::test]
+    fn test_moved_from_simple() {
+        let mut mt = MoveTracker::default();
+        mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
+        mt.record(
+            Path::new("/foo/bar/new/inner-old1").unwrap(),
+            Path::new("/foo/bar/new/inner-new").unwrap(),
+        );
+        mt.record(
+            Path::new("/foo/bar/new/inner-old2").unwrap(),
+            Path::new("/inner-new2").unwrap(),
+        );
+
+        assert_eq!(
+            mt.moved_from(&Path::new("/foo").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo").unwrap()
+        );
+        assert_eq!(
+            mt.moved_from(&Path::new("/foo/bar").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo/bar").unwrap()
+        );
+        assert_eq!(
+            mt.moved_from(&Path::new("/foo/bar/new").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo/bar/old").unwrap()
+        );
+        assert_eq!(
+            mt.moved_from(&Path::new("/foo/bar/new/more").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo/bar/old/more").unwrap()
+        );
+        assert_eq!(
+            mt.moved_from(&Path::new("/foo/bar/new/more/andmore").unwrap())
+                .unwrap()
+                .as_ref(),
+            &Path::new("/foo/bar/old/more/andmore").unwrap()
+        );
+        assert!(mt.moved_from(&Path::new("/foo/bar/old").unwrap()).is_none());
+        assert!(mt.moved_from(&Path::new("/foo/bar/old/more").unwrap()).is_none());
+        assert!(
+            mt.moved_from(&Path::new("/foo/bar/old/more/andmore").unwrap()).is_none()
+        );
+
+        assert_eq!(
+            mt.moved_from(&Path::new("/foo/bar/new/inner-new").unwrap())
+                .unwrap()
+                .as_ref(),
+            &Path::new("/foo/bar/old/inner-old1").unwrap()
+        );
+        assert_eq!(
+            mt.moved_from(&Path::new("/inner-new2").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo/bar/old/inner-old2").unwrap()
+        );
+    }
+
+    #[icechunk_macros::test]
+    fn test_moved_to_back_and_forth() {
+        let mut mt = MoveTracker::default();
+        mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
+        mt.record(Path::new("/foo/bar/new").unwrap(), Path::new("/foo/bar/old").unwrap());
+        assert_eq!(
+            mt.moved_to(&Path::new("/foo/bar/old/inner").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo/bar/old/inner").unwrap(),
+        );
+        assert_eq!(
+            mt.moved_to(&Path::new("/foo/bar/old").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo/bar/old").unwrap(),
+        );
+        assert_eq!(
+            mt.moved_to(&Path::new("/other").unwrap()).unwrap().as_ref(),
+            &Path::new("/other").unwrap(),
+        );
+        assert!(mt.moved_to(&Path::new("/foo/bar/new/other").unwrap()).is_none());
+    }
+
+    #[icechunk_macros::test]
+    fn test_moved_from_back_and_forth() {
+        let mut mt = MoveTracker::default();
+        mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
+        mt.record(Path::new("/foo/bar/new").unwrap(), Path::new("/foo/bar/old").unwrap());
+        assert_eq!(
+            mt.moved_from(&Path::new("/foo/bar/old/inner").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo/bar/old/inner").unwrap(),
+        );
+        assert_eq!(
+            mt.moved_from(&Path::new("/foo/bar/old").unwrap()).unwrap().as_ref(),
+            &Path::new("/foo/bar/old").unwrap(),
+        );
+        assert_eq!(
+            mt.moved_from(&Path::new("/other").unwrap()).unwrap().as_ref(),
+            &Path::new("/other").unwrap(),
+        );
     }
 }

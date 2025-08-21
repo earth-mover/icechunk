@@ -480,6 +480,10 @@ impl Path {
     pub fn name(&self) -> Option<&str> {
         self.0.file_name()
     }
+
+    pub fn buf(&self) -> &Utf8UnixPathBuf {
+        &self.0
+    }
 }
 
 impl TryFrom<&str> for Path {

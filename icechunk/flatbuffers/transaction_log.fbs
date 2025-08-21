@@ -47,6 +47,10 @@ table TransactionLog {
   // chunk ref changes made in this transaction
   // sorted in ascending order of the node_id of the ArrayUpdatedChunks
   updated_chunks: [ArrayUpdatedChunks] (required);
+
+  // sorted in ascending order of the node_id
+  // Added in spec version: 2.0
+  moved_nodes: [ObjectId8];
 }
 
 root_type TransactionLog;

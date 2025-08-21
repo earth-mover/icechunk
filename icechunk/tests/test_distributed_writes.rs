@@ -48,7 +48,7 @@ async fn write_chunks(
                 .chain(fy.to_le_bytes().into_iter())
                 .collect();
             let payload =
-                ds.get_chunk_writer()(Bytes::copy_from_slice(bytes.as_slice())).await?;
+                ds.get_chunk_writer()?(Bytes::copy_from_slice(bytes.as_slice())).await?;
             ds.set_chunk_ref(
                 "/array".try_into().unwrap(),
                 ChunkIndices(vec![x, y]),

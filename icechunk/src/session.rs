@@ -7,6 +7,7 @@ use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     cmp::min,
     collections::{HashMap, HashSet},
     convert::Infallible,
@@ -22,7 +23,7 @@ use tracing::{Instrument, debug, info, instrument, trace, warn};
 use crate::{
     RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
-    change_set::{ArrayData, ChangeSet},
+    change_set::{ArrayData, ChangeSet, MoveTracker},
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
@@ -63,6 +64,14 @@ pub enum SessionErrorKind {
 
     #[error("Read only sessions cannot modify the repository")]
     ReadOnlySession,
+    #[error(
+        "This session was created to rearrange the hierarchy, other write operations cannot be executed. Commit or abandon the sessions and create a regular writable session"
+    )]
+    RearrangeSessionOnly,
+    #[error(
+        "To move nodes in the hierarchy you need to create a rearrange session. Commit or abandon this session and create a new rearrange session"
+    )]
+    NonRearrangeSession,
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
     #[error("no ancestor node was found for `{prefix}`")]
@@ -236,7 +245,7 @@ impl Session {
             virtual_resolver,
             branch_name: None,
             snapshot_id,
-            change_set: ChangeSet::default(),
+            change_set: ChangeSet::for_edits(),
             default_commit_metadata: SnapshotProperties::default(),
             // Splits are populated for a node during
             // `add_array`, `update_array`, and `set_chunk_ref`
@@ -263,7 +272,32 @@ impl Session {
             virtual_resolver,
             branch_name: Some(branch_name),
             snapshot_id,
-            change_set: Default::default(),
+            change_set: ChangeSet::for_edits(),
+            default_commit_metadata,
+            splits: Default::default(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_rearrange_session(
+        config: RepositoryConfig,
+        storage_settings: storage::Settings,
+        storage: Arc<dyn Storage + Send + Sync>,
+        asset_manager: Arc<AssetManager>,
+        virtual_resolver: Arc<VirtualChunkResolver>,
+        branch_name: String,
+        snapshot_id: SnapshotId,
+        default_commit_metadata: SnapshotProperties,
+    ) -> Self {
+        Self {
+            config,
+            storage_settings: Arc::new(storage_settings),
+            storage,
+            asset_manager,
+            virtual_resolver,
+            branch_name: Some(branch_name),
+            snapshot_id,
+            change_set: ChangeSet::for_rearranging(),
             default_commit_metadata,
             splits: Default::default(),
         }
@@ -292,11 +326,7 @@ impl Session {
     }
 
     pub fn has_uncommitted_changes(&self) -> bool {
-        !self.change_set.is_empty()
-    }
-
-    pub fn changes(&self) -> &ChangeSet {
-        &self.change_set
+        !self.change_set().is_empty()
     }
 
     pub fn config(&self) -> &RepositoryConfig {
@@ -313,7 +343,7 @@ impl Session {
     /// Compute an overview of the current session changes
     pub async fn status(&self) -> SessionResult<Diff> {
         // it doesn't really matter what Id we give to the tx log, it's not going to be persisted
-        let tx_log = TransactionLog::new(&SnapshotId::random(), &self.change_set);
+        let tx_log = TransactionLog::new(&SnapshotId::random(), self.change_set());
         let from_session = Self::create_readonly_session(
             self.config().clone(),
             self.storage_settings.as_ref().clone(),
@@ -339,7 +369,7 @@ impl Session {
         match self.get_node(&path).await {
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 let id = NodeId::random();
-                self.change_set.add_group(path.clone(), id, definition);
+                self.change_set_mut()?.add_group(path.clone(), id, definition);
                 Ok(())
             }
             Ok(node) => Err(SessionErrorKind::AlreadyExists {
@@ -374,13 +404,14 @@ impl Session {
                     .await?
                     .filter_ok(|node| node.path.starts_with(&parent.path))
                     .try_collect()?;
+                let change_set = self.change_set_mut()?;
                 for node in nodes_iter {
                     match node.node_type() {
                         NodeType::Group => {
-                            self.change_set.delete_group(node.path, &node.id)
+                            change_set.delete_group(node.path, &node.id)?
                         }
                         NodeType::Array => {
-                            self.change_set.delete_array(node.path, &node.id)
+                            change_set.delete_array(node.path, &node.id)?
                         }
                     }
                 }
@@ -406,7 +437,7 @@ impl Session {
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 let id = NodeId::random();
                 self.cache_splits(&id, &path, &shape, &dimension_names);
-                self.change_set.add_array(
+                self.change_set_mut()?.add_array(
                     path,
                     id,
                     ArrayData { shape, dimension_names, user_data },
@@ -433,17 +464,33 @@ impl Session {
         dimension_names: Option<Vec<DimensionName>>,
         user_data: Bytes,
     ) -> SessionResult<()> {
-        self.get_array(path).await.map(|node| {
-            // needed to handle a resize for example.
-            self.cache_splits(&node.id, path, &shape, &dimension_names);
-            self.change_set.update_array(
-                &node.id,
-                path,
-                ArrayData { shape, dimension_names, user_data },
+        match self.get_array(path).await {
+            Ok(node) => {
+                // needed to handle a resize for example.
+                self.cache_splits(&node.id, path, &shape, &dimension_names);
+                {
+                    // we need to play this trick because we need to borrow from self twice
+                    // once to get the mutable change set, and other to compute
+                    // and pass splits
+                    // This solution first call the function to trigger any
+                    // errors, and then it takes the mutable ref again
+                    // without referencing self, only the field
+                    let _ = self.change_set_mut()?;
+                }
+                let change_set = &mut self.change_set;
                 #[allow(clippy::expect_used)]
-                self.splits.get(&node.id).expect("getting splits should not fail."),
-            )
-        })
+                let splits =
+                    self.splits.get(&node.id).expect("getting splits should not fail.");
+                change_set.update_array(
+                    &node.id,
+                    path,
+                    ArrayData { shape, dimension_names, user_data },
+                    splits,
+                );
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     // Updates an group Zarr metadata
@@ -455,9 +502,9 @@ impl Session {
         path: &Path,
         definition: Bytes,
     ) -> SessionResult<()> {
-        self.get_group(path)
-            .await
-            .map(|node| self.change_set.update_group(&node.id, path, definition))
+        self.get_group(path).await.and_then(|node| {
+            Ok(self.change_set_mut()?.update_group(&node.id, path, definition)?)
+        })
     }
 
     /// Delete an array in the hierarchy
@@ -467,11 +514,17 @@ impl Session {
     pub async fn delete_array(&mut self, path: Path) -> SessionResult<()> {
         match self.get_array(&path).await {
             Ok(node) => {
-                self.change_set.delete_array(node.path, &node.id);
+                self.change_set_mut()?.delete_array(node.path, &node.id);
             }
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {}
             Err(err) => Err(err)?,
         }
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub fn move_node(&mut self, from: Path, to: Path) -> SessionResult<()> {
+        self.change_set_mut()?.move_node(from, to)?;
         Ok(())
     }
 
@@ -505,6 +558,30 @@ impl Session {
     pub fn lookup_splits(&self, node_id: &NodeId) -> Option<&ManifestSplits> {
         self.splits.get(node_id)
     }
+
+    fn change_set(&self) -> &ChangeSet {
+        &self.change_set
+    }
+
+    fn change_set_mut(&mut self) -> SessionResult<&mut ChangeSet> {
+        if self.read_only() {
+            Err(SessionErrorKind::ReadOnlySession.into())
+        } else {
+            Ok(&mut self.change_set)
+        }
+    }
+
+    // fn move_tracker(&self) -> &MoveTracker {
+    //     self.move_tracker.as_ref().unwrap_or(&*EMPTY_MOVE_TRACKER)
+    // }
+
+    // fn move_tracker_mut(&mut self) -> SessionResult<&mut MoveTracker> {
+    //     if self.read_only() {
+    //         Err(SessionErrorKind::ReadOnlySession.into())
+    //     } else {
+    //         self.move_tracker.as_mut().ok_or(SessionErrorKind::NonRearrangeSession.into())
+    //     }
+    // }
 
     /// This method is directly called in add_array & update_array
     /// where we know we must update the splits HashMap
@@ -553,7 +630,7 @@ impl Session {
                 let splits = self
                     .get_splits(&node.id, &node.path, &shape, &dimension_names)
                     .clone();
-                self.change_set.set_chunk_ref(node.id, coord, data, &splits);
+                self.change_set_mut()?.set_chunk_ref(node.id, coord, data, &splits);
                 Ok(())
             } else {
                 Err(SessionErrorKind::InvalidIndex {
@@ -590,7 +667,7 @@ impl Session {
 
     #[instrument(skip(self))]
     pub async fn get_node(&self, path: &Path) -> SessionResult<NodeSnapshot> {
-        get_node(&self.asset_manager, &self.change_set, self.snapshot_id(), path).await
+        get_node(&self.asset_manager, self.change_set(), self.snapshot_id(), path).await
     }
 
     pub async fn get_array(&self, path: &Path) -> SessionResult<NodeSnapshot> {
@@ -624,7 +701,7 @@ impl Session {
     ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a + use<'a> {
         node_chunk_iterator(
             &self.asset_manager,
-            &self.change_set,
+            self.change_set(),
             &self.snapshot_id,
             path,
             ManifestExtents::ALL,
@@ -656,7 +733,7 @@ impl Session {
                 // check the chunks modified in this session first
                 // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
                 let session_chunk =
-                    self.change_set.get_chunk_ref(&node.id, coords).cloned();
+                    self.change_set().get_chunk_ref(&node.id, coords).cloned();
 
                 // If session_chunk is not None we have to return it, because is the update the
                 // user made in the current session
@@ -770,14 +847,16 @@ impl Session {
     #[instrument(skip(self))]
     pub fn get_chunk_writer(
         &self,
-    ) -> impl FnOnce(
-        Bytes,
-    )
-        -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
-    + use<> {
+    ) -> SessionResult<
+        impl FnOnce(
+            Bytes,
+        )
+            -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
+        + use<>,
+    > {
         let threshold = self.config().inline_chunk_threshold_bytes() as usize;
         let asset_manager = Arc::clone(&self.asset_manager);
-        move |data: Bytes| {
+        let fut = move |data: Bytes| {
             async move {
                 let payload = if data.len() > threshold {
                     new_materialized_chunk(asset_manager.as_ref(), data).await?
@@ -787,7 +866,8 @@ impl Session {
                 Ok(payload)
             }
             .boxed()
-        }
+        };
+        Ok(fut)
     }
 
     #[instrument(skip(self))]
@@ -851,14 +931,14 @@ impl Session {
     pub async fn list_nodes(
         &self,
     ) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + '_> {
-        updated_nodes(&self.asset_manager, &self.change_set, &self.snapshot_id).await
+        updated_nodes(&self.asset_manager, self.change_set(), &self.snapshot_id).await
     }
 
     #[instrument(skip(self))]
     pub async fn all_chunks(
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_> {
-        all_chunks(&self.asset_manager, &self.change_set, self.snapshot_id()).await
+        all_chunks(&self.asset_manager, self.change_set(), self.snapshot_id()).await
     }
 
     #[instrument(skip(self))]
@@ -870,7 +950,7 @@ impl Session {
         let node = self.get_array(array_path).await?;
         let updated_chunks = updated_node_chunks_iterator(
             self.asset_manager.as_ref(),
-            &self.change_set,
+            self.change_set(),
             &self.snapshot_id,
             node.clone(),
             ManifestExtents::ALL,
@@ -880,7 +960,7 @@ impl Session {
 
         let res = try_stream! {
             let new_chunks = stream::iter(
-                self.change_set
+                self.change_set()
                     .new_array_chunk_iterator(&node.id, array_path, ManifestExtents::ALL)
                     .map(|chunk_info| Ok::<ChunkIndices, SessionError>(chunk_info.coord)),
             );
@@ -909,10 +989,11 @@ impl Session {
         Ok(stream)
     }
 
-    /// Discard all uncommitted changes and return them as a `ChangeSet`
+    /// Discard all uncommitted changes
     #[instrument(skip(self))]
-    pub fn discard_changes(&mut self) -> ChangeSet {
-        std::mem::take(&mut self.change_set)
+    pub fn discard_changes(&mut self) -> SessionResult<()> {
+        self.change_set_mut()?.discard_changes();
+        Ok(())
     }
 
     /// Merge a set of `ChangeSet`s into the repository without committing them
@@ -939,7 +1020,7 @@ impl Session {
         // So a simple `extend` is fine, if the same node appears in two sessions,
         // it must have the same splits and overwriting is fine.
         self.splits.extend(other_splits);
-        self.change_set.merge(change_set);
+        self.change_set.merge(change_set)?;
         Ok(())
     }
 
@@ -1002,6 +1083,8 @@ impl Session {
             return Err(SessionErrorKind::ReadOnlySession.into());
         };
 
+        let branch_name = branch_name.clone();
+
         let default_metadata = self.default_commit_metadata.clone();
         let properties = properties
             .map(|p| {
@@ -1010,12 +1093,22 @@ impl Session {
                 merged
             })
             .unwrap_or(default_metadata);
+        {
+            // we need to play this trick because we need to borrow from self twice
+            // once to get the mutable change set, and other to compute
+            // and pass splits
+            // This solution first call the function to trigger any
+            // errors, and then it takes the mutable ref again
+            // without referencing self, only the field
+            let _ = self.change_set_mut()?;
+        }
+        let change_set = &mut self.change_set;
 
         let (id, _, _) = do_commit(
             Arc::clone(&self.asset_manager),
-            branch_name,
+            branch_name.as_str(),
             &self.snapshot_id,
-            &self.change_set,
+            change_set,
             message,
             Some(properties),
             &self.splits,
@@ -1026,7 +1119,7 @@ impl Session {
 
         // if the commit was successful, we update the session to be
         // a read only session pointed at the new snapshot
-        self.change_set = ChangeSet::default();
+        self.change_set = ChangeSet::for_edits();
         self.snapshot_id = id.clone();
         // Once committed, the session is now read only, which we control
         // by setting the branch_name to None (you can only write to a branch session)
@@ -1197,7 +1290,9 @@ impl Session {
                         current_snapshot_id.clone(),
                     );
 
-                    let change_set = std::mem::take(&mut self.change_set);
+                    let mut fresh = self.change_set().fresh();
+                    std::mem::swap(self.change_set_mut()?, &mut fresh);
+                    let change_set = fresh;
                     // TODO: this should probably execute in a worker thread
                     match solver.solve(&tx_log, &session, change_set, self).await? {
                         ConflictResolution::Patched(patched_changeset) => {
@@ -1484,7 +1579,7 @@ async fn get_node(
         None => {
             let node =
                 get_existing_node(asset_manager, change_set, snapshot_id, path).await?;
-            if change_set.is_deleted(&node.path, &node.id) {
+            if change_set.is_deleted(path, &node.id) {
                 Err(SessionErrorKind::NodeNotFound {
                     path: path.clone(),
                     message: "getting node".to_string(),
@@ -1506,44 +1601,63 @@ async fn get_existing_node(
     // An existing node is one that is present in a Snapshot file on storage
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
 
-    let node = snapshot.get_node(path).map_err(|err| match err {
-        // A missing node here is not really a format error, so we need to
-        // generate the correct error for repositories
-        IcechunkFormatError {
-            kind: IcechunkFormatErrorKind::NodeNotFound { path },
-            ..
-        } => SessionErrorKind::NodeNotFound {
-            path,
+    let renamed_path = change_set.moved_from(path);
+    if renamed_path.is_none() {
+        return Err(SessionErrorKind::NodeNotFound {
+            path: path.clone(),
             message: "existing node not found".to_string(),
         }
-        .into(),
-        err => SessionError::from(err),
-    })?;
-
-    match node.node_data {
-        NodeData::Array { ref manifests, .. } => {
-            if let Some(new_data) = change_set.get_updated_array(&node.id) {
-                let node_data = NodeData::Array {
-                    shape: new_data.shape.clone(),
-                    dimension_names: new_data.dimension_names.clone(),
-                    manifests: manifests.clone(),
-                };
-                Ok(NodeSnapshot {
-                    user_data: new_data.user_data.clone(),
-                    node_data,
-                    ..node
-                })
+        .into());
+    }
+    let renamed_path = renamed_path.unwrap();
+    dbg!((path, &renamed_path));
+    match snapshot.get_node(renamed_path.as_ref()) {
+        Ok(node) => {
+            let node = match node.node_data {
+                NodeData::Array { ref manifests, .. } => {
+                    if let Some(new_data) = change_set.get_updated_array(&node.id) {
+                        let node_data = NodeData::Array {
+                            shape: new_data.shape.clone(),
+                            dimension_names: new_data.dimension_names.clone(),
+                            manifests: manifests.clone(),
+                        };
+                        NodeSnapshot {
+                            user_data: new_data.user_data.clone(),
+                            node_data,
+                            ..node
+                        }
+                    } else {
+                        node
+                    }
+                }
+                NodeData::Group => {
+                    if let Some(updated_definition) =
+                        change_set.get_updated_group(&node.id)
+                    {
+                        NodeSnapshot { user_data: updated_definition.clone(), ..node }
+                    } else {
+                        node
+                    }
+                }
+            };
+            let node = if &node.path != path {
+                NodeSnapshot { path: path.clone(), ..node }
             } else {
-                Ok(node)
-            }
+                node
+            };
+            Ok(node)
         }
-        NodeData::Group => {
-            if let Some(updated_definition) = change_set.get_updated_group(&node.id) {
-                Ok(NodeSnapshot { user_data: updated_definition.clone(), ..node })
-            } else {
-                Ok(node)
-            }
+        // A missing node here is not really a format error, so we need to
+        // generate the correct error for repositories
+        Err(IcechunkFormatError {
+            kind: IcechunkFormatErrorKind::NodeNotFound { .. },
+            ..
+        }) => Err(SessionErrorKind::NodeNotFound {
+            path: path.clone(),
+            message: "existing node not found".to_string(),
         }
+        .into()),
+        Err(err) => Err(SessionError::from(err)),
     }
 }
 
@@ -2276,7 +2390,7 @@ mod tests {
 
     use super::*;
     use icechunk_macros::tokio_test;
-    use itertools::Itertools;
+    use itertools::{Itertools, assert_equal};
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
@@ -2582,7 +2696,7 @@ mod tests {
 
         let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
         for idx in [0, 2] {
-            let payload = session.get_chunk_writer()(bytes.clone()).await?;
+            let payload = session.get_chunk_writer()?(bytes.clone()).await?;
             session
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
                 .await?;
@@ -2624,7 +2738,7 @@ mod tests {
         );
 
         // set another chunk in this split
-        let payload = session.get_chunk_writer()(bytes.clone()).await?;
+        let payload = session.get_chunk_writer()?(bytes.clone()).await?;
         session
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![3]), Some(payload))
             .await?;
@@ -2837,7 +2951,7 @@ mod tests {
                     node_data == NodeData::Array { shape:shape3, dimension_names: dimension_names3, manifests: vec![] }
         ));
 
-        let payload = ds.get_chunk_writer()(Bytes::copy_from_slice(b"foo")).await?;
+        let payload = ds.get_chunk_writer()?(Bytes::copy_from_slice(b"foo")).await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
 
@@ -2869,7 +2983,7 @@ mod tests {
 
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
-        let payload = ds.get_chunk_writer()(data.clone()).await?;
+        let payload = ds.get_chunk_writer()?(data.clone()).await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
 
@@ -2901,11 +3015,11 @@ mod tests {
 
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"old".repeat(512).as_slice());
-        let payload = ds.get_chunk_writer()(data.clone()).await?;
+        let payload = ds.get_chunk_writer()?(data.clone()).await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
         let data = Bytes::copy_from_slice(b"new".repeat(512).as_slice());
-        let payload = ds.get_chunk_writer()(data.clone()).await?;
+        let payload = ds.get_chunk_writer()?(data.clone()).await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![1]), Some(payload))
             .await?;
 
@@ -3023,8 +3137,7 @@ mod tests {
         .await?;
 
         assert!(ds.has_uncommitted_changes());
-        let changes = ds.discard_changes();
-        assert!(!changes.is_empty());
+        ds.discard_changes()?;
         assert!(!ds.has_uncommitted_changes());
 
         // we set a chunk in a new array
@@ -3843,6 +3956,61 @@ mod tests {
 
         assert_eq!(parents[1].message.as_str(), Snapshot::INITIAL_COMMIT_MESSAGE);
         assert_eq!(parents[1].id, Snapshot::INITIAL_SNAPSHOT_ID);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_basic_rename() -> Result<(), Box<dyn Error>> {
+        let in_mem_storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let mut session = repo.writable_session("main").await?;
+
+        let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/foo/old/array".try_into()?;
+        session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
+        session.commit("first commit", None).await?;
+
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node(Path::new("/foo/old").unwrap(), Path::new("/foo/new").unwrap())?;
+        dbg!(session.get_node(&Path::new("/").unwrap()).await?.path.to_string());
+
+        assert_eq!(
+            session.get_node(&Path::new("/").unwrap()).await?.path.to_string(),
+            "/"
+        );
+
+        assert_eq!(
+            session
+                .get_node(&Path::new("/foo/new/array").unwrap())
+                .await?
+                .path
+                .to_string(),
+            "/foo/new/array"
+        );
+        assert!(session.get_node(&Path::new("/foo/old/array").unwrap()).await.is_err());
+
+        assert_equal(
+            session.list_nodes().await?.map(|n| n.unwrap().path),
+            [Path::new("/").unwrap(), Path::new("/foo/new/array").unwrap()],
+        );
+
+        session.commit("moved", None).await?;
+
+        let session =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
+
+        assert_eq!(
+            session
+                .get_node(&Path::new("/foo/new/array").unwrap())
+                .await?
+                .path
+                .to_string(),
+            "/foo/new/array"
+        );
+        assert!(session.get_node(&Path::new("/foo/old/array").unwrap()).await.is_err());
         Ok(())
     }
 

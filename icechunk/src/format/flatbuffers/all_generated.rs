@@ -2887,6 +2887,7 @@ pub mod generated {
         pub const VT_UPDATED_ARRAYS: flatbuffers::VOffsetT = 14;
         pub const VT_UPDATED_GROUPS: flatbuffers::VOffsetT = 16;
         pub const VT_UPDATED_CHUNKS: flatbuffers::VOffsetT = 18;
+        pub const VT_MOVED_NODES: flatbuffers::VOffsetT = 20;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -2903,6 +2904,9 @@ pub mod generated {
             args: &'args TransactionLogArgs<'args>,
         ) -> flatbuffers::WIPOffset<TransactionLog<'bldr>> {
             let mut builder = TransactionLogBuilder::new(_fbb);
+            if let Some(x) = args.moved_nodes {
+                builder.add_moved_nodes(x);
+            }
             if let Some(x) = args.updated_chunks {
                 builder.add_updated_chunks(x);
             }
@@ -3010,6 +3014,15 @@ pub mod generated {
                     .unwrap()
             }
         }
+        #[inline]
+        pub fn moved_nodes(&self) -> Option<flatbuffers::Vector<'a, ObjectId8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_MOVED_NODES, None)
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for TransactionLog<'_> {
@@ -3028,6 +3041,7 @@ pub mod generated {
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("updated_arrays", Self::VT_UPDATED_ARRAYS, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("updated_groups", Self::VT_UPDATED_GROUPS, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ArrayUpdatedChunks>>>>("updated_chunks", Self::VT_UPDATED_CHUNKS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("moved_nodes", Self::VT_MOVED_NODES, false)?
      .finish();
             Ok(())
         }
@@ -3054,6 +3068,8 @@ pub mod generated {
                 >,
             >,
         >,
+        pub moved_nodes:
+            Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ObjectId8>>>,
     }
     impl<'a> Default for TransactionLogArgs<'a> {
         #[inline]
@@ -3067,6 +3083,7 @@ pub mod generated {
                 updated_arrays: None, // required field
                 updated_groups: None, // required field
                 updated_chunks: None, // required field
+                moved_nodes: None,
             }
         }
     }
@@ -3156,6 +3173,16 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_moved_nodes(
+            &mut self,
+            moved_nodes: flatbuffers::WIPOffset<flatbuffers::Vector<'b, ObjectId8>>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                TransactionLog::VT_MOVED_NODES,
+                moved_nodes,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> TransactionLogBuilder<'a, 'b, A> {
@@ -3188,6 +3215,7 @@ pub mod generated {
             ds.field("updated_arrays", &self.updated_arrays());
             ds.field("updated_groups", &self.updated_groups());
             ds.field("updated_chunks", &self.updated_chunks());
+            ds.field("moved_nodes", &self.moved_nodes());
             ds.finish()
         }
     }

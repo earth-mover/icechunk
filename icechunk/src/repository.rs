@@ -1249,6 +1249,32 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
+    pub async fn rearrange_session(&self, branch: &str) -> RepositoryResult<Session> {
+        if !self.storage.can_write() {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot create writable_session".to_string(),
+            )
+            .into());
+        }
+        let snapshot_id = self.lookup_branch(branch).await?;
+
+        let session = Session::create_rearrange_session(
+            self.config.clone(),
+            self.storage_settings.clone(),
+            self.storage.clone(),
+            Arc::clone(&self.asset_manager),
+            self.virtual_resolver.clone(),
+            branch.to_string(),
+            snapshot_id.clone(),
+            self.default_commit_metadata.clone(),
+        );
+
+        self.preload_manifests(snapshot_id);
+
+        Ok(session)
+    }
+
+    #[instrument(skip(self))]
     fn preload_manifests(&self, snapshot_id: SnapshotId) {
         debug!("Preloading manifests");
         let asset_manager = Arc::clone(self.asset_manager());
@@ -1729,7 +1755,7 @@ mod tests {
 
         let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
         for idx in 0..4 {
-            let payload = session.get_chunk_writer()(bytes.clone()).await?;
+            let payload = session.get_chunk_writer()?(bytes.clone()).await?;
             session
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
                 .await?;

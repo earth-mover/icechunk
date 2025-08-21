@@ -324,13 +324,13 @@ impl Store {
             Key::Chunk { node_path, coords } => {
                 match locked_session {
                     Some(session) => {
-                        let writer = session.get_chunk_writer();
+                        let writer = session.get_chunk_writer()?;
                         let payload = writer(value).await?;
                         session.set_chunk_ref(node_path, coords, Some(payload)).await?
                     }
                     None => {
                         // we only lock the repository to get the writer
-                        let writer = self.session.read().await.get_chunk_writer();
+                        let writer = self.session.read().await.get_chunk_writer()?;
                         // then we can write the bytes without holding the lock
                         let payload = writer(value).await?;
                         // and finally we lock for write and update the reference
