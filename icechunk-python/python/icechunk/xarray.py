@@ -16,6 +16,9 @@ from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
 
 
+__all__ = ["to_icechunk"]
+
+
 Region = Mapping[str, slice | Literal["auto"]] | Literal["auto"] | None
 ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 
@@ -342,5 +345,3 @@ def _make_dataset(obj: DataArray | Dataset) -> Dataset:
         # No problems with the name - so we're fine!
         dataset = obj.to_dataset()
     return dataset
-
-__all__ = ["to_icechunk"]

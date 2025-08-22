@@ -12,6 +12,12 @@ from icechunk._icechunk_python import PySession
 from icechunk.store import IcechunkStore
 
 
+__all__ = [
+    "Session",
+    "ForkSession"
+]
+
+
 class Session:
     """A session object that allows for reading and writing data from an Icechunk repository."""
 
@@ -527,9 +533,3 @@ class ForkSession(Session):
             A zarr Store object for reading and writing data from the repository.
         """
         return IcechunkStore(self._session.store, for_fork=True)
-
-
-__all__ = [
-    "Session",
-    "ForkSession"
-]

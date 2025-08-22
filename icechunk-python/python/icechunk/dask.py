@@ -13,6 +13,13 @@ from dask.array.core import Array
 from icechunk.distributed import extract_session, merge_sessions
 from icechunk.session import ForkSession
 
+
+__all__ = [
+    "computing_meta",
+    "store_dask"
+]
+
+
 SimpleGraph: TypeAlias = Mapping[tuple[str, int], tuple[Any, ...]]
 
 
@@ -127,9 +134,3 @@ def session_merge_reduction(
         *da.compute(*merged_sessions)  # type: ignore[no-untyped-call]
     )
     return merged_session
-
-
-__all__ = [
-    "computing_meta",
-    "store_dask"
-]

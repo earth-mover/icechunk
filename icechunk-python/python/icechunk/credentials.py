@@ -14,6 +14,25 @@ from icechunk._icechunk_python import (
     S3StaticCredentials,
 )
 
+
+__all__ = [
+    "Credentials",
+    "s3_credentials",
+    "s3_static_credentials",
+    "s3_anonymous_credentials",
+    "s3_from_env_credentials",
+    "s3_refreshable_credentials",
+    "gcs_credentials",
+    "gcs_static_credentials",
+    "gcs_from_env_credentials",
+    "gcs_refreshable_credentials",
+    "azure_credentials",
+    "azure_static_credentials",
+    "azure_from_env_credentials",
+    "containers_credentials",
+]
+
+
 AnyS3Credential = (
     S3Credentials.Static
     | S3Credentials.Anonymous
@@ -400,20 +419,3 @@ def containers_credentials(
             raise ValueError(f"Unknown credential type {type(cred)}")
     return res
 
-
-__all__ = [
-    "Credentials",
-    "s3_credentials",
-    "s3_static_credentials",
-    "s3_anonymous_credentials",
-    "s3_from_env_credentials",
-    "s3_refreshable_credentials",
-    "gcs_credentials",
-    "gcs_static_credentials",
-    "gcs_from_env_credentials",
-    "gcs_refreshable_credentials",
-    "azure_credentials",
-    "azure_static_credentials",
-    "azure_from_env_credentials",
-    "containers_credentials",
-]

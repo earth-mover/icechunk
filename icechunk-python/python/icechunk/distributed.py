@@ -7,6 +7,12 @@ from icechunk import IcechunkStore
 from icechunk.session import ForkSession, Session
 
 
+__all__ = [
+    "extract_session",
+    "merge_sessions",
+]
+
+
 def _flatten(seq: Iterable[Any], container: type = list) -> Generator[Any, None, None]:
     if isinstance(seq, str):
         yield seq
@@ -68,9 +74,3 @@ def merge_sessions(
             )
     session.merge(*rest)
     return cast(ForkSession, session)
-
-
-__all__ = [
-    "extract_session",
-    "merge_sessions",
-]

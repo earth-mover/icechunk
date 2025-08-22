@@ -14,6 +14,12 @@ from zarr.core.buffer import Buffer, BufferPrototype
 from zarr.core.common import BytesLike
 from zarr.core.sync import SyncMixin
 
+
+__all__ = [
+    "IcechunkStore"
+]
+
+
 if TYPE_CHECKING:
     from icechunk import Session
 
@@ -461,8 +467,3 @@ class IcechunkStore(Store, SyncMixin):
 
     async def getsize_prefix(self, prefix: str) -> int:
         return await self._store.getsize_prefix(prefix)
-
-
-__all__ = [
-    "IcechunkStore"
-]
