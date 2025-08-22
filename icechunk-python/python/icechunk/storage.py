@@ -7,6 +7,9 @@ from icechunk._icechunk_python import (
     S3Options,
     S3StaticCredentials,
     Storage,
+    StorageConcurrencySettings,
+    StorageRetriesSettings,
+    StorageSettings,
 )
 from icechunk.credentials import (
     azure_credentials,
@@ -500,3 +503,23 @@ def azure_storage(
         credentials=credentials,
         config=config,
     )
+
+__all__ = [
+    "S3Options",
+    "Storage",
+    "StorageConcurrencySettings",
+    "StorageRetriesSettings",
+    "StorageSettings",
+    "in_memory_storage",
+    "local_filesystem_storage",
+    "http_store",
+    "local_filesystem_store",
+    "s3_store",
+    "s3_storage",
+    "s3_object_store_storage",
+    "tigris_storage",
+    "r2_storage",
+    "gcs_store",
+    "gcs_storage",
+    "azure_storage",
+]

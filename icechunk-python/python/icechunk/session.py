@@ -527,3 +527,9 @@ class ForkSession(Session):
             A zarr Store object for reading and writing data from the repository.
         """
         return IcechunkStore(self._session.store, for_fork=True)
+
+
+__all__ = [
+    "Session",
+    "ForkSession"
+]

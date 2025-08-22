@@ -461,3 +461,8 @@ class IcechunkStore(Store, SyncMixin):
 
     async def getsize_prefix(self, prefix: str) -> int:
         return await self._store.getsize_prefix(prefix)
+
+
+__all__ = [
+    "IcechunkStore"
+]
