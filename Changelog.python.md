@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Add synchronous `Repository.reopen()` method. There was previously only an async version `Repository.reopen_async()`.
+
 ## Python Icechunk Library 1.1.4
 
 ### Fixes
