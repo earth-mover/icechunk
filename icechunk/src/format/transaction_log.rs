@@ -3,18 +3,18 @@ use std::{
     iter,
 };
 
-use flatbuffers::VerifierOptions;
+use flatbuffers::{VerifierOptions, WIPOffset};
 use itertools::{Either, Itertools as _};
 
 use crate::{
-    change_set::ChangeSet,
+    change_set::{ChangeSet, Move},
     format::flatbuffers::generated::ObjectId12,
     session::{Session, SessionResult},
 };
 
 use super::{
     ChunkIndices, IcechunkResult, NodeId, Path, SnapshotId,
-    flatbuffers::generated::{self, ObjectId8},
+    flatbuffers::generated::{self, MoveOperation, MoveOperationArgs},
 };
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -24,6 +24,9 @@ pub struct TransactionLog {
 
 impl TransactionLog {
     pub fn new(id: &SnapshotId, cs: &ChangeSet) -> Self {
+        // TODO: what's a good capacity?
+        let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1_024 * 1_024);
+
         let mut new_groups: Vec<_> =
             cs.new_groups().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
         let mut new_arrays: Vec<_> =
@@ -37,9 +40,15 @@ impl TransactionLog {
             cs.updated_arrays().map(|id| generated::ObjectId8::new(&id.0)).collect();
         let mut updated_groups: Vec<_> =
             cs.updated_groups().map(|id| generated::ObjectId8::new(&id.0)).collect();
-
-        // TODO: what's a good capacity?
-        let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1_024 * 1_024);
+        let moved_nodes: Vec<_> = cs
+            .moves()
+            .map(|Move { from, to }| {
+                let from = builder.create_string(from.to_string().as_str());
+                let to = builder.create_string(to.to_string().as_str());
+                let args = MoveOperationArgs { from: Some(from), to: Some(to) };
+                MoveOperation::create(&mut builder, &args)
+            })
+            .collect();
 
         // these come sorted from the change set
         let updated_chunks = cs
@@ -82,7 +91,7 @@ impl TransactionLog {
 
         let id = ObjectId12::new(&id.0);
         let id = Some(&id);
-        let moved_nodes = Some(builder.create_vector::<ObjectId8>(&[])); // FIXME:
+        let moved_nodes = Some(builder.create_vector(moved_nodes.as_slice()));
         let tx = generated::TransactionLog::create(
             &mut builder,
             &generated::TransactionLogArgs {
@@ -205,6 +214,7 @@ impl TransactionLog {
     }
 
     pub fn len(&self) -> usize {
+        //FIXME
         let root = self.root();
         root.new_groups().len()
             + root.new_arrays().len()
@@ -217,6 +227,7 @@ impl TransactionLog {
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
+        //FIXME
         self.len() == 0
     }
 
@@ -316,7 +327,9 @@ impl TransactionLog {
 
         let id = ObjectId12::new(&id.0);
         let id = Some(&id);
-        let moved_nodes = Some(builder.create_vector::<ObjectId8>(&[])); // FIXME:
+        // FIXME: verify no moves in origins
+        let moved_nodes: &[WIPOffset<_>] = &[];
+        let moved_nodes = Some(builder.create_vector(moved_nodes)); // FIXME:
         let tx = generated::TransactionLog::create(
             &mut builder,
             &generated::TransactionLogArgs {
@@ -461,6 +474,7 @@ impl Diff {
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
+        // FIXME
         self.new_groups.is_empty()
             && self.new_arrays.is_empty()
             && self.deleted_groups.is_empty()
@@ -489,142 +503,143 @@ mod tests {
         },
     };
 
-    // #[icechunk_macros::test]
-    // fn test_merge() {
-    //     let mut cs1 = ChangeSet::default();
-    //     let added_group = NodeId::random();
-    //     let added_array = NodeId::random();
-    //     let deleted_group = NodeId::random();
-    //     let deleted_array = NodeId::random();
-    //     let updated_group = NodeId::random();
-    //     let chunk_added = NodeId::random();
-    //     cs1.add_group("/g1".try_into().unwrap(), added_group.clone(), Bytes::new());
-    //     cs1.delete_group("/g2".try_into().unwrap(), &deleted_group);
-    //     cs1.add_array(
-    //         "/a1".try_into().unwrap(),
-    //         added_array.clone(),
-    //         ArrayData {
-    //             shape: ArrayShape::new([(0, 10)]).unwrap(),
-    //             dimension_names: None,
-    //             user_data: Bytes::new(),
-    //         },
-    //     );
-    //     cs1.delete_array("/a2".try_into().unwrap(), &deleted_array);
-    //     cs1.update_group(&updated_group, &"/g3".try_into().unwrap(), Bytes::new());
-    //     cs1.set_chunk_ref(
-    //         chunk_added.clone(),
-    //         ChunkIndices(vec![0]),
-    //         Some(ChunkPayload::Inline(Bytes::new())),
-    //         &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
-    //     );
+    #[icechunk_macros::test]
+    fn test_merge() -> Result<(), Box<dyn std::error::Error>> {
+        let mut cs1 = ChangeSet::for_edits();
+        let added_group = NodeId::random();
+        let added_array = NodeId::random();
+        let deleted_group = NodeId::random();
+        let deleted_array = NodeId::random();
+        let updated_group = NodeId::random();
+        let chunk_added = NodeId::random();
+        cs1.add_group("/g1".try_into().unwrap(), added_group.clone(), Bytes::new())?;
+        cs1.delete_group("/g2".try_into().unwrap(), &deleted_group)?;
+        cs1.add_array(
+            "/a1".try_into().unwrap(),
+            added_array.clone(),
+            ArrayData {
+                shape: ArrayShape::new([(0, 10)]).unwrap(),
+                dimension_names: None,
+                user_data: Bytes::new(),
+            },
+        )?;
+        cs1.delete_array("/a2".try_into().unwrap(), &deleted_array)?;
+        cs1.update_group(&updated_group, &"/g3".try_into().unwrap(), Bytes::new())?;
+        cs1.set_chunk_ref(
+            chunk_added.clone(),
+            ChunkIndices(vec![0]),
+            Some(ChunkPayload::Inline(Bytes::new())),
+            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
+        )?;
 
-    //     let t1 = TransactionLog::new(&SnapshotId::random(), &cs1);
-    //     let t2 = TransactionLog::new(&SnapshotId::random(), &cs1);
+        let t1 = TransactionLog::new(&SnapshotId::random(), &cs1);
+        let t2 = TransactionLog::new(&SnapshotId::random(), &cs1);
 
-    //     let tx = TransactionLog::merge(&SnapshotId::random(), [&t1, &t2]);
-    //     assert!(tx.new_groups().eq([added_group.clone()]));
-    //     assert!(tx.new_arrays().eq([added_array.clone()]));
-    //     assert!(tx.deleted_groups().eq([deleted_group.clone()]));
-    //     assert!(tx.deleted_arrays().eq([deleted_array.clone()]));
-    //     assert!(tx.updated_groups().eq([updated_group.clone()]));
-    //     let chunks =
-    //         Vec::from_iter(tx.updated_chunks().map(|(id, it)| (id, Vec::from_iter(it))));
-    //     assert_eq!(chunks, vec![(chunk_added.clone(), vec![ChunkIndices(vec![0])])]);
+        let tx = TransactionLog::merge(&SnapshotId::random(), [&t1, &t2]);
+        assert!(tx.new_groups().eq([added_group.clone()]));
+        assert!(tx.new_arrays().eq([added_array.clone()]));
+        assert!(tx.deleted_groups().eq([deleted_group.clone()]));
+        assert!(tx.deleted_arrays().eq([deleted_array.clone()]));
+        assert!(tx.updated_groups().eq([updated_group.clone()]));
+        let chunks =
+            Vec::from_iter(tx.updated_chunks().map(|(id, it)| (id, Vec::from_iter(it))));
+        assert_eq!(chunks, vec![(chunk_added.clone(), vec![ChunkIndices(vec![0])])]);
 
-    //     let added_group2 = NodeId::random();
-    //     let deleted_group2 = NodeId::random();
-    //     let deleted_array2 = NodeId::random();
-    //     let updated_group2 = NodeId::random();
-    //     let chunk_added2 = NodeId::random();
-    //     let mut cs2 = ChangeSet::default();
-    //     cs2.add_group("/g1".try_into().unwrap(), added_group2.clone(), Bytes::new());
-    //     cs2.delete_group("/g2".try_into().unwrap(), &deleted_group2);
-    //     cs2.add_array(
-    //         "/a1".try_into().unwrap(),
-    //         added_array.clone(),
-    //         ArrayData {
-    //             shape: ArrayShape::new([(0, 10)]).unwrap(),
-    //             dimension_names: None,
-    //             user_data: Bytes::new(),
-    //         },
-    //     );
-    //     cs2.delete_array("/a2".try_into().unwrap(), &deleted_array2);
-    //     cs2.update_group(&updated_group2, &"/g3".try_into().unwrap(), Bytes::new());
-    //     cs2.set_chunk_ref(
-    //         chunk_added.clone(),
-    //         ChunkIndices(vec![0]),
-    //         None,
-    //         &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
-    //     );
-    //     cs2.set_chunk_ref(
-    //         chunk_added.clone(),
-    //         ChunkIndices(vec![1]),
-    //         Some(ChunkPayload::Inline(Bytes::new())),
-    //         &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
-    //     );
-    //     cs2.set_chunk_ref(
-    //         chunk_added.clone(),
-    //         ChunkIndices(vec![42]),
-    //         None,
-    //         &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
-    //     );
-    //     cs2.set_chunk_ref(
-    //         chunk_added2.clone(),
-    //         ChunkIndices(vec![7]),
-    //         Some(ChunkPayload::Inline(Bytes::new())),
-    //         &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
-    //     );
+        let added_group2 = NodeId::random();
+        let deleted_group2 = NodeId::random();
+        let deleted_array2 = NodeId::random();
+        let updated_group2 = NodeId::random();
+        let chunk_added2 = NodeId::random();
+        let mut cs2 = ChangeSet::for_edits();
+        cs2.add_group("/g1".try_into().unwrap(), added_group2.clone(), Bytes::new())?;
+        cs2.delete_group("/g2".try_into().unwrap(), &deleted_group2)?;
+        cs2.add_array(
+            "/a1".try_into().unwrap(),
+            added_array.clone(),
+            ArrayData {
+                shape: ArrayShape::new([(0, 10)]).unwrap(),
+                dimension_names: None,
+                user_data: Bytes::new(),
+            },
+        )?;
+        cs2.delete_array("/a2".try_into().unwrap(), &deleted_array2)?;
+        cs2.update_group(&updated_group2, &"/g3".try_into().unwrap(), Bytes::new())?;
+        cs2.set_chunk_ref(
+            chunk_added.clone(),
+            ChunkIndices(vec![0]),
+            None,
+            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
+        )?;
+        cs2.set_chunk_ref(
+            chunk_added.clone(),
+            ChunkIndices(vec![1]),
+            Some(ChunkPayload::Inline(Bytes::new())),
+            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
+        )?;
+        cs2.set_chunk_ref(
+            chunk_added.clone(),
+            ChunkIndices(vec![42]),
+            None,
+            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
+        )?;
+        cs2.set_chunk_ref(
+            chunk_added2.clone(),
+            ChunkIndices(vec![7]),
+            Some(ChunkPayload::Inline(Bytes::new())),
+            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
+        )?;
 
-    //     let t3 = TransactionLog::new(&SnapshotId::random(), &cs2);
-    //     let tx_id = SnapshotId::random();
-    //     let tx = TransactionLog::merge(&tx_id, [&t1, &t2, &t3]);
+        let t3 = TransactionLog::new(&SnapshotId::random(), &cs2);
+        let tx_id = SnapshotId::random();
+        let tx = TransactionLog::merge(&tx_id, [&t1, &t2, &t3]);
 
-    //     assert!(
-    //         tx.new_groups()
-    //             .sorted()
-    //             .eq([added_group.clone(), added_group2.clone()].into_iter().sorted())
-    //     );
-    //     assert!(tx.new_arrays().eq([added_array.clone()]));
-    //     assert!(
-    //         tx.deleted_groups().sorted().eq([
-    //             deleted_group.clone(),
-    //             deleted_group2.clone()
-    //         ]
-    //         .into_iter()
-    //         .sorted())
-    //     );
-    //     assert!(
-    //         tx.deleted_arrays().sorted().eq([
-    //             deleted_array.clone(),
-    //             deleted_array2.clone()
-    //         ]
-    //         .into_iter()
-    //         .sorted())
-    //     );
-    //     assert!(
-    //         tx.updated_groups().sorted().eq([
-    //             updated_group.clone(),
-    //             updated_group2.clone()
-    //         ]
-    //         .into_iter()
-    //         .sorted())
-    //     );
-    //     let chunks = HashSet::from_iter(
-    //         tx.updated_chunks().map(|(id, it)| (id, Vec::from_iter(it))),
-    //     );
-    //     assert_eq!(
-    //         chunks,
-    //         HashSet::from([
-    //             (
-    //                 chunk_added.clone(),
-    //                 vec![
-    //                     ChunkIndices(vec![0]),
-    //                     ChunkIndices(vec![1]),
-    //                     ChunkIndices(vec![42])
-    //                 ]
-    //             ),
-    //             (chunk_added2.clone(), vec![ChunkIndices(vec![7]),])
-    //         ])
-    //     );
-    // }
+        assert!(
+            tx.new_groups()
+                .sorted()
+                .eq([added_group.clone(), added_group2.clone()].into_iter().sorted())
+        );
+        assert!(tx.new_arrays().eq([added_array.clone()]));
+        assert!(
+            tx.deleted_groups().sorted().eq([
+                deleted_group.clone(),
+                deleted_group2.clone()
+            ]
+            .into_iter()
+            .sorted())
+        );
+        assert!(
+            tx.deleted_arrays().sorted().eq([
+                deleted_array.clone(),
+                deleted_array2.clone()
+            ]
+            .into_iter()
+            .sorted())
+        );
+        assert!(
+            tx.updated_groups().sorted().eq([
+                updated_group.clone(),
+                updated_group2.clone()
+            ]
+            .into_iter()
+            .sorted())
+        );
+        let chunks = HashSet::from_iter(
+            tx.updated_chunks().map(|(id, it)| (id, Vec::from_iter(it))),
+        );
+        assert_eq!(
+            chunks,
+            HashSet::from([
+                (
+                    chunk_added.clone(),
+                    vec![
+                        ChunkIndices(vec![0]),
+                        ChunkIndices(vec![1]),
+                        ChunkIndices(vec![42])
+                    ]
+                ),
+                (chunk_added2.clone(), vec![ChunkIndices(vec![7]),])
+            ])
+        );
+        Ok(())
+    }
 }

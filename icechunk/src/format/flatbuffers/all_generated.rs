@@ -2863,6 +2863,153 @@ pub mod generated {
             ds.finish()
         }
     }
+    pub enum MoveOperationOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct MoveOperation<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for MoveOperation<'a> {
+        type Inner = MoveOperation<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> MoveOperation<'a> {
+        pub const VT_FROM: flatbuffers::VOffsetT = 4;
+        pub const VT_TO: flatbuffers::VOffsetT = 6;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            MoveOperation { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args MoveOperationArgs<'args>,
+        ) -> flatbuffers::WIPOffset<MoveOperation<'bldr>> {
+            let mut builder = MoveOperationBuilder::new(_fbb);
+            if let Some(x) = args.to {
+                builder.add_to(x);
+            }
+            if let Some(x) = args.from {
+                builder.add_from(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn from(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(
+                        MoveOperation::VT_FROM,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn to(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(MoveOperation::VT_TO, None)
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for MoveOperation<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "from",
+                    Self::VT_FROM,
+                    true,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "to",
+                    Self::VT_TO,
+                    true,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct MoveOperationArgs<'a> {
+        pub from: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub to: Option<flatbuffers::WIPOffset<&'a str>>,
+    }
+    impl<'a> Default for MoveOperationArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            MoveOperationArgs {
+                from: None, // required field
+                to: None,   // required field
+            }
+        }
+    }
+
+    pub struct MoveOperationBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> MoveOperationBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_from(&mut self, from: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                MoveOperation::VT_FROM,
+                from,
+            );
+        }
+        #[inline]
+        pub fn add_to(&mut self, to: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(MoveOperation::VT_TO, to);
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> MoveOperationBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            MoveOperationBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<MoveOperation<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, MoveOperation::VT_FROM, "from");
+            self.fbb_.required(o, MoveOperation::VT_TO, "to");
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for MoveOperation<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("MoveOperation");
+            ds.field("from", &self.from());
+            ds.field("to", &self.to());
+            ds.finish()
+        }
+    }
     pub enum TransactionLogOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -3015,12 +3162,18 @@ pub mod generated {
             }
         }
         #[inline]
-        pub fn moved_nodes(&self) -> Option<flatbuffers::Vector<'a, ObjectId8>> {
+        pub fn moved_nodes(
+            &self,
+        ) -> Option<
+            flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MoveOperation<'a>>>,
+        > {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
             unsafe {
-                self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_MOVED_NODES, None)
+                self._tab.get::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MoveOperation>>,
+                >>(TransactionLog::VT_MOVED_NODES, None)
             }
         }
     }
@@ -3041,7 +3194,7 @@ pub mod generated {
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("updated_arrays", Self::VT_UPDATED_ARRAYS, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("updated_groups", Self::VT_UPDATED_GROUPS, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ArrayUpdatedChunks>>>>("updated_chunks", Self::VT_UPDATED_CHUNKS, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("moved_nodes", Self::VT_MOVED_NODES, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MoveOperation>>>>("moved_nodes", Self::VT_MOVED_NODES, false)?
      .finish();
             Ok(())
         }
@@ -3068,8 +3221,11 @@ pub mod generated {
                 >,
             >,
         >,
-        pub moved_nodes:
-            Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ObjectId8>>>,
+        pub moved_nodes: Option<
+            flatbuffers::WIPOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MoveOperation<'a>>>,
+            >,
+        >,
     }
     impl<'a> Default for TransactionLogArgs<'a> {
         #[inline]
@@ -3175,7 +3331,9 @@ pub mod generated {
         #[inline]
         pub fn add_moved_nodes(
             &mut self,
-            moved_nodes: flatbuffers::WIPOffset<flatbuffers::Vector<'b, ObjectId8>>,
+            moved_nodes: flatbuffers::WIPOffset<
+                flatbuffers::Vector<'b, flatbuffers::ForwardsUOffset<MoveOperation<'b>>>,
+            >,
         ) {
             self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
                 TransactionLog::VT_MOVED_NODES,

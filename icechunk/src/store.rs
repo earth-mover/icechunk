@@ -2092,7 +2092,7 @@ mod tests {
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
         assert_eq!(ds.read().await.has_uncommitted_changes(), true);
 
-        ds.write().await.discard_changes();
+        ds.write().await.discard_changes()?;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         // Create a new branch and do stuff with it

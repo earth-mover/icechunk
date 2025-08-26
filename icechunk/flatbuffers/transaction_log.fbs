@@ -15,6 +15,11 @@ table ArrayUpdatedChunks {
   chunks: [ChunkIndices] (required);
 }
 
+table MoveOperation {
+  from: string (required);
+  to: string (required);
+}
+
 table TransactionLog {
   // id of the transaction log file,
   // it will be the same as the corresponding snapshot
@@ -48,9 +53,9 @@ table TransactionLog {
   // sorted in ascending order of the node_id of the ArrayUpdatedChunks
   updated_chunks: [ArrayUpdatedChunks] (required);
 
-  // sorted in ascending order of the node_id
+  // sorted in application order, oldest first
   // Added in spec version: 2.0
-  moved_nodes: [ObjectId8];
+  moved_nodes: [MoveOperation];
 }
 
 root_type TransactionLog;

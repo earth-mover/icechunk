@@ -2,12 +2,15 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream};
+use futures::{
+    FutureExt, Stream, StreamExt, TryStreamExt,
+    future::Either,
+    stream::{self, FuturesUnordered},
+};
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
-    borrow::Cow,
     cmp::min,
     collections::{HashMap, HashSet},
     convert::Infallible,
@@ -23,7 +26,7 @@ use tracing::{Instrument, debug, info, instrument, trace, warn};
 use crate::{
     RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
-    change_set::{ArrayData, ChangeSet, MoveTracker},
+    change_set::{ArrayData, ChangeSet, Move},
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
@@ -369,7 +372,7 @@ impl Session {
         match self.get_node(&path).await {
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 let id = NodeId::random();
-                self.change_set_mut()?.add_group(path.clone(), id, definition);
+                self.change_set_mut()?.add_group(path.clone(), id, definition)?;
                 Ok(())
             }
             Ok(node) => Err(SessionErrorKind::AlreadyExists {
@@ -441,7 +444,7 @@ impl Session {
                     path,
                     id,
                     ArrayData { shape, dimension_names, user_data },
-                );
+                )?;
                 Ok(())
             }
             Ok(node) => Err(SessionErrorKind::AlreadyExists {
@@ -486,7 +489,7 @@ impl Session {
                     path,
                     ArrayData { shape, dimension_names, user_data },
                     splits,
-                );
+                )?;
                 Ok(())
             }
             Err(e) => Err(e),
@@ -503,7 +506,7 @@ impl Session {
         definition: Bytes,
     ) -> SessionResult<()> {
         self.get_group(path).await.and_then(|node| {
-            Ok(self.change_set_mut()?.update_group(&node.id, path, definition)?)
+            self.change_set_mut()?.update_group(&node.id, path, definition)
         })
     }
 
@@ -514,7 +517,7 @@ impl Session {
     pub async fn delete_array(&mut self, path: Path) -> SessionResult<()> {
         match self.get_array(&path).await {
             Ok(node) => {
-                self.change_set_mut()?.delete_array(node.path, &node.id);
+                self.change_set_mut()?.delete_array(node.path, &node.id)?;
             }
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {}
             Err(err) => Err(err)?,
@@ -630,7 +633,7 @@ impl Session {
                 let splits = self
                     .get_splits(&node.id, &node.path, &shape, &dimension_names)
                     .clone();
-                self.change_set_mut()?.set_chunk_ref(node.id, coord, data, &splits);
+                self.change_set_mut()?.set_chunk_ref(node.id, coord, data, &splits)?;
                 Ok(())
             } else {
                 Err(SessionErrorKind::InvalidIndex {
@@ -1610,7 +1613,6 @@ async fn get_existing_node(
         .into());
     }
     let renamed_path = renamed_path.unwrap();
-    dbg!((path, &renamed_path));
     match snapshot.get_node(renamed_path.as_ref()) {
         Ok(node) => {
             let node = match node.node_data {
@@ -2157,6 +2159,7 @@ async fn flush(
 
     trace!(transaction_log_id = %new_snapshot.id(), "Creating transaction log");
     let new_snapshot_id = new_snapshot.id();
+
     // FIXME: this should execute in a non-blocking context
     let this_tx_log = TransactionLog::new(&new_snapshot_id, flush_data.change_set);
     let new_tx_log = if commit_method == CommitMethod::NewCommit {
@@ -3975,7 +3978,6 @@ mod tests {
         let mut session = repo.rearrange_session("main").await?;
         session
             .move_node(Path::new("/foo/old").unwrap(), Path::new("/foo/new").unwrap())?;
-        dbg!(session.get_node(&Path::new("/").unwrap()).await?.path.to_string());
 
         assert_eq!(
             session.get_node(&Path::new("/").unwrap()).await?.path.to_string(),

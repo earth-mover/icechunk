@@ -46,6 +46,7 @@ impl EditChanges {
     fn is_empty(&self) -> bool {
         self == &Default::default()
     }
+
     fn merge(&mut self, other: EditChanges) {
         // FIXME: this should detect conflict, for example, if different writers added on the same
         // path, different objects, or if the same path is added and deleted, etc.
@@ -72,10 +73,10 @@ impl EditChanges {
     }
 }
 
-pub static EMPTY_EDITS: LazyLock<EditChanges> = LazyLock::new(|| Default::default());
+pub static EMPTY_EDITS: LazyLock<EditChanges> = LazyLock::new(Default::default);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct Move {
+pub struct Move {
     pub from: Path,
     pub to: Path,
 }
@@ -83,8 +84,7 @@ struct Move {
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct MoveTracker(Vec<Move>);
 
-pub static EMPTY_MOVE_TRACKER: LazyLock<MoveTracker> =
-    LazyLock::new(|| Default::default());
+pub static EMPTY_MOVE_TRACKER: LazyLock<MoveTracker> = LazyLock::new(Default::default);
 
 impl MoveTracker {
     pub fn record(&mut self, from: Path, to: Path) {
@@ -93,6 +93,10 @@ impl MoveTracker {
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    pub fn all_moves(&self) -> impl Iterator<Item = &Move> {
+        self.0.iter()
     }
 
     pub fn moved_to<'a>(&self, path: &'a Path) -> Option<Cow<'a, Path>> {
@@ -185,6 +189,13 @@ impl ChangeSet {
         }
     }
 
+    pub fn moves(&self) -> impl Iterator<Item = &Move> {
+        match self {
+            ChangeSet::Edit(_) => Either::Left(iter::empty()),
+            ChangeSet::Rearrange(move_tracker) => Either::Right(move_tracker.all_moves()),
+        }
+    }
+
     pub fn deleted_arrays(&self) -> impl Iterator<Item = &(Path, NodeId)> {
         self.edits().deleted_arrays.iter()
     }
@@ -244,10 +255,6 @@ impl ChangeSet {
     pub fn moved_from<'a>(&self, path: &'a Path) -> Option<Cow<'a, Path>> {
         self.move_tracker().moved_from(path)
     }
-
-    // pub fn has_moves(&self) -> bool {
-    //     !self.moved_nodes.is_empty()
-    // }
 
     pub fn add_group(
         &mut self,
@@ -581,13 +588,6 @@ impl ChangeSet {
         }
     }
 
-    pub fn merge_many<T: IntoIterator<Item = ChangeSet>>(&mut self, others: T) {
-        others.into_iter().fold(self, |res, change_set| {
-            res.merge(change_set);
-            res
-        });
-    }
-
     /// Serialize this ChangeSet
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
@@ -698,11 +698,6 @@ impl ChangeSet {
             }
         }
     }
-
-    //pub fn undo_update(&mut self, node_id: &NodeId) {
-    //    self.updated_arrays.remove(node_id);
-    //    self.updated_groups.remove(node_id);
-    //}
 }
 
 #[cfg(test)]
