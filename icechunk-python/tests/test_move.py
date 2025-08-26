@@ -1,4 +1,5 @@
 import numpy.testing
+import pytest
 
 import icechunk as ic
 import zarr
@@ -45,3 +46,23 @@ async def test_basic_move():
     group = zarr.open_group(store=store, mode="r")
     array = group["my/new/path/array"]
     numpy.testing.assert_array_equal(array, 42)
+
+
+def test_move_errors():
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+    session = repo.writable_session("main")
+    store = session.store
+    root = zarr.group(store=store, overwrite=True)
+    group = root.create_group("my/old/path", overwrite=True)
+    group.create_array("array", shape=(10, 10), chunks=(2, 2), dtype="i4", fill_value=42)
+    session.commit("create array")
+
+    session = repo.rearrange_session("main")
+    store = session.store
+
+    with pytest.raises(ic.IcechunkError, match="overwrite existing node"):
+        session.move("/my/old/path", "/my/old/path")
+    with pytest.raises(ic.IcechunkError, match="node not found"):
+        session.move("/not-found", "/my/new/path")
