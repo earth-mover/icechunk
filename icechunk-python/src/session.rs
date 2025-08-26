@@ -2,7 +2,12 @@ use std::{borrow::Cow, ops::Deref, sync::Arc};
 
 use async_stream::try_stream;
 use futures::{StreamExt, TryStreamExt};
-use icechunk::{Store, session::Session};
+use icechunk::{
+    Store,
+    format::Path,
+    session::Session,
+    store::{StoreError, StoreErrorKind},
+};
 use pyo3::{prelude::*, types::PyType};
 use tokio::sync::{Mutex, RwLock};
 
@@ -87,11 +92,36 @@ impl PySession {
         })
     }
 
-    pub fn discard_changes(&self, py: Python<'_>) {
+    pub fn discard_changes(&self, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
-            self.0.blocking_write().discard_changes();
-        })
+            self.0
+                .blocking_write()
+                .discard_changes()
+                .map_err(PyIcechunkStoreError::SessionError)
+        })?;
+        Ok(())
+    }
+
+    pub fn move_node(
+        &self,
+        py: Python<'_>,
+        from_path: String,
+        to_path: String,
+    ) -> PyResult<()> {
+        let from = Path::new(from_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let to = Path::new(to_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        py.allow_threads(move || {
+            self.0
+                .blocking_write()
+                .move_node(from, to)
+                .map_err(PyIcechunkStoreError::SessionError)
+        })?;
+        Ok(())
     }
 
     #[getter]

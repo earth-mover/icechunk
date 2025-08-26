@@ -152,6 +152,9 @@ class Session:
         """
         return self._session.config
 
+    def move(self, from_path: str, to_path: str) -> None:
+        return self._session.move_node(from_path, to_path)
+
     def all_virtual_chunk_locations(self) -> list[str]:
         """
         Return the location URLs of all virtual chunks.

@@ -1032,6 +1032,54 @@ class Repository:
         """
         return Session(await self._repository.writable_session_async(branch))
 
+    def rearrange_session(self, branch: str) -> Session:
+        """
+        Create a session to move/rename nodes in the Zarr hierarchy.
+
+        Like the read-only session, this can be thought of as a checkout of the repository at the
+        tip of the branch. However, this session is writable and can be used to make changes to the
+        repository. When ready, the changes can be committed to the branch, after which the session will
+        become a read-only session on the new snapshot.
+
+        This session only allows to make changes through `Session.move`. If you want to modify data, and
+        not only move nodes, use `Session.writable_session` instead.
+
+        Parameters
+        ----------
+        branch : str
+            The branch to create the session on.
+
+        Returns
+        -------
+        Session
+            The writable session on the branch.
+        """
+        return Session(self._repository.rearrange_session(branch))
+
+    async def rearrange_session_async(self, branch: str) -> Session:
+        """
+        Create a session to move/rename nodes in the Zarr hierarchy.
+
+        Like the read-only session, this can be thought of as a checkout of the repository at the
+        tip of the branch. However, this session is writable and can be used to make changes to the
+        repository. When ready, the changes can be committed to the branch, after which the session will
+        become a read-only session on the new snapshot.
+
+        This session only allows to make changes through `Session.move`. If you want to modify data, and
+        not only move nodes, use `Session.writable_session` instead.
+
+        Parameters
+        ----------
+        branch : str
+            The branch to create the session on.
+
+        Returns
+        -------
+        Session
+            The writable session on the branch.
+        """
+        return Session(await self._repository.rearrange_session_async(branch))
+
     @contextmanager
     def transaction(
         self,

@@ -1349,6 +1349,40 @@ impl PyRepository {
         })
     }
 
+    pub fn rearrange_session(&self, py: Python<'_>, branch: &str) -> PyResult<PySession> {
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            let session =
+                pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                    self.0
+                        .read()
+                        .await
+                        .rearrange_session(branch)
+                        .await
+                        .map_err(PyIcechunkStoreError::RepositoryError)
+                })?;
+
+            Ok(PySession(Arc::new(RwLock::new(session))))
+        })
+    }
+
+    fn rearrange_session_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        branch: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        let branch = branch.to_owned();
+        pyo3_async_runtimes::tokio::future_into_py::<_, PySession>(py, async move {
+            let repository = repository.read().await;
+            let session = repository
+                .rearrange_session(&branch)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(PySession(Arc::new(RwLock::new(session))))
+        })
+    }
+
     #[pyo3(signature = (message, branch, metadata=None))]
     pub fn rewrite_manifests(
         &self,
