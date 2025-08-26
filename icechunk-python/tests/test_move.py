@@ -47,6 +47,18 @@ async def test_basic_move():
     array = group["my/new/path/array"]
     numpy.testing.assert_array_equal(array, 42)
 
+    a, b, *_ = repo.ancestry(branch="main")
+    diff = repo.diff(from_snapshot_id=b.id, to_snapshot_id=a.id)
+    assert diff.moved_nodes == [("/my/old", "/my/new")]
+    assert (
+        repr(diff)
+        == """\
+Nodes moved/renamed:
+    /my/old -> /my/new
+
+"""
+    )
+
 
 def test_move_errors():
     repo = ic.Repository.create(

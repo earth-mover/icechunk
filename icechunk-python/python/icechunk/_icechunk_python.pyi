@@ -1261,6 +1261,12 @@ class Diff:
         The chunks indices that had data updated in the target ref, keyed by the path to the array.
         """
         ...
+    @property
+    def moved_nodes(self) -> list[tuple[str, str]]:
+        """
+        The list of node moves, in order of application, as tuples (from_path, to_path).
+        """
+        ...
 
 class GCSummary:
     """Summarizes the results of a garbage collection operation on an icechunk repo"""

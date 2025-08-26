@@ -157,6 +157,18 @@ impl TransactionLog {
         })
     }
 
+    pub fn moves(&self) -> impl Iterator<Item = Move> + '_ {
+        let it = match self.root().moved_nodes() {
+            Some(it) => Either::Left(it.iter()),
+            None => Either::Right(iter::empty()),
+        };
+        it.filter_map(|m| {
+            let from = Path::new(m.from()).ok()?;
+            let to = Path::new(m.to()).ok()?;
+            Some(Move { from, to })
+        })
+    }
+
     pub fn updated_chunks_for(
         &self,
         node: &NodeId,
@@ -214,7 +226,6 @@ impl TransactionLog {
     }
 
     pub fn len(&self) -> usize {
-        //FIXME
         let root = self.root();
         root.new_groups().len()
             + root.new_arrays().len()
@@ -223,11 +234,11 @@ impl TransactionLog {
             + root.updated_groups().len()
             + root.updated_arrays().len()
             + root.updated_chunks().iter().map(|s| s.chunks().len()).sum::<usize>()
+            + root.moved_nodes().map(|v| v.len()).unwrap_or_default()
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        //FIXME
         self.len() == 0
     }
 
@@ -370,6 +381,7 @@ pub struct DiffBuilder {
     updated_arrays: HashSet<NodeId>,
     // we use sorted set here to simply move it to a diff without having to rebuild
     updated_chunks: HashMap<NodeId, BTreeSet<ChunkIndices>>,
+    moved_nodes: Vec<Move>,
 }
 
 impl DiffBuilder {
@@ -380,6 +392,7 @@ impl DiffBuilder {
         self.deleted_arrays.extend(tx.deleted_arrays());
         self.updated_groups.extend(tx.updated_groups());
         self.updated_arrays.extend(tx.updated_arrays());
+        self.moved_nodes.extend(tx.moves());
 
         for (node, chunks) in tx.updated_chunks() {
             match self.updated_chunks.get_mut(&node) {
@@ -413,47 +426,48 @@ pub struct Diff {
     pub updated_groups: BTreeSet<Path>,
     pub updated_arrays: BTreeSet<Path>,
     pub updated_chunks: BTreeMap<Path, BTreeSet<ChunkIndices>>,
+    pub moved_nodes: Vec<Move>,
 }
 
 impl Diff {
-    fn from_diff_builder(tx: DiffBuilder, nodes: HashMap<NodeId, Path>) -> Self {
-        let new_groups = tx
+    fn from_diff_builder(builder: DiffBuilder, nodes: HashMap<NodeId, Path>) -> Self {
+        let new_groups = builder
             .new_groups
             .iter()
             .flat_map(|node_id| nodes.get(node_id))
             .cloned()
             .collect();
-        let new_arrays = tx
+        let new_arrays = builder
             .new_arrays
             .iter()
             .flat_map(|node_id| nodes.get(node_id))
             .cloned()
             .collect();
-        let deleted_groups = tx
+        let deleted_groups = builder
             .deleted_groups
             .iter()
             .flat_map(|node_id| nodes.get(node_id))
             .cloned()
             .collect();
-        let deleted_arrays = tx
+        let deleted_arrays = builder
             .deleted_arrays
             .iter()
             .flat_map(|node_id| nodes.get(node_id))
             .cloned()
             .collect();
-        let updated_groups = tx
+        let updated_groups = builder
             .updated_groups
             .iter()
             .flat_map(|node_id| nodes.get(node_id))
             .cloned()
             .collect();
-        let updated_arrays = tx
+        let updated_arrays = builder
             .updated_arrays
             .iter()
             .flat_map(|node_id| nodes.get(node_id))
             .cloned()
             .collect();
-        let updated_chunks = tx
+        let updated_chunks = builder
             .updated_chunks
             .into_iter()
             .flat_map(|(node_id, chunks)| {
@@ -469,12 +483,12 @@ impl Diff {
             updated_groups,
             updated_arrays,
             updated_chunks,
+            moved_nodes: builder.moved_nodes,
         }
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        // FIXME
         self.new_groups.is_empty()
             && self.new_arrays.is_empty()
             && self.deleted_groups.is_empty()
@@ -482,6 +496,7 @@ impl Diff {
             && self.updated_groups.is_empty()
             && self.updated_arrays.is_empty()
             && self.updated_chunks.is_empty()
+            && self.moved_nodes.is_empty()
     }
 }
 

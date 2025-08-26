@@ -250,6 +250,8 @@ pub struct PyDiff {
     #[pyo3(get)]
     // A Vec instead of a set to avoid issues with list not being hashable in python
     pub updated_chunks: BTreeMap<String, Vec<Vec<u32>>>,
+    #[pyo3(get)]
+    pub moved_nodes: Vec<(String, String)>,
 }
 
 impl From<Diff> for PyDiff {
@@ -275,6 +277,11 @@ impl From<Diff> for PyDiff {
                 (path, map)
             })
             .collect();
+        let moved_nodes = value
+            .moved_nodes
+            .into_iter()
+            .map(|m| (m.from.to_string(), m.to.to_string()))
+            .collect();
 
         PyDiff {
             new_groups,
@@ -284,6 +291,7 @@ impl From<Diff> for PyDiff {
             updated_groups,
             updated_arrays,
             updated_chunks,
+            moved_nodes,
         }
     }
 }
@@ -337,6 +345,14 @@ impl PyDiff {
             res.push_str("Arrays deleted:\n");
             for g in self.deleted_arrays.iter() {
                 writeln!(res, "    {g}").unwrap();
+            }
+            res.push('\n');
+        }
+
+        if !self.moved_nodes.is_empty() {
+            res.push_str("Nodes moved/renamed:\n");
+            for (from, to) in self.moved_nodes.iter() {
+                writeln!(res, "    {from} -> {to}").unwrap();
             }
             res.push('\n');
         }
