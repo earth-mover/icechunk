@@ -155,6 +155,9 @@ class Session:
     def move(self, from_path: str, to_path: str) -> None:
         return self._session.move_node(from_path, to_path)
 
+    async def move_async(self, from_path: str, to_path: str) -> None:
+        return await self._session.move_node_async(from_path, to_path)
+
     def all_virtual_chunk_locations(self) -> list[str]:
         """
         Return the location URLs of all virtual chunks.

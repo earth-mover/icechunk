@@ -5,7 +5,7 @@ use err_into::ErrorInto;
 use futures::{
     FutureExt, Stream, StreamExt, TryStreamExt,
     future::Either,
-    stream::{self, FuturesUnordered},
+    stream::{self},
 };
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
@@ -26,7 +26,7 @@ use tracing::{Instrument, debug, info, instrument, trace, warn};
 use crate::{
     RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
-    change_set::{ArrayData, ChangeSet, Move},
+    change_set::{ArrayData, ChangeSet},
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
@@ -60,8 +60,6 @@ pub enum SessionErrorKind {
     StorageError(StorageErrorKind),
     #[error(transparent)]
     FormatError(IcechunkFormatErrorKind),
-    //#[error(transparent)]
-    //Ref(RefErrorKind),
     #[error(transparent)]
     VirtualReferenceError(VirtualReferenceErrorKind),
 
@@ -75,6 +73,8 @@ pub enum SessionErrorKind {
         "To move nodes in the hierarchy you need to create a rearrange session. Commit or abandon this session and create a new rearrange session"
     )]
     NonRearrangeSession,
+    #[error("move cannot overwrite existing node at `{0}`")]
+    MoveWontOverwrite(String),
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
     #[error("no ancestor node was found for `{prefix}`")]
@@ -526,7 +526,14 @@ impl Session {
     }
 
     #[instrument(skip(self))]
-    pub fn move_node(&mut self, from: Path, to: Path) -> SessionResult<()> {
+    pub async fn move_node(&mut self, from: Path, to: Path) -> SessionResult<()> {
+        // does the source node exist?
+        let _ = self.get_node(&from).await?;
+        // are we overwriting the destination node?
+        if (self.get_node(&to).await).is_ok() {
+            return Err(SessionErrorKind::MoveWontOverwrite(to.to_string()).into());
+        }
+
         self.change_set_mut()?.move_node(from, to)?;
         Ok(())
     }
@@ -847,6 +854,7 @@ impl Session {
     /// ```
     ///
     /// As shown, the result of the returned function must be awaited to finish the upload.
+    #[allow(clippy::type_complexity)] // impl alias are unstable
     #[instrument(skip(self))]
     pub fn get_chunk_writer(
         &self,
@@ -1604,62 +1612,66 @@ async fn get_existing_node(
     // An existing node is one that is present in a Snapshot file on storage
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
 
-    let renamed_path = change_set.moved_from(path);
-    if renamed_path.is_none() {
-        return Err(SessionErrorKind::NodeNotFound {
-            path: path.clone(),
-            message: "existing node not found".to_string(),
-        }
-        .into());
-    }
-    let renamed_path = renamed_path.unwrap();
-    match snapshot.get_node(renamed_path.as_ref()) {
-        Ok(node) => {
-            let node = match node.node_data {
-                NodeData::Array { ref manifests, .. } => {
-                    if let Some(new_data) = change_set.get_updated_array(&node.id) {
-                        let node_data = NodeData::Array {
-                            shape: new_data.shape.clone(),
-                            dimension_names: new_data.dimension_names.clone(),
-                            manifests: manifests.clone(),
-                        };
-                        NodeSnapshot {
-                            user_data: new_data.user_data.clone(),
-                            node_data,
-                            ..node
-                        }
-                    } else {
-                        node
-                    }
-                }
-                NodeData::Group => {
-                    if let Some(updated_definition) =
-                        change_set.get_updated_group(&node.id)
-                    {
-                        NodeSnapshot { user_data: updated_definition.clone(), ..node }
-                    } else {
-                        node
-                    }
-                }
-            };
-            let node = if &node.path != path {
-                NodeSnapshot { path: path.clone(), ..node }
-            } else {
-                node
-            };
-            Ok(node)
-        }
-        // A missing node here is not really a format error, so we need to
-        // generate the correct error for repositories
-        Err(IcechunkFormatError {
-            kind: IcechunkFormatErrorKind::NodeNotFound { .. },
-            ..
-        }) => Err(SessionErrorKind::NodeNotFound {
+    match change_set.moved_from(path) {
+        None => Err(SessionErrorKind::NodeNotFound {
             path: path.clone(),
             message: "existing node not found".to_string(),
         }
         .into()),
-        Err(err) => Err(SessionError::from(err)),
+        Some(renamed_path) => {
+            match snapshot.get_node(renamed_path.as_ref()) {
+                Ok(node) => {
+                    let node = match node.node_data {
+                        NodeData::Array { ref manifests, .. } => {
+                            if let Some(new_data) = change_set.get_updated_array(&node.id)
+                            {
+                                let node_data = NodeData::Array {
+                                    shape: new_data.shape.clone(),
+                                    dimension_names: new_data.dimension_names.clone(),
+                                    manifests: manifests.clone(),
+                                };
+                                NodeSnapshot {
+                                    user_data: new_data.user_data.clone(),
+                                    node_data,
+                                    ..node
+                                }
+                            } else {
+                                node
+                            }
+                        }
+                        NodeData::Group => {
+                            if let Some(updated_definition) =
+                                change_set.get_updated_group(&node.id)
+                            {
+                                NodeSnapshot {
+                                    user_data: updated_definition.clone(),
+                                    ..node
+                                }
+                            } else {
+                                node
+                            }
+                        }
+                    };
+                    let node = if &node.path != path {
+                        NodeSnapshot { path: path.clone(), ..node }
+                    } else {
+                        node
+                    };
+                    Ok(node)
+                }
+                // A missing node here is not really a format error, so we need to
+                // generate the correct error for repositories
+                Err(IcechunkFormatError {
+                    kind: IcechunkFormatErrorKind::NodeNotFound { .. },
+                    ..
+                }) => Err(SessionErrorKind::NodeNotFound {
+                    path: path.clone(),
+                    message: "existing node not found".to_string(),
+                }
+                .into()),
+                Err(err) => Err(SessionError::from(err)),
+            }
+        }
     }
 }
 
@@ -3963,7 +3975,7 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_basic_rename() -> Result<(), Box<dyn Error>> {
+    async fn test_basic_move() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
@@ -3971,13 +3983,15 @@ mod tests {
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;
+        session.add_group(Path::new("/foo/old").unwrap(), Bytes::new()).await?;
         let apath: Path = "/foo/old/array".try_into()?;
         session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
         session.commit("first commit", None).await?;
 
         let mut session = repo.rearrange_session("main").await?;
         session
-            .move_node(Path::new("/foo/old").unwrap(), Path::new("/foo/new").unwrap())?;
+            .move_node(Path::new("/foo/old").unwrap(), Path::new("/foo/new").unwrap())
+            .await?;
 
         assert_eq!(
             session.get_node(&Path::new("/").unwrap()).await?.path.to_string(),
@@ -3996,7 +4010,11 @@ mod tests {
 
         assert_equal(
             session.list_nodes().await?.map(|n| n.unwrap().path),
-            [Path::new("/").unwrap(), Path::new("/foo/new/array").unwrap()],
+            [
+                Path::new("/").unwrap(),
+                Path::new("/foo/new").unwrap(),
+                Path::new("/foo/new/array").unwrap(),
+            ],
         );
 
         session.commit("moved", None).await?;
@@ -4012,7 +4030,36 @@ mod tests {
                 .to_string(),
             "/foo/new/array"
         );
-        assert!(session.get_node(&Path::new("/foo/old/array").unwrap()).await.is_err());
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_move_errors() -> Result<(), Box<dyn Error>> {
+        let in_mem_storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let mut session = repo.writable_session("main").await?;
+
+        let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/foo/old/array".try_into()?;
+        session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
+        session.commit("first commit", None).await?;
+
+        let mut session = repo.rearrange_session("main").await?;
+        assert!(matches!(
+                session
+                    .move_node(Path::new("/foo/old/array").unwrap(), Path::new("/foo/old/array").unwrap())
+                    .await,
+                Err(SessionError{kind: SessionErrorKind::MoveWontOverwrite(s), ..}) if s == "/foo/old/array"
+        ));
+
+        assert!(matches!(
+                session
+                    .move_node(Path::new("/foo/old/unknown").unwrap(), Path::new("/foo/bar").unwrap())
+                    .await,
+                Err(SessionError{kind: SessionErrorKind::NodeNotFound{path, ..}, ..}) if path == Path::new("/foo/old/unknown").unwrap()
+        ));
         Ok(())
     }
 

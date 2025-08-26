@@ -116,12 +116,38 @@ impl PySession {
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
         py.allow_threads(move || {
-            self.0
-                .blocking_write()
-                .move_node(from, to)
-                .map_err(PyIcechunkStoreError::SessionError)
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let mut session = self.0.write().await;
+                session
+                    .move_node(from, to)
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)
+            })
         })?;
         Ok(())
+    }
+
+    pub fn move_node_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        from_path: String,
+        to_path: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let from = Path::new(from_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let to = Path::new(to_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut session = session.write().await;
+            session
+                .move_node(from, to)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(())
+        })
     }
 
     #[getter]

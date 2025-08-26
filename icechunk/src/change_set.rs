@@ -103,9 +103,11 @@ impl MoveTracker {
         let mut res = Cow::Borrowed(path);
         for Move { from, to } in self.0.iter() {
             if let Ok(rest) = res.as_ref().buf().strip_prefix(from.buf()) {
-                res = Cow::Owned(
-                    Path::new(to.buf().join(rest).to_string().as_str()).unwrap(),
-                );
+                // it's safe to join segments that already belonged to a Path
+                #[allow(clippy::expect_used)]
+                let new_path = Path::new(to.buf().join(rest).to_string().as_str())
+                    .expect("Bug in moved_to, cannot create path");
+                res = Cow::Owned(new_path);
             } else if res.buf().starts_with(to.buf()) {
                 // the path has been overwritten by the moves
                 // calling code should check for overwrittes before moving
@@ -119,9 +121,11 @@ impl MoveTracker {
         let mut res = Cow::Borrowed(path);
         for Move { from, to } in self.0.iter().rev() {
             if let Ok(rest) = res.as_ref().buf().strip_prefix(to.buf()) {
-                res = Cow::Owned(
-                    Path::new(from.buf().join(rest).to_string().as_str()).unwrap(),
-                );
+                // it's safe to join segments that already belonged to a Path
+                #[allow(clippy::expect_used)]
+                let old_path = Path::new(from.buf().join(rest).to_string().as_str())
+                    .expect("Bug in moved_from, cannot create path");
+                res = Cow::Owned(old_path);
             } else if res.buf().starts_with(from.buf()) {
                 // the moves have deleted this path
                 // calling code should check for overwrittes before moving
@@ -133,6 +137,8 @@ impl MoveTracker {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+// we only keep one of this, their size difference doesn't affect us
+#[allow(clippy::large_enum_variant)]
 pub enum ChangeSet {
     Edit(EditChanges),
     Rearrange(MoveTracker),
@@ -664,7 +670,8 @@ impl ChangeSet {
 
     // Applies the changeset to an existing node, yielding a new node if it hasn't been deleted
     pub fn update_existing_node(&self, node: NodeSnapshot) -> Option<NodeSnapshot> {
-        let new_path = self.moved_to(&node.path).unwrap();
+        // we need to take into account moves
+        let new_path = self.moved_to(&node.path)?;
         if self.is_deleted(new_path.as_ref(), &node.id) {
             return None;
         }
@@ -718,7 +725,7 @@ mod tests {
     };
 
     #[icechunk_macros::test]
-    fn test_new_arrays_chunk_iterator() {
+    fn test_new_arrays_chunk_iterator() -> Result<(), Box<dyn std::error::Error>> {
         let mut change_set = ChangeSet::Edit(Default::default());
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
@@ -736,12 +743,12 @@ mod tests {
             "/foo/bar".try_into().unwrap(),
             node_id1.clone(),
             array_data.clone(),
-        );
+        )?;
         change_set.add_array(
             "/foo/baz".try_into().unwrap(),
             node_id2.clone(),
             array_data.clone(),
-        );
+        )?;
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         let splits1 = ManifestSplits::from_edges(vec![vec![0, 10], vec![0, 10]]);
@@ -751,7 +758,7 @@ mod tests {
             ChunkIndices(vec![0, 1]),
             None,
             &splits1,
-        );
+        )?;
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
         change_set.set_chunk_ref(
@@ -759,13 +766,13 @@ mod tests {
             ChunkIndices(vec![1, 0]),
             Some(ChunkPayload::Inline("bar1".into())),
             &splits1,
-        );
+        )?;
         change_set.set_chunk_ref(
             node_id1.clone(),
             ChunkIndices(vec![1, 1]),
             Some(ChunkPayload::Inline("bar2".into())),
             &splits1,
-        );
+        )?;
 
         let splits2 = ManifestSplits::from_edges(vec![vec![0, 10]]);
         change_set.set_chunk_ref(
@@ -773,13 +780,13 @@ mod tests {
             ChunkIndices(vec![0]),
             Some(ChunkPayload::Inline("baz1".into())),
             &splits2,
-        );
+        )?;
         change_set.set_chunk_ref(
             node_id2.clone(),
             ChunkIndices(vec![1]),
             Some(ChunkPayload::Inline("baz2".into())),
             &splits2,
-        );
+        )?;
 
         {
             let all_chunks: Vec<_> = change_set
@@ -823,6 +830,7 @@ mod tests {
             .into();
             assert_eq!(all_chunks, expected_chunks);
         }
+        Ok(())
     }
 
     #[icechunk_macros::test]
