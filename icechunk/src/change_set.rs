@@ -110,7 +110,7 @@ impl MoveTracker {
                 res = Cow::Owned(new_path);
             } else if res.buf().starts_with(to.buf()) {
                 // the path has been overwritten by the moves
-                // calling code should check for overwrittes before moving
+                // calling code should check for overwrites before moving
                 return None;
             }
         }
@@ -128,7 +128,7 @@ impl MoveTracker {
                 res = Cow::Owned(old_path);
             } else if res.buf().starts_with(from.buf()) {
                 // the moves have deleted this path
-                // calling code should check for overwrittes before moving
+                // calling code should check for overwrites before moving
                 return None;
             }
         }
