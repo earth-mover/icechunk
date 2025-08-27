@@ -434,6 +434,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # This will test out checking out and deleting a tag that does not exist.
         return name
 
+    @precondition(lambda self: self.model.changes_made)
     @rule()
     def discard_changes(self) -> None:
         note(f"Discarding changes (branch={self.model.branch})")
