@@ -80,6 +80,7 @@ impl BasicConflictSolver {
                     | ZarrMetadataUpdateOfDeletedGroup(_)
                     | ChunksUpdatedInDeletedArray { .. }
                     | ChunksUpdatedInUpdatedArray { .. }
+                    | MoveOperationCannotBeRebased
             ) || matches!(conflict,
                 ChunkDoubleUpdate{..} if self.on_chunk_conflict == VersionSelection::Fail
             ) || matches!(conflict,

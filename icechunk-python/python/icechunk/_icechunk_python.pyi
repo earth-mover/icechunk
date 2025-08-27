@@ -2153,6 +2153,9 @@ class ConflictType(Enum):
     DeleteOfUpdatedGroup = (10,)
     """A delete is attempted on an updated group"""
 
+    (MoveOperationCannotBeRebased,) = (11,)
+    """Move operation cannot be rebased"""
+
 class Conflict:
     """A conflict detected between snapshots"""
 

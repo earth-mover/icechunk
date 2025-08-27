@@ -78,3 +78,36 @@ def test_move_errors():
         session.move("/my/old/path", "/my/old/path")
     with pytest.raises(ic.IcechunkError, match="node not found"):
         session.move("/not-found", "/my/new/path")
+
+
+def test_doesnt_rebase():
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store, overwrite=True)
+    root.create_group("my/old/path", overwrite=True)
+    session.commit("create group")
+
+    session1 = repo.rearrange_session("main")
+    session1.move("/my/old/path", "/my/new/path")
+
+    session2 = repo.writable_session("main")
+    root = zarr.group(store=session2.store, overwrite=True)
+    root.create_group("no-conflict", overwrite=True)
+
+    session1.commit("moved")
+
+    try:
+        session2.commit("rebase commit")
+        raise AssertionError()
+    except ic.ConflictError:
+        try:
+            session2.rebase(ic.ConflictDetector())
+            raise AssertionError()
+        except ic.RebaseFailedError as e:
+            assert len(e.conflicts) == 1
+            assert (
+                e.conflicts[0].conflict_type
+                == ic.ConflictType.MoveOperationCannotBeRebased
+            )

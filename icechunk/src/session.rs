@@ -1279,7 +1279,7 @@ impl Session {
                     .try_take_while(|snap_id| ready(Ok(snap_id != &self.snapshot_id)))
                     .try_collect::<Vec<_>>()
                     .await?;
-                trace!("Found {} commits to rebase", new_commits.len());
+                trace!("Found {} commits to rebase over", new_commits.len());
 
                 // TODO: this clone is expensive
                 // we currently need it to be able to process commits one by one without modifying the
