@@ -135,6 +135,8 @@ pub enum SessionErrorKind {
     NoAmendForInitialCommit,
     #[error("failed to create manifest from chunk stream")]
     ManifestCreationError(#[from] Box<SessionError>),
+    #[error("unknown error: {0}")]
+    Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
 pub type SessionError = ICError<SessionErrorKind>;
@@ -215,6 +217,8 @@ impl ManifestSplits {
         find_coord(self.iter(), coord).map(|x| x.0)
     }
 }
+
+pub type ReindexOperationResult = Result<Option<ChunkIndices>, SessionError>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -536,6 +540,66 @@ impl Session {
 
         self.change_set_mut()?.move_node(from, to)?;
         Ok(())
+    }
+
+    #[instrument(skip(self, calculate_new_index))]
+    pub async fn reindex_array<F>(
+        &mut self,
+        array_path: &Path,
+        calculate_new_index: F,
+    ) -> SessionResult<()>
+    where
+        F: Fn(&ChunkIndices) -> ReindexOperationResult,
+    {
+        let node = self.get_array(array_path).await?;
+        #[allow(clippy::panic)]
+        let (shape, splits) = if let NodeData::Array { shape, dimension_names, .. } =
+            node.node_data
+        {
+            let splits =
+                self.get_splits(&node.id, &node.path, &shape, &dimension_names).clone();
+            (shape, splits)
+        } else {
+            // we know it's an array because get_array succeeded
+            panic!("bug in reindex")
+        };
+
+        let mut original_chunks = self.chunk_coordinates(array_path).await?.boxed();
+        let mut change_set = ChangeSet::for_edits();
+        // TODO: concurrency
+        while let Some(old_chunk_index) = original_chunks.try_next().await? {
+            if let Some(new_chunk_index) = calculate_new_index(&old_chunk_index)? {
+                let new_payload =
+                    self.get_chunk_ref(array_path, &old_chunk_index).await?;
+                if shape.valid_chunk_coord(&new_chunk_index) {
+                    change_set.set_chunk_ref(
+                        node.id.clone(),
+                        new_chunk_index,
+                        new_payload,
+                        &splits,
+                    )?;
+                } else {
+                    return Err(SessionErrorKind::InvalidIndex {
+                        coords: new_chunk_index,
+                        path: node.path.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+        drop(original_chunks);
+        self.change_set_mut()?.merge(change_set)?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn shift_array(
+        &mut self,
+        array_path: &Path,
+        offset: &[i64], // FIXME: overflow
+    ) -> SessionResult<()> {
+        self.reindex_array(array_path, shift_by(offset)).await
     }
 
     #[instrument(skip(self, coords))]
@@ -1717,6 +1781,27 @@ pub fn construct_valid_byte_range(
             let new_start = new_end - n;
             new_start..new_end
         }
+    }
+}
+
+pub fn shift_by(offset: &[i64]) -> impl Fn(&ChunkIndices) -> ReindexOperationResult {
+    |index: &ChunkIndices| {
+        let res: Option<Vec<u32>> = index
+            .0
+            .iter()
+            .zip(offset.iter())
+            .map(|(index, offset)| {
+                let new_index = *index as i64 + offset;
+                if new_index < 0 {
+                    return Ok(None);
+                }
+                let new_index: u32 = new_index
+                    .try_into()
+                    .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
+                Ok::<_, SessionError>(Some(new_index))
+            })
+            .try_collect()?;
+        Ok(res.map(ChunkIndices))
     }
 }
 
@@ -4121,6 +4206,51 @@ mod tests {
             }
             _ => panic!("Expected InvalidIndex Error"),
         }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_array_shift() -> Result<(), Box<dyn Error>> {
+        let in_mem_storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let mut session = repo.writable_session("main").await?;
+        let shape = ArrayShape::new(vec![(20, 2)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/array".try_into()?;
+        session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
+
+        for chunk_index in 0..10 {
+            session
+                .set_chunk_ref(
+                    apath.clone(),
+                    ChunkIndices(vec![chunk_index]),
+                    Some(ChunkPayload::Inline(chunk_index.to_string().into())),
+                )
+                .await?;
+        }
+
+        session.commit("first commit", None).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.reindex_array(&apath, shift_by(&[-1])).await?;
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?,
+            Some(ChunkPayload::Inline("1".into()))
+        );
+        for chunk_index in 0..=8 {
+            let new_payload =
+                session.get_chunk_ref(&apath, &ChunkIndices(vec![chunk_index])).await?;
+            assert_eq!(
+                new_payload,
+                Some(ChunkPayload::Inline((chunk_index + 1).to_string().into()))
+            )
+        }
+
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![9])).await?,
+            Some(ChunkPayload::Inline("9".into()))
+        );
         Ok(())
     }
 

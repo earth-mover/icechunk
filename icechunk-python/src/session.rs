@@ -4,11 +4,14 @@ use async_stream::try_stream;
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Store,
-    format::Path,
-    session::Session,
+    format::{ChunkIndices, Path},
+    session::{Session, SessionErrorKind},
     store::{StoreError, StoreErrorKind},
 };
-use pyo3::{prelude::*, types::PyType};
+use pyo3::{
+    prelude::*,
+    types::{PyFunction, PyType},
+};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
@@ -144,6 +147,61 @@ impl PySession {
             let mut session = session.write().await;
             session
                 .move_node(from, to)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(())
+        })
+    }
+
+    pub fn reindex_array<'py>(
+        &mut self,
+        py: Python<'py>,
+        array_path: String,
+        shift_chunk: Bound<'py, PyFunction>,
+    ) -> PyResult<()> {
+        let array_path = Path::new(array_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let shift_chunk = |idx: &ChunkIndices| {
+            let python_index = idx
+                .0
+                .clone()
+                .into_pyobject(py)
+                .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
+            let new_index = shift_chunk
+                .call1((python_index,))
+                .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
+            if new_index.is_none() {
+                Ok(None)
+            } else {
+                let new_index: Vec<u32> = new_index
+                    .extract()
+                    .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
+                Ok(Some(ChunkIndices(new_index)))
+            }
+        };
+
+        // TODO: allow_threads
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let mut session = self.0.write().await;
+            session
+                .reindex_array(&array_path, shift_chunk)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(())
+        })
+    }
+
+    pub fn shift_array(&mut self, array_path: String, offset: Vec<i64>) -> PyResult<()> {
+        let array_path = Path::new(array_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+
+        // TODO: allow_threads
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let mut session = self.0.write().await;
+            session
+                .shift_array(&array_path, offset.as_slice())
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(())
