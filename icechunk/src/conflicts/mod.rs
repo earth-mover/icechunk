@@ -39,6 +39,7 @@ pub enum Conflict {
         path: Path,
         node_id: NodeId,
     },
+    MoveOperationCannotBeRebased,
     // FIXME: we are missing the case of current change deleting a group and previous change
     // creating something new under it
 }

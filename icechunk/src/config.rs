@@ -70,7 +70,9 @@ pub enum CompressionAlgorithm {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct CompressionConfig {
+    #[serde(default)]
     pub algorithm: Option<CompressionAlgorithm>,
+    #[serde(default)]
     pub level: Option<u8>,
 }
 
@@ -93,10 +95,19 @@ impl CompressionConfig {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct CachingConfig {
+    #[serde(default)]
     pub num_snapshot_nodes: Option<u64>,
+
+    #[serde(default)]
     pub num_chunk_refs: Option<u64>,
+
+    #[serde(default)]
     pub num_transaction_changes: Option<u64>,
+
+    #[serde(default)]
     pub num_bytes_attributes: Option<u64>,
+
+    #[serde(default)]
     pub num_bytes_chunks: Option<u64>,
 }
 
@@ -309,7 +320,9 @@ static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ManifestConfig {
+    #[serde(default)]
     pub preload: Option<ManifestPreloadConfig>,
+    #[serde(default)]
     pub splitting: Option<ManifestSplittingConfig>,
 }
 
@@ -352,25 +365,38 @@ impl ManifestConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepositoryConfig {
     /// Chunks smaller than this will be stored inline in the manifest
+    #[serde(default)]
     pub inline_chunk_threshold_bytes: Option<u16>,
 
     /// Concurrency used by the get_partial_values operation to fetch different keys in parallel
+    #[serde(default)]
     pub get_partial_values_concurrency: Option<u16>,
 
+    #[serde(default)]
     pub compression: Option<CompressionConfig>,
+
+    #[serde(default)]
     pub max_concurrent_requests: Option<u16>,
+
+    #[serde(default)]
     pub caching: Option<CachingConfig>,
 
     // If not set it will use the Storage implementation default
+    #[serde(default)]
     pub storage: Option<storage::Settings>,
 
     // Compatibility note:
     // The key is this hashmap used to be the ContainerName, which
     // we have eliminated. We maintain the types for compatibility
     // with persisted configurations
+    #[serde(default)]
     pub virtual_chunk_containers: Option<HashMap<String, VirtualChunkContainer>>,
 
+    #[serde(default)]
     pub manifest: Option<ManifestConfig>,
+
+    #[serde(default)]
+    pub previous_file: Option<String>,
 }
 
 static DEFAULT_COMPRESSION: OnceLock<CompressionConfig> = OnceLock::new();
@@ -463,6 +489,12 @@ impl RepositoryConfig {
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            previous_file: match (&self.previous_file, other.previous_file) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(_), Some(theirs)) => Some(theirs),
             },
         }
     }

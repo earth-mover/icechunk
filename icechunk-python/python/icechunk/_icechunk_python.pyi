@@ -1,6 +1,6 @@
 import abc
 import datetime
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable
 from enum import Enum
 from typing import Any, TypeAlias
 
@@ -1261,6 +1261,12 @@ class Diff:
         The chunks indices that had data updated in the target ref, keyed by the path to the array.
         """
         ...
+    @property
+    def moved_nodes(self) -> list[tuple[str, str]]:
+        """
+        The list of node moves, in order of application, as tuples (from_path, to_path).
+        """
+        ...
 
 class GCSummary:
     """Summarizes the results of a garbage collection operation on an icechunk repo"""
@@ -1443,6 +1449,8 @@ class PyRepository:
     ) -> PySession: ...
     def writable_session(self, branch: str) -> PySession: ...
     async def writable_session_async(self, branch: str) -> PySession: ...
+    def rearrange_session(self, branch: str) -> PySession: ...
+    async def rearrange_session_async(self, branch: str) -> PySession: ...
     def expire_snapshots(
         self,
         older_than: datetime.datetime,
@@ -1499,6 +1507,7 @@ class PyRepository:
     async def inspect_snapshot_async(
         self, snapshot_id: str, *, pretty: bool = True
     ) -> str: ...
+    def spec_version(self) -> int: ...
 
 class PySession:
     @classmethod
@@ -1515,6 +1524,14 @@ class PySession:
     def has_uncommitted_changes(self) -> bool: ...
     def status(self) -> Diff: ...
     def discard_changes(self) -> None: ...
+    def move_node(self, from_path: str, to_path: str) -> None: ...
+    def reindex_array(
+        self,
+        array_path: str,
+        shift_chunk: Callable[[Iterable[int]], Iterable[int] | None],
+    ) -> None: ...
+    def shift_array(self, array_path: str, offset: Iterable[int]) -> None: ...
+    async def move_node_async(self, from_path: str, to_path: str) -> None: ...
     def all_virtual_chunk_locations(self) -> list[str]: ...
     async def all_virtual_chunk_locations_async(self) -> list[str]: ...
     def chunk_coordinates(
@@ -1539,6 +1556,16 @@ class PySession:
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+    ) -> str: ...
+    def amend(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str: ...
+    async def amend_async(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
     ) -> str: ...
     def rebase(self, solver: ConflictSolver) -> None: ...
     async def rebase_async(self, solver: ConflictSolver) -> None: ...
@@ -2132,6 +2159,9 @@ class ConflictType(Enum):
     DeleteOfUpdatedGroup = (10,)
     """A delete is attempted on an updated group"""
 
+    (MoveOperationCannotBeRebased,) = (11,)
+    """Move operation cannot be rebased"""
+
 class Conflict:
     """A conflict detected between snapshots"""
 
@@ -2215,5 +2245,23 @@ def spec_version() -> int:
 
     Returns:
         int: The version of the Icechunk specification that the library is compatible with
+    """
+    ...
+
+def _upgrade_icechunk_repository(
+    repo: PyRepository, *, dry_run: bool = True, delete_unused_v1_files: bool = False
+) -> None:
+    """
+    Migrate a repository to the latest version of Icechunk.
+
+    This is an administrative operation, and must be executed in isolation from
+    other readers and writers. Other processes running concurrently on the same
+    repo may see undefined behavior.
+
+    At this time, this function supports only migration from Icechunk spec version 1
+    to Icechunk spec version 2. This means Icechunk versions 1.x to 2.x.
+
+    The operation is usually fast, but it can take several minutes if there is a very
+    large version history (thousands of snapshots).
     """
     ...
