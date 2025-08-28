@@ -209,10 +209,7 @@ Arrays deleted:
     tag_snapshot_id = repo.lookup_tag("v1.0")
     assert tag_snapshot_id == feature_snapshot_id
 
-    print(list(repo.ancestry(tag="v1.0")))
     actual = next(iter(repo.ancestry(tag="v1.0")))
-    print(repo.lookup_snapshot(actual.id))
-    print(actual)
     assert actual.id == repo.lookup_snapshot(actual.id).id
     assert actual == repo.lookup_snapshot(actual.id)
 
@@ -500,6 +497,18 @@ Arrays deleted:
 
     actual = next(iter([parent async for parent in repo.async_ancestry(tag="v1.0")]))
     assert actual == await repo.lookup_snapshot_async(actual.id)
+
+    ops = [type(op) for op in repo.ops_log()]
+    assert ops == [
+        ic.BranchCreatedUpdate,
+        ic.TagCreatedUpdate,
+        ic.BranchDeletedUpdate,
+        ic.NewCommitUpdate,
+        ic.BranchCreatedUpdate,
+        ic.NewCommitUpdate,
+        ic.NewCommitUpdate,
+        ic.RepoInitializedUpdate,
+    ]
 
 
 async def test_branch_reset_async() -> None:

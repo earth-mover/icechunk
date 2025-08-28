@@ -204,6 +204,147 @@ pub mod generated {
     }
 
     impl flatbuffers::SimpleToVerifyInSlice for RepoAvailability {}
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MIN_UPDATE_TYPE: u8 = 0;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    pub const ENUM_MAX_UPDATE_TYPE: u8 = 12;
+    #[deprecated(
+        since = "2.0.0",
+        note = "Use associated constants instead. This will no longer be generated in 2021."
+    )]
+    #[allow(non_camel_case_types)]
+    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 13] = [
+        UpdateType::NONE,
+        UpdateType::RepoInitializedUpdate,
+        UpdateType::RepoMigratedUpdate,
+        UpdateType::ConfigChangedUpdate,
+        UpdateType::TagCreatedUpdate,
+        UpdateType::TagDeletedUpdate,
+        UpdateType::BranchCreatedUpdate,
+        UpdateType::BranchDeletedUpdate,
+        UpdateType::BranchResetUpdate,
+        UpdateType::NewCommitUpdate,
+        UpdateType::CommitAmendedUpdate,
+        UpdateType::GCRanUpdate,
+        UpdateType::ExpirationRanUpdate,
+    ];
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    #[repr(transparent)]
+    pub struct UpdateType(pub u8);
+    #[allow(non_upper_case_globals)]
+    impl UpdateType {
+        pub const NONE: Self = Self(0);
+        pub const RepoInitializedUpdate: Self = Self(1);
+        pub const RepoMigratedUpdate: Self = Self(2);
+        pub const ConfigChangedUpdate: Self = Self(3);
+        pub const TagCreatedUpdate: Self = Self(4);
+        pub const TagDeletedUpdate: Self = Self(5);
+        pub const BranchCreatedUpdate: Self = Self(6);
+        pub const BranchDeletedUpdate: Self = Self(7);
+        pub const BranchResetUpdate: Self = Self(8);
+        pub const NewCommitUpdate: Self = Self(9);
+        pub const CommitAmendedUpdate: Self = Self(10);
+        pub const GCRanUpdate: Self = Self(11);
+        pub const ExpirationRanUpdate: Self = Self(12);
+
+        pub const ENUM_MIN: u8 = 0;
+        pub const ENUM_MAX: u8 = 12;
+        pub const ENUM_VALUES: &'static [Self] = &[
+            Self::NONE,
+            Self::RepoInitializedUpdate,
+            Self::RepoMigratedUpdate,
+            Self::ConfigChangedUpdate,
+            Self::TagCreatedUpdate,
+            Self::TagDeletedUpdate,
+            Self::BranchCreatedUpdate,
+            Self::BranchDeletedUpdate,
+            Self::BranchResetUpdate,
+            Self::NewCommitUpdate,
+            Self::CommitAmendedUpdate,
+            Self::GCRanUpdate,
+            Self::ExpirationRanUpdate,
+        ];
+        /// Returns the variant's name or "" if unknown.
+        pub fn variant_name(self) -> Option<&'static str> {
+            match self {
+                Self::NONE => Some("NONE"),
+                Self::RepoInitializedUpdate => Some("RepoInitializedUpdate"),
+                Self::RepoMigratedUpdate => Some("RepoMigratedUpdate"),
+                Self::ConfigChangedUpdate => Some("ConfigChangedUpdate"),
+                Self::TagCreatedUpdate => Some("TagCreatedUpdate"),
+                Self::TagDeletedUpdate => Some("TagDeletedUpdate"),
+                Self::BranchCreatedUpdate => Some("BranchCreatedUpdate"),
+                Self::BranchDeletedUpdate => Some("BranchDeletedUpdate"),
+                Self::BranchResetUpdate => Some("BranchResetUpdate"),
+                Self::NewCommitUpdate => Some("NewCommitUpdate"),
+                Self::CommitAmendedUpdate => Some("CommitAmendedUpdate"),
+                Self::GCRanUpdate => Some("GCRanUpdate"),
+                Self::ExpirationRanUpdate => Some("ExpirationRanUpdate"),
+                _ => None,
+            }
+        }
+    }
+    impl core::fmt::Debug for UpdateType {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            if let Some(name) = self.variant_name() {
+                f.write_str(name)
+            } else {
+                f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+            }
+        }
+    }
+    impl<'a> flatbuffers::Follow<'a> for UpdateType {
+        type Inner = Self;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+            Self(b)
+        }
+    }
+
+    impl flatbuffers::Push for UpdateType {
+        type Output = UpdateType;
+        #[inline]
+        unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+            flatbuffers::emplace_scalar::<u8>(dst, self.0);
+        }
+    }
+
+    impl flatbuffers::EndianScalar for UpdateType {
+        type Scalar = u8;
+        #[inline]
+        fn to_little_endian(self) -> u8 {
+            self.0.to_le()
+        }
+        #[inline]
+        #[allow(clippy::wrong_self_convention)]
+        fn from_little_endian(v: u8) -> Self {
+            let b = u8::from_le(v);
+            Self(b)
+        }
+    }
+
+    impl<'a> flatbuffers::Verifiable for UpdateType {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            u8::run_verifier(v, pos)
+        }
+    }
+
+    impl flatbuffers::SimpleToVerifyInSlice for UpdateType {}
+    pub struct UpdateTypeUnionTableOffset {}
+
     // struct ObjectId12, aligned to 1
     #[repr(transparent)]
     #[derive(Clone, Copy, PartialEq)]
@@ -3887,6 +4028,1411 @@ pub mod generated {
             ds.finish()
         }
     }
+    pub enum RepoInitializedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct RepoInitializedUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for RepoInitializedUpdate<'a> {
+        type Inner = RepoInitializedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> RepoInitializedUpdate<'a> {
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            RepoInitializedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            _args: &'args RepoInitializedUpdateArgs,
+        ) -> flatbuffers::WIPOffset<RepoInitializedUpdate<'bldr>> {
+            let mut builder = RepoInitializedUpdateBuilder::new(_fbb);
+            builder.finish()
+        }
+    }
+
+    impl flatbuffers::Verifiable for RepoInitializedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?.finish();
+            Ok(())
+        }
+    }
+    pub struct RepoInitializedUpdateArgs {}
+    impl<'a> Default for RepoInitializedUpdateArgs {
+        #[inline]
+        fn default() -> Self {
+            RepoInitializedUpdateArgs {}
+        }
+    }
+
+    pub struct RepoInitializedUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> RepoInitializedUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> RepoInitializedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            RepoInitializedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<RepoInitializedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for RepoInitializedUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("RepoInitializedUpdate");
+            ds.finish()
+        }
+    }
+    pub enum RepoMigratedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct RepoMigratedUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for RepoMigratedUpdate<'a> {
+        type Inner = RepoMigratedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> RepoMigratedUpdate<'a> {
+        pub const VT_FROM_VERSION: flatbuffers::VOffsetT = 4;
+        pub const VT_TO_VERSION: flatbuffers::VOffsetT = 6;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            RepoMigratedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args RepoMigratedUpdateArgs,
+        ) -> flatbuffers::WIPOffset<RepoMigratedUpdate<'bldr>> {
+            let mut builder = RepoMigratedUpdateBuilder::new(_fbb);
+            builder.add_to_version(args.to_version);
+            builder.add_from_version(args.from_version);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn from_version(&self) -> u8 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<u8>(RepoMigratedUpdate::VT_FROM_VERSION, Some(0)).unwrap()
+            }
+        }
+        #[inline]
+        pub fn to_version(&self) -> u8 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<u8>(RepoMigratedUpdate::VT_TO_VERSION, Some(0)).unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for RepoMigratedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<u8>("from_version", Self::VT_FROM_VERSION, false)?
+                .visit_field::<u8>("to_version", Self::VT_TO_VERSION, false)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct RepoMigratedUpdateArgs {
+        pub from_version: u8,
+        pub to_version: u8,
+    }
+    impl<'a> Default for RepoMigratedUpdateArgs {
+        #[inline]
+        fn default() -> Self {
+            RepoMigratedUpdateArgs { from_version: 0, to_version: 0 }
+        }
+    }
+
+    pub struct RepoMigratedUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> RepoMigratedUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_from_version(&mut self, from_version: u8) {
+            self.fbb_.push_slot::<u8>(
+                RepoMigratedUpdate::VT_FROM_VERSION,
+                from_version,
+                0,
+            );
+        }
+        #[inline]
+        pub fn add_to_version(&mut self, to_version: u8) {
+            self.fbb_.push_slot::<u8>(RepoMigratedUpdate::VT_TO_VERSION, to_version, 0);
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> RepoMigratedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            RepoMigratedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<RepoMigratedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for RepoMigratedUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("RepoMigratedUpdate");
+            ds.field("from_version", &self.from_version());
+            ds.field("to_version", &self.to_version());
+            ds.finish()
+        }
+    }
+    pub enum ConfigChangedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct ConfigChangedUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for ConfigChangedUpdate<'a> {
+        type Inner = ConfigChangedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> ConfigChangedUpdate<'a> {
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            ConfigChangedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            _args: &'args ConfigChangedUpdateArgs,
+        ) -> flatbuffers::WIPOffset<ConfigChangedUpdate<'bldr>> {
+            let mut builder = ConfigChangedUpdateBuilder::new(_fbb);
+            builder.finish()
+        }
+    }
+
+    impl flatbuffers::Verifiable for ConfigChangedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?.finish();
+            Ok(())
+        }
+    }
+    pub struct ConfigChangedUpdateArgs {}
+    impl<'a> Default for ConfigChangedUpdateArgs {
+        #[inline]
+        fn default() -> Self {
+            ConfigChangedUpdateArgs {}
+        }
+    }
+
+    pub struct ConfigChangedUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ConfigChangedUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> ConfigChangedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            ConfigChangedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<ConfigChangedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for ConfigChangedUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("ConfigChangedUpdate");
+            ds.finish()
+        }
+    }
+    pub enum TagCreatedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct TagCreatedUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for TagCreatedUpdate<'a> {
+        type Inner = TagCreatedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> TagCreatedUpdate<'a> {
+        pub const VT_NAME: flatbuffers::VOffsetT = 4;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            TagCreatedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args TagCreatedUpdateArgs<'args>,
+        ) -> flatbuffers::WIPOffset<TagCreatedUpdate<'bldr>> {
+            let mut builder = TagCreatedUpdateBuilder::new(_fbb);
+            if let Some(x) = args.name {
+                builder.add_name(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn name(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(
+                        TagCreatedUpdate::VT_NAME,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for TagCreatedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "name",
+                    Self::VT_NAME,
+                    true,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct TagCreatedUpdateArgs<'a> {
+        pub name: Option<flatbuffers::WIPOffset<&'a str>>,
+    }
+    impl<'a> Default for TagCreatedUpdateArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            TagCreatedUpdateArgs {
+      name: None, // required field
+    }
+        }
+    }
+
+    pub struct TagCreatedUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> TagCreatedUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_name(&mut self, name: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                TagCreatedUpdate::VT_NAME,
+                name,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> TagCreatedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            TagCreatedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<TagCreatedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, TagCreatedUpdate::VT_NAME, "name");
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for TagCreatedUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("TagCreatedUpdate");
+            ds.field("name", &self.name());
+            ds.finish()
+        }
+    }
+    pub enum TagDeletedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct TagDeletedUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for TagDeletedUpdate<'a> {
+        type Inner = TagDeletedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> TagDeletedUpdate<'a> {
+        pub const VT_NAME: flatbuffers::VOffsetT = 4;
+        pub const VT_PREVIOUS_SNAP_ID: flatbuffers::VOffsetT = 6;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            TagDeletedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args TagDeletedUpdateArgs<'args>,
+        ) -> flatbuffers::WIPOffset<TagDeletedUpdate<'bldr>> {
+            let mut builder = TagDeletedUpdateBuilder::new(_fbb);
+            if let Some(x) = args.previous_snap_id {
+                builder.add_previous_snap_id(x);
+            }
+            if let Some(x) = args.name {
+                builder.add_name(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn name(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(
+                        TagDeletedUpdate::VT_NAME,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn previous_snap_id(&self) -> &'a ObjectId12 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<ObjectId12>(TagDeletedUpdate::VT_PREVIOUS_SNAP_ID, None)
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for TagDeletedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "name",
+                    Self::VT_NAME,
+                    true,
+                )?
+                .visit_field::<ObjectId12>(
+                    "previous_snap_id",
+                    Self::VT_PREVIOUS_SNAP_ID,
+                    true,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct TagDeletedUpdateArgs<'a> {
+        pub name: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub previous_snap_id: Option<&'a ObjectId12>,
+    }
+    impl<'a> Default for TagDeletedUpdateArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            TagDeletedUpdateArgs {
+                name: None,             // required field
+                previous_snap_id: None, // required field
+            }
+        }
+    }
+
+    pub struct TagDeletedUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> TagDeletedUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_name(&mut self, name: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                TagDeletedUpdate::VT_NAME,
+                name,
+            );
+        }
+        #[inline]
+        pub fn add_previous_snap_id(&mut self, previous_snap_id: &ObjectId12) {
+            self.fbb_.push_slot_always::<&ObjectId12>(
+                TagDeletedUpdate::VT_PREVIOUS_SNAP_ID,
+                previous_snap_id,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> TagDeletedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            TagDeletedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<TagDeletedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, TagDeletedUpdate::VT_NAME, "name");
+            self.fbb_.required(
+                o,
+                TagDeletedUpdate::VT_PREVIOUS_SNAP_ID,
+                "previous_snap_id",
+            );
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for TagDeletedUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("TagDeletedUpdate");
+            ds.field("name", &self.name());
+            ds.field("previous_snap_id", &self.previous_snap_id());
+            ds.finish()
+        }
+    }
+    pub enum BranchCreatedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct BranchCreatedUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for BranchCreatedUpdate<'a> {
+        type Inner = BranchCreatedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> BranchCreatedUpdate<'a> {
+        pub const VT_NAME: flatbuffers::VOffsetT = 4;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            BranchCreatedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args BranchCreatedUpdateArgs<'args>,
+        ) -> flatbuffers::WIPOffset<BranchCreatedUpdate<'bldr>> {
+            let mut builder = BranchCreatedUpdateBuilder::new(_fbb);
+            if let Some(x) = args.name {
+                builder.add_name(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn name(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(
+                        BranchCreatedUpdate::VT_NAME,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for BranchCreatedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "name",
+                    Self::VT_NAME,
+                    true,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct BranchCreatedUpdateArgs<'a> {
+        pub name: Option<flatbuffers::WIPOffset<&'a str>>,
+    }
+    impl<'a> Default for BranchCreatedUpdateArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            BranchCreatedUpdateArgs {
+      name: None, // required field
+    }
+        }
+    }
+
+    pub struct BranchCreatedUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> BranchCreatedUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_name(&mut self, name: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                BranchCreatedUpdate::VT_NAME,
+                name,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> BranchCreatedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            BranchCreatedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<BranchCreatedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, BranchCreatedUpdate::VT_NAME, "name");
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for BranchCreatedUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("BranchCreatedUpdate");
+            ds.field("name", &self.name());
+            ds.finish()
+        }
+    }
+    pub enum BranchDeletedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct BranchDeletedUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for BranchDeletedUpdate<'a> {
+        type Inner = BranchDeletedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> BranchDeletedUpdate<'a> {
+        pub const VT_NAME: flatbuffers::VOffsetT = 4;
+        pub const VT_PREVIOUS_SNAP_ID: flatbuffers::VOffsetT = 6;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            BranchDeletedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args BranchDeletedUpdateArgs<'args>,
+        ) -> flatbuffers::WIPOffset<BranchDeletedUpdate<'bldr>> {
+            let mut builder = BranchDeletedUpdateBuilder::new(_fbb);
+            if let Some(x) = args.previous_snap_id {
+                builder.add_previous_snap_id(x);
+            }
+            if let Some(x) = args.name {
+                builder.add_name(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn name(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(
+                        BranchDeletedUpdate::VT_NAME,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn previous_snap_id(&self) -> &'a ObjectId12 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<ObjectId12>(BranchDeletedUpdate::VT_PREVIOUS_SNAP_ID, None)
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for BranchDeletedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "name",
+                    Self::VT_NAME,
+                    true,
+                )?
+                .visit_field::<ObjectId12>(
+                    "previous_snap_id",
+                    Self::VT_PREVIOUS_SNAP_ID,
+                    true,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct BranchDeletedUpdateArgs<'a> {
+        pub name: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub previous_snap_id: Option<&'a ObjectId12>,
+    }
+    impl<'a> Default for BranchDeletedUpdateArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            BranchDeletedUpdateArgs {
+                name: None,             // required field
+                previous_snap_id: None, // required field
+            }
+        }
+    }
+
+    pub struct BranchDeletedUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> BranchDeletedUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_name(&mut self, name: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                BranchDeletedUpdate::VT_NAME,
+                name,
+            );
+        }
+        #[inline]
+        pub fn add_previous_snap_id(&mut self, previous_snap_id: &ObjectId12) {
+            self.fbb_.push_slot_always::<&ObjectId12>(
+                BranchDeletedUpdate::VT_PREVIOUS_SNAP_ID,
+                previous_snap_id,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> BranchDeletedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            BranchDeletedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<BranchDeletedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, BranchDeletedUpdate::VT_NAME, "name");
+            self.fbb_.required(
+                o,
+                BranchDeletedUpdate::VT_PREVIOUS_SNAP_ID,
+                "previous_snap_id",
+            );
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for BranchDeletedUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("BranchDeletedUpdate");
+            ds.field("name", &self.name());
+            ds.field("previous_snap_id", &self.previous_snap_id());
+            ds.finish()
+        }
+    }
+    pub enum BranchResetUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct BranchResetUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for BranchResetUpdate<'a> {
+        type Inner = BranchResetUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> BranchResetUpdate<'a> {
+        pub const VT_NAME: flatbuffers::VOffsetT = 4;
+        pub const VT_PREVIOUS_SNAP_ID: flatbuffers::VOffsetT = 6;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            BranchResetUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args BranchResetUpdateArgs<'args>,
+        ) -> flatbuffers::WIPOffset<BranchResetUpdate<'bldr>> {
+            let mut builder = BranchResetUpdateBuilder::new(_fbb);
+            if let Some(x) = args.previous_snap_id {
+                builder.add_previous_snap_id(x);
+            }
+            if let Some(x) = args.name {
+                builder.add_name(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn name(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(
+                        BranchResetUpdate::VT_NAME,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn previous_snap_id(&self) -> &'a ObjectId12 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<ObjectId12>(BranchResetUpdate::VT_PREVIOUS_SNAP_ID, None)
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for BranchResetUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "name",
+                    Self::VT_NAME,
+                    true,
+                )?
+                .visit_field::<ObjectId12>(
+                    "previous_snap_id",
+                    Self::VT_PREVIOUS_SNAP_ID,
+                    true,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct BranchResetUpdateArgs<'a> {
+        pub name: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub previous_snap_id: Option<&'a ObjectId12>,
+    }
+    impl<'a> Default for BranchResetUpdateArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            BranchResetUpdateArgs {
+                name: None,             // required field
+                previous_snap_id: None, // required field
+            }
+        }
+    }
+
+    pub struct BranchResetUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> BranchResetUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_name(&mut self, name: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                BranchResetUpdate::VT_NAME,
+                name,
+            );
+        }
+        #[inline]
+        pub fn add_previous_snap_id(&mut self, previous_snap_id: &ObjectId12) {
+            self.fbb_.push_slot_always::<&ObjectId12>(
+                BranchResetUpdate::VT_PREVIOUS_SNAP_ID,
+                previous_snap_id,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> BranchResetUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            BranchResetUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<BranchResetUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, BranchResetUpdate::VT_NAME, "name");
+            self.fbb_.required(
+                o,
+                BranchResetUpdate::VT_PREVIOUS_SNAP_ID,
+                "previous_snap_id",
+            );
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for BranchResetUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("BranchResetUpdate");
+            ds.field("name", &self.name());
+            ds.field("previous_snap_id", &self.previous_snap_id());
+            ds.finish()
+        }
+    }
+    pub enum NewCommitUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct NewCommitUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for NewCommitUpdate<'a> {
+        type Inner = NewCommitUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> NewCommitUpdate<'a> {
+        pub const VT_BRANCH: flatbuffers::VOffsetT = 4;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            NewCommitUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args NewCommitUpdateArgs<'args>,
+        ) -> flatbuffers::WIPOffset<NewCommitUpdate<'bldr>> {
+            let mut builder = NewCommitUpdateBuilder::new(_fbb);
+            if let Some(x) = args.branch {
+                builder.add_branch(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn branch(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(
+                        NewCommitUpdate::VT_BRANCH,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for NewCommitUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "branch",
+                    Self::VT_BRANCH,
+                    true,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct NewCommitUpdateArgs<'a> {
+        pub branch: Option<flatbuffers::WIPOffset<&'a str>>,
+    }
+    impl<'a> Default for NewCommitUpdateArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            NewCommitUpdateArgs {
+      branch: None, // required field
+    }
+        }
+    }
+
+    pub struct NewCommitUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> NewCommitUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_branch(&mut self, branch: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                NewCommitUpdate::VT_BRANCH,
+                branch,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> NewCommitUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            NewCommitUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<NewCommitUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, NewCommitUpdate::VT_BRANCH, "branch");
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for NewCommitUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("NewCommitUpdate");
+            ds.field("branch", &self.branch());
+            ds.finish()
+        }
+    }
+    pub enum CommitAmendedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct CommitAmendedUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for CommitAmendedUpdate<'a> {
+        type Inner = CommitAmendedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> CommitAmendedUpdate<'a> {
+        pub const VT_BRANCH: flatbuffers::VOffsetT = 4;
+        pub const VT_PREVIOUS_SNAP_ID: flatbuffers::VOffsetT = 6;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            CommitAmendedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args CommitAmendedUpdateArgs<'args>,
+        ) -> flatbuffers::WIPOffset<CommitAmendedUpdate<'bldr>> {
+            let mut builder = CommitAmendedUpdateBuilder::new(_fbb);
+            if let Some(x) = args.previous_snap_id {
+                builder.add_previous_snap_id(x);
+            }
+            if let Some(x) = args.branch {
+                builder.add_branch(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn branch(&self) -> &'a str {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<&str>>(
+                        CommitAmendedUpdate::VT_BRANCH,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn previous_snap_id(&self) -> &'a ObjectId12 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<ObjectId12>(CommitAmendedUpdate::VT_PREVIOUS_SNAP_ID, None)
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for CommitAmendedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "branch",
+                    Self::VT_BRANCH,
+                    true,
+                )?
+                .visit_field::<ObjectId12>(
+                    "previous_snap_id",
+                    Self::VT_PREVIOUS_SNAP_ID,
+                    true,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct CommitAmendedUpdateArgs<'a> {
+        pub branch: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub previous_snap_id: Option<&'a ObjectId12>,
+    }
+    impl<'a> Default for CommitAmendedUpdateArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            CommitAmendedUpdateArgs {
+                branch: None,           // required field
+                previous_snap_id: None, // required field
+            }
+        }
+    }
+
+    pub struct CommitAmendedUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> CommitAmendedUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_branch(&mut self, branch: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                CommitAmendedUpdate::VT_BRANCH,
+                branch,
+            );
+        }
+        #[inline]
+        pub fn add_previous_snap_id(&mut self, previous_snap_id: &ObjectId12) {
+            self.fbb_.push_slot_always::<&ObjectId12>(
+                CommitAmendedUpdate::VT_PREVIOUS_SNAP_ID,
+                previous_snap_id,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> CommitAmendedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            CommitAmendedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<CommitAmendedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, CommitAmendedUpdate::VT_BRANCH, "branch");
+            self.fbb_.required(
+                o,
+                CommitAmendedUpdate::VT_PREVIOUS_SNAP_ID,
+                "previous_snap_id",
+            );
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for CommitAmendedUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("CommitAmendedUpdate");
+            ds.field("branch", &self.branch());
+            ds.field("previous_snap_id", &self.previous_snap_id());
+            ds.finish()
+        }
+    }
+    pub enum GCRanUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct GCRanUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for GCRanUpdate<'a> {
+        type Inner = GCRanUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> GCRanUpdate<'a> {
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            GCRanUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            _args: &'args GCRanUpdateArgs,
+        ) -> flatbuffers::WIPOffset<GCRanUpdate<'bldr>> {
+            let mut builder = GCRanUpdateBuilder::new(_fbb);
+            builder.finish()
+        }
+    }
+
+    impl flatbuffers::Verifiable for GCRanUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?.finish();
+            Ok(())
+        }
+    }
+    pub struct GCRanUpdateArgs {}
+    impl<'a> Default for GCRanUpdateArgs {
+        #[inline]
+        fn default() -> Self {
+            GCRanUpdateArgs {}
+        }
+    }
+
+    pub struct GCRanUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> GCRanUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> GCRanUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            GCRanUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<GCRanUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for GCRanUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("GCRanUpdate");
+            ds.finish()
+        }
+    }
+    pub enum ExpirationRanUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct ExpirationRanUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for ExpirationRanUpdate<'a> {
+        type Inner = ExpirationRanUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> ExpirationRanUpdate<'a> {
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            ExpirationRanUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            _args: &'args ExpirationRanUpdateArgs,
+        ) -> flatbuffers::WIPOffset<ExpirationRanUpdate<'bldr>> {
+            let mut builder = ExpirationRanUpdateBuilder::new(_fbb);
+            builder.finish()
+        }
+    }
+
+    impl flatbuffers::Verifiable for ExpirationRanUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?.finish();
+            Ok(())
+        }
+    }
+    pub struct ExpirationRanUpdateArgs {}
+    impl<'a> Default for ExpirationRanUpdateArgs {
+        #[inline]
+        fn default() -> Self {
+            ExpirationRanUpdateArgs {}
+        }
+    }
+
+    pub struct ExpirationRanUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ExpirationRanUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> ExpirationRanUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            ExpirationRanUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<ExpirationRanUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for ExpirationRanUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("ExpirationRanUpdate");
+            ds.finish()
+        }
+    }
     pub enum RepoOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -3911,7 +5457,9 @@ pub mod generated {
         pub const VT_LAST_UPDATED_AT: flatbuffers::VOffsetT = 14;
         pub const VT_STATUS: flatbuffers::VOffsetT = 16;
         pub const VT_METADATA: flatbuffers::VOffsetT = 18;
-        pub const VT_PREVIOUS_FILE: flatbuffers::VOffsetT = 20;
+        pub const VT_LATEST_UPDATE_TYPE: flatbuffers::VOffsetT = 20;
+        pub const VT_LATEST_UPDATE: flatbuffers::VOffsetT = 22;
+        pub const VT_PREVIOUS_FILE: flatbuffers::VOffsetT = 24;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -3932,6 +5480,9 @@ pub mod generated {
             if let Some(x) = args.previous_file {
                 builder.add_previous_file(x);
             }
+            if let Some(x) = args.latest_update {
+                builder.add_latest_update(x);
+            }
             if let Some(x) = args.metadata {
                 builder.add_metadata(x);
             }
@@ -3950,6 +5501,7 @@ pub mod generated {
             if let Some(x) = args.tags {
                 builder.add_tags(x);
             }
+            builder.add_latest_update_type(args.latest_update_type);
             builder.add_spec_version(args.spec_version);
             builder.finish()
         }
@@ -4061,6 +5613,34 @@ pub mod generated {
             }
         }
         #[inline]
+        pub fn latest_update_type(&self) -> UpdateType {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<UpdateType>(
+                        Repo::VT_LATEST_UPDATE_TYPE,
+                        Some(UpdateType::NONE),
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn latest_update(&self) -> flatbuffers::Table<'a> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(
+                        Repo::VT_LATEST_UPDATE,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
         pub fn previous_file(&self) -> Option<&'a str> {
             // Safety:
             // Created from valid Table for this object
@@ -4070,6 +5650,193 @@ pub mod generated {
                     Repo::VT_PREVIOUS_FILE,
                     None,
                 )
+            }
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn latest_update_as_repo_initialized_update(
+            &self,
+        ) -> Option<RepoInitializedUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::RepoInitializedUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { RepoInitializedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn latest_update_as_repo_migrated_update(
+            &self,
+        ) -> Option<RepoMigratedUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::RepoMigratedUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { RepoMigratedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn latest_update_as_config_changed_update(
+            &self,
+        ) -> Option<ConfigChangedUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::ConfigChangedUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { ConfigChangedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn latest_update_as_tag_created_update(
+            &self,
+        ) -> Option<TagCreatedUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::TagCreatedUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { TagCreatedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn latest_update_as_tag_deleted_update(
+            &self,
+        ) -> Option<TagDeletedUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::TagDeletedUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { TagDeletedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn latest_update_as_branch_created_update(
+            &self,
+        ) -> Option<BranchCreatedUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::BranchCreatedUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { BranchCreatedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn latest_update_as_branch_deleted_update(
+            &self,
+        ) -> Option<BranchDeletedUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::BranchDeletedUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { BranchDeletedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn latest_update_as_branch_reset_update(
+            &self,
+        ) -> Option<BranchResetUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::BranchResetUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { BranchResetUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn latest_update_as_new_commit_update(&self) -> Option<NewCommitUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::NewCommitUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { NewCommitUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn latest_update_as_commit_amended_update(
+            &self,
+        ) -> Option<CommitAmendedUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::CommitAmendedUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { CommitAmendedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn latest_update_as_gcran_update(&self) -> Option<GCRanUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::GCRanUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { GCRanUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn latest_update_as_expiration_ran_update(
+            &self,
+        ) -> Option<ExpirationRanUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::ExpirationRanUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { ExpirationRanUpdate::init_from_table(u) })
+            } else {
+                None
             }
         }
     }
@@ -4082,34 +5849,33 @@ pub mod generated {
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
-                .visit_field::<u8>("spec_version", Self::VT_SPEC_VERSION, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<
-                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>,
-                >>("tags", Self::VT_TAGS, true)?
-                .visit_field::<flatbuffers::ForwardsUOffset<
-                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>,
-                >>("branches", Self::VT_BRANCHES, true)?
-                .visit_field::<flatbuffers::ForwardsUOffset<
-                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<&'_ str>>,
-                >>("deleted_tags", Self::VT_DELETED_TAGS, true)?
-                .visit_field::<flatbuffers::ForwardsUOffset<
-                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SnapshotInfo>>,
-                >>("snapshots", Self::VT_SNAPSHOTS, true)?
-                .visit_field::<u64>("last_updated_at", Self::VT_LAST_UPDATED_AT, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<RepoStatus>>(
-                    "status",
-                    Self::VT_STATUS,
-                    true,
-                )?
-                .visit_field::<flatbuffers::ForwardsUOffset<
-                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MetadataItem>>,
-                >>("metadata", Self::VT_METADATA, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
-                    "previous_file",
-                    Self::VT_PREVIOUS_FILE,
-                    false,
-                )?
-                .finish();
+     .visit_field::<u8>("spec_version", Self::VT_SPEC_VERSION, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>>>("tags", Self::VT_TAGS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>>>("branches", Self::VT_BRANCHES, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<&'_ str>>>>("deleted_tags", Self::VT_DELETED_TAGS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SnapshotInfo>>>>("snapshots", Self::VT_SNAPSHOTS, true)?
+     .visit_field::<u64>("last_updated_at", Self::VT_LAST_UPDATED_AT, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<RepoStatus>>("status", Self::VT_STATUS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MetadataItem>>>>("metadata", Self::VT_METADATA, false)?
+     .visit_union::<UpdateType, _>("latest_update_type", Self::VT_LATEST_UPDATE_TYPE, "latest_update", Self::VT_LATEST_UPDATE, true, |key, v, pos| {
+        match key {
+          UpdateType::RepoInitializedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RepoInitializedUpdate>>("UpdateType::RepoInitializedUpdate", pos),
+          UpdateType::RepoMigratedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RepoMigratedUpdate>>("UpdateType::RepoMigratedUpdate", pos),
+          UpdateType::ConfigChangedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ConfigChangedUpdate>>("UpdateType::ConfigChangedUpdate", pos),
+          UpdateType::TagCreatedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<TagCreatedUpdate>>("UpdateType::TagCreatedUpdate", pos),
+          UpdateType::TagDeletedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<TagDeletedUpdate>>("UpdateType::TagDeletedUpdate", pos),
+          UpdateType::BranchCreatedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<BranchCreatedUpdate>>("UpdateType::BranchCreatedUpdate", pos),
+          UpdateType::BranchDeletedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<BranchDeletedUpdate>>("UpdateType::BranchDeletedUpdate", pos),
+          UpdateType::BranchResetUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<BranchResetUpdate>>("UpdateType::BranchResetUpdate", pos),
+          UpdateType::NewCommitUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<NewCommitUpdate>>("UpdateType::NewCommitUpdate", pos),
+          UpdateType::CommitAmendedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<CommitAmendedUpdate>>("UpdateType::CommitAmendedUpdate", pos),
+          UpdateType::GCRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<GCRanUpdate>>("UpdateType::GCRanUpdate", pos),
+          UpdateType::ExpirationRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ExpirationRanUpdate>>("UpdateType::ExpirationRanUpdate", pos),
+          _ => Ok(()),
+        }
+     })?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("previous_file", Self::VT_PREVIOUS_FILE, false)?
+     .finish();
             Ok(())
         }
     }
@@ -4142,6 +5908,8 @@ pub mod generated {
                 flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MetadataItem<'a>>>,
             >,
         >,
+        pub latest_update_type: UpdateType,
+        pub latest_update: Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
         pub previous_file: Option<flatbuffers::WIPOffset<&'a str>>,
     }
     impl<'a> Default for RepoArgs<'a> {
@@ -4156,6 +5924,8 @@ pub mod generated {
                 last_updated_at: 0,
                 status: None, // required field
                 metadata: None,
+                latest_update_type: UpdateType::NONE,
+                latest_update: None, // required field
                 previous_file: None,
             }
         }
@@ -4239,6 +6009,24 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_latest_update_type(&mut self, latest_update_type: UpdateType) {
+            self.fbb_.push_slot::<UpdateType>(
+                Repo::VT_LATEST_UPDATE_TYPE,
+                latest_update_type,
+                UpdateType::NONE,
+            );
+        }
+        #[inline]
+        pub fn add_latest_update(
+            &mut self,
+            latest_update: flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Repo::VT_LATEST_UPDATE,
+                latest_update,
+            );
+        }
+        #[inline]
         pub fn add_previous_file(
             &mut self,
             previous_file: flatbuffers::WIPOffset<&'b str>,
@@ -4263,6 +6051,7 @@ pub mod generated {
             self.fbb_.required(o, Repo::VT_DELETED_TAGS, "deleted_tags");
             self.fbb_.required(o, Repo::VT_SNAPSHOTS, "snapshots");
             self.fbb_.required(o, Repo::VT_STATUS, "status");
+            self.fbb_.required(o, Repo::VT_LATEST_UPDATE, "latest_update");
             flatbuffers::WIPOffset::new(o.value())
         }
     }
@@ -4278,6 +6067,97 @@ pub mod generated {
             ds.field("last_updated_at", &self.last_updated_at());
             ds.field("status", &self.status());
             ds.field("metadata", &self.metadata());
+            ds.field("latest_update_type", &self.latest_update_type());
+            match self.latest_update_type() {
+                UpdateType::RepoInitializedUpdate => {
+                    if let Some(x) = self.latest_update_as_repo_initialized_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::RepoMigratedUpdate => {
+                    if let Some(x) = self.latest_update_as_repo_migrated_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::ConfigChangedUpdate => {
+                    if let Some(x) = self.latest_update_as_config_changed_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::TagCreatedUpdate => {
+                    if let Some(x) = self.latest_update_as_tag_created_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::TagDeletedUpdate => {
+                    if let Some(x) = self.latest_update_as_tag_deleted_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::BranchCreatedUpdate => {
+                    if let Some(x) = self.latest_update_as_branch_created_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::BranchDeletedUpdate => {
+                    if let Some(x) = self.latest_update_as_branch_deleted_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::BranchResetUpdate => {
+                    if let Some(x) = self.latest_update_as_branch_reset_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::NewCommitUpdate => {
+                    if let Some(x) = self.latest_update_as_new_commit_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::CommitAmendedUpdate => {
+                    if let Some(x) = self.latest_update_as_commit_amended_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::GCRanUpdate => {
+                    if let Some(x) = self.latest_update_as_gcran_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::ExpirationRanUpdate => {
+                    if let Some(x) = self.latest_update_as_expiration_ran_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                _ => {
+                    let x: Option<()> = None;
+                    ds.field("latest_update", &x)
+                }
+            };
             ds.field("previous_file", &self.previous_file());
             ds.finish()
         }

@@ -31,7 +31,7 @@ use crate::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
         format_constants::SpecVersionBin,
-        repo_info::RepoInfo,
+        repo_info::{RepoInfo, UpdateType},
         snapshot::{
             ManifestFileInfo, NodeData, Snapshot, SnapshotInfo, SnapshotProperties,
         },
@@ -420,13 +420,17 @@ impl Repository {
             // if we have both configuration, this is an unfinished migration
             // but still a V2+ repo
             Ok(v) => Ok(Some(v)),
-            Err(_) => {
+            Err(RepositoryError {
+                kind: RepositoryErrorKind::RepositoryDoesntExist,
+                ..
+            }) => {
                 if is_v1 {
                     Ok(Some(SpecVersionBin::V1dot0))
                 } else {
                     Ok(None)
                 }
             }
+            Err(err) => Err(err),
         }
     }
 
@@ -634,6 +638,45 @@ impl Repository {
     {
         let snapshot_id = self.resolve_ref_version_v1(version).await?;
         self.snapshot_info_ancestry_v1(&snapshot_id).await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn ops_log(
+        &self,
+    ) -> RepositoryResult<
+        impl Stream<Item = RepositoryResult<(DateTime<Utc>, UpdateType)>> + Send + use<>,
+    > {
+        let (repo_info, _) = self.get_repo_info().await?;
+        let mut repo_info = Some(repo_info);
+        let asset_manager = Arc::clone(self.asset_manager());
+        let stream = try_stream! {
+            while let Some(this) = repo_info {
+                let last_updated = this.last_updated_at()?;
+                let update = this.latest_update()?;
+
+                yield (last_updated, update);
+
+                if let Some(previous) = this.previous_file()? {
+                    match asset_manager.fetch_repo_info_backup(previous).await {
+                        Ok((new_one, _)) =>  {
+                            repo_info = Some(new_one);
+                        }
+                        Err(RepositoryError{kind:RepositoryErrorKind::RepositoryDoesntExist, ..}) => {
+                            repo_info = None;
+                        }
+                        Err(err) => {
+                            repo_info = None;
+                            Err(err)?;
+                        }
+                    }
+                } else {
+                    repo_info = None;
+                }
+            }
+
+        };
+
+        Ok(stream)
     }
 
     /// Create a new branch in the repository at the given snapshot id

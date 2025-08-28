@@ -1307,6 +1307,64 @@ class GCSummary:
         """
         ...
 
+class UpdateType:
+    @property
+    def updated_at(self) -> datetime.datetime: ...
+
+class RepoInitializedUpdate(UpdateType):
+    pass
+
+class RepoMigratedUpdate(UpdateType):
+    @property
+    def from_version(self) -> int: ...
+    @property
+    def to_version(self) -> int: ...
+
+class ConfigChangedUpdate(UpdateType):
+    pass
+
+class TagCreatedUpdate(UpdateType):
+    @property
+    def name(self) -> str: ...
+
+class TagDeletedUpdate(UpdateType):
+    @property
+    def name(self) -> str: ...
+    @property
+    def previous_snap_id(self) -> str: ...
+
+class BranchCreatedUpdate(UpdateType):
+    @property
+    def name(self) -> str: ...
+
+class BranchDeletedUpdate(UpdateType):
+    @property
+    def name(self) -> str: ...
+    @property
+    def previous_snap_id(self) -> str: ...
+
+class BranchResetUpdate(UpdateType):
+    @property
+    def name(self) -> str: ...
+    @property
+    def previous_snap_id(self) -> str: ...
+
+class NewCommitUpdate(UpdateType):
+    @property
+    def branch(self) -> str: ...
+
+class CommitAmendedUpdate(UpdateType):
+    @property
+    def name(self) -> str: ...
+    @property
+    def previous_snap_id(self) -> str: ...
+
+class GCRanUpdate(UpdateType):
+    pass
+
+class ExpirationRanUpdate(UpdateType):
+    pass
+
 class PyRepository:
     @classmethod
     def create(
@@ -1393,6 +1451,7 @@ class PyRepository:
         tag: str | None = None,
         snapshot_id: str | None = None,
     ) -> AsyncIterator[SnapshotInfo]: ...
+    def async_ops_log(self) -> AsyncIterator[UpdateType]: ...
     def create_branch(self, branch: str, snapshot_id: str) -> None: ...
     async def create_branch_async(self, branch: str, snapshot_id: str) -> None: ...
     def list_branches(self) -> set[str]: ...

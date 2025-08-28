@@ -16,7 +16,7 @@ use crate::{
     format::{
         ChunkId, FileTypeTag, IcechunkFormatError, ManifestId, ObjectId, SnapshotId,
         manifest::{ChunkPayload, Manifest},
-        repo_info::RepoInfo,
+        repo_info::{RepoInfo, UpdateType},
         snapshot::{ManifestFileInfo, Snapshot, SnapshotInfo},
     },
     ops::pointed_snapshots,
@@ -419,6 +419,7 @@ async fn delete_snapshots_from_repo_info(
         repo_info.branches()?,
         repo_info.deleted_tags()?,
         kept_snaps,
+        &UpdateType::GCRanUpdate,
         backup_path.as_deref(),
     )?;
     let _ = asset_manager
@@ -775,6 +776,7 @@ pub async fn expire(
         branches,
         deleted_tag_names,
         retained,
+        &UpdateType::ExpirationRanUpdate,
         backup_path.as_deref(),
     )?;
 

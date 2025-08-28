@@ -10,7 +10,9 @@ use crate::{
     error::ICError,
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, REPO_INFO_FILE_PATH, SnapshotId,
-        V1_REFS_FILE_PATH, format_constants::SpecVersionBin, repo_info::RepoInfo,
+        V1_REFS_FILE_PATH,
+        format_constants::SpecVersionBin,
+        repo_info::{RepoInfo, UpdateType},
         snapshot::SnapshotInfo,
     },
     refs::{Ref, RefError, RefErrorKind, RefResult, list_deleted_tags, list_refs},
@@ -226,6 +228,10 @@ pub async fn migrate_1_to_2(
         branches,
         deleted_tags.iter().map(|s| s.as_str()),
         all_snapshots,
+        &UpdateType::RepoMigratedUpdate {
+            from_version: SpecVersionBin::V1dot0,
+            to_version: SpecVersionBin::V2dot0,
+        },
         None,
     )?);
 

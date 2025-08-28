@@ -225,12 +225,13 @@ impl AssetManager {
         let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
         let content_type = Some("application/yaml");
         if let Some(backup_path) = backup_path {
+            let backup_path = format!("{OVERWRITTEN_FILES_PATH}/{backup_path}");
             match self
                 .storage
                 .copy_object(
                     &self.storage_settings,
                     CONFIG_FILE_PATH,
-                    backup_path,
+                    backup_path.as_str(),
                     content_type,
                     previous_version,
                 )
@@ -422,6 +423,15 @@ impl AssetManager {
         &self,
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
         fetch_repo_info(self.storage.as_ref(), &self.storage_settings).await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn fetch_repo_info_backup(
+        &self,
+        file_name: &str,
+    ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
+        fetch_repo_info_backup(self.storage.as_ref(), &self.storage_settings, file_name)
+            .await
     }
 
     #[instrument(skip(self, info))]
@@ -1040,11 +1050,12 @@ async fn write_repo_info(
     debug!(size_bytes = buffer.len(), "Writing repo info");
 
     if let Some(backup_path) = backup_path {
+        let backup_path = format!("{OVERWRITTEN_FILES_PATH}/{backup_path}");
         match storage
             .copy_object(
                 storage_settings,
                 REPO_INFO_FILE_PATH,
-                backup_path,
+                backup_path.as_str(),
                 None,
                 version,
             )
@@ -1079,8 +1090,29 @@ async fn fetch_repo_info(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
+    fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH).await
+}
+
+async fn fetch_repo_info_backup(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    file_name: &str,
+) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
+    fetch_repo_info_from_path(
+        storage,
+        storage_settings,
+        format!("{OVERWRITTEN_FILES_PATH}/{file_name}").as_str(),
+    )
+    .await
+}
+
+async fn fetch_repo_info_from_path(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    path: &str,
+) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
     debug!("Downloading repo info");
-    match storage.get_object(storage_settings, REPO_INFO_FILE_PATH, None).await {
+    match storage.get_object(storage_settings, path, None).await {
         Ok((result, version)) => {
             let span = Span::current();
             tokio::task::spawn_blocking(move || {
@@ -1167,7 +1199,7 @@ fn backup_destination(source_path: &str) -> String {
     let now = Utc::now().timestamp_millis() as u64;
     let time_index = last - now;
     let random = ChunkId::random().to_string();
-    format!("{OVERWRITTEN_FILES_PATH}/{source_path}.{time_index:014}.{random}")
+    format!("{source_path}.{time_index:014}.{random}")
 }
 
 #[cfg(test)]

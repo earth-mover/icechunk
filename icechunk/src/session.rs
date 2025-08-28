@@ -39,7 +39,7 @@ use crate::{
             VirtualReferenceError, VirtualReferenceErrorKind,
             uniform_manifest_split_edges,
         },
-        repo_info::RepoInfo,
+        repo_info::{RepoInfo, UpdateType},
         snapshot::{
             ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
             NodeType, Snapshot, SnapshotInfo, SnapshotProperties,
@@ -2352,9 +2352,20 @@ async fn do_commit(
             Some(asset_manager.backup_path_for_repo_info())
         };
 
+        let update_type = match commit_method {
+            CommitMethod::NewCommit => {
+                UpdateType::NewCommitUpdate { branch: branch_name.to_string() }
+            }
+            CommitMethod::Amend => UpdateType::CommitAmendedUpdate {
+                branch: branch_name.to_string(),
+                previous_snap_id: parent_snapshot.id.clone(),
+            },
+        };
+
         let new_repo_info = Arc::new(repo_info.add_snapshot(
             new_snapshot_info,
             branch_name,
+            &update_type,
             backup_path.as_deref(),
         )?);
 
@@ -2962,6 +2973,7 @@ mod tests {
         let repo_info = RepoInfo::initial((&initial).try_into()?).add_snapshot(
             snapshot.as_ref().try_into()?,
             "main",
+            &UpdateType::NewCommitUpdate { branch: "main".to_string() },
             None,
         )?;
         asset_manager
@@ -3935,11 +3947,10 @@ mod tests {
 
         let mut session = repo.writable_session("main").await?;
         session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
-        session.commit("will be amended", None).await?;
-
+        let before_amend1 = session.commit("will be amended", None).await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
-        session.amend("first amend", None).await?;
+        let before_amend2 = session.amend("first amend", None).await?;
 
         let main_version = VersionInfo::BranchTipRef("main".to_string());
         let anc: Vec<_> = repo
@@ -3989,6 +4000,27 @@ mod tests {
         assert_eq!(
             anc_from_main,
             vec!["second amend", "make root", "Repository initialized"]
+        );
+        let updates =
+            repo.ops_log().await?.map_ok(|(_, up)| up).try_collect::<Vec<_>>().await?;
+
+        use UpdateType::*;
+        assert_eq!(
+            updates,
+            vec![
+                CommitAmendedUpdate {
+                    branch: "main".to_string(),
+                    previous_snap_id: before_amend2
+                },
+                TagCreatedUpdate { name: "tag".to_string() },
+                CommitAmendedUpdate {
+                    branch: "main".to_string(),
+                    previous_snap_id: before_amend1
+                },
+                NewCommitUpdate { branch: "main".to_string() },
+                NewCommitUpdate { branch: "main".to_string() },
+                RepoInitializedUpdate,
+            ]
         );
 
         Ok(())

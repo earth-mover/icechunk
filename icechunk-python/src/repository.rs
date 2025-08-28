@@ -14,6 +14,7 @@ use icechunk::{
     config::Credentials,
     format::{
         SnapshotId,
+        repo_info::UpdateType,
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
         transaction_log::Diff,
     },
@@ -426,6 +427,306 @@ impl PyGCSummary {
 
 impl_pickle!(PyGCSummary);
 
+#[pyclass(name = "UpdateType", eq, subclass)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyUpdateType {
+    #[pyo3(get)]
+    updated_at: DateTime<Utc>,
+}
+
+#[pyclass(name = "RepoInitializedUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyRepoInitializedUpdate;
+
+#[pyclass(name = "RepoMigratedUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyRepoMigratedUpdate {
+    #[pyo3(get)]
+    from_version: u8,
+    #[pyo3(get)]
+    to_version: u8,
+}
+
+#[pyclass(name = "ConfigChangedUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyConfigChangedUpdate;
+
+#[pyclass(name = "GCRanUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyGCRanUpdate;
+
+#[pyclass(name = "ExpirationRanUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyExpirationRanUpdate;
+
+#[pyclass(name = "TagCreatedUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyTagCreatedUpdate {
+    #[pyo3(get)]
+    name: String,
+}
+
+#[pyclass(name = "BranchCreatedUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyBranchCreatedUpdate {
+    #[pyo3(get)]
+    name: String,
+}
+
+#[pyclass(name = "TagDeletedUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyTagDeletedUpdate {
+    #[pyo3(get)]
+    name: String,
+    #[pyo3(get)]
+    previous_snap_id: String,
+}
+
+#[pyclass(name = "BranchDeletedUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyBranchDeletedUpdate {
+    #[pyo3(get)]
+    name: String,
+    #[pyo3(get)]
+    previous_snap_id: String,
+}
+
+#[pyclass(name = "BranchResetUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyBranchResetUpdate {
+    #[pyo3(get)]
+    name: String,
+    #[pyo3(get)]
+    previous_snap_id: String,
+}
+
+#[pyclass(name = "NewCommitUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyNewCommitUpdate {
+    #[pyo3(get)]
+    branch: String,
+}
+
+#[pyclass(name = "CommitAmendedUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PyCommitAmendedUpdate {
+    #[pyo3(get)]
+    branch: String,
+    #[pyo3(get)]
+    previous_snap_id: String,
+}
+
+#[pymethods]
+impl PyRepoInitializedUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok("RepoInitializedUpdate()".to_string())
+    }
+}
+
+#[pymethods]
+impl PyConfigChangedUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok("ConfigChangedUpdate()".to_string())
+    }
+}
+
+#[pymethods]
+impl PyTagCreatedUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("TagCreatedUpdate(name={})", self.name))
+    }
+}
+
+#[pymethods]
+impl PyTagDeletedUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!(
+            "TagDeletedUpdate(name={}, previous_snap_id={})",
+            self.name, self.previous_snap_id
+        ))
+    }
+}
+
+#[pymethods]
+impl PyBranchCreatedUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("BranchCreatedUpdate(name={})", self.name))
+    }
+}
+
+#[pymethods]
+impl PyBranchDeletedUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!(
+            "BranchDeletedUpdate(name={}, previous_snap_id={})",
+            self.name, self.previous_snap_id
+        ))
+    }
+}
+
+#[pymethods]
+impl PyBranchResetUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!(
+            "BranchResetUpdate(name={}, previous_snap_id={})",
+            self.name, self.previous_snap_id
+        ))
+    }
+}
+
+#[pymethods]
+impl PyNewCommitUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("NewCommitUpdate(branch={})", self.branch))
+    }
+}
+
+#[pymethods]
+impl PyCommitAmendedUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!(
+            "CommitAmendedUpdate(branch={}, previous_snap_id={})",
+            self.branch, self.previous_snap_id
+        ))
+    }
+}
+
+#[pymethods]
+impl PyRepoMigratedUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!(
+            "RepoMigratedUpdate(from_version={}, to_version={})",
+            self.from_version, self.to_version
+        ))
+    }
+}
+
+#[pymethods]
+impl PyGCRanUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok("GCRanUpdate()".to_string())
+    }
+}
+
+#[pymethods]
+impl PyExpirationRanUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok("ExpirationRanUpdate()".to_string())
+    }
+}
+
+fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py<PyAny>> {
+    Python::with_gil(|py| {
+        let res = match update {
+            UpdateType::RepoInitializedUpdate => {
+                Bound::new(py, (PyRepoInitializedUpdate, PyUpdateType { updated_at }))?
+                    .into_any()
+                    .unbind()
+            }
+            UpdateType::RepoMigratedUpdate { from_version, to_version } => Bound::new(
+                py,
+                (
+                    PyRepoMigratedUpdate {
+                        from_version: *from_version as u8,
+                        to_version: *to_version as u8,
+                    },
+                    PyUpdateType { updated_at },
+                ),
+            )?
+            .into_any()
+            .unbind(),
+            UpdateType::ConfigChangedUpdate => {
+                Bound::new(py, (PyConfigChangedUpdate, PyUpdateType { updated_at }))?
+                    .into_any()
+                    .unbind()
+            }
+            UpdateType::TagCreatedUpdate { name } => Bound::new(
+                py,
+                (PyTagCreatedUpdate { name: name.clone() }, PyUpdateType { updated_at }),
+            )?
+            .into_any()
+            .unbind(),
+            UpdateType::TagDeletedUpdate { name, previous_snap_id } => Bound::new(
+                py,
+                (
+                    PyTagDeletedUpdate {
+                        name: name.clone(),
+                        previous_snap_id: previous_snap_id.to_string(),
+                    },
+                    PyUpdateType { updated_at },
+                ),
+            )?
+            .into_any()
+            .unbind(),
+            UpdateType::BranchCreatedUpdate { name } => Bound::new(
+                py,
+                (
+                    PyBranchCreatedUpdate { name: name.clone() },
+                    PyUpdateType { updated_at },
+                ),
+            )?
+            .into_any()
+            .unbind(),
+            UpdateType::BranchDeletedUpdate { name, previous_snap_id } => Bound::new(
+                py,
+                (
+                    PyBranchDeletedUpdate {
+                        name: name.clone(),
+                        previous_snap_id: previous_snap_id.to_string(),
+                    },
+                    PyUpdateType { updated_at },
+                ),
+            )?
+            .into_any()
+            .unbind(),
+            UpdateType::BranchResetUpdate { name, previous_snap_id } => Bound::new(
+                py,
+                (
+                    PyBranchResetUpdate {
+                        name: name.clone(),
+                        previous_snap_id: previous_snap_id.to_string(),
+                    },
+                    PyUpdateType { updated_at },
+                ),
+            )?
+            .into_any()
+            .unbind(),
+            UpdateType::NewCommitUpdate { branch } => Bound::new(
+                py,
+                (
+                    PyNewCommitUpdate { branch: branch.clone() },
+                    PyUpdateType { updated_at },
+                ),
+            )?
+            .into_any()
+            .unbind(),
+            UpdateType::CommitAmendedUpdate { branch, previous_snap_id } => Bound::new(
+                py,
+                (
+                    PyCommitAmendedUpdate {
+                        branch: branch.clone(),
+                        previous_snap_id: previous_snap_id.to_string(),
+                    },
+                    PyUpdateType { updated_at },
+                ),
+            )?
+            .into_any()
+            .unbind(),
+            UpdateType::GCRanUpdate => {
+                Bound::new(py, (PyGCRanUpdate, PyUpdateType { updated_at }))?
+                    .into_any()
+                    .unbind()
+            }
+            UpdateType::ExpirationRanUpdate => {
+                Bound::new(py, (PyExpirationRanUpdate, PyUpdateType { updated_at }))?
+                    .into_any()
+                    .unbind()
+            }
+        };
+        Ok(res)
+    })
+}
+
 #[pyclass]
 pub struct PyRepository(Arc<RwLock<Repository>>);
 
@@ -832,6 +1133,25 @@ impl PyRepository {
             });
 
             let prepared_list = Arc::new(Mutex::new(parents.err_into().boxed()));
+            Ok(PyAsyncGenerator::new(prepared_list))
+        })
+    }
+
+    pub fn async_ops_log(&self, py: Python<'_>) -> PyResult<PyAsyncGenerator> {
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.allow_threads(move || {
+            let ops = pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(async move {
+                    let repo = self.0.read().await;
+                    repo.ops_log().await
+                })
+                .map_err(PyIcechunkStoreError::RepositoryError)?
+                .map_err(PyIcechunkStoreError::RepositoryError)
+                .and_then(|(ts, update)| async move {
+                    mk_update_type(&update, ts).map_err(PyIcechunkStoreError::from)
+                });
+
+            let prepared_list = Arc::new(Mutex::new(ops.err_into().boxed()));
             Ok(PyAsyncGenerator::new(prepared_list))
         })
     }
