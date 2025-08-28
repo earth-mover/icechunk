@@ -17,6 +17,11 @@ from icechunk.session import Session
 from icechunk.store import IcechunkStore
 
 
+__all__ = [
+    "Repository"
+]
+
+
 class Repository:
     """An Icechunk repository."""
 
