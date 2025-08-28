@@ -1,10 +1,12 @@
+from collections.abc import Iterable
+
 import numpy as np
 
 import icechunk as ic
 import zarr
 
 
-async def test_shift_using_function():
+async def test_shift_using_function() -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
     )
@@ -21,13 +23,18 @@ async def test_shift_using_function():
     array = root["array"]
     assert array[0] == 0
     assert array[49] == 49
-    session.reindex_array("/array", lambda idx: [idx[0] - 4] if idx[0] >= 4 else None)
+
+    def reindex(idx: Iterable[int]) -> Iterable[int] | None:
+        idx = list(idx)
+        return [idx[0] - 4] if idx[0] >= 4 else None
+
+    session.reindex_array("/array", reindex)
     # we moved 4 chunks to the left, that's 8 array elements
     np.testing.assert_equal(array[0:42], np.arange(8, 50))
     np.testing.assert_equal(array[42:], np.arange(42, 50))
 
 
-async def test_shift_using_shift_by_offset():
+async def test_shift_using_shift_by_offset() -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
     )
@@ -48,7 +55,7 @@ async def test_shift_using_shift_by_offset():
     np.testing.assert_equal(array[42:], np.arange(42, 50))
 
 
-async def test_resize_and_shift_right():
+async def test_resize_and_shift_right() -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
     )

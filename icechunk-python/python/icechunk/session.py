@@ -1,6 +1,6 @@
 import contextlib
 import warnings
-from collections.abc import AsyncIterator, Callable, Generator
+from collections.abc import AsyncIterator, Callable, Generator, Iterable
 from typing import Any, NoReturn, Self
 
 from icechunk import (
@@ -170,11 +170,13 @@ class Session:
         return self._session.all_virtual_chunk_locations()
 
     def reindex_array(
-        self, array_path: str, shift_chunk: Callable[[list[int]], list[int] | None]
+        self,
+        array_path: str,
+        shift_chunk: Callable[[Iterable[int]], Iterable[int] | None],
     ) -> None:
         return self._session.reindex_array(array_path, shift_chunk)
 
-    def shift_array(self, array_path: str, offset: list[int]) -> None:
+    def shift_array(self, array_path: str, offset: Iterable[int]) -> None:
         return self._session.shift_array(array_path, offset)
 
     async def all_virtual_chunk_locations_async(self) -> list[str]:
