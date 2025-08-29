@@ -54,7 +54,7 @@ tokio-util = { version = "0.7.16", features = ["compat", "io-util"] }
 serde_bytes = "0.11.17"
 regex = "1.11.2"
 tracing-error = "0.2.1"
-tracing-subscriber = { version = "0.3.19", features = [
+tracing-subscriber = { version = "0.3.20", features = [
   "env-filter",
 ], optional = true }
 tracing = "0.1.41"
