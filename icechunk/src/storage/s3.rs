@@ -858,6 +858,8 @@ impl Storage for S3Storage {
                 let code = err.as_service_error().and_then(|e| e.code()).unwrap_or("");
                 if code.contains("PreconditionFailed")
                     || code.contains("ConditionalRequestConflict")
+                    // ConcurrentModification sent by Ceph Object Gateway
+                    || code.contains("ConcurrentModification")
                 {
                     Ok(WriteRefResult::WontOverwrite)
                 } else {
