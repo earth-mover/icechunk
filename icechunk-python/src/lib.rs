@@ -9,8 +9,6 @@ mod streams;
 
 use std::env;
 
-use strsim;
-
 use config::{
     PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
     PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsBearerCredential,
