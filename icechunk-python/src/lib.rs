@@ -122,9 +122,13 @@ fn check_filter_for_misspellings(filter: &str) {
     for module in modules {
         if is_likely_icechunk_misspelling(module) {
             let misspelled = module.split("::").next().unwrap_or(module);
+            // Sanitize the user input to prevent ANSI injection attacks
+            let sanitized =
+                misspelled.chars().filter(|c| !c.is_control()).collect::<String>();
+
             eprintln!(
                 "\x1b[93m\x1b[1mWarning\x1b[0m: Did you mean '\x1b[92m\x1b[1micechunk\x1b[0m' instead of '\x1b[91m{}\x1b[0m' in log filter?",
-                misspelled
+                sanitized
             );
         }
     }
