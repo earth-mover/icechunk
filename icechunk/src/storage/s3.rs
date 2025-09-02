@@ -331,7 +331,12 @@ impl S3Storage {
             }
             // minio returns this
             Err(SdkError::ServiceError(err)) => {
-                if err.err().meta().code() == Some("PreconditionFailed") {
+                let code = err.err().meta().code().unwrap_or_default();
+                if code == "PreconditionFailed"
+                    || code == "ConditionalRequestConflict"
+                    // ConcurrentModification sent by Ceph Object Gateway
+                    || code == "ConcurrentModification"
+                {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
                     Err(StorageError::from(Box::new(
@@ -475,7 +480,12 @@ impl S3Storage {
             }
             // minio returns this
             Err(SdkError::ServiceError(err)) => {
-                if err.err().meta().code() == Some("PreconditionFailed") {
+                let code = err.err().meta().code().unwrap_or_default();
+                if code == "PreconditionFailed"
+                    || code == "ConditionalRequestConflict"
+                    // ConcurrentModification sent by Ceph Object Gateway
+                    || code == "ConcurrentModification"
+                {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
                     Err(StorageError::from(Box::new(SdkError::<
@@ -580,7 +590,12 @@ impl Storage for S3Storage {
         match req.send().await {
             Ok(_) => Ok(VersionedUpdateResult::Updated { new_version: version.clone() }),
             Err(SdkError::ServiceError(err)) => {
-                if err.err().meta().code() == Some("PreconditionFailed") {
+                let code = err.err().meta().code().unwrap_or_default();
+                if code == "PreconditionFailed"
+                    || code == "ConditionalRequestConflict"
+                    // ConcurrentModification sent by Ceph Object Gateway
+                    || code == "ConcurrentModification"
+                {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
                     Err(StorageError::from(Box::new(
