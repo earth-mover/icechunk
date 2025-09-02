@@ -9,6 +9,8 @@ mod streams;
 
 use std::env;
 
+use strsim;
+
 use config::{
     PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
     PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsBearerCredential,
@@ -88,10 +90,57 @@ fn initialize_logs(py: Python) -> PyResult<()> {
     Ok(())
 }
 
+fn extract_module_names(filter: &str) -> Vec<&str> {
+    filter
+        .split(',')
+        .map(|part| part.trim())
+        .filter_map(|part| {
+            if part.contains(':') {
+                Some(part.split(':').next().unwrap_or(""))
+            } else {
+                None
+            }
+        })
+        .filter(|module| !module.is_empty())
+        .collect()
+}
+
+fn is_likely_icechunk_misspelling(module: &str) -> bool {
+    const GENERIC_LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
+
+    if GENERIC_LOG_LEVELS.contains(&module) {
+        return false;
+    }
+
+    let base_module = module.split("::").next().unwrap_or(module);
+    let distance = strsim::levenshtein("icechunk", base_module);
+
+    distance > 0 && distance <= 2 && base_module.len() >= 6
+}
+
+fn check_filter_for_misspellings(filter: &str) {
+    let modules = extract_module_names(filter);
+
+    for module in modules {
+        if is_likely_icechunk_misspelling(module) {
+            let misspelled = module.split("::").next().unwrap_or(module);
+            eprintln!(
+                "\x1b[93m\x1b[1mWarning\x1b[0m: Did you mean '\x1b[92m\x1b[1micechunk\x1b[0m' instead of '\x1b[91m{}\x1b[0m' in log filter?",
+                misspelled
+            );
+        }
+    }
+}
+
 #[pyfunction]
 fn set_logs_filter(py: Python, log_filter_directive: Option<String>) -> PyResult<()> {
     let log_filter_directive =
         log_filter_directive.or_else(|| log_filters_from_env(py).ok().flatten());
+
+    if let Some(ref filter) = log_filter_directive {
+        check_filter_for_misspellings(filter);
+    }
+
     initialize_tracing(log_filter_directive.as_deref());
     Ok(())
 }
