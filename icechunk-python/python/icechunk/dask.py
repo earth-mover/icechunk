@@ -13,6 +13,13 @@ from dask.array.core import Array
 from icechunk.distributed import extract_session, merge_sessions
 from icechunk.session import ForkSession
 
+
+__all__ = [
+    "computing_meta",
+    "store_dask"
+]
+
+
 SimpleGraph: TypeAlias = Mapping[tuple[str, int], tuple[Any, ...]]
 
 
