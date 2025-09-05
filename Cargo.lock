@@ -1793,6 +1793,7 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
+ "strsim",
  "thiserror 2.0.16",
  "tokio",
  "typetag",

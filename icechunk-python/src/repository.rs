@@ -591,10 +591,7 @@ impl PyRepository {
     }
 
     #[staticmethod]
-    fn exists_async<'py>(
-        py: Python<'py>,
-        storage: PyStorage,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn exists_async(py: Python<'_>, storage: PyStorage) -> PyResult<Bound<'_, PyAny>> {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let exists = Repository::exists(storage.0.as_ref())
                 .await
@@ -697,10 +694,10 @@ impl PyRepository {
     }
 
     #[staticmethod]
-    fn fetch_config_async<'py>(
-        py: Python<'py>,
+    fn fetch_config_async(
+        py: Python<'_>,
         storage: PyStorage,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<Bound<'_, PyAny>> {
         pyo3_async_runtimes::tokio::future_into_py::<_, Option<PyRepositoryConfig>>(
             py,
             async move {
