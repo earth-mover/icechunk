@@ -56,7 +56,7 @@ jobs:
       - name: Check
         if: github.event_name == 'push'
         run: |
-          just pre-commit
+          just pre-commit-ci
 
       - name: Install cargo-release
         run: cargo install --locked cargo-release

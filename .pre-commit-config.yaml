@@ -8,32 +8,49 @@ repos:
         exclude: docs/mkdocs.yml
       - id: debug-statements
       - id: mixed-line-ending
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Ruff version.
     rev: 'v0.8.0'
     hooks:
       - id: ruff-format
       - id: ruff
         args: ["--fix", "--show-fixes", "icechunk-python/"]
+
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.7
     hooks:
       - id: actionlint
         files: ".github/workflows/"
         args: ["-ignore", "SC1090", "-ignore", "SC2046", "-ignore", "SC2086", "-ignore", "SC2129", "-ignore", "SC2155"]
+
   - repo: https://github.com/codespell-project/codespell
-    # Configuration for codespell is in .codespellrc
     rev: v2.3.0
     hooks:
       - id: codespell
+
   - repo: local
     hooks:
-      - id: just-rust
-        name: just
-        description: Run the just pre-commit step
+      - id: rust-pre-commit-fast
+        name: "Fast Rust checks (format, lint)"
+        entry: just pre-commit-fast
+        language: system
+        files: \.(rs|toml)$|Cargo\.lock$|justfile$
+        pass_filenames: false
+
+      - id: rust-pre-commit
+        name: "Medium Rust checks (compilation, deps)"
         entry: just pre-commit
         language: system
+        files: \.(rs|toml)$|Cargo\.lock$|justfile$
         pass_filenames: false
-        files: "(^|.*/)(icechunk/|icechunk-python/src/).*"
+        stages: [pre-push]
+
+      - id: rust-pre-commit-ci
+        name: "Full CI checks (tests, examples)"
+        entry: just pre-commit-ci
+        language: system
+        files: \.(rs|toml)$|Cargo\.lock$|justfile$
+        pass_filenames: false
+        stages: [manual]
 
 exclude: 'tests/data/.*'
