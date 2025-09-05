@@ -88,50 +88,32 @@ fn initialize_logs(py: Python) -> PyResult<()> {
     Ok(())
 }
 
-fn extract_module_names(filter: &str) -> Vec<&str> {
-    filter
-        .split(',')
-        .map(|part| part.trim())
-        .filter_map(|part| {
-            if part.contains(':') {
-                Some(part.split(':').next().unwrap_or(""))
-            } else {
-                None
-            }
-        })
-        .filter(|module| !module.is_empty())
-        .collect()
-}
 
-fn is_likely_icechunk_misspelling(module: &str) -> bool {
-    const GENERIC_LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
-
-    if GENERIC_LOG_LEVELS.contains(&module) {
-        return false;
-    }
-
-    let base_module = module.split("::").next().unwrap_or(module);
+fn is_likely_icechunk_misspelling(base_module: &str) -> bool {
     let distance = strsim::levenshtein("icechunk", base_module);
-
     distance > 0 && distance <= 2 && base_module.len() >= 6
 }
 
 fn check_filter_for_misspellings(filter: &str) {
-    let modules = extract_module_names(filter);
-
-    for module in modules {
-        if is_likely_icechunk_misspelling(module) {
-            let misspelled = module.split("::").next().unwrap_or(module);
-            // Sanitize the user input to prevent ANSI injection attacks
-            let sanitized =
-                misspelled.chars().filter(|c| !c.is_control()).collect::<String>();
+    filter
+        .split(',')
+        .filter_map(|part| {
+            let trimmed = part.trim();
+            trimmed.find(':').map(|idx| &trimmed[..idx])
+        })
+        .filter(|module| !module.is_empty())
+        .map(|module| module.split("::").next().unwrap_or(module))
+        .filter(|base_module| is_likely_icechunk_misspelling(base_module))
+        .for_each(|misspelled| {
+            let sanitized = misspelled.chars()
+                .filter(|c| !c.is_control())
+                .collect::<String>();
 
             eprintln!(
-                "\x1b[93m\x1b[1mWarning\x1b[0m: Did you mean '\x1b[92m\x1b[1micechunk\x1b[0m' instead of '\x1b[91m{}\x1b[0m' in log filter?",
+                "WARNING: Did you mean 'icechunk' instead of '{}' in log filter?",
                 sanitized
             );
-        }
-    }
+        });
 }
 
 #[pyfunction]
