@@ -43,8 +43,21 @@ check-deps *args='':
 run-all-examples:
   for example in icechunk/examples/*.rs; do cargo run --example "$(basename "${example%.rs}")"; done
 
-# run all checks that CI actions will run
+# fast pre-commit - format and lint only
+pre-commit-fast:
+  just format "--check"
+  just lint "-p icechunk -p icechunk-python"
+
+# medium pre-commit - includes compilation checks (~2-3 minutes)
 pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
+  just compile-tests "--locked"
+  just build
+  just format "--check"
+  just lint "-p icechunk -p icechunk-python"
+  just check-deps
+
+# full pre-commit for CI - runs all checks including tests
+pre-commit-ci $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
   just compile-tests "--locked"
   just build
   just format "--check"
