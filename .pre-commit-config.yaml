@@ -31,14 +31,14 @@ repos:
   - repo: local
     hooks:
       - id: rust-pre-commit-fast
-        name: "⚡ Fast Rust checks (format, lint)"
+        name: "Fast Rust checks (format, lint)"
         entry: just pre-commit-fast
         language: system
         files: \.(rs|toml)$|Cargo\.lock$|justfile$
         pass_filenames: false
 
       - id: rust-pre-commit
-        name: "🔧 Medium Rust checks (compilation, deps)"
+        name: "Medium Rust checks (compilation, deps)"
         entry: just pre-commit
         language: system
         files: \.(rs|toml)$|Cargo\.lock$|justfile$
@@ -46,7 +46,7 @@ repos:
         stages: [pre-push]
 
       - id: rust-pre-commit-ci
-        name: "🚀 Full CI checks (tests, examples)"
+        name: "Full CI checks (tests, examples)"
         entry: just pre-commit-ci
         language: system
         files: \.(rs|toml)$|Cargo\.lock$|justfile$
