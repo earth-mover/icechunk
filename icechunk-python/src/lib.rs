@@ -88,32 +88,26 @@ fn initialize_logs(py: Python) -> PyResult<()> {
     Ok(())
 }
 
-fn is_likely_icechunk_misspelling(base_module: &str) -> bool {
-    let distance = strsim::levenshtein("icechunk", base_module);
-    distance > 0 && distance <= 2 && base_module.len() >= 6
-}
-
 fn check_filter_for_misspellings(filter: &str) {
     filter
         .split(',')
         .filter_map(|part| {
             let trimmed = part.trim();
-            // Extract module name from "module:level" format
+            // Extract and validate module name from "module:level" format
             let module = trimmed.find(':').and_then(|idx| {
                 let module = &trimmed[..idx];
                 (!module.is_empty()).then_some(module)
             })?;
 
-            // Get base module name (before "::")
+            // Get base module name (before "::") and check if it's a likely misspelling
             let base_module = module.split("::").next().unwrap_or(module);
+            let distance = strsim::levenshtein("icechunk", base_module);
 
-            // Check if it's likely a misspelling
-            is_likely_icechunk_misspelling(base_module).then_some(base_module)
+            (distance > 0 && distance <= 2 && base_module.len() >= 6).then(|| {
+                base_module.chars().filter(|c| !c.is_control()).collect::<String>()
+            })
         })
-        .for_each(|misspelled| {
-            let sanitized =
-                misspelled.chars().filter(|c| !c.is_control()).collect::<String>();
-
+        .for_each(|sanitized| {
             eprintln!(
                 "WARNING: Did you mean 'icechunk' instead of '{}' in log filter?",
                 sanitized
