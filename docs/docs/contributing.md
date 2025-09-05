@@ -45,6 +45,7 @@ Create / activate a virtual environment:
     uv sync
     ```
 
+
 Install `maturin`:
 
 === "Venv"
@@ -98,9 +99,106 @@ They can be run from the root of the repo with `docker compose up` (`ctrl-c` the
     uv run pytest
     ```
 
+
 ### Rust Development Workflow
 
-TODO
+#### Prerequisites
+
+Install the `just` command runner (used for build tasks and pre-commit hooks):
+
+```bash
+cargo install just
+```
+
+Or using other package managers:
+- **macOS**: `brew install just`
+- **Ubuntu**: `snap install --edge --classic just`
+
+#### Building
+
+Build the Rust workspace:
+
+```bash
+# Build all packages
+just build
+
+# Build release version
+just build-release
+
+# Compile tests without running them
+just compile-tests
+```
+
+#### Testing
+
+```bash
+# Run all tests
+just test
+
+# Run tests with logs enabled
+just test-logs debug
+
+# Run only specific tests
+cargo test test_name
+```
+
+#### Code Quality
+
+We use a tiered pre-commit system for fast development:
+
+```bash
+# Fast checks (~3 seconds) - format and lint only
+just pre-commit-fast
+
+# Medium checks (~2-3 minutes) - includes compilation and deps
+just pre-commit
+
+# Full CI checks (~5+ minutes) - includes all tests and examples
+just pre-commit-ci
+```
+
+Individual checks:
+
+```bash
+# Format code
+just format
+
+# Check formatting without changing files
+just format --check
+
+# Lint with clippy
+just lint
+
+# Check dependencies for security issues
+just check-deps
+```
+
+#### Pre-commit Hooks
+
+We use [pre-commit](https://pre-commit.com/) to automatically run checks. Install it:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+The pre-commit configuration automatically runs:
+- **Every commit**: Fast Python and Rust checks (~2 seconds total)
+- **Before push**: Medium Rust checks (compilation + dependencies)
+- **Manual**: Full CI-level checks when needed
+
+To run manually:
+
+```bash
+# Run on changed files only
+pre-commit run
+
+# Run on all files
+pre-commit run --all-files
+
+# Run full CI checks manually
+pre-commit run rust-pre-commit-ci --hook-stage manual
+```
 
 ## Roadmap
 
