@@ -10,6 +10,7 @@ from icechunk import (
 )
 from icechunk._icechunk_python import PySession
 from icechunk.store import IcechunkStore
+import icechunk.display as display
 
 
 class Session:
@@ -21,6 +22,21 @@ class Session:
     def __init__(self, session: PySession):
         self._session = session
         self._allow_changes = False
+
+    def __repr__(self) -> str:
+        mutable_attributes=[
+            "read_only",
+            "snapshot_id",
+        ]
+        
+        if not self.read_only:
+            mutable_attributes += ["branch", "has_uncommitted_changes"]
+
+        return display.dataclass_repr(
+            obj=self,
+            cls_name="icechunk.Session",
+            attributes=mutable_attributes,
+        )
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Session):
