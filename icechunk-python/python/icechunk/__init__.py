@@ -22,6 +22,10 @@ from icechunk._icechunk_python import (
     Credentials,
     Diff,
     ExpirationRanUpdate,
+    ExportAllHistory,
+    ExportRefsHistory,
+    ExportSingleSnapshot,
+    ExportVersionSelection,
     GCRanUpdate,
     GcsBearerCredential,
     GcsCredentials,
@@ -56,6 +60,7 @@ from icechunk._icechunk_python import (
     VirtualChunkContainer,
     VirtualChunkSpec,
     __version__,
+    _export_repository,
     _upgrade_icechunk_repository,
     initialize_logs,
     set_logs_filter,
@@ -127,6 +132,10 @@ __all__ = [
     "Credentials",
     "Diff",
     "ExpirationRanUpdate",
+    "ExportAllHistory",
+    "ExportRefsHistory",
+    "ExportSingleSnapshot",
+    "ExportVersionSelection",
     "ForkSession",
     "GCRanUpdate",
     "GCSummary",
@@ -258,6 +267,12 @@ def upgrade_icechunk_repository(
     _upgrade_icechunk_repository(
         repo._repository, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
     )
+
+
+def export_repository(
+    repo: Repository, destination: Storage, versions: ExportVersionSelection
+) -> None:
+    _export_repository(repo._repository, destination, versions)
 
 
 ManifestSplittingConfig.from_dict = from_dict  # type: ignore[method-assign]

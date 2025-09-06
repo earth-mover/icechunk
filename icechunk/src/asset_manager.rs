@@ -452,6 +452,18 @@ impl AssetManager {
         .await
     }
 
+    pub fn chunk_path(id: &ChunkId) -> String {
+        format!("{CHUNKS_FILE_PATH}/{id}")
+    }
+
+    pub fn manifest_path(id: &ManifestId) -> String {
+        format!("{MANIFESTS_FILE_PATH}/{id}")
+    }
+
+    pub fn snapshot_path(id: &SnapshotId) -> String {
+        format!("{SNAPSHOTS_FILE_PATH}/{id}")
+    }
+
     #[instrument(skip(self, bytes))]
     pub async fn write_chunk(
         &self,
@@ -460,7 +472,6 @@ impl AssetManager {
     ) -> RepositoryResult<()> {
         trace!(%chunk_id, size_bytes=bytes.len(), "Writing chunk");
 
-        let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
         let _permit = self.request_semaphore.acquire().await?;
         let settings = storage::Settings {
             storage_class: self.storage_settings.chunks_storage_class().cloned(),
@@ -468,7 +479,14 @@ impl AssetManager {
         };
         // we don't pre-populate the chunk cache, there are too many of them for this to be useful
         self.storage
-            .put_object(&settings, path.as_str(), bytes, None, Default::default(), None)
+            .put_object(
+                &settings,
+                Self::chunk_path(&chunk_id).as_str(),
+                bytes,
+                None,
+                Default::default(),
+                None,
+            )
             .await?
             .must_write()?;
         Ok(())
@@ -485,11 +503,14 @@ impl AssetManager {
             Ok(chunk) => Ok(chunk),
             Err(guard) => {
                 trace!(%chunk_id, ?range, "Downloading chunk");
-                let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
                 let permit = self.request_semaphore.acquire().await?;
                 let (read, _) = self
                     .storage
-                    .get_object(&self.storage_settings, &path, Some(range))
+                    .get_object(
+                        &self.storage_settings,
+                        &Self::chunk_path(chunk_id),
+                        Some(range),
+                    )
                     .await?;
                 let chunk =
                     async_reader_to_bytes(read, (range.end - range.start) as usize)
@@ -507,11 +528,13 @@ impl AssetManager {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<DateTime<Utc>> {
         debug!(%snapshot_id, "Getting snapshot timestamp");
-        let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
         let _permit = self.request_semaphore.acquire().await?;
         Ok(self
             .storage
-            .get_object_last_modified(path.as_str(), &self.storage_settings)
+            .get_object_last_modified(
+                Self::snapshot_path(snapshot_id).as_str(),
+                &self.storage_settings,
+            )
             .await?)
     }
 
@@ -785,7 +808,6 @@ async fn write_new_manifest(
 
     let len = buffer.len() as u64;
     debug!(%id, size_bytes=len, "Writing manifest");
-    let path = format!("{MANIFESTS_FILE_PATH}/{id}");
     let settings = storage::Settings {
         storage_class: storage_settings.metadata_storage_class().cloned(),
         ..storage_settings.clone()
@@ -793,7 +815,14 @@ async fn write_new_manifest(
 
     let _permit = semaphore.acquire().await?;
     storage
-        .put_object(&settings, path.as_str(), buffer.into(), None, metadata, None)
+        .put_object(
+            &settings,
+            AssetManager::manifest_path(&id).as_str(),
+            buffer.into(),
+            None,
+            metadata,
+            None,
+        )
         .await?
         .must_write()?;
     Ok(len)
@@ -808,12 +837,17 @@ async fn fetch_manifest(
 ) -> RepositoryResult<Arc<Manifest>> {
     debug!(%manifest_id, "Downloading manifest");
 
-    let path = format!("{MANIFESTS_FILE_PATH}/{manifest_id}");
     let range = 0..manifest_size;
     let range = if manifest_size > 0 { Some(&range) } else { None };
     let _permit = semaphore.acquire().await?;
 
-    let (read, _) = storage.get_object(storage_settings, path.as_str(), range).await?;
+    let (read, _) = storage
+        .get_object(
+            storage_settings,
+            AssetManager::manifest_path(manifest_id).as_str(),
+            range,
+        )
+        .await?;
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
@@ -887,7 +921,7 @@ async fn write_new_snapshot(
     .await??;
 
     debug!(%id, size_bytes=buffer.len(), "Writing snapshot");
-    let path = format!("{SNAPSHOTS_FILE_PATH}/{id}");
+    let path = AssetManager::snapshot_path(&id);
     let settings = storage::Settings {
         storage_class: storage_settings.metadata_storage_class().cloned(),
         ..storage_settings.clone()
@@ -910,7 +944,7 @@ async fn fetch_snapshot(
     debug!(%snapshot_id, "Downloading snapshot");
     let _permit = semaphore.acquire().await?;
 
-    let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
+    let path = AssetManager::snapshot_path(snapshot_id);
     let (read, _) = storage.get_object(storage_settings, path.as_str(), None).await?;
 
     let span = Span::current();
@@ -1270,7 +1304,7 @@ mod test {
         // when we insert we cache, so no fetches
         assert_eq!(
             logging.fetch_operations(),
-            vec![("put_object".to_string(), format!("{MANIFESTS_FILE_PATH}/{id}"))]
+            vec![("put_object".to_string(), AssetManager::manifest_path(&id))]
         );
 
         // first time it sees an ID it calls the backend

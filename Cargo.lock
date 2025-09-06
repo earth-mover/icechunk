@@ -1786,6 +1786,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "icechunk-export"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "chrono",
+ "err-into",
+ "futures",
+ "icechunk",
+ "indicatif",
+ "itertools",
+ "tokio",
+]
+
+[[package]]
 name = "icechunk-macros"
 version = "0.1.0"
 dependencies = [
@@ -1804,6 +1818,7 @@ dependencies = [
  "clap",
  "futures",
  "icechunk",
+ "icechunk-export",
  "itertools",
  "miette",
  "pyo3",
@@ -2000,6 +2015,19 @@ dependencies = [
  "equivalent",
  "hashbrown 0.14.5",
  "serde",
+]
+
+[[package]]
+name = "indicatif"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70a646d946d06bedbbc4cac4c218acf4bbf2d87757a784857025f4d447e4e1cd"
+dependencies = [
+ "console",
+ "portable-atomic",
+ "unicode-width 0.2.0",
+ "unit-prefix",
+ "web-time",
 ]
 
 [[package]]
@@ -3974,6 +4002,12 @@ name = "unindent"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7de7d73e1754487cb58364ee906a499937a0dfabd86bcb980fa99ec8c8fa2ce"
+
+[[package]]
+name = "unit-prefix"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "323402cff2dd658f39ca17c789b502021b3f18707c91cdf22e3838e1b4023817"
 
 [[package]]
 name = "unsafe-libyaml"

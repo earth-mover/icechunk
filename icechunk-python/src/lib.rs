@@ -1,6 +1,7 @@
 mod config;
 mod conflicts;
 mod errors;
+mod export;
 mod pickle;
 mod repository;
 mod session;
@@ -152,6 +153,16 @@ fn _upgrade_icechunk_repository(
     repo.migrate_1_to_2(py, dry_run, delete_unused_v1_files)
 }
 
+#[pyfunction]
+fn _export_repository<'py>(
+    py: Python<'py>,
+    source: &PyRepository,
+    destination: PyStorage,
+    versions: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    source.export(py, destination, versions)
+}
+
 fn pep440_version() -> String {
     let cargo_version = env!("CARGO_PKG_VERSION");
     cargo_version.replace("-rc.", "rc").replace("-alpha.", "a").replace("-beta.", "b")
@@ -210,12 +221,17 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCommitAmendedUpdate>()?;
     m.add_class::<PyGCRanUpdate>()?;
     m.add_class::<PyExpirationRanUpdate>()?;
+    m.add_class::<export::PyVersionSelection>()?;
+    m.add_class::<export::PyAllHistory>()?;
+    m.add_class::<export::PySingleSnapshot>()?;
+    m.add_class::<export::PyRefsHistory>()?;
     m.add_class::<VirtualChunkSpec>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
     m.add_function(wrap_pyfunction!(_upgrade_icechunk_repository, m)?)?;
+    m.add_function(wrap_pyfunction!(_export_repository, m)?)?;
     m.add("__version__", pep440_version())?;
 
     // Exceptions

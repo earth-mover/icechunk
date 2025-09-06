@@ -14,13 +14,13 @@ use tracing::{debug, info, instrument};
 use crate::{
     asset_manager::AssetManager,
     format::{
-        ChunkId, FileTypeTag, IcechunkFormatError, ManifestId, ObjectId, SnapshotId,
+        ChunkId, FileTypeTag, ManifestId, ObjectId, SnapshotId,
         manifest::{ChunkPayload, Manifest},
         repo_info::{RepoInfo, UpdateType},
         snapshot::{ManifestFileInfo, Snapshot, SnapshotInfo},
     },
     ops::pointed_snapshots,
-    refs::{Ref, RefError},
+    refs::Ref,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{DeleteObjectsResult, ListInfo, VersionInfo},
     stream_utils::{StreamLimiter, try_unique_stream},
@@ -170,18 +170,6 @@ pub struct GCSummary {
     pub transaction_logs_deleted: u64,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum GCError {
-    #[error("ref error {0}")]
-    Ref(#[from] RefError),
-    #[error("repository error {0}")]
-    Repository(#[from] RepositoryError),
-    #[error("format error {0}")]
-    FormatError(#[from] IcechunkFormatError),
-}
-
-pub type GCResult<A> = Result<A, GCError>;
-
 async fn snapshot_retained(
     keep_snapshots: Arc<Mutex<HashSet<SnapshotId>>>,
     snap: Arc<Snapshot>,
@@ -250,10 +238,10 @@ async fn chunks_retained(
 }
 
 #[instrument(skip_all)]
-async fn find_retained(
+pub async fn find_retained(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
-) -> GCResult<(HashSet<ChunkId>, HashSet<ManifestId>, HashSet<SnapshotId>)> {
+) -> RepositoryResult<(HashSet<ChunkId>, HashSet<ManifestId>, HashSet<SnapshotId>)> {
     let all_snaps =
         pointed_snapshots(Arc::clone(&asset_manager), &config.extra_roots).await?;
 
@@ -316,12 +304,12 @@ async fn find_retained(
 pub async fn garbage_collect(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
-) -> GCResult<GCSummary> {
+) -> RepositoryResult<GCSummary> {
     if !asset_manager.can_write_to_storage() {
-        return Err(GCError::Repository(
-            RepositoryErrorKind::ReadonlyStorage("Cannot garbage collect".to_string())
-                .into(),
-        ));
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot garbage collect".to_string(),
+        )
+        .into());
     }
 
     // TODO: this function could have much more parallelism
@@ -404,7 +392,7 @@ async fn delete_snapshots_from_repo_info(
     keep_snapshots: &HashSet<SnapshotId>,
     repo_info: Arc<RepoInfo>,
     repo_info_version: &VersionInfo,
-) -> GCResult<()> {
+) -> RepositoryResult<()> {
     let kept_snaps: Vec<_> = repo_info
         .all_snapshots()?
         .filter_ok(|si| keep_snapshots.contains(&si.id))
@@ -449,7 +437,7 @@ async fn gc_chunks(
     asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<ChunkId>,
-) -> GCResult<DeleteObjectsResult> {
+) -> RepositoryResult<DeleteObjectsResult> {
     tracing::info!("Deleting chunks");
     let to_delete = asset_manager
         .list_chunks()
@@ -477,7 +465,7 @@ async fn gc_manifests(
     asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<ManifestId>,
-) -> GCResult<DeleteObjectsResult> {
+) -> RepositoryResult<DeleteObjectsResult> {
     tracing::info!("Deleting manifests");
     let to_delete = asset_manager
         .list_manifests()
@@ -508,7 +496,7 @@ async fn gc_snapshots(
     asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
-) -> GCResult<DeleteObjectsResult> {
+) -> RepositoryResult<DeleteObjectsResult> {
     tracing::info!("Deleting snapshots");
     let to_delete = asset_manager
         .list_snapshots()
@@ -539,7 +527,7 @@ async fn gc_transaction_logs(
     asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
-) -> GCResult<DeleteObjectsResult> {
+) -> RepositoryResult<DeleteObjectsResult> {
     tracing::info!("Deleting transaction logs");
     let to_delete = asset_manager
         .list_transaction_logs()
@@ -600,21 +588,23 @@ pub async fn expire(
     older_than: DateTime<Utc>,
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
-) -> GCResult<ExpireResult> {
+) -> RepositoryResult<ExpireResult> {
     if !asset_manager.can_write_to_storage() {
-        return Err(GCError::Repository(
-            RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into(),
-        ));
+        return Err(
+            RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into()
+        );
     }
     info!("Expiration started");
     let (repo_info, repo_info_version) = asset_manager.fetch_repo_info().await?;
     let tags: Vec<(Ref, SnapshotId)> = repo_info
         .tags()?
-        .map(|(name, snap)| Ok::<_, GCError>((Ref::Tag(name.to_string()), snap)))
+        .map(|(name, snap)| Ok::<_, RepositoryError>((Ref::Tag(name.to_string()), snap)))
         .try_collect()?;
     let branches: Vec<(Ref, SnapshotId)> = repo_info
         .branches()?
-        .map(|(name, snap)| Ok::<_, GCError>((Ref::Branch(name.to_string()), snap)))
+        .map(|(name, snap)| {
+            Ok::<_, RepositoryError>((Ref::Branch(name.to_string()), snap))
+        })
         .try_collect()?;
 
     fn split_root<E>(
@@ -647,7 +637,7 @@ pub async fn expire(
                 }
             };
 
-            Ok::<_, GCError>(res)
+            Ok::<_, RepositoryError>(res)
         },
     )?;
 

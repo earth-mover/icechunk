@@ -42,6 +42,7 @@ use crate::{
         format_option_to_string,
     },
     errors::PyIcechunkStoreError,
+    export::{PyAllHistory, PyRefsHistory, PySingleSnapshot, PyVersionSelection},
     impl_pickle,
     session::PySession,
     streams::PyAsyncGenerator,
@@ -744,6 +745,36 @@ impl PyRepository {
                 migrations::migrate_1_to_2(&mut repo, dry_run, delete_unused_v1_files)
                     .await
                     .map_err(PyIcechunkStoreError::MigrationError)?;
+                Ok(())
+            })
+        })
+    }
+
+    pub fn export<'py>(
+        &self,
+        py: Python<'py>,
+        destination: PyStorage,
+        versions: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        let versions = if let Ok(_) = versions.extract::<PyRef<PyAllHistory>>() {
+            icechunk_export::VersionSelection::AllHistory
+        } else if let Ok(cell) = versions.extract::<PyRef<PySingleSnapshot>>() {
+            icechunk_export::VersionSelection::SingleSnapshot(
+                cell.snapshot_id.clone().try_into().unwrap(), //FIXME: unwrap
+            )
+        } else if let Ok(cell) = versions.extract::<PyRef<PyRefsHistory>>() {
+            icechunk_export::VersionSelection::RefsHistory {
+                tags: cell.tags.clone(),
+                branches: cell.branches.clone(),
+            }
+        } else {
+            panic!("unknown versions value") // FIXME: panic
+        };
+        py.allow_threads(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let repo = self.0.write().await;
+                let destination = destination.0;
+                icechunk_export::export(&repo, destination, &versions).await.unwrap(); //FIXME:unwrap
                 Ok(())
             })
         })
@@ -1806,7 +1837,7 @@ impl PyRepository {
                         },
                     )
                     .await
-                    .map_err(PyIcechunkStoreError::GCError)?;
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
                     Ok::<_, PyIcechunkStoreError>(
                         result
                             .released_snapshots
@@ -1850,7 +1881,7 @@ impl PyRepository {
                 },
             )
             .await
-            .map_err(PyIcechunkStoreError::GCError)?;
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(result.released_snapshots.iter().map(|id| id.to_string()).collect())
         })
     }
@@ -1883,7 +1914,7 @@ impl PyRepository {
                     };
                     let result = garbage_collect(asset_manager, &gc_config)
                         .await
-                        .map_err(PyIcechunkStoreError::GCError)?;
+                        .map_err(PyIcechunkStoreError::RepositoryError)?;
                     Ok::<_, PyIcechunkStoreError>(result.into())
                 })?;
 
@@ -1917,7 +1948,7 @@ impl PyRepository {
             };
             let result = garbage_collect(asset_manager, &gc_config)
                 .await
-                .map_err(PyIcechunkStoreError::GCError)?;
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(result.into())
         })
     }
