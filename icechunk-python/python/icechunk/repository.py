@@ -409,6 +409,33 @@ class Repository:
         """
         return self._repository.storage()
 
+    def reopen(
+        self,
+        config: RepositoryConfig | None = None,
+        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+    ) -> Self:
+        """
+        Reopen the repository with new configuration or credentials.
+
+        Parameters
+        ----------
+        config : RepositoryConfig, optional
+            The new repository configuration. If not provided, uses the existing configuration.
+        authorize_virtual_chunk_access : dict[str, AnyCredential | None], optional
+            New virtual chunk access credentials.
+
+        Returns
+        -------
+        Self
+            A new Repository instance with the updated configuration.
+        """
+        return self.__class__(
+            self._repository.reopen(
+                config=config,
+                authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+            )
+        )
+
     async def reopen_async(
         self,
         config: RepositoryConfig | None = None,

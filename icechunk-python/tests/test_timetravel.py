@@ -764,6 +764,13 @@ async def test_repository_lifecycle_async() -> None:
     reopened_repo = await repo.reopen_async(config=new_config)
     assert reopened_repo.config.inline_chunk_threshold_bytes == 4096
 
+    # Test reopen (sync) with new config
+    new_config_sync = ic.RepositoryConfig.default()
+    new_config_sync.inline_chunk_threshold_bytes = 2048
+
+    reopened_repo_sync = repo.reopen(config=new_config_sync)
+    assert reopened_repo_sync.config.inline_chunk_threshold_bytes == 2048
+
     # Test open_or_create_async with new storage (should create)
     new_storage = ic.in_memory_storage()
     assert not await ic.Repository.exists_async(new_storage)
