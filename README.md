@@ -136,7 +136,7 @@ When writing data, a Zarr implementation will create these keys and populate the
 When modifying existing arrays or groups, a Zarr implementation will potentially overwrite existing keys with new data.
 
 This is generally not a problem, as long there is only one person or process coordinating access to the data.
-However, when multiple uncoordinated readers and writers attempt to access the same Zarr data at the same time, [various consistency problems](https://docs.earthmover.io/concepts/version-control-system#consistency-problems-with-zarr) emerge.
+However, when multiple uncoordinated readers and writers attempt to access the same Zarr data at the same time, [various consistency problems](https://icechunk.io/en/latest/faq/#why-was-icechunk-created) emerge.
 These consistency problems can occur in both file storage and object storage; they are particularly severe in a cloud setting where Zarr is being used as an active store for data that are frequently changed while also being read.
 
 With Icechunk, we keep the same core Zarr data model, but add a layer of indirection between the Zarr keys and the on-disk storage.

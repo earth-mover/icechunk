@@ -88,10 +88,42 @@ fn initialize_logs(py: Python) -> PyResult<()> {
     Ok(())
 }
 
+fn check_filter_for_misspellings(filter: &str) {
+    filter
+        .split(',')
+        .filter_map(|part| {
+            let trimmed = part.trim();
+            // Extract and validate module name from "module:level" format
+            let module = trimmed.find(':').and_then(|idx| {
+                let module = &trimmed[..idx];
+                (!module.is_empty()).then_some(module)
+            })?;
+
+            // Get base module name (before "::") and check if it's a likely misspelling
+            let base_module = module.split("::").next().unwrap_or(module);
+            let distance = strsim::levenshtein("icechunk", base_module);
+
+            (distance > 0 && distance <= 2 && base_module.len() >= 6).then(|| {
+                base_module.chars().filter(|c| !c.is_control()).collect::<String>()
+            })
+        })
+        .for_each(|sanitized| {
+            eprintln!(
+                "WARNING: Did you mean 'icechunk' instead of '{}' in log filter?",
+                sanitized
+            );
+        });
+}
+
 #[pyfunction]
 fn set_logs_filter(py: Python, log_filter_directive: Option<String>) -> PyResult<()> {
     let log_filter_directive =
         log_filter_directive.or_else(|| log_filters_from_env(py).ok().flatten());
+
+    if let Some(ref filter) = log_filter_directive {
+        check_filter_for_misspellings(filter);
+    }
+
     initialize_tracing(log_filter_directive.as_deref());
     Ok(())
 }
