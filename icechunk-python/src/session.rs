@@ -41,7 +41,7 @@ impl PySession {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
-    fn as_bytes(&self, py: Python<'_>) -> PyIcechunkStoreResult<Cow<[u8]>> {
+    fn as_bytes(&self, py: Python<'_>) -> PyIcechunkStoreResult<Cow<'_, [u8]>> {
         // This is a compute intensive task, we need to release the Gil
         py.allow_threads(move || {
             let bytes =

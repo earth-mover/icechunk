@@ -24,9 +24,8 @@ env:
   RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
   RUSTUP_MAX_RETRIES: 10
   # update RUST_CHANNEL and CARGO_DENY in sync
-  # version 0.18.4 of cargo-deny requires rustc 1.88.0 breaks our current version on 1.87
-  RUST_CHANNEL: '1.87.0'
-  CARGO_DENY_VERSION: '0.18.3'
+  RUST_CHANNEL: '1.89.0'
+  CARGO_DENY_VERSION: '0.18.4'
 
 jobs:
   rust:

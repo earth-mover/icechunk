@@ -443,7 +443,7 @@ impl Snapshot {
         )
     }
 
-    fn root(&self) -> generated::Snapshot {
+    fn root(&self) -> generated::Snapshot<'_> {
         // without the unsafe version this is too slow
         // if we try to keep the root in the Manifest struct, we would need a lifetime
         unsafe { flatbuffers::root_unchecked::<generated::Snapshot>(&self.buffer) }
