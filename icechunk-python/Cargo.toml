@@ -19,7 +19,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 bytes = "1.10.1"
-chrono = { version = "0.4.41" }
+chrono = { version = "0.4.42" }
 futures = "0.3.31"
 icechunk = { path = "../icechunk", version = "0.3.8", features = ["logs"] }
 itertools = "0.14.0"
