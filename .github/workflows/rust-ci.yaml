@@ -39,8 +39,6 @@ jobs:
       #contents: read
       #actions: read
       #pull-requests: read
-    env:
-      #CC: deny_c
 
     strategy:
       fail-fast: false
