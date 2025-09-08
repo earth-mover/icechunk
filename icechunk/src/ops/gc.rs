@@ -607,11 +607,11 @@ pub async fn expire_ref(
     pin!(ancestry);
 
     let mut ref_is_expired = false;
-    if let Some(Ok(info)) = ancestry.as_mut().peek().await {
-        if info.flushed_at < older_than {
-            tracing::debug!(flushed_at = %info.flushed_at, "Ref flagged as expired");
-            ref_is_expired = true;
-        }
+    if let Some(Ok(info)) = ancestry.as_mut().peek().await
+        && info.flushed_at < older_than
+    {
+        tracing::debug!(flushed_at = %info.flushed_at, "Ref flagged as expired");
+        ref_is_expired = true;
     }
 
     while let Some(parent) = ancestry.try_next().await? {
