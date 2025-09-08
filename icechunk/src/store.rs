@@ -800,12 +800,12 @@ async fn set_array_meta(
         .shape()
         .ok_or(StoreErrorKind::Other("Invalid chunk grid metadata".to_string()))?;
     if let Ok(node) = session.get_array(&path).await {
-        if let NodeData::Array { .. } = node.node_data {
-            if node.user_data != user_data {
-                session
-                    .update_array(&path, shape, array_meta.dimension_names(), user_data)
-                    .await?;
-            }
+        if let NodeData::Array { .. } = node.node_data
+            && node.user_data != user_data
+        {
+            session
+                .update_array(&path, shape, array_meta.dimension_names(), user_data)
+                .await?;
         }
         // FIXME: don't ignore error
         Ok(())
@@ -823,10 +823,10 @@ async fn set_group_meta(
     session: &mut Session,
 ) -> StoreResult<()> {
     if let Ok(node) = session.get_group(&path).await {
-        if let NodeData::Group = node.node_data {
-            if node.user_data != user_data {
-                session.update_group(&path, user_data).await?;
-            }
+        if let NodeData::Group = node.node_data
+            && node.user_data != user_data
+        {
+            session.update_group(&path, user_data).await?;
         }
         Ok(())
     } else {

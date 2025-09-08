@@ -291,6 +291,7 @@ impl From<Diff> for PyDiff {
 
 #[pymethods]
 impl PyDiff {
+    #[allow(clippy::unwrap_used)]
     pub fn __repr__(&self) -> String {
         let mut res = String::new();
         use std::fmt::Write;
@@ -665,7 +666,7 @@ impl PyRepository {
         })
     }
 
-    fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<[u8]>> {
+    fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<'_, [u8]>> {
         // This is a compute intensive task, we need to release the Gil
         py.allow_threads(move || {
             let bytes = self
@@ -1704,8 +1705,6 @@ fn args_to_version_info(
 
         Ok(VersionInfo::SnapshotId(snapshot_id))
     } else {
-        return Err(PyValueError::new_err(
-            "Must provide one of branch, tag, or snapshot_id",
-        ));
+        Err(PyValueError::new_err("Must provide one of branch, tag, or snapshot_id"))
     }
 }

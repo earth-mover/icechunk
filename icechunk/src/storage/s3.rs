@@ -325,10 +325,10 @@ impl S3Storage {
             .bucket(self.bucket.clone())
             .key(key);
 
-        if settings.unsafe_use_metadata() {
-            if let Some(ct) = content_type {
-                b = b.content_type(ct)
-            };
+        if settings.unsafe_use_metadata()
+            && let Some(ct) = content_type
+        {
+            b = b.content_type(ct);
         }
 
         if settings.unsafe_use_metadata() {
@@ -911,11 +911,11 @@ impl Storage for S3Storage {
         let mut sizes = HashMap::new();
         let mut ids = Vec::new();
         for (id, size) in batch.into_iter() {
-            if let Ok(key) = self.get_path_str(prefix, id.as_str()) {
-                if let Ok(ident) = ObjectIdentifier::builder().key(key.clone()).build() {
-                    ids.push(ident);
-                    sizes.insert(key, size);
-                }
+            if let Ok(key) = self.get_path_str(prefix, id.as_str())
+                && let Ok(ident) = ObjectIdentifier::builder().key(key.clone()).build()
+            {
+                ids.push(ident);
+                sizes.insert(key, size);
             }
         }
 

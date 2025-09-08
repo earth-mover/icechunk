@@ -2196,10 +2196,10 @@ fn aggregate_extents<'a, T: std::fmt::Debug, E>(
             // We need to iterate over coordinates, and update the
             // minimum and maximum for each if needed
             for (coord_idx, value) in idx.0.iter().enumerate() {
-                if let Some(from_current) = from.get_mut(coord_idx) {
-                    if value < from_current {
-                        *from_current = *value
-                    }
+                if let Some(from_current) = from.get_mut(coord_idx)
+                    && value < from_current
+                {
+                    *from_current = *value
                 }
                 if let Some(to_current) = to.get_mut(coord_idx) {
                     let range_value = value + 1;
