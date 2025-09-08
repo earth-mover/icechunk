@@ -48,7 +48,7 @@ jobs:
               sleep 3
           done
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
@@ -166,7 +166,7 @@ jobs:
           path: "xarray"
           fetch-depth: 0 # Fetch all history for all branches and tags.
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 

@@ -53,7 +53,7 @@ jobs:
               sleep 3
           done
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Build wheels
@@ -84,7 +84,7 @@ jobs:
             target: armv7
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: 3.x
       - name: Build wheels
@@ -111,7 +111,7 @@ jobs:
             target: x86
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: 3.x
           architecture: ${{ matrix.platform.target }}
@@ -138,7 +138,7 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: 3.x
       - name: Build wheels
