@@ -431,7 +431,7 @@ impl Manifest {
         self.len() == 0
     }
 
-    fn root(&self) -> generated::Manifest {
+    fn root(&self) -> generated::Manifest<'_> {
         // without the unsafe version this is too slow
         // if we try to keep the root in the Manifest struct, we would need a lifetime
         unsafe { flatbuffers::root_unchecked::<generated::Manifest>(&self.buffer) }

@@ -893,14 +893,12 @@ impl GcsRefreshableCredentialProvider {
         let last_credential = self.last_credential.read().await;
 
         // If we have a credential and it hasn't expired, return it
-        if let Some(creds) = last_credential.as_ref() {
-            if let Some(expires_after) = creds.expires_after {
-                if expires_after
-                    > Utc::now() + TimeDelta::seconds(rand::random_range(120..=180))
-                {
-                    return Ok(creds.clone());
-                }
-            }
+        if let Some(creds) = last_credential.as_ref()
+            && let Some(expires_after) = creds.expires_after
+            && expires_after
+                > Utc::now() + TimeDelta::seconds(rand::random_range(120..=180))
+        {
+            return Ok(creds.clone());
         }
 
         drop(last_credential);

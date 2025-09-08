@@ -518,7 +518,7 @@ impl RepoInfo {
         self.buffer.as_slice()
     }
 
-    fn root(&self) -> IcechunkResult<generated::Repo> {
+    fn root(&self) -> IcechunkResult<generated::Repo<'_>> {
         Ok(flatbuffers::root::<generated::Repo>(&self.buffer)?)
     }
 
@@ -998,7 +998,7 @@ mod tests {
         assert_eq!(all, HashSet::from_iter([snap1.clone(), snap2.clone()]));
 
         let anc: Vec<_> = repo.ancestry(&id1)?.try_collect()?;
-        assert_eq!(anc, [snap1.clone()]);
+        assert_eq!(anc, std::slice::from_ref(&snap1));
 
         let anc: Vec<_> = repo.ancestry(&id2)?.try_collect()?;
         assert_eq!(anc, [snap2.clone(), snap1.clone()]);

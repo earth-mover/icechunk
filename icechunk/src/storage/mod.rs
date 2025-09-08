@@ -656,10 +656,11 @@ pub fn new_s3_storage(
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
-    if let Some(endpoint) = &config.endpoint_url {
-        if endpoint.contains("fly.storage.tigris.dev") {
-            return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
-        }
+    if let Some(endpoint) = &config.endpoint_url
+        && (endpoint.contains("fly.storage.tigris.dev")
+            || endpoint.contains("t3.storage.dev"))
+    {
+        return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
     }
 
     let st = S3Storage::new(
@@ -732,7 +733,7 @@ pub fn new_tigris_storage(
 ) -> StorageResult<Arc<dyn Storage>> {
     let config = S3Options {
         endpoint_url: Some(
-            config.endpoint_url.unwrap_or("https://fly.storage.tigris.dev".to_string()),
+            config.endpoint_url.unwrap_or("https://t3.storage.dev".to_string()),
         ),
         ..config
     };
@@ -782,10 +783,11 @@ pub async fn new_s3_object_store_storage(
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
 ) -> StorageResult<Arc<dyn Storage>> {
-    if let Some(endpoint) = &config.endpoint_url {
-        if endpoint.contains("fly.storage.tigris.dev") {
-            return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
-        }
+    if let Some(endpoint) = &config.endpoint_url
+        && (endpoint.contains("fly.storage.tigris.dev")
+            || endpoint.contains("t3.storage.dev"))
+    {
+        return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
     }
     let storage =
         ObjectStorage::new_s3(bucket, prefix, credentials, Some(config)).await?;

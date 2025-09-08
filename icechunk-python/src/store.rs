@@ -135,7 +135,7 @@ impl PyStore {
         })
     }
 
-    fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<[u8]>> {
+    fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<'_, [u8]>> {
         // This is blocking function, we need to release the Gil
         py.allow_threads(move || {
             // FIXME: Use rmp_serde instead of serde_json to optimize performance

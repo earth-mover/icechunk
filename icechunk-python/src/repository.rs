@@ -299,6 +299,7 @@ impl From<Diff> for PyDiff {
 
 #[pymethods]
 impl PyDiff {
+    #[allow(clippy::unwrap_used)]
     pub fn __repr__(&self) -> String {
         let mut res = String::new();
         use std::fmt::Write;
@@ -926,10 +927,7 @@ impl PyRepository {
     }
 
     #[staticmethod]
-    fn exists_async<'py>(
-        py: Python<'py>,
-        storage: PyStorage,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn exists_async(py: Python<'_>, storage: PyStorage) -> PyResult<Bound<'_, PyAny>> {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let exists = Repository::exists(storage.0)
                 .await
@@ -1003,7 +1001,7 @@ impl PyRepository {
         })
     }
 
-    fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<[u8]>> {
+    fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<'_, [u8]>> {
         // This is a compute intensive task, we need to release the Gil
         py.allow_threads(move || {
             let bytes = self
@@ -1032,10 +1030,10 @@ impl PyRepository {
     }
 
     #[staticmethod]
-    fn fetch_config_async<'py>(
-        py: Python<'py>,
+    fn fetch_config_async(
+        py: Python<'_>,
         storage: PyStorage,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<Bound<'_, PyAny>> {
         pyo3_async_runtimes::tokio::future_into_py::<_, Option<PyRepositoryConfig>>(
             py,
             async move {
@@ -2068,8 +2066,6 @@ fn args_to_version_info(
 
         Ok(VersionInfo::SnapshotId(snapshot_id))
     } else {
-        return Err(PyValueError::new_err(
-            "Must provide one of branch, tag, or snapshot_id",
-        ));
+        Err(PyValueError::new_err("Must provide one of branch, tag, or snapshot_id"))
     }
 }

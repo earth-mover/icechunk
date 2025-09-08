@@ -528,7 +528,7 @@ impl AssetManager {
     #[instrument(skip(self))]
     pub async fn list_chunks(
         &self,
-    ) -> RepositoryResult<BoxStream<RepositoryResult<ListInfo<ChunkId>>>> {
+    ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<ChunkId>>>> {
         Ok(translate_list_infos(
             self.storage
                 .list_objects(&self.storage_settings, CHUNKS_FILE_PATH)
@@ -540,7 +540,7 @@ impl AssetManager {
     #[instrument(skip(self))]
     pub async fn list_manifests(
         &self,
-    ) -> RepositoryResult<BoxStream<RepositoryResult<ListInfo<ManifestId>>>> {
+    ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<ManifestId>>>> {
         Ok(translate_list_infos(
             self.storage
                 .list_objects(&self.storage_settings, MANIFESTS_FILE_PATH)
@@ -552,7 +552,7 @@ impl AssetManager {
     #[instrument(skip(self))]
     pub async fn list_snapshots(
         &self,
-    ) -> RepositoryResult<BoxStream<RepositoryResult<ListInfo<SnapshotId>>>> {
+    ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<SnapshotId>>>> {
         Ok(translate_list_infos(
             self.storage
                 .list_objects(&self.storage_settings, SNAPSHOTS_FILE_PATH)
@@ -564,7 +564,7 @@ impl AssetManager {
     #[instrument(skip(self))]
     pub async fn list_transaction_logs(
         &self,
-    ) -> RepositoryResult<BoxStream<RepositoryResult<ListInfo<SnapshotId>>>> {
+    ) -> RepositoryResult<BoxStream<'_, RepositoryResult<ListInfo<SnapshotId>>>> {
         Ok(translate_list_infos(
             self.storage
                 .list_objects(&self.storage_settings, TRANSACTION_LOGS_FILE_PATH)

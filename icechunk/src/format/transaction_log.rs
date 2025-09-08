@@ -215,7 +215,7 @@ impl TransactionLog {
             .is_some()
     }
 
-    fn root(&self) -> generated::TransactionLog {
+    fn root(&self) -> generated::TransactionLog<'_> {
         // without the unsafe version this is too slow
         // if we try to keep the root in the TransactionLog struct, we would need a lifetime
         unsafe { flatbuffers::root_unchecked::<generated::TransactionLog>(&self.buffer) }
