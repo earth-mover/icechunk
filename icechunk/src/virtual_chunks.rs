@@ -379,7 +379,7 @@ impl VirtualChunkResolver {
                     opts
                 } else {
                     &S3Options {
-                        endpoint_url: Some("https://fly.storage.tigris.dev".to_string()),
+                        endpoint_url: Some("https://t3.storage.dev".to_string()),
                         ..opts.clone()
                     }
                 };
