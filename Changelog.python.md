@@ -1,10 +1,13 @@
 # Changelog
 
-## Unreleased
+## Python Icechunk Library 1.1.5
 
 ### Features
 
 - Add synchronous `Repository.reopen()` method. There was previously only an async version `Repository.reopen_async()`.
+- S3 Storage now uses environment variables `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`.
+- Emit a warning if `icechunk` is misspelled when configuring logs.
+- Better Ceph Object Gateway compatibility.
 
 ## Python Icechunk Library 1.1.4
 
