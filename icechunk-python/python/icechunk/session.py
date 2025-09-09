@@ -368,7 +368,7 @@ class Session:
         Finally, the `ForkSessions` are pickled back to the coordinator that uses `ForkSession.merge` to merge them
         back into the original session and `commit`.
 
-        Learn more about collaborative writes at https://icechunk.io/en/latest/parallel/#multi-threading
+        Learn more about collaborative writes at https://icechunk.io/en/latest/parallel/
 
         Raises
         ------
