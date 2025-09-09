@@ -359,6 +359,24 @@ class Session:
         await self._session.rebase_async(solver)
 
     def fork(self) -> "ForkSession":
+        """
+        Create a child session that can be pickled to a worker job and later merged.
+
+        This method supports Icechunk's distributed, collaborative jobs. A coordinator task creates a new session using
+        `Repository.writable_session`. Then `Session.fork` is called repeatedly to create as many serializable sessions
+        as worker jobs. Each new `ForkSession` is pickled to the worker that uses it to do all its writes.
+        Finally, the `ForkSessions` are pickled back to the coordinator that uses `ForkSession.merge` to merge them
+        back into the original session and `commit`.
+
+        Learn more about collaborative writes at https://icechunk.io/en/latest/parallel/#multi-threading
+
+        Raises
+        ------
+        ValueError
+            When `self` already has uncommitted changes.
+        ValueError
+            When `self` is read-only.
+        """
         if self.has_uncommitted_changes:
             raise ValueError(
                 "Cannot fork a Session with uncommitted changes. "
