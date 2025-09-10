@@ -6,6 +6,7 @@ use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::{
     cmp::min,
     collections::{HashMap, HashSet},
@@ -219,6 +220,39 @@ pub struct Session {
     default_commit_metadata: SnapshotProperties,
     // This is an optimization so that we needn't figure out the split sizes on every set.
     splits: HashMap<NodeId, ManifestSplits>,
+}
+
+impl fmt::Display for Session {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // let mut contents = String::new();
+
+        //if self.read_only() {
+        write!(
+            f,
+            "<icechunk.Session>\n\
+            read_only: {}\n\
+            snapshot_id: {}",
+            self.read_only(),
+            self.snapshot_id(),
+        )
+        // } else {
+        //     let branch = py.allow_threads(move || {
+        //         self.0
+        //             .blocking_read()
+        //             .branch()
+        //             .map(|b| b.to_string())
+        //             .unwrap_or_else(|| "None".to_string())
+        //     });
+
+        //     format!(
+        //         "<icechunk.Session>\n\
+        //         read_only: {}\n\
+        //         snapshot_id: {}\n\
+        //         branch: {}",
+        //         read_only, snapshot_id, branch,
+        //     )
+        // }
+    }
 }
 
 impl Session {
