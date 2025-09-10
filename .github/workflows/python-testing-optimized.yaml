@@ -1,0 +1,241 @@
+name: Python Testing (Optimized)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: ./icechunk-python
+
+jobs:
+  # Build wheels once and reuse across all Python jobs
+  build_wheels:
+    name: Build Python Wheels
+    uses: ./.github/workflows/shared-build.yaml
+    with:
+      rust_channel: '1.89.0'
+      upload_rust_artifacts: true
+      upload_python_wheels: true
+      runner: ubuntu-latest
+
+  # Setup shared infrastructure once
+  infrastructure:
+    name: Setup Test Infrastructure
+    runs-on: ubuntu-latest
+    outputs:
+      docker_cache_hit: ${{ steps.docker_cache.outputs.cache-hit }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Cache Docker containers
+        id: docker_cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker_cache
+          key: docker-containers-${{ hashFiles('**/docker-compose.yml') }}-${{ github.run_id }}
+          restore-keys: |
+            docker-containers-${{ hashFiles('**/docker-compose.yml') }}-
+
+      - name: Stand up MinIO
+        run: docker compose up -d minio
+
+      - name: Wait for MinIO to be ready
+        run: |
+          for _ in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
+      - name: Save Docker state
+        if: steps.docker_cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/docker_cache
+          docker save $(docker images -q) > /tmp/docker_cache/images.tar || true
+
+  # Main test suite - reuses wheels and infrastructure
+  test:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    needs: [build_wheels, infrastructure]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # Restore Docker containers
+      - name: Restore Docker cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker_cache
+          key: docker-containers-${{ hashFiles('**/docker-compose.yml') }}-${{ github.run_id }}
+          restore-keys: |
+            docker-containers-${{ hashFiles('**/docker-compose.yml') }}-
+
+      - name: Load Docker images and start services
+        run: |
+          if [ -f /tmp/docker_cache/images.tar ]; then
+            docker load < /tmp/docker_cache/images.tar
+          fi
+          docker compose up -d minio
+          # Wait for MinIO
+          for _ in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
+      # Download pre-built wheels
+      - name: Download Python wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: python-wheels-x86_64
+          path: icechunk-python/dist/
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      # Enhanced hypothesis caching
+      - name: Restore cached hypothesis directory
+        uses: actions/cache/restore@v4
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            cache-hypothesis-${{ runner.os }}-
+
+      - name: Cache Python environment
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            icechunk-python/.venv
+          key: python-env-test-${{ runner.os }}-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            python-env-test-${{ runner.os }}-
+
+      - name: Setup test environment
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install icechunk['test'] --find-links dist --force-reinstall --pre
+
+      - name: Describe environment
+        run: |
+          source .venv/bin/activate
+          pip list
+
+      - name: Run pytest
+        run: |
+          source .venv/bin/activate
+          pytest -n 4
+
+      # Always save hypothesis cache
+      - name: Save cached hypothesis directory
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+
+  # XArray backends testing - reuses wheels and infrastructure
+  xarray_backends:
+    name: XArray Backends Test
+    runs-on: ubuntu-latest
+    needs: [build_wheels, infrastructure]
+    steps:
+      - name: Checkout repository (icechunk)
+        uses: actions/checkout@v5
+        with:
+          path: "icechunk"
+
+      # Restore Docker containers
+      - name: Restore Docker cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker_cache
+          key: docker-containers-${{ hashFiles('icechunk/**/docker-compose.yml') }}-${{ github.run_id }}
+          restore-keys: |
+            docker-containers-${{ hashFiles('icechunk/**/docker-compose.yml') }}-
+
+      - name: Load Docker images and start services
+        working-directory: icechunk
+        run: |
+          if [ -f /tmp/docker_cache/images.tar ]; then
+            docker load < /tmp/docker_cache/images.tar
+          fi
+          docker compose up -d minio
+          # Wait for MinIO
+          for _ in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
+      # Download pre-built wheels
+      - name: Download Python wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: python-wheels-x86_64
+          path: icechunk/icechunk-python/dist/
+
+      - name: Checkout repository (xarray)
+        uses: actions/checkout@v5
+        with:
+          repository: "pydata/xarray"
+          path: "xarray"
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Cache Python environment
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            icechunk/icechunk-python/.venv
+          key: python-env-xarray-${{ runner.os }}-${{ hashFiles('icechunk/**/pyproject.toml') }}
+          restore-keys: |
+            python-env-xarray-${{ runner.os }}-
+
+      - name: Setup test environment
+        working-directory: icechunk/icechunk-python
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install icechunk['test'] --find-links dist --force-reinstall --pre
+          pip install pytest-mypy-plugins
+
+      - name: Run XArray backends tests
+        working-directory: icechunk/icechunk-python
+        env:
+          ICECHUNK_XARRAY_BACKENDS_TESTS: 1
+        run: |
+          source .venv/bin/activate
+          # Pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
+          pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py

@@ -20,11 +20,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      # Cache codespell dependencies for faster runs
+      # Cache codespell binary for faster runs
       - name: Cache codespell
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
+          path: ~/.cache/codespell
           key: codespell-${{ runner.os }}-${{ hashFiles('**/.codespellrc') }}
           restore-keys: |
             codespell-${{ runner.os }}-
