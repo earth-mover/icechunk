@@ -221,5 +221,7 @@ nav:
     - Spec: spec.md
     - Python API Reference: reference.md
     - Icechunk Rust: icechunk-rust.md
-    - Contributing: contributing.md
     - Migrate to 1.0: migration.md
+  - Contributing:
+    - Contributing Guide: contributing.md
+    - CI Infrastructure: ci-infrastructure.md
