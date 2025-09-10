@@ -244,10 +244,12 @@ impl fmt::Display for Session {
                 "<icechunk.Session>\n\
                 read_only: {}\n\
                 snapshot_id: {}\n\
-                branch: {}",
+                branch: {}\n\
+                has_uncommitted_changes: {}",
                 self.read_only(),
                 self.snapshot_id(),
                 branch,
+                self.has_uncommitted_changes(),
             )
         }
     }
