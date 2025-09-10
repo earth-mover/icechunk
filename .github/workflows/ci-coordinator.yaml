@@ -1,0 +1,157 @@
+name: CI Coordinator
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  workflow_dispatch:
+  schedule:
+    # Three times a day for integration tests
+    - cron: '33 3,10,15 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Build artifacts for each architecture/platform
+  build_ubuntu_x86:
+    name: Build (Ubuntu x86_64)
+    uses: ./.github/workflows/shared-build.yaml
+    with:
+      rust_channel: '1.89.0'
+      upload_rust_artifacts: true
+      upload_python_wheels: true
+      target: x86_64
+      runner: ubuntu-latest
+
+  build_ubuntu_arm:
+    name: Build (Ubuntu ARM64)
+    uses: ./.github/workflows/shared-build.yaml
+    with:
+      rust_channel: '1.89.0'
+      upload_rust_artifacts: true
+      upload_python_wheels: true
+      target: aarch64
+      runner: ubuntu-24.04-arm
+
+  build_macos_x86:
+    name: Build (macOS x86_64)
+    uses: ./.github/workflows/shared-build.yaml
+    with:
+      rust_channel: '1.89.0'
+      upload_rust_artifacts: true
+      upload_python_wheels: true
+      target: x86_64
+      runner: macos-13
+
+  build_macos_arm:
+    name: Build (macOS ARM64)
+    uses: ./.github/workflows/shared-build.yaml
+    with:
+      rust_channel: '1.89.0'
+      upload_rust_artifacts: true
+      upload_python_wheels: true
+      target: aarch64
+      runner: macos-14
+
+  build_windows:
+    name: Build (Windows x86_64)
+    uses: ./.github/workflows/shared-build.yaml
+    with:
+      rust_channel: '1.89.0'
+      upload_rust_artifacts: true
+      upload_python_wheels: true
+      target: x86_64
+      runner: windows-latest
+
+  # Platform-specific test suites (each uses its corresponding build)
+  test_ubuntu_x86:
+    name: Test Ubuntu x86_64
+    needs: [build_ubuntu_x86]
+    uses: ./.github/workflows/rust-testing.yaml
+    secrets: inherit
+    with:
+      target: x86_64
+      runner: ubuntu-latest
+      include_docker_tests: true
+
+  test_ubuntu_arm:
+    name: Test Ubuntu ARM64
+    needs: [build_ubuntu_arm]
+    uses: ./.github/workflows/rust-testing.yaml
+    with:
+      target: aarch64
+      runner: ubuntu-24.04-arm
+      include_docker_tests: false
+
+  test_macos_x86:
+    name: Test macOS x86_64
+    needs: [build_macos_x86]
+    uses: ./.github/workflows/rust-testing.yaml
+    with:
+      target: x86_64
+      runner: macos-13
+      include_docker_tests: false
+
+  test_macos_arm:
+    name: Test macOS ARM64
+    needs: [build_macos_arm]
+    uses: ./.github/workflows/rust-testing.yaml
+    with:
+      target: aarch64
+      runner: macos-14
+      include_docker_tests: false
+
+  test_windows:
+    name: Test Windows x86_64
+    needs: [build_windows]
+    uses: ./.github/workflows/rust-testing.yaml
+    with:
+      target: x86_64
+      runner: windows-latest
+      include_docker_tests: false
+
+  # Python tests (Ubuntu only, with Docker infrastructure)
+  python_tests:
+    name: Python Tests
+    needs: [build_ubuntu_x86]
+    uses: ./.github/workflows/python-testing-optimized.yaml
+    with:
+      target: x86_64
+
+  # Upstream tests (conditional)
+  upstream_tests:
+    name: Upstream Tests
+    needs: [build_ubuntu_x86]
+    uses: ./.github/workflows/python-upstream-optimized.yaml
+    if: ${{
+      (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
+      || github.event_name == 'workflow_dispatch'
+      || github.event_name == 'schedule'
+      }}
+    with:
+      target: x86_64
+
+  # Integration tests (scheduled only, Ubuntu with secrets)
+  integration_tests:
+    name: Integration Tests
+    needs: [build_ubuntu_x86]
+    if: github.event_name == 'schedule'
+    uses: ./.github/workflows/rust-testing.yaml
+    secrets: inherit
+    with:
+      target: x86_64
+      runner: ubuntu-latest
+      include_docker_tests: true
+      include_integration_tests: true
+
+  # Linting runs independently (builds minimal wheels as needed)
+  linting:
+    name: Code Quality
+    uses: ./.github/workflows/linting.yaml

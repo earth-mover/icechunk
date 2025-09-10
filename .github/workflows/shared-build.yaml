@@ -19,7 +19,7 @@ on:
         type: boolean
         default: false
       target:
-        description: 'Build target architecture'
+        description: 'Build target architecture (x86_64, aarch64)'
         required: false
         type: string
         default: 'x86_64'
@@ -125,7 +125,7 @@ jobs:
         if: ${{ inputs.upload_rust_artifacts }}
         uses: actions/upload-artifact@v4
         with:
-          name: rust-artifacts-${{ inputs.target }}
+          name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
           path: |
             target/release/
             target/*/release/
@@ -147,7 +147,7 @@ jobs:
         if: ${{ inputs.upload_rust_artifacts }}
         uses: actions/download-artifact@v4
         with:
-          name: rust-artifacts-${{ inputs.target }}
+          name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
           path: target/
 
       - name: Setup Python
@@ -176,6 +176,6 @@ jobs:
       - name: Upload Python wheels
         uses: actions/upload-artifact@v4
         with:
-          name: python-wheels-${{ inputs.target }}
+          name: python-wheels-${{ inputs.target }}-${{ inputs.runner }}
           path: icechunk-python/dist/
           retention-days: 1

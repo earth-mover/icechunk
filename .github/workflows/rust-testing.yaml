@@ -1,0 +1,127 @@
+name: Rust Testing
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: 'Target architecture (x86_64, aarch64)'
+        required: false
+        type: string
+        default: 'x86_64'
+      runner:
+        description: 'GitHub runner to use'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      include_docker_tests:
+        description: 'Whether to include Docker-based tests'
+        required: false
+        type: boolean
+        default: false
+      include_integration_tests:
+        description: 'Whether to include integration tests'
+        required: false
+        type: boolean
+        default: false
+      rust_channel:
+        description: 'Rust channel to use'
+        required: false
+        type: string
+        default: '1.89.0'
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CI: 1
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
+  RUSTUP_MAX_RETRIES: 10
+  RUST_CHANNEL: ${{ inputs.rust_channel }}
+  CARGO_DENY_VERSION: '0.18.4'
+
+jobs:
+  test:
+    name: Rust Tests (${{ inputs.target }})
+    runs-on: ${{ inputs.runner }}
+    env:
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
+      TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
+      TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+      TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # Download artifacts built by shared-build
+      - name: Download Rust artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
+          path: target/
+
+      # Set up Docker infrastructure (only if requested)
+      - name: Stand up docker services
+        if: ${{ inputs.include_docker_tests }}
+        run: docker compose up -d
+
+      - name: Wait for containers to be ready
+        if: ${{ inputs.include_docker_tests }}
+        run: |
+          for _ in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+          for _ in {1..20}; do
+              if curl --silent --fail "http://azurite:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
+              break
+              fi
+              sleep 3
+          done
+
+      - name: Install Just
+        if: ${{ inputs.include_docker_tests }}
+        run: sudo snap install --edge --classic just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.RUST_CHANNEL }}-${{ inputs.target }}-${{ inputs.runner }}
+          cache-all-crates: true
+          cache-on-failure: true
+
+      - name: Install cargo-deny
+        if: ${{ inputs.include_docker_tests }}
+        run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
+
+      # Run comprehensive tests (if Docker is available)
+      - name: Run comprehensive tests
+        if: ${{ inputs.include_docker_tests }}
+        run: just pre-commit-ci
+
+      # Run unit tests only (if no Docker)
+      - name: Run unit tests
+        if: ${{ !inputs.include_docker_tests }}
+        run: cargo test --lib
+
+      # Run integration tests (only if specifically requested)
+      - name: Run integration tests
+        if: ${{ inputs.include_integration_tests }}
+        run: cargo test --all --all-targets -- --ignored

@@ -1,14 +1,13 @@
 name: Python Check - Upstream (Optimized)
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    types: [opened, reopened, synchronize, labeled]
-  schedule:
-    - cron: "0 0 * * *" # Daily "At 00:00" UTC
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      target:
+        description: 'Target architecture (x86_64, aarch64)'
+        required: false
+        type: string
+        default: 'x86_64'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -116,7 +115,7 @@ jobs:
       - name: Download Python wheels
         uses: actions/download-artifact@v4
         with:
-          name: python-wheels-x86_64
+          name: python-wheels-${{ inputs.target }}-ubuntu-latest
           path: icechunk-python/dist/
 
       - name: Setup Python
@@ -235,7 +234,7 @@ jobs:
       - name: Download Python wheels
         uses: actions/download-artifact@v4
         with:
-          name: python-wheels-x86_64
+          name: python-wheels-${{ inputs.target }}-ubuntu-latest
           path: icechunk/icechunk-python/dist/
 
       - name: Checkout repository (xarray)
