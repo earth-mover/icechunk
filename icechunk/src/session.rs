@@ -26,6 +26,7 @@ use crate::{
     change_set::{ArrayData, ChangeSet},
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
+    display::dataclass_repr,
     error::ICError,
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
@@ -46,7 +47,6 @@ use crate::{
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
-    write_dataclass_repr,
 };
 
 #[derive(Debug, Error)]
@@ -225,12 +225,13 @@ pub struct Session {
 
 impl fmt::Display for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.read_only() {
-            write_dataclass_repr!(
-                f,
+        let repr = if self.read_only() {
+            dataclass_repr(
                 "icechunk.Session",
-                "read_only": self.read_only(),
-                "snapshot_id": self.snapshot_id(),
+                &[
+                    ("read_only", &self.read_only().to_string()),
+                    ("snapshot_id", &self.snapshot_id().to_string()),
+                ],
             )
         } else {
             let branch = self
@@ -238,15 +239,20 @@ impl fmt::Display for Session {
                 .map(|b| b.to_string())
                 .unwrap_or_else(|| "None".to_string());
 
-            write_dataclass_repr!(
-                f,
+            dataclass_repr(
                 "icechunk.Session",
-                "read_only": self.read_only(),
-                "snapshot_id": self.snapshot_id(),
-                "branch": branch,
-                "has_uncommitted_changes": self.has_uncommitted_changes(),
+                &[
+                    ("read_only", &self.read_only().to_string()),
+                    ("snapshot_id", &self.snapshot_id().to_string()),
+                    ("branch", &branch),
+                    (
+                        "has_uncommitted_changes",
+                        &self.has_uncommitted_changes().to_string(),
+                    ),
+                ],
             )
-        }
+        };
+        write!(f, "{}", repr)
     }
 }
 
