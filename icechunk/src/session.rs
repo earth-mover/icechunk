@@ -224,34 +224,32 @@ pub struct Session {
 
 impl fmt::Display for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // let mut contents = String::new();
+        if self.read_only() {
+            write!(
+                f,
+                "<icechunk.Session>\n\
+                read_only: {}\n\
+                snapshot_id: {}",
+                self.read_only(),
+                self.snapshot_id(),
+            )
+        } else {
+            let branch = self
+                .branch()
+                .map(|b| b.to_string())
+                .unwrap_or_else(|| "None".to_string());
 
-        //if self.read_only() {
-        write!(
-            f,
-            "<icechunk.Session>\n\
-            read_only: {}\n\
-            snapshot_id: {}",
-            self.read_only(),
-            self.snapshot_id(),
-        )
-        // } else {
-        //     let branch = py.allow_threads(move || {
-        //         self.0
-        //             .blocking_read()
-        //             .branch()
-        //             .map(|b| b.to_string())
-        //             .unwrap_or_else(|| "None".to_string())
-        //     });
-
-        //     format!(
-        //         "<icechunk.Session>\n\
-        //         read_only: {}\n\
-        //         snapshot_id: {}\n\
-        //         branch: {}",
-        //         read_only, snapshot_id, branch,
-        //     )
-        // }
+            write!(
+                f,
+                "<icechunk.Session>\n\
+                read_only: {}\n\
+                snapshot_id: {}\n\
+                branch: {}",
+                self.read_only(),
+                self.snapshot_id(),
+                branch,
+            )
+        }
     }
 }
 
