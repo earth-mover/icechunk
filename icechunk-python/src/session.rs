@@ -24,13 +24,16 @@ pub struct PySession(pub Arc<RwLock<Session>>);
 /// python threads can make progress
 impl PySession {
     fn __repr__(&self, py: Python<'_>) -> String {
-        let read_only =
+        let read_only: String =
             py.allow_threads(move || self.0.blocking_read().read_only().to_string());
+        let snapshot_id: String =
+            py.allow_threads(move || self.0.blocking_read().snapshot_id().to_string());
 
         format!(
             "<icechunk.Session>\n\
-            read_only: {}",
-            read_only
+            read_only: {}\n\
+            snapshot_id: {}",
+            read_only, snapshot_id,
         )
     }
 
