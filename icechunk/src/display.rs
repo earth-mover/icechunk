@@ -1,5 +1,5 @@
 pub fn dataclass_repr(class_name: &str, attributes: &[(&str, &str)]) -> String {
-    // Writes a python-like (non-executable) repr, given a class name and an (ordered) mapping of name, attribute pairs.
+    // Writes a python-like (non-executable) multi-line repr, given a class name and an (ordered) mapping of name, attribute pairs.
     //
     // Result of:
     //
@@ -24,3 +24,36 @@ pub fn dataclass_repr(class_name: &str, attributes: &[(&str, &str)]) -> String {
 
     format!("<{}>{}", class_name, attrs)
 }
+
+pub fn executable_dataclass_repr(
+    class_name: &str,
+    attributes: &[(&str, &str)],
+) -> String {
+    // Writes a python-like (executable) multi-line repr, given a class name and an (ordered) mapping of name, attribute pairs.
+    //
+    // Result of:
+    //
+    // dataclass_repr(
+    //     "icechunk.Config",
+    //     &[
+    //         ("field1", &self.field1().to_string()),
+    //         ("field2", &self.field2().to_string()),
+    //     ]
+    // )
+    //
+    // Looks like:
+    //
+    // icechunk.Config(
+    //     field1=value,
+    //     field2=value,
+    // )
+
+    let attrs = attributes
+        .iter()
+        .map(|(name, value)| format!("\n    {}={}", name, value))
+        .collect::<String>();
+
+    format!("{}({}\n)", class_name, attrs)
+}
+
+// TODO: consolidate these two functions?

@@ -263,6 +263,7 @@ class CachingConfig:
         num_bytes_chunks: int | None
             The number of bytes of chunks to cache.
         """
+    def __repr__(self) -> str: ...
     @property
     def num_snapshot_nodes(self) -> int | None:
         """

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, TimeDelta, Timelike, Utc};
+use icechunk::display::executable_dataclass_repr;
 use icechunk::storage::RetriesSettings;
 use itertools::Itertools;
 use pyo3::exceptions::PyValueError;
@@ -694,13 +695,21 @@ impl PyCachingConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        format!(
-            r#"CachingConfig(num_snapshot_nodes={snap}, num_chunk_refs={man}, num_transaction_changes={tx}, num_bytes_attributes={att}, num_bytes_chunks={chunks})"#,
-            snap = format_option_to_string(self.num_snapshot_nodes),
-            man = format_option_to_string(self.num_chunk_refs),
-            tx = format_option_to_string(self.num_transaction_changes),
-            att = format_option_to_string(self.num_bytes_attributes),
-            chunks = format_option_to_string(self.num_bytes_chunks),
+        executable_dataclass_repr(
+            "icechunk.CachingConfig",
+            &[
+                ("num_snapshot_nodes", &format_option_to_string(self.num_snapshot_nodes)),
+                ("num_chunk_refs", &format_option_to_string(self.num_chunk_refs)),
+                (
+                    "num_transaction_changes",
+                    &format_option_to_string(self.num_transaction_changes),
+                ),
+                (
+                    "num_bytes_attributes",
+                    &format_option_to_string(self.num_bytes_attributes),
+                ),
+                ("num_bytes_chunks", &format_option_to_string(self.num_bytes_chunks)),
+            ],
         )
     }
 }
