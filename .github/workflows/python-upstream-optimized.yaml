@@ -1,0 +1,296 @@
+name: Python Check - Upstream (Optimized)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  schedule:
+    - cron: "0 0 * * *" # Daily "At 00:00" UTC
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+defaults:
+  run:
+    working-directory: ./icechunk-python
+
+jobs:
+  # Build wheels once for both upstream jobs
+  build_wheels:
+    name: Build Python Wheels (Upstream)
+    uses: ./.github/workflows/shared-build.yaml
+    with:
+      rust_channel: '1.89.0'
+      upload_rust_artifacts: true
+      upload_python_wheels: true
+      runner: ubuntu-latest
+
+  # Setup shared infrastructure once
+  infrastructure:
+    name: Setup Test Infrastructure
+    runs-on: ubuntu-latest
+    outputs:
+      docker_cache_hit: ${{ steps.docker_cache.outputs.cache-hit }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Cache Docker containers
+        id: docker_cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker_cache
+          key: docker-containers-upstream-${{ hashFiles('**/docker-compose.yml') }}-${{ github.run_id }}
+          restore-keys: |
+            docker-containers-upstream-${{ hashFiles('**/docker-compose.yml') }}-
+
+      - name: Stand up MinIO
+        run: docker compose up -d minio
+
+      - name: Wait for MinIO to be ready
+        run: |
+          for _ in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
+      - name: Save Docker state
+        if: steps.docker_cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/docker_cache
+          docker save $(docker images -q) > /tmp/docker_cache/images.tar || true
+
+  # Main upstream development testing
+  upstream_dev:
+    name: Upstream Dev Tests
+    runs-on: ubuntu-latest
+    needs: [build_wheels, infrastructure]
+    if: ${{
+      (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
+      || github.event_name == 'workflow_dispatch'
+      || github.event_name == 'schedule'
+      }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # Restore Docker containers
+      - name: Restore Docker cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker_cache
+          key: docker-containers-upstream-${{ hashFiles('**/docker-compose.yml') }}-${{ github.run_id }}
+          restore-keys: |
+            docker-containers-upstream-${{ hashFiles('**/docker-compose.yml') }}-
+
+      - name: Load Docker images and start services
+        run: |
+          if [ -f /tmp/docker_cache/images.tar ]; then
+            docker load < /tmp/docker_cache/images.tar
+          fi
+          docker compose up -d minio
+          # Wait for MinIO
+          for _ in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
+      - name: Install Just
+        run: sudo snap install --edge --classic just
+
+      # Download pre-built wheels
+      - name: Download Python wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: python-wheels-x86_64
+          path: icechunk-python/dist/
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      # Cache UV dependencies and virtual environment
+      - name: Cache UV dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.local/share/uv/cache
+            icechunk-python/.venv
+          key: uv-upstream-${{ runner.os }}-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            uv-upstream-${{ runner.os }}-
+
+      - name: Setup upstream environment
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          uv pip install --group upstream --pre
+          uv pip install icechunk --no-deps --find-links dist --force-reinstall --pre
+          uv pip list
+
+      - name: Run mypy with upstream dependencies
+        run: |
+          source .venv/bin/activate
+          mypy python
+
+      # Enhanced hypothesis caching for upstream
+      - name: Restore cached hypothesis directory
+        uses: actions/cache/restore@v4
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-upstream-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            cache-hypothesis-upstream-${{ runner.os }}-
+
+      - name: Describe environment
+        run: |
+          source .venv/bin/activate
+          pip list
+
+      - name: Run pytest with upstream dependencies
+        id: status
+        run: |
+          source .venv/bin/activate
+          pytest -n 4 --report-log output-pytest-log.jsonl
+
+      # Always save hypothesis cache
+      - name: Save cached hypothesis directory
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-upstream-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Generate and publish the report
+        if: |
+          failure()
+          && steps.status.outcome == 'failure'
+          && github.event_name == 'schedule'
+          && github.repository_owner == 'earth-mover'
+        uses: xarray-contrib/issue-from-pytest-log@v1
+        with:
+          log-path: icechunk-python/output-pytest-log.jsonl
+
+  # XArray backends testing with upstream dependencies
+  xarray_backends_upstream:
+    name: XArray Backends (Upstream)
+    runs-on: ubuntu-latest
+    needs: [build_wheels, infrastructure]
+    if: ${{
+      (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
+      || github.event_name == 'workflow_dispatch'
+      || github.event_name == 'schedule'
+      }}
+    steps:
+      - name: Checkout repository (icechunk)
+        uses: actions/checkout@v5
+        with:
+          path: "icechunk"
+
+      # Restore Docker containers
+      - name: Restore Docker cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker_cache
+          key: docker-containers-upstream-${{ hashFiles('icechunk/**/docker-compose.yml') }}-${{ github.run_id }}
+          restore-keys: |
+            docker-containers-upstream-${{ hashFiles('icechunk/**/docker-compose.yml') }}-
+
+      - name: Load Docker images and start services
+        working-directory: icechunk
+        run: |
+          if [ -f /tmp/docker_cache/images.tar ]; then
+            docker load < /tmp/docker_cache/images.tar
+          fi
+          docker compose up -d minio
+          # Wait for MinIO
+          for _ in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
+      # Download pre-built wheels
+      - name: Download Python wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: python-wheels-x86_64
+          path: icechunk/icechunk-python/dist/
+
+      - name: Checkout repository (xarray)
+        uses: actions/checkout@v5
+        with:
+          repository: "pydata/xarray"
+          path: "xarray"
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      # Cache UV dependencies and virtual environment for XArray
+      - name: Cache UV dependencies (XArray)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.local/share/uv/cache
+            icechunk/icechunk-python/.venv
+          key: uv-xarray-upstream-${{ runner.os }}-${{ hashFiles('icechunk/**/pyproject.toml') }}
+          restore-keys: |
+            uv-xarray-upstream-${{ runner.os }}-
+
+      - name: Setup upstream environment for XArray
+        working-directory: icechunk/icechunk-python
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          uv pip install icechunk --group upstream --find-links dist --pre
+          uv pip install pytest-mypy-plugins
+          uv pip list
+
+      - name: Run XArray backends tests with upstream dependencies
+        id: status
+        working-directory: icechunk/icechunk-python
+        env:
+          ICECHUNK_XARRAY_BACKENDS_TESTS: 1
+        run: |
+          source .venv/bin/activate
+          # Pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
+          pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
+
+      - name: Generate and publish the report
+        if: |
+          failure()
+          && steps.status.outcome == 'failure'
+          && github.event_name == 'schedule'
+          && github.repository_owner == 'earth-mover'
+        uses: xarray-contrib/issue-from-pytest-log@v1
+        with:
+          log-path: icechunk/icechunk-python/output-pytest-log.jsonl
+          issue-title: "Nightly Xarray backends tests failed"

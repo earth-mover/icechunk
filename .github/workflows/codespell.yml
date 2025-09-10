@@ -19,6 +19,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      # Cache codespell dependencies for faster runs
+      - name: Cache codespell
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: codespell-${{ runner.os }}-${{ hashFiles('**/.codespellrc') }}
+          restore-keys: |
+            codespell-${{ runner.os }}-
+
       - name: Annotate locations with typos
         uses: codespell-project/codespell-problem-matcher@v1.2.0
       - name: Codespell

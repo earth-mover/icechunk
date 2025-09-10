@@ -43,11 +43,13 @@ jobs:
           rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
           rustup default ${{ env.RUST_CHANNEL }}
 
+      # Enhanced caching for Windows using Swatinem
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          # workspaces: "rust -> target"
           key: windows-${{ env.RUST_CHANNEL }}
+          cache-all-crates: true
+          cache-on-failure: true
 
       - name: Check
         run: |

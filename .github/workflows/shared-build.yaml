@@ -1,0 +1,181 @@
+name: Shared Build Infrastructure
+
+on:
+  workflow_call:
+    inputs:
+      rust_channel:
+        description: 'Rust channel to use'
+        required: false
+        type: string
+        default: '1.89.0'
+      upload_rust_artifacts:
+        description: 'Whether to upload Rust build artifacts'
+        required: false
+        type: boolean
+        default: false
+      upload_python_wheels:
+        description: 'Whether to upload Python wheels'
+        required: false
+        type: boolean
+        default: false
+      target:
+        description: 'Build target architecture'
+        required: false
+        type: string
+        default: 'x86_64'
+      runner:
+        description: 'GitHub runner to use'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    outputs:
+      rust_cache_hit:
+        description: "Whether Rust cache was hit"
+        value: ${{ jobs.rust_build.outputs.cache_hit }}
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CI: 1
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  setup_infrastructure:
+    name: Setup Infrastructure
+    runs-on: ubuntu-latest
+    outputs:
+      docker_cache_hit: ${{ steps.docker_cache.outputs.cache-hit }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # Cache Docker containers to avoid repeated MinIO/Azurite setup
+      - name: Cache Docker containers
+        id: docker_cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker_cache
+          key: docker-containers-${{ hashFiles('**/docker-compose.yml', '**/Dockerfile') }}-${{ github.run_id }}
+          restore-keys: |
+            docker-containers-${{ hashFiles('**/docker-compose.yml', '**/Dockerfile') }}-
+
+      - name: Stand up docker services
+        run: |
+          docker compose up -d
+
+      - name: Wait for services to be ready
+        run: |
+          # Wait for MinIO
+          for _ in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
+          # Wait for Azurite
+          for _ in {1..20}; do
+              if curl --silent --fail "http://azurite:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
+              break
+              fi
+              sleep 3
+          done
+
+      - name: Save Docker state
+        if: steps.docker_cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/docker_cache
+          docker save $(docker images -q) > /tmp/docker_cache/images.tar || true
+
+  rust_build:
+    name: Rust Build
+    runs-on: ${{ inputs.runner }}
+    outputs:
+      cache_hit: ${{ steps.rust_cache.outputs.cache-hit }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ inputs.rust_channel }}
+          rustup component add --toolchain ${{ inputs.rust_channel }} rustfmt rust-src clippy
+          rustup default ${{ inputs.rust_channel }}
+
+      # Primary Rust caching using Swatinem - optimized for Rust projects
+      - name: Cache Rust dependencies and build artifacts
+        id: rust_cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ inputs.rust_channel }}-${{ inputs.target }}
+          cache-directories: |
+            ~/.cargo/bin/
+            target/
+          cache-all-crates: true
+          cache-on-failure: true
+
+      - name: Build Rust project
+        run: |
+          cargo build --release --target-dir target
+
+      - name: Upload Rust build artifacts
+        if: ${{ inputs.upload_rust_artifacts }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-artifacts-${{ inputs.target }}
+          path: |
+            target/release/
+            target/*/release/
+          retention-days: 1
+
+  python_wheels:
+    name: Python Wheels Build
+    runs-on: ${{ inputs.runner }}
+    needs: [rust_build]
+    if: ${{ inputs.upload_python_wheels }}
+    defaults:
+      run:
+        working-directory: ./icechunk-python
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download Rust artifacts
+        if: ${{ inputs.upload_rust_artifacts }}
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-artifacts-${{ inputs.target }}
+          path: target/
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      # Cache Python dependencies
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.local/share/uv/cache
+          key: python-deps-${{ runner.os }}-${{ hashFiles('**/pyproject.toml', '**/requirements*.txt') }}
+          restore-keys: |
+            python-deps-${{ runner.os }}-
+
+      - name: Build Python wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          target: ${{ inputs.target }}
+          args: --release --out dist --find-interpreter
+
+      - name: Upload Python wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels-${{ inputs.target }}
+          path: icechunk-python/dist/
+          retention-days: 1
