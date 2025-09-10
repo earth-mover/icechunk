@@ -23,6 +23,17 @@ pub struct PySession(pub Arc<RwLock<Session>>);
 /// Most functions in this class block, so they need to `allow_threads` so other
 /// python threads can make progress
 impl PySession {
+    fn __repr__(&self, py: Python<'_>) -> String {
+        let read_only =
+            py.allow_threads(move || self.0.blocking_read().read_only().to_string());
+
+        format!(
+            "<icechunk.Session>\n\
+            read_only: {}",
+            read_only
+        )
+    }
+
     #[classmethod]
     fn from_bytes(
         _cls: Bound<'_, PyType>,
