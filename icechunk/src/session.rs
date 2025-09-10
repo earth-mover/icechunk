@@ -225,52 +225,28 @@ pub struct Session {
 
 impl fmt::Display for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // if self.read_only() {
-        //     write!(
-        //         f,
-        //         "<icechunk.Session>\n\
-        //         read_only: {}\n\
-        //         snapshot_id: {}",
-        //         self.read_only(),
-        //         self.snapshot_id(),
-        //     )
-        // } else {
-        //     let branch = self
-        //         .branch()
-        //         .map(|b| b.to_string())
-        //         .unwrap_or_else(|| "None".to_string());
+        if self.read_only() {
+            write_dataclass_repr!(
+                f,
+                "icechunk.Session",
+                "read_only": self.read_only(),
+                "snapshot_id": self.snapshot_id(),
+            )
+        } else {
+            let branch = self
+                .branch()
+                .map(|b| b.to_string())
+                .unwrap_or_else(|| "None".to_string());
 
-        //     write!(
-        //         f,
-        //         "<icechunk.Session>\n\
-        //         read_only: {}\n\
-        //         snapshot_id: {}\n\
-        //         branch: {}\n\
-        //         has_uncommitted_changes: {}",
-        //         self.read_only(),
-        //         self.snapshot_id(),
-        //         branch,
-        //         self.has_uncommitted_changes(),
-        //     )
-        // }
-
-        // if self.read_only() {
-        //     write_dataclass_repr!(
-        //         f,
-        //         "icechunk.Session" // "read_only": self.read_only(),
-        //                            // "snapshot_id": self.snapshot_id()
-        //     )
-        // } else {
-        //     write_dataclass_repr!(
-        //         f,
-        //         "icechunk.Session" // "read_only": self.read_only(),
-        //                            // "snapshot_id": self.snapshot_id(),
-        //                            // "branch": self.branch().as_ref().unwrap_or(&"None".to_string()),
-        //                            // "has_uncommitted_changes": self.has_uncommitted_changes()
-        //     )
-        // }
-
-        write_dataclass_repr!(f, "icechunk.Session")
+            write_dataclass_repr!(
+                f,
+                "icechunk.Session",
+                "read_only": self.read_only(),
+                "snapshot_id": self.snapshot_id(),
+                "branch": branch,
+                "has_uncommitted_changes": self.has_uncommitted_changes(),
+            )
+        }
     }
 }
 
