@@ -74,16 +74,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Cache Python dependencies
-        uses: actions/cache@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
         with:
-          path: |
-            ~/.cache/pip
-            ~/.local/share/uv/cache
-            .venv
-          key: python-test-${{ runner.os }}-${{ hashFiles('**/pyproject.toml', '**/requirements*.txt') }}
-          restore-keys: |
-            python-test-${{ runner.os }}-
+          enable-cache: true
 
       # Build wheel using pre-built Rust artifacts
       - name: Build Python wheel
@@ -95,14 +89,13 @@ jobs:
 
       # Install and test
       - name: Setup test environment
+        working-directory: ./icechunk-python
         run: |
-          python -m venv .venv
-          source .venv/bin/activate || .venv\\Scripts\\activate
-          pip install --upgrade pip
-          pip install dist/*.whl
-          pip install pytest pytest-asyncio
+          uv venv
+          uv pip install dist/*.whl
+          uv pip install pytest pytest-asyncio
 
       - name: Run Python tests
+        working-directory: ./icechunk-python
         run: |
-          source .venv/bin/activate || .venv\\Scripts\\activate
-          pytest python/
+          uv run pytest python/

@@ -45,6 +45,11 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
       # Cache dependencies
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -53,18 +58,16 @@ jobs:
           cache-all-crates: true
           cache-on-failure: true
 
-      - name: Cache Python dependencies
+      - name: Cache additional tools
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/pip
             ~/.cache/pre-commit
             ~/.cache/codespell
             ~/.cache/actionlint
-            icechunk-python/.venv
-          key: python-lint-${{ runner.os }}-${{ hashFiles('**/pyproject.toml', '**/.pre-commit-config.yaml', '**/.codespellrc') }}
+          key: tools-lint-${{ runner.os }}-${{ hashFiles('**/.pre-commit-config.yaml', '**/.codespellrc') }}
           restore-keys: |
-            python-lint-${{ runner.os }}-
+            tools-lint-${{ runner.os }}-
 
       # Rust linting
       - name: Run Rust linting and formatting checks
@@ -81,23 +84,19 @@ jobs:
       - name: Setup Python linting environment
         working-directory: ./icechunk-python
         run: |
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install --upgrade pip
-          pip install icechunk['test'] --find-links dist --force-reinstall --pre
-          pip install pre-commit
+          uv venv
+          uv pip install icechunk[test] --find-links dist --force-reinstall --pre
+          uv pip install pre-commit
 
       - name: Run Python pre-commit linting
         working-directory: ./icechunk-python
         run: |
-          source .venv/bin/activate
-          SKIP=just-rust pre-commit run --all-files
+          SKIP=just-rust uv run pre-commit run --all-files
 
       - name: Run mypy type checking
         working-directory: ./icechunk-python
         run: |
-          source .venv/bin/activate
-          mypy python
+          uv run mypy python
 
       # Spell checking
       - name: Annotate locations with typos
