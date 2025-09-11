@@ -50,15 +50,6 @@ jobs:
         run: |
           docker compose up -d minio
 
-      - name: Wait for MinIO to be ready
-        run: |
-          for _ in {1..30}; do
-              if curl --silent --fail http://localhost:9000/minio/health/live; then
-              break
-              fi
-              sleep 1
-          done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
 
       - uses: actions/setup-python@v6
         with:
@@ -94,6 +85,18 @@ jobs:
           uv venv
           uv pip install icechunk['test'] --find-links dist
 
+      # this is here instead of earlier to give minio more time to get up and running
+      # checking and waiting only right before we need it
+      - name: Wait for MinIO to be ready
+        run: |
+          for _ in {1..30}; do
+              if curl --silent --fail http://localhost:9000/minio/health/live; then
+              break
+              fi
+              sleep 1
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
       - name: Run pytest
         shell: bash
         working-directory: icechunk-python
@@ -125,16 +128,6 @@ jobs:
         run: |
           docker compose up -d minio
 
-      - name: Wait for MinIO to be ready
-        working-directory: icechunk
-        run: |
-          for _ in {1..30}; do
-              if curl --silent --fail http://localhost:9000/minio/health/live; then
-              break
-              fi
-              sleep 1
-          done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
 
       - uses: actions/checkout@v5
         with:
@@ -168,6 +161,18 @@ jobs:
           uv pip install icechunk['test'] --find-links dist
           uv pip install pytest-mypy-plugins
 
+      # this is here instead of earlier to give minio more time to get up and running
+      # checking and waiting only right before we need it
+      - name: Wait for MinIO to be ready
+        working-directory: icechunk
+        run: |
+          for _ in {1..30}; do
+              if curl --silent --fail http://localhost:9000/minio/health/live; then
+              break
+              fi
+              sleep 1
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
       - name: Run xarray backends tests
         shell: bash
         working-directory: icechunk/icechunk-python
