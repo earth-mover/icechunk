@@ -23,9 +23,7 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
   RUSTUP_MAX_RETRIES: 10
-  # update RUST_CHANNEL and CARGO_DENY in sync
   RUST_CHANNEL: '1.89.0'
-  CARGO_DENY_VERSION: '0.18.4'
 
 jobs:
   rust:
@@ -89,11 +87,7 @@ jobs:
           # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
 
-      - name: Install cargo-deny
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
-
-      - name: Check
+      - name: Run tests with Docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
@@ -112,7 +106,12 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          just pre-commit-ci
+          just test
+
+      - name: Run examples
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          just run-all-examples
 
       - name: Run unit tests only
         if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
