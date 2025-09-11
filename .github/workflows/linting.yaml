@@ -203,6 +203,6 @@ jobs:
           key: actionlint-${{ runner.os }}
 
       - name: Run actionlint
-        uses: rhysd/actionlint@v1
+        uses: rhysd/actionlint@v1.7.7
         with:
           fail-on-error: true
