@@ -101,9 +101,9 @@ jobs:
         working-directory: icechunk-python
         run: |
           set -e
-          uv venv
+          source .venv/bin/activate
           # Run tests
-          pytest -n 4
+          python -m pytest -n 4
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
@@ -178,5 +178,5 @@ jobs:
         run: |
           set -e
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          uv venv
-          pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
+          source .venv/bin/activate
+          python -m pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
