@@ -92,6 +92,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
+          key: ${{ inputs.rust_channel }}-${{ inputs.target }}-${{ inputs.runner }}
           cache-all-crates: true
           cache-on-failure: true
 

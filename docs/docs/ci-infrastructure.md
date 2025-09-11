@@ -6,6 +6,8 @@ This document explains Icechunk's Continuous Integration (CI) infrastructure, in
 
 Icechunk uses a **multi-architecture CI coordinator** approach that builds artifacts once per platform and reuses them across multiple test jobs. This design reduces CI time by 60-70% compared to the previous approach where each job built independently.
 
+The CI pipeline has been optimized with comprehensive caching strategies and separated Docker infrastructure to eliminate unnecessary delays for non-Docker dependent tests.
+
 ### Key Components
 
 - **🐳 Docker Tests**: Integration tests with MinIO (S3-compatible storage) and Azurite (Azure emulator)
@@ -23,10 +25,8 @@ flowchart TD
 
     subgraph BUILDS["🔨 Build Phase (Parallel)"]
         B1["Ubuntu x86_64"]
-        B2["Ubuntu ARM64"]
-        B3["macOS x86_64"]
-        B4["macOS ARM64"]
-        B5["Windows x86_64"]
+        B2["macOS ARM64"]
+        B3["Windows x86_64"]
     end
 
     subgraph TESTS["🧪 Test Phase (Parallel)"]
@@ -146,18 +146,14 @@ graph TB
 
 ## Caching Strategy
 
-The CI system uses multi-layer caching for optimal performance:
+The CI system uses multi-layer caching for optimal performance, including recent optimizations for Rust toolchain caching and cargo-deny binary caching:
 
 ```mermaid
 graph TB
     subgraph RUST_CACHE["🦀 Rust Caching"]
-        RC1["Swatinem/rust-cache"]
-        RC2["• Cargo registry"]
-        RC3["• Build artifacts"]
-        RC4["• All crates"]
-        RC1 --> RC2
-        RC1 --> RC3
-        RC1 --> RC4
+        RC1["Swatinem/rust-cache<br/>• Cargo registry<br/>• Build artifacts<br/>• All crates"]
+        RC2["Rustup Toolchain Cache<br/>• ~/.rustup/toolchains<br/>• ~/.rustup/update-hashes<br/>• ~/.rustup/settings.toml"]
+        RC3["cargo-deny Binary<br/>• ~/.cargo/bin/cargo-deny<br/>• Version-specific caching"]
     end
 
     subgraph PY_CACHE["🐍 Python Caching"]
@@ -240,6 +236,9 @@ graph TB
 - **💾 Strategic Caching**: Multi-layer caching reduces rebuild frequency
 - **🔄 Artifact Reuse**: Rust binaries and Python wheels shared across jobs
 - **⏱️ Time Savings**: 60-70% reduction in total CI time
+- **🐳 Docker Separation**: Docker setup only runs for workflows that need it
+- **🦀 Toolchain Caching**: Rustup installations cached across all workflows
+- **📦 Binary Caching**: cargo-deny and other tools cached to avoid recompilation
 
 ## Security Model and Conditional Testing
 

@@ -53,6 +53,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
+          key: ${{ env.RUST_CHANNEL }}-linting
           cache-all-crates: true
           cache-on-failure: true
 
