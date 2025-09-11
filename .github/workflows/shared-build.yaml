@@ -78,15 +78,28 @@ jobs:
         run: |
           cargo build --release --target-dir target
 
-      - name: Compress Rust build artifacts
-        if: ${{ inputs.upload_rust_artifacts }}
+      - name: Compress Rust build artifacts (Unix)
+        if: ${{ inputs.upload_rust_artifacts && runner.os != 'Windows' }}
         run: |
           tar -czf rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz target/
 
-      - name: Upload Rust build artifacts
-        if: ${{ inputs.upload_rust_artifacts }}
+      - name: Compress Rust build artifacts (Windows)
+        if: ${{ inputs.upload_rust_artifacts && runner.os == 'Windows' }}
+        run: |
+          Compress-Archive -Path target/ -DestinationPath rust-target-${{ inputs.target }}-${{ inputs.runner }}.zip
+
+      - name: Upload Rust build artifacts (Unix)
+        if: ${{ inputs.upload_rust_artifacts && runner.os != 'Windows' }}
         uses: actions/upload-artifact@v4
         with:
           name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
           path: rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz
+          retention-days: 1
+
+      - name: Upload Rust build artifacts (Windows)
+        if: ${{ inputs.upload_rust_artifacts && runner.os == 'Windows' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
+          path: rust-target-${{ inputs.target }}-${{ inputs.runner }}.zip
           retention-days: 1

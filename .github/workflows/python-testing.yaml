@@ -52,10 +52,17 @@ jobs:
           name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
           path: ./
 
-      - name: Extract Rust artifacts
+      - name: Extract Rust artifacts (Unix)
+        if: ${{ runner.os != 'Windows' }}
         run: |
           tar -xzf rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz
           rm rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz
+
+      - name: Extract Rust artifacts (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        run: |
+          Expand-Archive -Path rust-target-${{ inputs.target }}-${{ inputs.runner }}.zip -DestinationPath .
+          Remove-Item rust-target-${{ inputs.target }}-${{ inputs.runner }}.zip
 
       # Setup Docker services (only for Ubuntu)
       - name: Setup Docker services for testing
