@@ -40,6 +40,36 @@ jobs:
     runs-on: ${{ inputs.runner }}
     # Safe for all contributors (no cloud credentials)
 
+    services:
+      minio:
+        image: minio/minio
+        ports:
+          - 9000:9000
+          - 9001:9001
+        env:
+          MINIO_ROOT_USER: minio123
+          MINIO_ROOT_PASSWORD: minio123
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --entrypoint "/bin/sh -c 'for bucket in testbucket externalbucket arraylake-repo-bucket; do mkdir -p /data/$$bucket; done && /usr/bin/minio server --console-address :9001 /data'"
+
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+        options: >-
+          --health-cmd "nc 127.0.0.1 10000 -z"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        env:
+          AZURITE_ACCOUNTS: devstoreaccount1:Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -74,10 +104,23 @@ jobs:
           cache-all-crates: true
           cache-on-failure: true
 
-      # Run safe tests with Docker (excludes cloud integration tests)
-      # Note: Docker services are set up in separate job that runs in parallel with builds
+      # Initialize test containers and buckets
+      - name: Initialize test storage
+        if: ${{ inputs.include_docker_tests }}
+        run: |
+          # Set up minio client
+          curl -O https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x mc
+          ./mc alias set minio http://localhost:9000 minio123 minio123
+
+          # Create azurite test container
+          curl -X PUT "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"
+
+      # Run safe tests with Docker services (excludes cloud integration tests)
       - name: Run safe tests with Docker
         if: ${{ inputs.include_docker_tests }}
+        env:
+          CARGO_TERM_COLOR: always
         run: |
           just compile-tests "--locked"
           just build
