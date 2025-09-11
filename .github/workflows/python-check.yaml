@@ -20,8 +20,30 @@ defaults:
     working-directory: ./icechunk-python
 
 jobs:
-  build:
+  build-wheels:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          args: --release --out dist --find-interpreter
+          sccache: true
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-wheels
+          path: icechunk-python/dist
+
+  test:
+    runs-on: ubuntu-latest
+    needs: [build-wheels]
     steps:
       - uses: actions/checkout@v5
       - name: Install Just
@@ -39,17 +61,16 @@ jobs:
               sleep 3
           done
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
+      - name: Download wheels
+        uses: actions/download-artifact@v4
         with:
-          working-directory: icechunk-python
-          # target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
-          # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
+          name: test-wheels
+          path: icechunk-python/dist
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
@@ -66,25 +87,22 @@ jobs:
           enable-cache: true
           working-directory: icechunk-python
 
-      - name: Install dependencies and run pytest
+      - name: Install dependencies
         shell: bash
         working-directory: icechunk-python
         run: |
           set -e
-          # Sync project dependencies and install the built wheel
-          uv sync
+          # Create virtual environment and install the built wheel
+          uv venv
           uv pip install icechunk[test] --find-links dist
+
+      - name: Run pytest
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
           # Run tests
           uv run pytest -n 4
-
-      # - name: python examples
-      #   shell: bash
-      #   working-directory: icechunk-python
-      #   run: |
-      #     set -e
-      #     python3 -m venv .venv
-      #     source .venv/bin/activate
-      #     sh examples/run_in_ci.sh
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
@@ -97,6 +115,7 @@ jobs:
 
   xarray-backends:
     runs-on: ubuntu-latest
+    needs: [build-wheels]
     steps:
       - uses: actions/checkout@v5
         with:
@@ -128,22 +147,34 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
+      - name: Download wheels
+        uses: actions/download-artifact@v4
         with:
-          working-directory: icechunk/icechunk-python
-          args: --release --out dist --find-interpreter
+          name: test-wheels
+          path: icechunk/icechunk-python/dist
 
-      - name: pytest
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
         shell: bash
         working-directory: icechunk/icechunk-python
         env:
           ICECHUNK_XARRAY_BACKENDS_TESTS: 1
         run: |
           set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install icechunk['test'] --find-links dist --force-reinstall --pre
-          pip install pytest-mypy-plugins
+          uv venv
+          uv pip install icechunk[test] --find-links dist
+          uv pip install pytest-mypy-plugins
+
+      - name: Run xarray backends tests
+        shell: bash
+        working-directory: icechunk/icechunk-python
+        env:
+          ICECHUNK_XARRAY_BACKENDS_TESTS: 1
+        run: |
+          set -e
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
+          uv run pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
