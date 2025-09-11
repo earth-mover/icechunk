@@ -62,6 +62,7 @@ jobs:
           # target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
           # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
+          sccache: true
 
       - name: setup
         shell: bash
@@ -178,6 +179,7 @@ jobs:
         with:
           working-directory: icechunk/icechunk-python
           args: --release --out dist --find-interpreter
+          sccache: true
 
       - name: setup
         shell: bash
