@@ -69,18 +69,17 @@ jobs:
           cache-all-crates: true
           cache-on-failure: true
 
+      # Download pre-built Python wheel from build job
+      - name: Download Python wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: python-wheel-${{ inputs.target }}-${{ inputs.runner }}
+          path: icechunk-python/dist/
+
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-
-      # Build wheel using pre-built Rust artifacts
-      - name: Build Python wheel
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: icechunk-python
-          target: ${{ inputs.target }}
-          args: --release --out dist --find-interpreter
 
       # Install and test
       - name: Setup test environment
