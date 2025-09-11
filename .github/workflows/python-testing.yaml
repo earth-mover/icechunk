@@ -20,7 +20,7 @@ on:
         default: 'ubuntu-latest'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.target }}-${{ inputs.runner }}
   cancel-in-progress: true
 
 permissions:
