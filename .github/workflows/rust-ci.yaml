@@ -106,7 +106,13 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
+          just compile-tests "--locked"
           just test
+
+      - name: Run doc tests
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          just doctest
 
       - name: Run examples
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
