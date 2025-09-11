@@ -50,10 +50,35 @@ jobs:
       target: x86_64
       runner: windows-latest
 
+  # Docker setup (runs in parallel with builds)
+  setup_docker:
+    name: Setup Docker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Start Docker services
+        run: |
+          docker compose up -d
+          # Wait for services to be ready
+          for _ in {1..10}; do
+              if curl --silent --fail http://minio:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+          for _ in {1..20}; do
+              if curl --silent --fail "http://azurite:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
+              break
+              fi
+              sleep 3
+          done
+
   # Platform-specific tests (start immediately after Rust builds)
   test_ubuntu:
     name: Test Ubuntu
-    needs: [build_ubuntu]
+    needs: [build_ubuntu, setup_docker]
     uses: ./.github/workflows/rust-testing-safe.yaml
     with:
       target: x86_64
