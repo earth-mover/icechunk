@@ -72,7 +72,7 @@ jobs:
         run: just pre-commit-python
 
       # Python setup and linting
-      - name: Build minimal wheel for Python linting
+      - name: Build Python wheel using cached Rust artifacts
         uses: PyO3/maturin-action@v1
         with:
           working-directory: icechunk-python

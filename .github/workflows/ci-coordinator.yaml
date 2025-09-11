@@ -141,9 +141,10 @@ jobs:
       target: x86_64
       runner: ubuntu-latest
 
-  # Code quality checks (runs independently for fast feedback)
+  # Code quality checks (reuse Ubuntu build for efficiency)
   linting:
     name: Code Quality
+    needs: [build_ubuntu]
     uses: ./.github/workflows/linting.yaml
 
   # Dependency checks (runs independently, depends on Ubuntu build)

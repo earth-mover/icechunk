@@ -44,30 +44,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # Download artifacts built by shared-build
-      - name: Download Rust artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
-          path: ./
-
-      - name: Debug - List downloaded files
-        run: |
-          echo "Contents of current directory:"
-          ls -la
-          echo "Looking for: rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz"
-
-      - name: Extract Rust artifacts (Unix)
-        if: ${{ runner.os != 'Windows' }}
-        run: |
-          tar -xzf rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz
-          rm rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz
-
-      - name: Extract Rust artifacts (Windows)
-        if: ${{ runner.os == 'Windows' }}
-        run: |
-          Expand-Archive -Path rust-target-${{ inputs.target }}-${{ inputs.runner }}.zip -DestinationPath .
-          Remove-Item rust-target-${{ inputs.target }}-${{ inputs.runner }}.zip
+      # Rust artifacts available via Swatinem/rust-cache (no manual download needed)
 
       - name: Install Just
         if: ${{ inputs.include_docker_tests }}
