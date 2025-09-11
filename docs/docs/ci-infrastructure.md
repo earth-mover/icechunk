@@ -189,7 +189,8 @@ graph TB
 
 - **`ci-coordinator.yaml`**: Main entry point that orchestrates all builds and tests
 - **`shared-build.yaml`**: Reusable workflow for building Rust artifacts and Python wheels
-- **`rust-testing.yaml`**: Configurable testing workflow supporting Docker and unit tests
+- **`rust-testing-safe.yaml`**: Safe testing workflow (no secrets, runs on all PRs)
+- **`rust-testing-integration.yaml`**: Integration testing workflow (requires secrets, trusted runs only)
 
 ### Specialized Workflows
 
@@ -240,13 +241,33 @@ graph TB
 - **🔄 Artifact Reuse**: Rust binaries and Python wheels shared across jobs
 - **⏱️ Time Savings**: 60-70% reduction in total CI time
 
-## Conditional Testing
+## Security Model and Conditional Testing
 
-The CI system includes smart conditional logic for different scenarios:
+The CI system implements a **dual-workflow security model** to protect cloud credentials:
 
-- **Integration Tests**: Only run on schedule (3x daily)
-- **Upstream Tests**: Run when `test-upstream` label is applied to PR
-- **Docker Tests**: Only on Ubuntu runners
-- **Cross-Platform Tests**: Unit tests on all platforms
+### Safe Tests (All PRs)
+- **`rust-testing-safe.yaml`**: No secrets exposed
+- **Local Docker only**: MinIO and Azurite for S3/Azure simulation
+- **All platform tests**: Ubuntu, macOS, Windows unit tests
+- **Fast feedback**: Runs on every PR from any contributor
 
-This approach balances comprehensive testing with resource efficiency, ensuring fast feedback for common changes while maintaining thorough testing for releases and scheduled runs.
+### Integration Tests (Trusted Only)
+- **`rust-testing-integration.yaml`**: Requires cloud secrets
+- **Real cloud storage**: R2, AWS S3, Tigris testing
+- **Conditional execution**: Only runs when:
+  - Scheduled runs (3x daily)
+  - Manual workflow dispatch
+  - Pushes to main branch
+  - PRs with `test-with-secrets` label (maintainer approval)
+
+### Test Categories
+- **Unit Tests**: Run on all platforms without secrets
+- **Docker Integration**: Safe MinIO/Azurite tests on Ubuntu
+- **Cloud Integration**: Real cloud storage tests (secrets required)
+- **Upstream Tests**: Dependency compatibility (labeled/scheduled only)
+
+This **defense-in-depth** approach ensures:
+- **Fast PR feedback** with comprehensive safe testing
+- **Full validation** on trusted runs with cloud credentials
+- **Zero secret exposure** to untrusted contributors
+- **Maintainer control** via labels for special testing needs

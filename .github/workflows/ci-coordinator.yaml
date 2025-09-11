@@ -71,20 +71,35 @@ jobs:
       runner: windows-latest
 
   # Platform-specific test suites (each uses its corresponding build)
-  test_ubuntu_x86:
-    name: Test Ubuntu x86_64
+  test_ubuntu_x86_safe:
+    name: Test Ubuntu x86_64 (Safe)
     needs: [build_ubuntu_x86]
-    uses: ./.github/workflows/rust-testing.yaml
-    secrets: inherit
+    uses: ./.github/workflows/rust-testing-safe.yaml
     with:
       target: x86_64
       runner: ubuntu-latest
       include_docker_tests: true
 
+  # Integration tests with secrets (schedule, workflow_dispatch, main pushes, or approved PRs)
+  test_ubuntu_x86_integration:
+    name: Test Ubuntu x86_64 (Integration)
+    needs: [build_ubuntu_x86]
+    if: ${{
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'test-with-secrets'))
+      }}
+    uses: ./.github/workflows/rust-testing-integration.yaml
+    secrets: inherit
+    with:
+      target: x86_64
+      runner: ubuntu-latest
+
   test_ubuntu_arm:
     name: Test Ubuntu ARM64
     needs: [build_ubuntu_arm]
-    uses: ./.github/workflows/rust-testing.yaml
+    uses: ./.github/workflows/rust-testing-safe.yaml
     with:
       target: aarch64
       runner: ubuntu-24.04-arm
@@ -93,7 +108,7 @@ jobs:
   test_macos_x86:
     name: Test macOS x86_64
     needs: [build_macos_x86]
-    uses: ./.github/workflows/rust-testing.yaml
+    uses: ./.github/workflows/rust-testing-safe.yaml
     with:
       target: x86_64
       runner: macos-13
@@ -102,7 +117,7 @@ jobs:
   test_macos_arm:
     name: Test macOS ARM64
     needs: [build_macos_arm]
-    uses: ./.github/workflows/rust-testing.yaml
+    uses: ./.github/workflows/rust-testing-safe.yaml
     with:
       target: aarch64
       runner: macos-14
@@ -111,7 +126,7 @@ jobs:
   test_windows:
     name: Test Windows x86_64
     needs: [build_windows]
-    uses: ./.github/workflows/rust-testing.yaml
+    uses: ./.github/workflows/rust-testing-safe.yaml
     with:
       target: x86_64
       runner: windows-latest
@@ -138,18 +153,16 @@ jobs:
     with:
       target: x86_64
 
-  # Integration tests (scheduled only, Ubuntu with secrets)
-  integration_tests:
-    name: Integration Tests
+  # Additional integration tests (scheduled only - combines both safe and secret tests)
+  integration_tests_comprehensive:
+    name: Comprehensive Integration Tests
     needs: [build_ubuntu_x86]
     if: github.event_name == 'schedule'
-    uses: ./.github/workflows/rust-testing.yaml
+    uses: ./.github/workflows/rust-testing-integration.yaml
     secrets: inherit
     with:
       target: x86_64
       runner: ubuntu-latest
-      include_docker_tests: true
-      include_integration_tests: true
 
   # Linting runs independently (builds minimal wheels as needed)
   linting:
