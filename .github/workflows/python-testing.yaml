@@ -69,29 +69,18 @@ jobs:
           cache-all-crates: true
           cache-on-failure: true
 
-      # Download pre-built Python wheel from build job
-      - name: Download Python wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: python-wheel-${{ inputs.target }}-${{ inputs.runner }}
-          path: icechunk-python/dist/
-
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
 
-      # Install and test
+      # Install and test using uv sync which will build the project
       - name: Setup test environment
         working-directory: ./icechunk-python
-        env:
-          UV_SYSTEM_PYTHON: 1
         run: |
-          uv pip install icechunk[test] --find-links dist
+          uv sync --extra test
 
       - name: Run Python tests
         working-directory: ./icechunk-python
-        env:
-          UV_SYSTEM_PYTHON: 1
         run: |
           uv run pytest python/

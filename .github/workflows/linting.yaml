@@ -70,31 +70,19 @@ jobs:
         run: just pre-commit-python
 
       # Python setup and linting
-      - name: Download Python wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: python-wheel-x86_64-ubuntu-latest
-          path: icechunk-python/dist/
-
       - name: Setup Python linting environment
         working-directory: ./icechunk-python
-        env:
-          UV_SYSTEM_PYTHON: 1
         run: |
-          uv pip install icechunk[test] --find-links dist
-          uv pip install pre-commit
+          uv sync --extra test
+          uv add pre-commit
 
       - name: Run Python pre-commit linting
         working-directory: ./icechunk-python
-        env:
-          UV_SYSTEM_PYTHON: 1
         run: |
           SKIP=just-rust uv run pre-commit run --all-files
 
       - name: Run mypy type checking
         working-directory: ./icechunk-python
-        env:
-          UV_SYSTEM_PYTHON: 1
         run: |
           uv run mypy python
 
