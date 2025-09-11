@@ -94,15 +94,16 @@ jobs:
           set -e
           # Create virtual environment and install the built wheel
           uv venv
-          uv pip install icechunk[test] --find-links dist
+          uv pip install icechunk['test'] --find-links dist
 
       - name: Run pytest
         shell: bash
         working-directory: icechunk-python
         run: |
           set -e
+          uv venv
           # Run tests
-          uv run pytest -n 4
+          pytest -n 4
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
@@ -166,7 +167,7 @@ jobs:
         run: |
           set -e
           uv venv
-          uv pip install icechunk[test] --find-links dist
+          uv pip install icechunk['test'] --find-links dist
           uv pip install pytest-mypy-plugins
 
       - name: Run xarray backends tests
@@ -177,4 +178,5 @@ jobs:
         run: |
           set -e
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          uv run pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
+          uv venv
+          pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
