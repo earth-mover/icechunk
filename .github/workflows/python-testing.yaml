@@ -56,6 +56,16 @@ jobs:
           restore-keys: |
             rustup-${{ runner.os }}-
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
       - name: Install Rust toolchain
         run: |
           rustup update --no-self-update ${{ inputs.rust_channel }}
@@ -76,11 +86,6 @@ jobs:
           target: ${{ inputs.target }}
           args: --release --out dist --find-interpreter
           sccache: true
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
 
       # Install and test using the pre-built wheel
       - name: Setup test environment
