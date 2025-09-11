@@ -5,6 +5,14 @@ alias pre := pre-commit
 test *args='':
   cargo test --all --all-targets {{args}}
 
+# run tests without secrets (excludes ignored integration tests)
+test-safe *args='':
+  cargo test --all --all-targets {{args}}
+
+# run integration tests that require secrets (only ignored tests)
+test-integration *args='':
+  cargo test --all --all-targets {{args}} -- --ignored
+
 doctest *args='':
   cargo test --doc {{args}}
 

@@ -136,22 +136,12 @@ jobs:
   python_tests:
     name: Python Tests
     needs: [build_ubuntu_x86]
-    uses: ./.github/workflows/python-testing-optimized.yaml
+    uses: ./.github/workflows/python-testing.yaml
     with:
       target: x86_64
 
-  # Upstream tests (conditional)
-  upstream_tests:
-    name: Upstream Tests
-    needs: [build_ubuntu_x86]
-    uses: ./.github/workflows/python-upstream-optimized.yaml
-    if: ${{
-      (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
-      || github.event_name == 'workflow_dispatch'
-      || github.event_name == 'schedule'
-      }}
-    with:
-      target: x86_64
+  # Note: Upstream tests moved to separate scheduled workflow
+  # Can be added back when needed
 
   # Additional integration tests (scheduled only - combines both safe and secret tests)
   integration_tests_comprehensive:

@@ -43,19 +43,20 @@ jobs:
   test:
     name: Rust Tests (${{ inputs.target }})
     runs-on: ${{ inputs.runner }}
+    # Only set cloud secrets if they are available (not for untrusted PRs)
     env:
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
-      TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
-      TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-      TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET || '' }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || '' }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || '' }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID || '' }}
+      AWS_BUCKET: ${{ secrets.AWS_BUCKET || '' }}
+      AWS_REGION: ${{ secrets.AWS_REGION || '' }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || '' }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || '' }}
+      TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET || '' }}
+      TIGRIS_REGION: ${{ secrets.TIGRIS_REGION || '' }}
+      TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID || '' }}
+      TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY || '' }}
 
     steps:
       - name: Checkout repository

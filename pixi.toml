@@ -1,0 +1,27 @@
+[workspace]
+authors = ["Ian Hunt-Isaak <ianhuntisaak@gmail.com>"]
+channels = ["conda-forge"]
+name = "icechunk"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+build-rust = "cargo build --release"
+build-python-dev = { cmd = "maturin develop", cwd = "icechunk-python" }
+build-python = { cmd = "maturin develop --release", cwd = "icechunk-python" }
+test-python = { cmd = "pytest tests/", cwd = "icechunk-python" }
+build-all = { depends-on = ["build-rust", "build-python"] }
+
+[dependencies]
+python = ">=3.10"
+pip = "*"
+maturin = "*"
+pytest = "*"
+just = ">=1.42.4,<2"
+
+[feature.test.dependencies]
+boto3 = "*"
+mypy-boto3-s3 = "*"
+
+[environments]
+test = ["test"]
