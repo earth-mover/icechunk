@@ -35,37 +35,6 @@ jobs:
       run:
         working-directory: ./
 
-    # Use GitHub Actions service containers for faster startup
-    services:
-      minio:
-        image: minio/minio
-        ports:
-          - 9000:9000
-          - 9001:9001
-        env:
-          MINIO_ROOT_USER: minio123
-          MINIO_ROOT_PASSWORD: minio123
-        options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-          server --console-address :9001 /data
-
-      azurite:
-        image: mcr.microsoft.com/azure-storage/azurite:3.33.0
-        ports:
-          - 10000:10000
-          - 10001:10001
-          - 10002:10002
-        options: >-
-          --health-cmd "nc 127.0.0.1 10000 -z"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-        env:
-          AZURITE_ACCOUNTS: devstoreaccount1:Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==
-
     strategy:
       fail-fast: false
       matrix:
@@ -77,7 +46,42 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      # Initialize services
+      - name: Start Docker services
+        run: |
+          docker compose up -d
+
+      - name: Wait for services to be ready
+        run: |
+          # Wait for MinIO
+          echo "Waiting for MinIO..."
+          for i in {1..30}; do
+            if curl --silent --fail http://localhost:9000/minio/health/live; then
+              echo "MinIO is ready"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "MinIO failed to start"
+              docker compose logs minio
+              exit 1
+            fi
+            sleep 2
+          done
+
+          # Wait for Azurite
+          echo "Waiting for Azurite..."
+          for i in {1..30}; do
+            if nc -z localhost 10000; then
+              echo "Azurite is ready"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "Azurite failed to start"
+              docker compose logs azurite
+              exit 1
+            fi
+            sleep 2
+          done
+
       - name: Initialize test storage
         run: |
           # Set up minio client and create buckets
