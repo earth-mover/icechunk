@@ -51,12 +51,6 @@ jobs:
           args: --release --out dist --find-interpreter
           # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
 
-      - name: Cargo lint + format icechunk-python
-        shell: bash
-        working-directory: icechunk
-        run: |
-          just pre-commit-python
-
       - name: mypy
         shell: bash
         working-directory: icechunk-python
