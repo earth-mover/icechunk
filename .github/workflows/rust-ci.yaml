@@ -26,22 +26,50 @@ env:
   RUST_CHANNEL: '1.89.0'
 
 jobs:
-  rust:
-    name: Rust CI
+  # Linux tests with service containers for faster startup
+  rust-linux:
+    name: Rust CI (Linux)
     timeout-minutes: 20
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: ./
-    #permissions:
-      #contents: read
-      #actions: read
-      #pull-requests: read
+
+    # Use GitHub Actions service containers for faster startup
+    services:
+      minio:
+        image: minio/minio
+        ports:
+          - 9000:9000
+          - 9001:9001
+        env:
+          MINIO_ROOT_USER: minio123
+          MINIO_ROOT_PASSWORD: minio123
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          server --console-address :9001 /data
+
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+        options: >-
+          --health-cmd "nc 127.0.0.1 10000 -z"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        env:
+          AZURITE_ACCOUNTS: devstoreaccount1:Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==
 
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
 
     steps:
       - name: Checkout repository
@@ -49,30 +77,21 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Stand up docker services
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+      # Initialize services
+      - name: Initialize test storage
         run: |
-          docker compose up -d
+          # Set up minio client and create buckets
+          curl -O https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x mc
+          ./mc alias set minio http://localhost:9000 minio123 minio123
+          ./mc mb minio/testbucket || echo "testbucket already exists"
+          ./mc mb minio/externalbucket || echo "externalbucket already exists"
+          ./mc mb minio/arraylake-repo-bucket || echo "arraylake-repo-bucket already exists"
 
-      - name: Wait for containers to be ready
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: |
-          for _ in {1..10}; do
-              if curl --silent --fail http://minio:9000/minio/health/live; then
-              break
-              fi
-              sleep 3
-          done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
-          for _ in {1..20}; do
-              if curl --silent --fail "http://azurite:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
-              break
-              fi
-              sleep 3
-          done
+          # Create azurite test container
+          curl -X PUT "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"
 
       - name: Install Just
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: sudo snap install --edge --classic just
 
       - name: Install Rust toolchain
@@ -87,8 +106,7 @@ jobs:
           # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
 
-      - name: Run tests with Docker services
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+      - name: Run tests with service containers
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -106,17 +124,12 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
+          # Run tests against local storage services (minio/azurite)
           just test
 
       - name: Run examples
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
           just run-all-examples
-
-      - name: Run unit tests only
-        if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
-        run: |
-          cargo test --lib
 
       - name: Run integration tests against object stores
         if: github.event_name == 'cron'
@@ -138,3 +151,38 @@ jobs:
 
         run: |
           cargo test --all --all-targets -- --ignored
+
+  # macOS tests without Docker services
+  rust-macos:
+    name: Rust CI (macOS)
+    timeout-minutes: 20
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: ./
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.RUST_CHANNEL }}
+
+      - name: Run unit tests only
+        run: |
+          cargo test --lib
