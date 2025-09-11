@@ -48,6 +48,12 @@ jobs:
           name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
           path: ./
 
+      - name: Debug - List downloaded files
+        run: |
+          echo "Contents of current directory:"
+          ls -la
+          echo "Looking for: rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz"
+
       - name: Extract Rust artifacts (Unix)
         if: ${{ runner.os != 'Windows' }}
         run: |
