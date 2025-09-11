@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, TimeDelta, Timelike, Utc};
-use icechunk::display::executable_dataclass_repr;
+use icechunk::display::dataclass_repr;
 use icechunk::storage::RetriesSettings;
 use itertools::Itertools;
 use pyo3::exceptions::PyValueError;
@@ -695,7 +695,7 @@ impl PyCachingConfig {
     }
 
     pub fn __repr__(&self) -> String {
-        executable_dataclass_repr(
+        dataclass_repr(
             "icechunk.CachingConfig",
             &[
                 ("num_snapshot_nodes", &format_option_to_string(self.num_snapshot_nodes)),

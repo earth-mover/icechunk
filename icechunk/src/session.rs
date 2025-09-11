@@ -26,7 +26,7 @@ use crate::{
     change_set::{ArrayData, ChangeSet},
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
-    display::dataclass_repr,
+    display::dataclass_str,
     error::ICError,
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
@@ -226,7 +226,7 @@ pub struct Session {
 impl fmt::Display for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let repr = if self.read_only() {
-            dataclass_repr(
+            dataclass_str(
                 "icechunk.Session",
                 &[
                     ("read_only", &self.read_only().to_string()),
@@ -239,7 +239,7 @@ impl fmt::Display for Session {
                 .map(|b| b.to_string())
                 .unwrap_or_else(|| "None".to_string());
 
-            dataclass_repr(
+            dataclass_str(
                 "icechunk.Session",
                 &[
                     ("read_only", &self.read_only().to_string()),

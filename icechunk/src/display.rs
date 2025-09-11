@@ -1,9 +1,9 @@
-pub fn dataclass_repr(class_name: &str, attributes: &[(&str, &str)]) -> String {
+pub fn dataclass_str(class_name: &str, attributes: &[(&str, &str)]) -> String {
     // Writes a python-like (non-executable) multi-line repr, given a class name and an (ordered) mapping of name, attribute pairs.
     //
     // Result of:
     //
-    // dataclass_repr(
+    // dataclass_str(
     //     "icechunk.Session",
     //     &[
     //         ("read_only", &self.read_only().to_string()),
@@ -25,10 +25,7 @@ pub fn dataclass_repr(class_name: &str, attributes: &[(&str, &str)]) -> String {
     format!("<{}>{}", class_name, attrs)
 }
 
-pub fn executable_dataclass_repr(
-    class_name: &str,
-    attributes: &[(&str, &str)],
-) -> String {
+pub fn dataclass_repr(class_name: &str, attributes: &[(&str, &str)]) -> String {
     // Writes a python-like (executable) multi-line repr, given a class name and an (ordered) mapping of name, attribute pairs.
     //
     // Result of:
