@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, TimeDelta, Timelike, Utc};
-use icechunk::display::{PyRepr, dataclass_repr, dataclass_str};
+use icechunk::repr::{PyRepr, dataclass_repr, dataclass_str};
 use icechunk::storage::RetriesSettings;
 use itertools::Itertools;
 use pyo3::exceptions::PyValueError;
