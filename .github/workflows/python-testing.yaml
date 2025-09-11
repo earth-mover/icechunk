@@ -64,19 +64,6 @@ jobs:
           Expand-Archive -Path rust-target-${{ inputs.target }}-${{ inputs.runner }}.zip -DestinationPath .
           Remove-Item rust-target-${{ inputs.target }}-${{ inputs.runner }}.zip
 
-      # Setup Docker services (only for Ubuntu)
-      - name: Setup Docker services for testing
-        if: ${{ runner.os == 'Linux' }}
-        run: |
-          docker compose up -d minio
-          # Wait for MinIO
-          for _ in {1..10}; do
-              if curl --silent --fail http://minio:9000/minio/health/live; then
-              break
-              fi
-              sleep 3
-          done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
 
       # Cache rustup toolchain installation
       - name: Cache rustup toolchain

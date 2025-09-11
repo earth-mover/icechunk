@@ -106,7 +106,7 @@ jobs:
   # Python tests (builds wheels internally using Rust artifacts)
   python_tests_ubuntu:
     name: Python Tests Ubuntu
-    needs: [build_ubuntu]
+    needs: [build_ubuntu, setup_docker]
     uses: ./.github/workflows/python-testing.yaml
     with:
       rust_channel: '1.89.0'
