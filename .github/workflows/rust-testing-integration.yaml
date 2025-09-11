@@ -33,7 +33,7 @@ jobs:
   test:
     name: Integration Tests (${{ inputs.target }})
     runs-on: ${{ inputs.runner }}
-    # Cloud secrets required - only for trusted runs
+    # Requires cloud credentials
     env:
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

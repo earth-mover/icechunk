@@ -21,7 +21,7 @@ permissions:
 jobs:
   # Build artifacts for each architecture/platform
   build_ubuntu_x86:
-    name: Build (Ubuntu x86_64)
+    name: Build Ubuntu x86
     uses: ./.github/workflows/shared-build.yaml
     with:
       rust_channel: '1.89.0'
@@ -31,7 +31,7 @@ jobs:
       runner: ubuntu-latest
 
   build_ubuntu_arm:
-    name: Build (Ubuntu ARM64)
+    name: Build Ubuntu ARM
     uses: ./.github/workflows/shared-build.yaml
     with:
       rust_channel: '1.89.0'
@@ -41,7 +41,7 @@ jobs:
       runner: ubuntu-24.04-arm
 
   build_macos_x86:
-    name: Build (macOS x86_64)
+    name: Build macOS x86
     uses: ./.github/workflows/shared-build.yaml
     with:
       rust_channel: '1.89.0'
@@ -51,7 +51,7 @@ jobs:
       runner: macos-13
 
   build_macos_arm:
-    name: Build (macOS ARM64)
+    name: Build macOS ARM
     uses: ./.github/workflows/shared-build.yaml
     with:
       rust_channel: '1.89.0'
@@ -61,7 +61,7 @@ jobs:
       runner: macos-14
 
   build_windows:
-    name: Build (Windows x86_64)
+    name: Build Windows
     uses: ./.github/workflows/shared-build.yaml
     with:
       rust_channel: '1.89.0'
@@ -72,7 +72,7 @@ jobs:
 
   # Platform-specific test suites (each uses its corresponding build)
   test_ubuntu_x86_safe:
-    name: Test Ubuntu x86_64 (Safe)
+    name: Test Ubuntu x86 (Safe)
     needs: [build_ubuntu_x86]
     uses: ./.github/workflows/rust-testing-safe.yaml
     with:
@@ -80,9 +80,9 @@ jobs:
       runner: ubuntu-latest
       include_docker_tests: true
 
-  # Integration tests with secrets (schedule, workflow_dispatch, main pushes, or approved PRs)
+  # Integration tests with cloud credentials
   test_ubuntu_x86_integration:
-    name: Test Ubuntu x86_64 (Integration)
+    name: Test Ubuntu x86 (Integration)
     needs: [build_ubuntu_x86]
     if: ${{
       github.event_name == 'schedule'
@@ -97,7 +97,7 @@ jobs:
       runner: ubuntu-latest
 
   test_ubuntu_arm:
-    name: Test Ubuntu ARM64
+    name: Test Ubuntu ARM
     needs: [build_ubuntu_arm]
     uses: ./.github/workflows/rust-testing-safe.yaml
     with:
@@ -106,7 +106,7 @@ jobs:
       include_docker_tests: false
 
   test_macos_x86:
-    name: Test macOS x86_64
+    name: Test macOS x86
     needs: [build_macos_x86]
     uses: ./.github/workflows/rust-testing-safe.yaml
     with:
@@ -115,7 +115,7 @@ jobs:
       include_docker_tests: false
 
   test_macos_arm:
-    name: Test macOS ARM64
+    name: Test macOS ARM
     needs: [build_macos_arm]
     uses: ./.github/workflows/rust-testing-safe.yaml
     with:
@@ -124,7 +124,7 @@ jobs:
       include_docker_tests: false
 
   test_windows:
-    name: Test Windows x86_64
+    name: Test Windows
     needs: [build_windows]
     uses: ./.github/workflows/rust-testing-safe.yaml
     with:
@@ -132,7 +132,7 @@ jobs:
       runner: windows-latest
       include_docker_tests: false
 
-  # Python tests (Ubuntu only, with Docker infrastructure)
+  # Python tests
   python_tests:
     name: Python Tests
     needs: [build_ubuntu_x86]
@@ -140,12 +140,10 @@ jobs:
     with:
       target: x86_64
 
-  # Note: Upstream tests moved to separate scheduled workflow
-  # Can be added back when needed
 
-  # Additional integration tests (scheduled only - combines both safe and secret tests)
+  # Integration tests (scheduled only)
   integration_tests_comprehensive:
-    name: Comprehensive Integration Tests
+    name: Integration Tests
     needs: [build_ubuntu_x86]
     if: github.event_name == 'schedule'
     uses: ./.github/workflows/rust-testing-integration.yaml
@@ -154,7 +152,7 @@ jobs:
       target: x86_64
       runner: ubuntu-latest
 
-  # Linting runs independently (builds minimal wheels as needed)
+  # Code quality checks
   linting:
     name: Code Quality
     uses: ./.github/workflows/linting.yaml

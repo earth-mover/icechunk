@@ -17,9 +17,8 @@ permissions:
   contents: read
 
 jobs:
-  # Rust linting - reuses shared build for speed
   rust_lint:
-    name: Rust Linting
+    name: Rust Lint
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -47,9 +46,8 @@ jobs:
       - name: Run Rust linting and formatting checks
         run: just pre-commit-python
 
-  # Python linting - builds minimal wheel for imports
   python_lint:
-    name: Python Linting
+    name: Python Lint
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -75,7 +73,6 @@ jobs:
           restore-keys: |
             python-lint-${{ runner.os }}-
 
-      # Build minimal wheel for linting (faster than full maturin build)
       - name: Install Rust toolchain (for minimal build)
         run: |
           rustup update --no-self-update 1.89.0
@@ -107,9 +104,8 @@ jobs:
           source .venv/bin/activate
           SKIP=just-rust pre-commit run --all-files
 
-  # MyPy type checking
   mypy:
-    name: MyPy Type Check
+    name: Type Check
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -134,7 +130,6 @@ jobs:
           restore-keys: |
             python-mypy-${{ runner.os }}-
 
-      # Build minimal wheel for type checking
       - name: Install Rust toolchain (for minimal build)
         run: |
           rustup update --no-self-update 1.89.0
@@ -165,7 +160,6 @@ jobs:
           source .venv/bin/activate
           mypy python
 
-  # Codespell (spell checking)
   codespell:
     name: Spell Check
     runs-on: ubuntu-latest
@@ -173,7 +167,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      # Cache codespell binary for faster runs
       - name: Cache codespell
         uses: actions/cache@v4
         with:
@@ -188,9 +181,8 @@ jobs:
       - name: Codespell
         uses: codespell-project/actions-codespell@v2
 
-  # GitHub Actions workflow linting (already in pre-commit but good to have explicit)
   actionlint:
-    name: GitHub Actions Lint
+    name: Actions Lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

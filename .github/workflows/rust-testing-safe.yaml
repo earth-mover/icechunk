@@ -38,7 +38,7 @@ jobs:
   test:
     name: Safe Rust Tests (${{ inputs.target }})
     runs-on: ${{ inputs.runner }}
-    # No cloud secrets - safe for untrusted PRs
+    # Safe for all contributors (no cloud credentials)
 
     steps:
       - name: Checkout repository
