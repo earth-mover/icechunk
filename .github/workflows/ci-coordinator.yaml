@@ -24,7 +24,6 @@ jobs:
     uses: ./.github/workflows/shared-build.yaml
     with:
       rust_channel: '1.89.0'
-      upload_rust_artifacts: true
       target: x86_64
       runner: ubuntu-latest
 
@@ -33,7 +32,6 @@ jobs:
     uses: ./.github/workflows/shared-build.yaml
     with:
       rust_channel: '1.89.0'
-      upload_rust_artifacts: true
       target: aarch64
       runner: macos-14
 
@@ -42,7 +40,6 @@ jobs:
     uses: ./.github/workflows/shared-build.yaml
     with:
       rust_channel: '1.89.0'
-      upload_rust_artifacts: true
       target: x86_64
       runner: windows-latest
 

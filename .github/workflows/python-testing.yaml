@@ -41,38 +41,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # Download pre-built Rust artifacts
-      - name: Download Rust artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
-          path: ./artifacts/
-
-      - name: Debug - List downloaded files
-        run: |
-          echo "Contents of current directory:"
-          ls -la
-          echo "Contents of artifacts directory:"
-          ls -la ./artifacts/ || echo "Artifacts directory does not exist"
-          echo "Looking for: rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz"
-
-      - name: Extract Rust artifacts (Unix)
-        if: ${{ runner.os != 'Windows' }}
-        run: |
-          cd ./artifacts/
-          tar -xzf rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz
-          mv target ../
-          cd ..
-          rm -rf ./artifacts/
-
-      - name: Extract Rust artifacts (Windows)
-        if: ${{ runner.os == 'Windows' }}
-        run: |
-          cd ./artifacts/
-          Expand-Archive -Path rust-target-${{ inputs.target }}-${{ inputs.runner }}.zip -DestinationPath .
-          Move-Item target ../
-          cd ..
-          Remove-Item -Recurse -Force ./artifacts/
+      # Rust dependencies cached by Swatinem/rust-cache (no manual artifacts needed)
 
 
       # Cache rustup toolchain installation
