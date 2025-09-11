@@ -2,6 +2,7 @@ use std::{borrow::Cow, ops::Deref, sync::Arc};
 
 use async_stream::try_stream;
 use futures::{StreamExt, TryStreamExt};
+use icechunk::display::{PyRepr, dataclass_str};
 use icechunk::{Store, session::Session};
 use pyo3::{prelude::*, types::PyType};
 use tokio::sync::{Mutex, RwLock};
@@ -19,12 +20,83 @@ use crate::{
 #[derive(Clone)]
 pub struct PySession(pub Arc<RwLock<Session>>);
 
+impl PyRepr for PySession {
+    fn __str__(&self) -> String {
+        // Use dataclass_str because Session is a non-executable class
+        let session = self.0.blocking_read();
+        if session.read_only() {
+            dataclass_str(
+                "icechunk.Session",
+                &[
+                    ("read_only", &session.read_only().to_string()),
+                    ("snapshot_id", &session.snapshot_id().to_string()),
+                ],
+            )
+        } else {
+            let branch = session
+                .branch()
+                .map(|b| b.to_string())
+                .unwrap_or_else(|| "None".to_string());
+
+            dataclass_str(
+                "icechunk.Session",
+                &[
+                    ("read_only", &session.read_only().to_string()),
+                    ("snapshot_id", &session.snapshot_id().to_string()),
+                    ("branch", &branch),
+                    (
+                        "has_uncommitted_changes",
+                        &session.has_uncommitted_changes().to_string(),
+                    ),
+                ],
+            )
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        let session = self.0.blocking_read();
+        if session.read_only() {
+            dataclass_str(
+                "icechunk.Session",
+                &[
+                    ("read_only", &session.read_only().to_string()),
+                    ("snapshot_id", &session.snapshot_id().to_string()),
+                ],
+            )
+        } else {
+            let branch = session
+                .branch()
+                .map(|b| b.to_string())
+                .unwrap_or_else(|| "None".to_string());
+
+            dataclass_str(
+                "icechunk.Session",
+                &[
+                    ("read_only", &session.read_only().to_string()),
+                    ("snapshot_id", &session.snapshot_id().to_string()),
+                    ("branch", &branch),
+                    (
+                        "has_uncommitted_changes",
+                        &session.has_uncommitted_changes().to_string(),
+                    ),
+                ],
+            )
+        }
+    }
+}
+
 #[pymethods]
 /// Most functions in this class block, so they need to `allow_threads` so other
 /// python threads can make progress
 impl PySession {
-    fn __repr__(&self, py: Python<'_>) -> String {
-        py.allow_threads(move || self.0.blocking_read().to_string())
+    fn __str__(&self) -> String {
+        // Only needed because #[pymethods] cannot be used on trait impl blocks
+        <Self as PyRepr>::__str__(self)
+    }
+
+    fn __repr__(&self) -> String {
+        // Only needed because #[pymethods] cannot be used on trait impl blocks
+        <Self as PyRepr>::__repr__(self)
     }
 
     #[classmethod]

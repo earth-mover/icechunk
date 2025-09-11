@@ -1,3 +1,11 @@
+pub trait PyRepr {
+    fn __str__(&self) -> String;
+
+    fn __repr__(&self) -> String;
+
+    // TODO fn _repr_html_(&self) -> String;
+}
+
 pub fn dataclass_str(class_name: &str, attributes: &[(&str, &str)]) -> String {
     // Writes a python-like (non-executable) multi-line repr, given a class name and an (ordered) mapping of name, attribute pairs.
     //

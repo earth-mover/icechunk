@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, TimeDelta, Timelike, Utc};
-use icechunk::display::dataclass_repr;
+use icechunk::display::{PyRepr, dataclass_repr, dataclass_str};
 use icechunk::storage::RetriesSettings;
 use itertools::Itertools;
 use pyo3::exceptions::PyValueError;
@@ -668,8 +668,58 @@ pub struct PyCachingConfig {
     pub num_bytes_chunks: Option<u64>,
 }
 
+impl PyRepr for PyCachingConfig {
+    fn __str__(&self) -> String {
+        dataclass_str(
+            "icechunk.CachingConfig",
+            &[
+                ("num_snapshot_nodes", &format_option_to_string(self.num_snapshot_nodes)),
+                ("num_chunk_refs", &format_option_to_string(self.num_chunk_refs)),
+                (
+                    "num_transaction_changes",
+                    &format_option_to_string(self.num_transaction_changes),
+                ),
+                (
+                    "num_bytes_attributes",
+                    &format_option_to_string(self.num_bytes_attributes),
+                ),
+                ("num_bytes_chunks", &format_option_to_string(self.num_bytes_chunks)),
+            ],
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        dataclass_repr(
+            "icechunk.CachingConfig",
+            &[
+                ("num_snapshot_nodes", &format_option_to_string(self.num_snapshot_nodes)),
+                ("num_chunk_refs", &format_option_to_string(self.num_chunk_refs)),
+                (
+                    "num_transaction_changes",
+                    &format_option_to_string(self.num_transaction_changes),
+                ),
+                (
+                    "num_bytes_attributes",
+                    &format_option_to_string(self.num_bytes_attributes),
+                ),
+                ("num_bytes_chunks", &format_option_to_string(self.num_bytes_chunks)),
+            ],
+        )
+    }
+}
+
 #[pymethods]
 impl PyCachingConfig {
+    fn __str__(&self) -> String {
+        // Only needed because #[pymethods] cannot be used on trait impl blocks
+        <Self as PyRepr>::__str__(self)
+    }
+
+    fn __repr__(&self) -> String {
+        // Only needed because #[pymethods] cannot be used on trait impl blocks
+        <Self as PyRepr>::__repr__(self)
+    }
+
     #[staticmethod]
     /// Create a default `CachingConfig` instance
     fn default() -> Self {
@@ -692,25 +742,6 @@ impl PyCachingConfig {
             num_bytes_attributes,
             num_bytes_chunks,
         }
-    }
-
-    pub fn __repr__(&self) -> String {
-        dataclass_repr(
-            "icechunk.CachingConfig",
-            &[
-                ("num_snapshot_nodes", &format_option_to_string(self.num_snapshot_nodes)),
-                ("num_chunk_refs", &format_option_to_string(self.num_chunk_refs)),
-                (
-                    "num_transaction_changes",
-                    &format_option_to_string(self.num_transaction_changes),
-                ),
-                (
-                    "num_bytes_attributes",
-                    &format_option_to_string(self.num_bytes_attributes),
-                ),
-                ("num_bytes_chunks", &format_option_to_string(self.num_bytes_chunks)),
-            ],
-        )
     }
 }
 

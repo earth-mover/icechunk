@@ -6,7 +6,6 @@ use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use std::{
     cmp::min,
     collections::{HashMap, HashSet},
@@ -26,7 +25,6 @@ use crate::{
     change_set::{ArrayData, ChangeSet},
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
-    display::dataclass_str,
     error::ICError,
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
@@ -221,39 +219,6 @@ pub struct Session {
     default_commit_metadata: SnapshotProperties,
     // This is an optimization so that we needn't figure out the split sizes on every set.
     splits: HashMap<NodeId, ManifestSplits>,
-}
-
-impl fmt::Display for Session {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let repr = if self.read_only() {
-            dataclass_str(
-                "icechunk.Session",
-                &[
-                    ("read_only", &self.read_only().to_string()),
-                    ("snapshot_id", &self.snapshot_id().to_string()),
-                ],
-            )
-        } else {
-            let branch = self
-                .branch()
-                .map(|b| b.to_string())
-                .unwrap_or_else(|| "None".to_string());
-
-            dataclass_str(
-                "icechunk.Session",
-                &[
-                    ("read_only", &self.read_only().to_string()),
-                    ("snapshot_id", &self.snapshot_id().to_string()),
-                    ("branch", &branch),
-                    (
-                        "has_uncommitted_changes",
-                        &self.has_uncommitted_changes().to_string(),
-                    ),
-                ],
-            )
-        };
-        write!(f, "{}", repr)
-    }
 }
 
 impl Session {
