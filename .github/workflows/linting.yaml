@@ -70,10 +70,18 @@ jobs:
         run: just pre-commit-python
 
       # Python setup and linting
+      - name: Build Python wheel with sccache
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          target: x86_64
+          args: --release --out dist --find-interpreter
+          sccache: true
+
       - name: Setup Python linting environment
         working-directory: ./icechunk-python
         run: |
-          uv sync --extra test
+          uv sync --extra test --find-links dist
           uv add pre-commit
 
       - name: Run Python pre-commit linting

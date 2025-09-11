@@ -18,91 +18,55 @@ env:
   RUST_CHANNEL: '1.89.0'
 
 jobs:
-  # Essential builds for PR testing
-  build_ubuntu:
-    name: Build Ubuntu
-    uses: ./.github/workflows/shared-build.yaml
-    with:
-      rust_channel: '1.89.0'
-      target: x86_64
-      runner: ubuntu-latest
-
-  build_macos_arm:
-    name: Build macOS ARM
-    uses: ./.github/workflows/shared-build.yaml
-    with:
-      rust_channel: '1.89.0'
-      target: aarch64
-      runner: macos-14
-
-  build_windows:
-    name: Build Windows
-    uses: ./.github/workflows/shared-build.yaml
-    with:
-      rust_channel: '1.89.0'
-      target: x86_64
-      runner: windows-latest
-
-  # Platform-specific tests (start immediately after Rust builds)
-  test_ubuntu:
-    name: Test Ubuntu
-    needs: [build_ubuntu]
+  # Matrix-based Rust builds and tests
+  rust_tests:
+    name: Rust Tests (${{ matrix.platform.name }})
+    strategy:
+      matrix:
+        platform:
+          - name: Ubuntu
+            target: x86_64
+            runner: ubuntu-latest
+            include_docker: true
+          - name: macOS ARM
+            target: aarch64
+            runner: macos-14
+            include_docker: false
+          - name: Windows
+            target: x86_64
+            runner: windows-latest
+            include_docker: false
     uses: ./.github/workflows/rust-testing-safe.yaml
     with:
-      target: x86_64
-      runner: ubuntu-latest
-      include_docker_tests: true
+      target: ${{ matrix.platform.target }}
+      runner: ${{ matrix.platform.runner }}
+      include_docker_tests: ${{ matrix.platform.include_docker }}
+      rust_channel: '1.89.0'
 
-  test_macos_arm:
-    name: Test macOS ARM
-    needs: [build_macos_arm]
-    uses: ./.github/workflows/rust-testing-safe.yaml
-    with:
-      target: aarch64
-      runner: macos-14
-      include_docker_tests: false
-
-  test_windows:
-    name: Test Windows
-    needs: [build_windows]
-    uses: ./.github/workflows/rust-testing-safe.yaml
-    with:
-      target: x86_64
-      runner: windows-latest
-      include_docker_tests: false
-
-  # Python tests (builds wheels internally using Rust artifacts)
-  python_tests_ubuntu:
-    name: Python Tests Ubuntu
-    needs: [build_ubuntu]
+  # Matrix-based Python tests with sccache
+  python_tests:
+    name: Python Tests (${{ matrix.platform.name }})
+    strategy:
+      matrix:
+        platform:
+          - name: Ubuntu
+            target: x86_64
+            runner: ubuntu-latest
+          - name: macOS ARM
+            target: aarch64
+            runner: macos-14
+          - name: Windows
+            target: x86_64
+            runner: windows-latest
     uses: ./.github/workflows/python-testing.yaml
     with:
       rust_channel: '1.89.0'
-      target: x86_64
-      runner: ubuntu-latest
-
-  python_tests_macos_arm:
-    name: Python Tests macOS ARM
-    needs: [build_macos_arm]
-    uses: ./.github/workflows/python-testing.yaml
-    with:
-      rust_channel: '1.89.0'
-      target: aarch64
-      runner: macos-14
-
-  python_tests_windows:
-    name: Python Tests Windows
-    needs: [build_windows]
-    uses: ./.github/workflows/python-testing.yaml
-    with:
-      rust_channel: '1.89.0'
-      target: x86_64
-      runner: windows-latest
+      target: ${{ matrix.platform.target }}
+      runner: ${{ matrix.platform.runner }}
 
   # Integration tests with cloud credentials
   test_integration:
     name: Test Integration
-    needs: [build_ubuntu]
     if: ${{
       github.event_name == 'schedule'
       || github.event_name == 'workflow_dispatch'
@@ -116,16 +80,14 @@ jobs:
       target: x86_64
       runner: ubuntu-latest
 
-  # Code quality checks (reuse Ubuntu build for efficiency)
+  # Code quality checks (build wheels with sccache, run in parallel)
   linting:
     name: Code Quality
-    needs: [build_ubuntu]
     uses: ./.github/workflows/linting.yaml
 
-  # Dependency checks (runs independently, depends on Ubuntu build)
+  # Dependency checks (runs independently)
   dependency_check:
     name: Dependency Check
-    needs: [build_ubuntu]
     uses: ./.github/workflows/dependency-check.yaml
     with:
       rust_channel: '1.89.0'

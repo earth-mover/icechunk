@@ -69,16 +69,24 @@ jobs:
           cache-all-crates: true
           cache-on-failure: true
 
+      - name: Build Python wheel with sccache
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk-python
+          target: ${{ inputs.target }}
+          args: --release --out dist --find-interpreter
+          sccache: true
+
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
 
-      # Install and test using uv sync which will build the project
+      # Install and test using the pre-built wheel
       - name: Setup test environment
         working-directory: ./icechunk-python
         run: |
-          uv sync --extra test
+          uv sync --extra test --find-links dist
 
       - name: Run Python tests
         working-directory: ./icechunk-python
