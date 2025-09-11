@@ -51,15 +51,6 @@ jobs:
           args: --release --out dist --find-interpreter
           # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
 
-      - name: pre-commit lint
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          source .venv/bin/activate
-          pip install pre-commit
-          SKIP=just-rust pre-commit run --all-files
-
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
         uses: actions/cache/restore@v4

@@ -58,11 +58,6 @@ jobs:
         run: |
           just doctest
 
-      - name: Run actionlint pre-commit step
-        uses: pre-commit/action@v3.0.1
-        with:
-          extra_args: actionlint --all-files
-
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
@@ -73,3 +68,10 @@ jobs:
         working-directory: icechunk-python
         run: |
           uvx --with mypy --with zarr --with hypothesis --with xarray --with dask mypy python
+
+      - name: Run pre-commit checks (skip Rust)
+        uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: --all-files
+        env:
+          SKIP: rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci
