@@ -13,11 +13,6 @@ on:
         required: false
         type: boolean
         default: false
-      upload_python_wheels:
-        description: 'Whether to upload Python wheels'
-        required: false
-        type: boolean
-        default: false
       target:
         description: 'Build target architecture (x86_64, aarch64)'
         required: false
@@ -48,7 +43,7 @@ env:
 
 jobs:
   build:
-    name: Build (${{ inputs.target }})
+    name: Build & Test Setup
     runs-on: ${{ inputs.runner }}
     outputs:
       cache_hit: ${{ steps.rust_cache.outputs.cache-hit }}
@@ -56,23 +51,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # Docker infrastructure setup (only for Ubuntu with Docker tests)
-      - name: Cache Docker containers
-        if: ${{ inputs.include_docker_setup }}
-        id: docker_cache
-        uses: actions/cache@v4
-        with:
-          path: /tmp/docker_cache
-          key: docker-containers-${{ hashFiles('**/docker-compose.yml', '**/Dockerfile') }}-${{ github.run_id }}
-          restore-keys: |
-            docker-containers-${{ hashFiles('**/docker-compose.yml', '**/Dockerfile') }}-
-
-      - name: Stand up docker services
+      # Start Docker services early (non-blocking, only for Ubuntu)
+      - name: Start Docker services in background
         if: ${{ inputs.include_docker_setup }}
         run: |
           docker compose up -d
 
-      - name: Wait for services to be ready
+      # Install Rust while Docker starts up
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ inputs.rust_channel }}
+          rustup component add --toolchain ${{ inputs.rust_channel }} rustfmt rust-src clippy
+          rustup default ${{ inputs.rust_channel }}
+
+      - name: Cache Rust dependencies and build artifacts
+        id: rust_cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'macos' || 'ubuntu' }}-${{ inputs.rust_channel }}
+          cache-directories: |
+            ~/.cargo/bin/
+            target/
+          cache-all-crates: true
+          cache-on-failure: true
+
+      # Build Rust while Docker continues starting
+      - name: Build Rust project
+        run: |
+          cargo build --release --target-dir target
+
+      # Only wait for Docker after Rust build is done (for Ubuntu)
+      - name: Ensure Docker services are ready
         if: ${{ inputs.include_docker_setup }}
         run: |
           # Wait for MinIO
@@ -92,88 +101,15 @@ jobs:
               sleep 3
           done
 
-      - name: Save Docker state
-        if: ${{ inputs.include_docker_setup && steps.docker_cache.outputs.cache-hit != 'true' }}
+      - name: Compress Rust build artifacts
+        if: ${{ inputs.upload_rust_artifacts }}
         run: |
-          mkdir -p /tmp/docker_cache
-          docker save $(docker images -q) > /tmp/docker_cache/images.tar || true
-
-      # Rust build
-      - name: Install Rust toolchain
-        run: |
-          rustup update --no-self-update ${{ inputs.rust_channel }}
-          rustup component add --toolchain ${{ inputs.rust_channel }} rustfmt rust-src clippy
-          rustup default ${{ inputs.rust_channel }}
-
-      - name: Cache Rust dependencies and build artifacts
-        id: rust_cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ inputs.rust_channel }}-${{ inputs.target }}
-          cache-directories: |
-            ~/.cargo/bin/
-            target/
-          cache-all-crates: true
-          cache-on-failure: true
-
-      - name: Build Rust project
-        run: |
-          cargo build --release --target-dir target
+          tar -czf rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz target/
 
       - name: Upload Rust build artifacts
         if: ${{ inputs.upload_rust_artifacts }}
         uses: actions/upload-artifact@v4
         with:
           name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
-          path: |
-            target/release/
-            target/*/release/
-          retention-days: 1
-
-  python_wheels:
-    name: Python Wheels (${{ inputs.target }})
-    runs-on: ${{ inputs.runner }}
-    needs: [build]
-    if: ${{ inputs.upload_python_wheels }}
-    defaults:
-      run:
-        working-directory: ./icechunk-python
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Download Rust artifacts
-        if: ${{ inputs.upload_rust_artifacts }}
-        uses: actions/download-artifact@v4
-        with:
-          name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
-          path: target/
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-
-      - name: Cache Python dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pip
-            ~/.local/share/uv/cache
-          key: python-deps-${{ runner.os }}-${{ hashFiles('**/pyproject.toml', '**/requirements*.txt') }}
-          restore-keys: |
-            python-deps-${{ runner.os }}-
-
-      - name: Build Python wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: icechunk-python
-          target: ${{ inputs.target }}
-          args: --release --out dist --find-interpreter
-
-      - name: Upload Python wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-wheels-${{ inputs.target }}-${{ inputs.runner }}
-          path: icechunk-python/dist/
+          path: rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz
           retention-days: 1

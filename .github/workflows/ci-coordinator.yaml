@@ -18,6 +18,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  RUST_CHANNEL: '1.89.0'
+
 jobs:
   # Essential builds for PR testing
   build_ubuntu:
@@ -26,7 +29,6 @@ jobs:
     with:
       rust_channel: '1.89.0'
       upload_rust_artifacts: true
-      upload_python_wheels: true
       target: x86_64
       runner: ubuntu-latest
       include_docker_setup: true
@@ -37,7 +39,6 @@ jobs:
     with:
       rust_channel: '1.89.0'
       upload_rust_artifacts: true
-      upload_python_wheels: true
       target: aarch64
       runner: macos-14
       include_docker_setup: false
@@ -48,12 +49,11 @@ jobs:
     with:
       rust_channel: '1.89.0'
       upload_rust_artifacts: true
-      upload_python_wheels: true
       target: x86_64
       runner: windows-latest
       include_docker_setup: false
 
-  # Platform-specific tests
+  # Platform-specific tests (start immediately after Rust builds)
   test_ubuntu:
     name: Test Ubuntu
     needs: [build_ubuntu]
@@ -81,13 +81,33 @@ jobs:
       runner: windows-latest
       include_docker_tests: false
 
-  # Python tests (using Ubuntu build)
-  python_tests:
-    name: Python Tests
+  # Python tests (builds wheels internally using Rust artifacts)
+  python_tests_ubuntu:
+    name: Python Tests Ubuntu
     needs: [build_ubuntu]
     uses: ./.github/workflows/python-testing.yaml
     with:
+      rust_channel: '1.89.0'
       target: x86_64
+      runner: ubuntu-latest
+
+  python_tests_macos_arm:
+    name: Python Tests macOS ARM
+    needs: [build_macos_arm]
+    uses: ./.github/workflows/python-testing.yaml
+    with:
+      rust_channel: '1.89.0'
+      target: aarch64
+      runner: macos-14
+
+  python_tests_windows:
+    name: Python Tests Windows
+    needs: [build_windows]
+    uses: ./.github/workflows/python-testing.yaml
+    with:
+      rust_channel: '1.89.0'
+      target: x86_64
+      runner: windows-latest
 
   # Integration tests with cloud credentials
   test_integration:
@@ -102,6 +122,7 @@ jobs:
     uses: ./.github/workflows/rust-testing-integration.yaml
     secrets: inherit
     with:
+      rust_channel: '1.89.0'
       target: x86_64
       runner: ubuntu-latest
 
@@ -109,3 +130,13 @@ jobs:
   linting:
     name: Code Quality
     uses: ./.github/workflows/linting.yaml
+
+  # Dependency checks (runs independently, depends on Ubuntu build)
+  dependency_check:
+    name: Dependency Check
+    needs: [build_ubuntu]
+    uses: ./.github/workflows/dependency-check.yaml
+    with:
+      rust_channel: '1.89.0'
+      target: x86_64
+      runner: ubuntu-latest

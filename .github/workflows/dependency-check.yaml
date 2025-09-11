@@ -1,0 +1,75 @@
+name: Dependency Check
+
+on:
+  workflow_call:
+    inputs:
+      rust_channel:
+        description: 'Rust channel to use'
+        required: false
+        type: string
+        default: '1.89.0'
+      target:
+        description: 'Build target architecture (x86_64, aarch64)'
+        required: false
+        type: string
+        default: 'x86_64'
+      runner:
+        description: 'GitHub runner to use'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CI: 1
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
+  RUSTUP_MAX_RETRIES: 10
+  RUST_CHANNEL: ${{ inputs.rust_channel }}
+  CARGO_DENY_VERSION: '0.18.4'
+
+jobs:
+  check_dependencies:
+    name: Check Dependencies
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # Download pre-built Rust artifacts
+      - name: Download Rust artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
+          path: ./
+
+      - name: Extract Rust artifacts
+        run: |
+          tar -xzf rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz
+          rm rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz
+
+      - name: Install Just
+        run: sudo snap install --edge --classic just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'macos' || 'ubuntu' }}-${{ env.RUST_CHANNEL }}
+          cache-directories: |
+            ~/.cargo/bin/
+            target/
+          cache-all-crates: true
+          cache-on-failure: true
+
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
+
+      - name: Run dependency checks
+        run: just check-deps

@@ -57,7 +57,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: rust-artifacts-${{ inputs.target }}-${{ inputs.runner }}
-          path: target/
+          path: ./
+
+      - name: Extract Rust artifacts
+        run: |
+          tar -xzf rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz
+          rm rust-target-${{ inputs.target }}-${{ inputs.runner }}.tar.gz
 
       # Set up Docker infrastructure for MinIO tests
       - name: Stand up docker services

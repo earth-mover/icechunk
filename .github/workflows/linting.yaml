@@ -11,6 +11,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  RUST_CHANNEL: '1.89.0'
+
 jobs:
   lint:
     name: Code Quality
@@ -25,9 +28,9 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
-          rustup update --no-self-update 1.89.0
-          rustup component add --toolchain 1.89.0 rustfmt rust-src clippy
-          rustup default 1.89.0
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -38,7 +41,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: 1.89.0-lint
+          key: ${{ env.RUST_CHANNEL }}-lint
           cache-all-crates: true
           cache-on-failure: true
 
