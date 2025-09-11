@@ -28,6 +28,11 @@ repos:
     hooks:
       - id: codespell
 
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint
+
   - repo: local
     hooks:
       - id: rust-pre-commit-fast
