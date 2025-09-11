@@ -46,8 +46,6 @@ jobs:
     needs: [build-wheels]
     steps:
       - uses: actions/checkout@v5
-      - name: Install Just
-        run: sudo snap install --edge --classic just
       - name: Stand up MinIO
         run: |
           docker compose up -d minio
