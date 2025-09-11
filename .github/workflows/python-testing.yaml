@@ -65,7 +65,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ inputs.rust_channel }}-${{ inputs.target }}-${{ inputs.runner }}
+          shared-key: rust-${{ inputs.rust_channel }}
           cache-all-crates: true
           cache-on-failure: true
 
@@ -85,10 +85,14 @@ jobs:
       # Install and test
       - name: Setup test environment
         working-directory: ./icechunk-python
+        env:
+          UV_SYSTEM_PYTHON: 1
         run: |
           uv pip install icechunk[test] --find-links dist
 
       - name: Run Python tests
         working-directory: ./icechunk-python
+        env:
+          UV_SYSTEM_PYTHON: 1
         run: |
           uv run pytest python/

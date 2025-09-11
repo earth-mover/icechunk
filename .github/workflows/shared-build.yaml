@@ -64,7 +64,7 @@ jobs:
         id: rust_cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ inputs.rust_channel }}-${{ inputs.target }}-${{ inputs.runner }}
+          shared-key: rust-${{ inputs.rust_channel }}
           cache-all-crates: true
           cache-on-failure: true
 
