@@ -71,6 +71,18 @@ jobs:
           done
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
 
+      # Cache rustup toolchain installation
+      - name: Cache rustup toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: rustup-${{ runner.os }}-${{ inputs.rust_channel }}
+          restore-keys: |
+            rustup-${{ runner.os }}-
+
       - name: Install Rust toolchain
         run: |
           rustup update --no-self-update ${{ inputs.rust_channel }}
@@ -80,10 +92,6 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'macos' || 'ubuntu' }}-${{ inputs.rust_channel }}
-          cache-directories: |
-            ~/.cargo/bin/
-            target/
           cache-all-crates: true
           cache-on-failure: true
 

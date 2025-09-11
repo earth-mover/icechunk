@@ -23,11 +23,6 @@ on:
         required: false
         type: string
         default: 'ubuntu-latest'
-      include_docker_setup:
-        description: 'Whether to set up Docker infrastructure (only needed for Ubuntu)'
-        required: false
-        type: boolean
-        default: false
     outputs:
       rust_cache_hit:
         description: "Whether Rust cache was hit"
@@ -51,11 +46,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # Start Docker services early (non-blocking, only for Ubuntu)
-      - name: Start Docker services in background
-        if: ${{ inputs.include_docker_setup }}
-        run: |
-          docker compose up -d
+      # Cache rustup toolchain installation
+      - name: Cache rustup toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: rustup-${{ runner.os }}-${{ inputs.rust_channel }}
+          restore-keys: |
+            rustup-${{ runner.os }}-
 
       # Install Rust while Docker starts up
       - name: Install Rust toolchain
@@ -68,10 +69,6 @@ jobs:
         id: rust_cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'macos' || 'ubuntu' }}-${{ inputs.rust_channel }}
-          cache-directories: |
-            ~/.cargo/bin/
-            target/
           cache-all-crates: true
           cache-on-failure: true
 
@@ -79,27 +76,6 @@ jobs:
       - name: Build Rust project
         run: |
           cargo build --release --target-dir target
-
-      # Only wait for Docker after Rust build is done (for Ubuntu)
-      - name: Ensure Docker services are ready
-        if: ${{ inputs.include_docker_setup }}
-        run: |
-          # Wait for MinIO
-          for _ in {1..10}; do
-              if curl --silent --fail http://minio:9000/minio/health/live; then
-              break
-              fi
-              sleep 3
-          done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
-
-          # Wait for Azurite
-          for _ in {1..20}; do
-              if curl --silent --fail "http://azurite:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
-              break
-              fi
-              sleep 3
-          done
 
       - name: Compress Rust build artifacts
         if: ${{ inputs.upload_rust_artifacts }}

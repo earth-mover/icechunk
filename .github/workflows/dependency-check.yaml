@@ -52,23 +52,39 @@ jobs:
       - name: Install Just
         run: sudo snap install --edge --classic just
 
+      # Cache rustup toolchain installation
+      - name: Cache rustup toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: rustup-${{ runner.os }}-${{ inputs.rust_channel }}
+          restore-keys: |
+            rustup-${{ runner.os }}-
+
       - name: Install Rust toolchain
         run: |
-          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
-          rustup default ${{ env.RUST_CHANNEL }}
+          rustup update --no-self-update ${{ inputs.rust_channel }}
+          rustup component add --toolchain ${{ inputs.rust_channel }} rustfmt rust-src clippy
+          rustup default ${{ inputs.rust_channel }}
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'macos' || 'ubuntu' }}-${{ env.RUST_CHANNEL }}
-          cache-directories: |
-            ~/.cargo/bin/
-            target/
           cache-all-crates: true
           cache-on-failure: true
 
+      - name: Cache cargo-deny
+        uses: actions/cache@v4
+        id: cargo_deny_cache
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ env.CARGO_DENY_VERSION }}-${{ runner.os }}
+
       - name: Install cargo-deny
+        if: steps.cargo_deny_cache.outputs.cache-hit != 'true'
         run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
 
       - name: Run dependency checks

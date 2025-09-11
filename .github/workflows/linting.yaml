@@ -26,6 +26,18 @@ jobs:
       - name: Install Just
         run: sudo snap install --edge --classic just
 
+      # Cache rustup toolchain installation
+      - name: Cache rustup toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: rustup-${{ runner.os }}-${{ env.RUST_CHANNEL }}
+          restore-keys: |
+            rustup-${{ runner.os }}-
+
       - name: Install Rust toolchain
         run: |
           rustup update --no-self-update ${{ env.RUST_CHANNEL }}
@@ -41,7 +53,6 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ env.RUST_CHANNEL }}-lint
           cache-all-crates: true
           cache-on-failure: true
 

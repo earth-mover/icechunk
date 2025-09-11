@@ -31,7 +31,6 @@ jobs:
       upload_rust_artifacts: true
       target: x86_64
       runner: ubuntu-latest
-      include_docker_setup: true
 
   build_macos_arm:
     name: Build macOS ARM
@@ -41,7 +40,6 @@ jobs:
       upload_rust_artifacts: true
       target: aarch64
       runner: macos-14
-      include_docker_setup: false
 
   build_windows:
     name: Build Windows
@@ -51,7 +49,6 @@ jobs:
       upload_rust_artifacts: true
       target: x86_64
       runner: windows-latest
-      include_docker_setup: false
 
   # Platform-specific tests (start immediately after Rust builds)
   test_ubuntu:
