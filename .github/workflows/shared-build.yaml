@@ -28,10 +28,15 @@ on:
         required: false
         type: string
         default: 'ubuntu-latest'
+      include_docker_setup:
+        description: 'Whether to set up Docker infrastructure (only needed for Ubuntu)'
+        required: false
+        type: boolean
+        default: false
     outputs:
       rust_cache_hit:
         description: "Whether Rust cache was hit"
-        value: ${{ jobs.rust_build.outputs.cache_hit }}
+        value: ${{ jobs.build.outputs.cache_hit }}
 
 env:
   CARGO_INCREMENTAL: 0
@@ -42,17 +47,18 @@ env:
   RUSTUP_MAX_RETRIES: 10
 
 jobs:
-  setup_infrastructure:
-    name: Setup Infrastructure
-    runs-on: ubuntu-latest
+  build:
+    name: Build (${{ inputs.target }})
+    runs-on: ${{ inputs.runner }}
     outputs:
-      docker_cache_hit: ${{ steps.docker_cache.outputs.cache-hit }}
+      cache_hit: ${{ steps.rust_cache.outputs.cache-hit }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # Cache Docker containers to avoid repeated MinIO/Azurite setup
+      # Docker infrastructure setup (only for Ubuntu with Docker tests)
       - name: Cache Docker containers
+        if: ${{ inputs.include_docker_setup }}
         id: docker_cache
         uses: actions/cache@v4
         with:
@@ -62,10 +68,12 @@ jobs:
             docker-containers-${{ hashFiles('**/docker-compose.yml', '**/Dockerfile') }}-
 
       - name: Stand up docker services
+        if: ${{ inputs.include_docker_setup }}
         run: |
           docker compose up -d
 
       - name: Wait for services to be ready
+        if: ${{ inputs.include_docker_setup }}
         run: |
           # Wait for MinIO
           for _ in {1..10}; do
@@ -85,27 +93,18 @@ jobs:
           done
 
       - name: Save Docker state
-        if: steps.docker_cache.outputs.cache-hit != 'true'
+        if: ${{ inputs.include_docker_setup && steps.docker_cache.outputs.cache-hit != 'true' }}
         run: |
           mkdir -p /tmp/docker_cache
           docker save $(docker images -q) > /tmp/docker_cache/images.tar || true
 
-  rust_build:
-    name: Rust Build
-    runs-on: ${{ inputs.runner }}
-    outputs:
-      cache_hit: ${{ steps.rust_cache.outputs.cache-hit }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
+      # Rust build
       - name: Install Rust toolchain
         run: |
           rustup update --no-self-update ${{ inputs.rust_channel }}
           rustup component add --toolchain ${{ inputs.rust_channel }} rustfmt rust-src clippy
           rustup default ${{ inputs.rust_channel }}
 
-      # Primary Rust caching using Swatinem - optimized for Rust projects
       - name: Cache Rust dependencies and build artifacts
         id: rust_cache
         uses: Swatinem/rust-cache@v2
@@ -132,9 +131,9 @@ jobs:
           retention-days: 1
 
   python_wheels:
-    name: Python Wheels Build
+    name: Python Wheels (${{ inputs.target }})
     runs-on: ${{ inputs.runner }}
-    needs: [rust_build]
+    needs: [build]
     if: ${{ inputs.upload_python_wheels }}
     defaults:
       run:
@@ -155,7 +154,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      # Cache Python dependencies
       - name: Cache Python dependencies
         uses: actions/cache@v4
         with:

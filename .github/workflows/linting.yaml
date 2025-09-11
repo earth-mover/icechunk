@@ -2,11 +2,6 @@ name: Linting & Code Quality
 
 on:
   workflow_call:
-  push:
-    branches:
-      - main
-  pull_request:
-    types: [opened, reopened, synchronize, labeled]
   workflow_dispatch:
 
 concurrency:
@@ -17,16 +12,14 @@ permissions:
   contents: read
 
 jobs:
-  rust_lint:
-    name: Rust Lint
+  lint:
+    name: Code Quality
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./icechunk
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      # Install system dependencies
       - name: Install Just
         run: sudo snap install --edge --classic just
 
@@ -36,6 +29,12 @@ jobs:
           rustup component add --toolchain 1.89.0 rustfmt rust-src clippy
           rustup default 1.89.0
 
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      # Cache dependencies
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -43,55 +42,33 @@ jobs:
           cache-all-crates: true
           cache-on-failure: true
 
-      - name: Run Rust linting and formatting checks
-        run: just pre-commit-python
-
-  python_lint:
-    name: Python Lint
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./icechunk-python
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-
-      # Cache Python dependencies
-      - name: Cache Python linting dependencies
+      - name: Cache Python dependencies
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/pip
             ~/.cache/pre-commit
+            ~/.cache/codespell
+            ~/.cache/actionlint
             icechunk-python/.venv
-          key: python-lint-${{ runner.os }}-${{ hashFiles('**/pyproject.toml', '**/.pre-commit-config.yaml') }}
+          key: python-lint-${{ runner.os }}-${{ hashFiles('**/pyproject.toml', '**/.pre-commit-config.yaml', '**/.codespellrc') }}
           restore-keys: |
             python-lint-${{ runner.os }}-
 
-      - name: Install Rust toolchain (for minimal build)
-        run: |
-          rustup update --no-self-update 1.89.0
-          rustup default 1.89.0
+      # Rust linting
+      - name: Run Rust linting and formatting checks
+        working-directory: ./icechunk
+        run: just pre-commit-python
 
-      - name: Cache Rust dependencies (minimal)
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: 1.89.0-python-lint
-          cache-all-crates: true
-          cache-on-failure: true
-
-      - name: Build minimal wheel for linting
+      # Python setup and linting
+      - name: Build minimal wheel for Python linting
         uses: PyO3/maturin-action@v1
         with:
           working-directory: icechunk-python
           args: --release --out dist --find-interpreter
 
-      - name: Setup linting environment
+      - name: Setup Python linting environment
+        working-directory: ./icechunk-python
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
@@ -99,101 +76,26 @@ jobs:
           pip install icechunk['test'] --find-links dist --force-reinstall --pre
           pip install pre-commit
 
-      - name: Run pre-commit linting
+      - name: Run Python pre-commit linting
+        working-directory: ./icechunk-python
         run: |
           source .venv/bin/activate
           SKIP=just-rust pre-commit run --all-files
 
-  mypy:
-    name: Type Check
-    runs-on: ubuntu-latest
-    defaults:
-      run:
+      - name: Run mypy type checking
         working-directory: ./icechunk-python
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-
-      # Cache Python dependencies
-      - name: Cache Python type checking dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pip
-            icechunk-python/.venv
-          key: python-mypy-${{ runner.os }}-${{ hashFiles('**/pyproject.toml') }}
-          restore-keys: |
-            python-mypy-${{ runner.os }}-
-
-      - name: Install Rust toolchain (for minimal build)
-        run: |
-          rustup update --no-self-update 1.89.0
-          rustup default 1.89.0
-
-      - name: Cache Rust dependencies (minimal)
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: 1.89.0-python-mypy
-          cache-all-crates: true
-          cache-on-failure: true
-
-      - name: Build minimal wheel for type checking
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: icechunk-python
-          args: --release --out dist --find-interpreter
-
-      - name: Setup type checking environment
-        run: |
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install --upgrade pip
-          pip install icechunk['test'] --find-links dist --force-reinstall --pre
-
-      - name: Run mypy
         run: |
           source .venv/bin/activate
           mypy python
 
-  codespell:
-    name: Spell Check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Cache codespell
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/codespell
-          key: codespell-${{ runner.os }}-${{ hashFiles('**/.codespellrc') }}
-          restore-keys: |
-            codespell-${{ runner.os }}-
-
+      # Spell checking
       - name: Annotate locations with typos
         uses: codespell-project/codespell-problem-matcher@v1.2.0
 
-      - name: Codespell
+      - name: Run codespell
         uses: codespell-project/actions-codespell@v2
 
-  actionlint:
-    name: Actions Lint
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Cache actionlint
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/actionlint
-          key: actionlint-${{ runner.os }}
-
+      # GitHub Actions linting
       - name: Run actionlint
         uses: rhysd/actionlint@v1.7.7
         with:
