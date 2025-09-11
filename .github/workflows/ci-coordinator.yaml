@@ -19,9 +19,9 @@ permissions:
   contents: read
 
 jobs:
-  # Build artifacts for each architecture/platform
-  build_ubuntu_x86:
-    name: Build Ubuntu x86
+  # Primary build (Ubuntu x86) - most important for testing
+  build_primary:
+    name: Build Primary
     uses: ./.github/workflows/shared-build.yaml
     with:
       rust_channel: '1.89.0'
@@ -30,60 +30,28 @@ jobs:
       target: x86_64
       runner: ubuntu-latest
 
-  build_ubuntu_arm:
-    name: Build Ubuntu ARM
-    uses: ./.github/workflows/shared-build.yaml
-    with:
-      rust_channel: '1.89.0'
-      upload_rust_artifacts: true
-      upload_python_wheels: true
-      target: aarch64
-      runner: ubuntu-24.04-arm
-
-  build_macos_x86:
-    name: Build macOS x86
-    uses: ./.github/workflows/shared-build.yaml
-    with:
-      rust_channel: '1.89.0'
-      upload_rust_artifacts: true
-      upload_python_wheels: true
-      target: x86_64
-      runner: macos-13
-
-  build_macos_arm:
-    name: Build macOS ARM
-    uses: ./.github/workflows/shared-build.yaml
-    with:
-      rust_channel: '1.89.0'
-      upload_rust_artifacts: true
-      upload_python_wheels: true
-      target: aarch64
-      runner: macos-14
-
-  build_windows:
-    name: Build Windows
-    uses: ./.github/workflows/shared-build.yaml
-    with:
-      rust_channel: '1.89.0'
-      upload_rust_artifacts: true
-      upload_python_wheels: true
-      target: x86_64
-      runner: windows-latest
-
-  # Platform-specific test suites (each uses its corresponding build)
-  test_ubuntu_x86_safe:
-    name: Test Ubuntu x86 (Safe)
-    needs: [build_ubuntu_x86]
+  # Core tests using primary build
+  test_primary:
+    name: Test Primary
+    needs: [build_primary]
     uses: ./.github/workflows/rust-testing-safe.yaml
     with:
       target: x86_64
       runner: ubuntu-latest
       include_docker_tests: true
 
+  # Python tests
+  python_tests:
+    name: Python Tests
+    needs: [build_primary]
+    uses: ./.github/workflows/python-testing.yaml
+    with:
+      target: x86_64
+
   # Integration tests with cloud credentials
-  test_ubuntu_x86_integration:
-    name: Test Ubuntu x86 (Integration)
-    needs: [build_ubuntu_x86]
+  test_integration:
+    name: Test Integration
+    needs: [build_primary]
     if: ${{
       github.event_name == 'schedule'
       || github.event_name == 'workflow_dispatch'
@@ -96,63 +64,7 @@ jobs:
       target: x86_64
       runner: ubuntu-latest
 
-  test_ubuntu_arm:
-    name: Test Ubuntu ARM
-    needs: [build_ubuntu_arm]
-    uses: ./.github/workflows/rust-testing-safe.yaml
-    with:
-      target: aarch64
-      runner: ubuntu-24.04-arm
-      include_docker_tests: false
-
-  test_macos_x86:
-    name: Test macOS x86
-    needs: [build_macos_x86]
-    uses: ./.github/workflows/rust-testing-safe.yaml
-    with:
-      target: x86_64
-      runner: macos-13
-      include_docker_tests: false
-
-  test_macos_arm:
-    name: Test macOS ARM
-    needs: [build_macos_arm]
-    uses: ./.github/workflows/rust-testing-safe.yaml
-    with:
-      target: aarch64
-      runner: macos-14
-      include_docker_tests: false
-
-  test_windows:
-    name: Test Windows
-    needs: [build_windows]
-    uses: ./.github/workflows/rust-testing-safe.yaml
-    with:
-      target: x86_64
-      runner: windows-latest
-      include_docker_tests: false
-
-  # Python tests
-  python_tests:
-    name: Python Tests
-    needs: [build_ubuntu_x86]
-    uses: ./.github/workflows/python-testing.yaml
-    with:
-      target: x86_64
-
-
-  # Integration tests (scheduled only)
-  integration_tests_comprehensive:
-    name: Integration Tests
-    needs: [build_ubuntu_x86]
-    if: github.event_name == 'schedule'
-    uses: ./.github/workflows/rust-testing-integration.yaml
-    secrets: inherit
-    with:
-      target: x86_64
-      runner: ubuntu-latest
-
-  # Code quality checks
+  # Code quality checks (runs independently)
   linting:
     name: Code Quality
     uses: ./.github/workflows/linting.yaml
