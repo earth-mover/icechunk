@@ -19,9 +19,9 @@ permissions:
   contents: read
 
 jobs:
-  # Primary build (Ubuntu x86) - most important for testing
-  build_primary:
-    name: Build Primary
+  # Essential builds for PR testing
+  build_ubuntu:
+    name: Build Ubuntu
     uses: ./.github/workflows/shared-build.yaml
     with:
       rust_channel: '1.89.0'
@@ -30,20 +30,58 @@ jobs:
       target: x86_64
       runner: ubuntu-latest
 
-  # Core tests using primary build
-  test_primary:
-    name: Test Primary
-    needs: [build_primary]
+  build_macos_arm:
+    name: Build macOS ARM
+    uses: ./.github/workflows/shared-build.yaml
+    with:
+      rust_channel: '1.89.0'
+      upload_rust_artifacts: true
+      upload_python_wheels: true
+      target: aarch64
+      runner: macos-14
+
+  build_windows:
+    name: Build Windows
+    uses: ./.github/workflows/shared-build.yaml
+    with:
+      rust_channel: '1.89.0'
+      upload_rust_artifacts: true
+      upload_python_wheels: true
+      target: x86_64
+      runner: windows-latest
+
+  # Platform-specific tests
+  test_ubuntu:
+    name: Test Ubuntu
+    needs: [build_ubuntu]
     uses: ./.github/workflows/rust-testing-safe.yaml
     with:
       target: x86_64
       runner: ubuntu-latest
       include_docker_tests: true
 
-  # Python tests
+  test_macos_arm:
+    name: Test macOS ARM
+    needs: [build_macos_arm]
+    uses: ./.github/workflows/rust-testing-safe.yaml
+    with:
+      target: aarch64
+      runner: macos-14
+      include_docker_tests: false
+
+  test_windows:
+    name: Test Windows
+    needs: [build_windows]
+    uses: ./.github/workflows/rust-testing-safe.yaml
+    with:
+      target: x86_64
+      runner: windows-latest
+      include_docker_tests: false
+
+  # Python tests (using Ubuntu build)
   python_tests:
     name: Python Tests
-    needs: [build_primary]
+    needs: [build_ubuntu]
     uses: ./.github/workflows/python-testing.yaml
     with:
       target: x86_64
@@ -51,7 +89,7 @@ jobs:
   # Integration tests with cloud credentials
   test_integration:
     name: Test Integration
-    needs: [build_primary]
+    needs: [build_ubuntu]
     if: ${{
       github.event_name == 'schedule'
       || github.event_name == 'workflow_dispatch'
