@@ -19,10 +19,6 @@ on:
         type: string
         default: 'ubuntu-latest'
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.target }}-${{ inputs.runner }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
 

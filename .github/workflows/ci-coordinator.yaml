@@ -11,10 +11,6 @@ on:
     # Three times a day for integration tests
     - cron: '33 3,10,15 * * *'
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
@@ -106,7 +102,7 @@ jobs:
   # Python tests (builds wheels internally using Rust artifacts)
   python_tests_ubuntu:
     name: Python Tests Ubuntu
-    needs: [test_ubuntu]
+    needs: [build_ubuntu, setup_docker]
     uses: ./.github/workflows/python-testing.yaml
     with:
       rust_channel: '1.89.0'
