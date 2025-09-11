@@ -62,3 +62,14 @@ jobs:
         uses: pre-commit/action@v3.0.1
         with:
           extra_args: actionlint --all-files
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Python mypy type checking
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          uvx --with mypy --with zarr --with hypothesis --with xarray --with dask mypy python
