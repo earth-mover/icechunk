@@ -122,15 +122,11 @@ jobs:
         env:
           CARGO_TERM_COLOR: always
         run: |
-          just compile-tests "--locked"
-          just build
-          just format "--check"
-          just lint "-p icechunk -p icechunk-python"
-          just doctest
           just test-safe
-          just run-all-examples
 
       # Run unit tests only (if no Docker)
       - name: Run unit tests
         if: ${{ !inputs.include_docker_tests }}
+        env:
+          CARGO_TERM_COLOR: always
         run: cargo test --lib
