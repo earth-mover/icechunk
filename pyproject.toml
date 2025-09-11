@@ -14,7 +14,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
 ]
-readme = "../README.md"
+readme = "README.md"
 license = { file = "LICENSE" }
 dynamic = ["version"]
 authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
@@ -116,7 +116,9 @@ dev = [
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "icechunk._icechunk_python"
-python-source = "python"
+python-source = "icechunk-python/python"
+manifest-path = "icechunk-python/Cargo.toml"
+profile = "release"
 exclude = ["README.md"]
 
 [tool.uv]
@@ -124,16 +126,17 @@ exclude = ["README.md"]
 cache-keys = [
   {file = "pyproject.toml"},
   {file = "Cargo.toml"},
-  {file = "src/**/*.rs"},
-  {file = "../icechunk/Cargo.toml"},
-  {file = "../icechunk/src/**/*.rs"},
+  {file = "icechunk-python/Cargo.toml"},
+  {file = "icechunk-python/src/**/*.rs"},
+  {file = "icechunk/Cargo.toml"},
+  {file = "icechunk/src/**/*.rs"},
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 minversion = "7"
-testpaths = ["tests", "integration_tests"]
+testpaths = ["icechunk-python/tests", "icechunk-python/integration_tests"]
 log_cli_level = "INFO"
 xfail_strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers"]
