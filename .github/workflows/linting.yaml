@@ -41,10 +41,9 @@ jobs:
           rustup default ${{ env.RUST_CHANNEL }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          python-version: '3.11'
 
       # Cache dependencies
       - name: Cache Rust dependencies
@@ -80,8 +79,7 @@ jobs:
       - name: Setup Python linting environment
         working-directory: ./icechunk-python
         run: |
-          uv venv
-          uv pip install icechunk[test] --find-links dist --force-reinstall --pre
+          uv pip install icechunk[test] --find-links dist
           uv pip install pre-commit
 
       - name: Run Python pre-commit linting
