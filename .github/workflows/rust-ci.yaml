@@ -114,7 +114,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
 
-      - name: Check
+      - name: Run tests with Docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
@@ -133,7 +133,8 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          just pre-commit-ci
+          # Run tests against local storage services (minio/azurite)
+          just test
 
       - name: Run unit tests only
         if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
