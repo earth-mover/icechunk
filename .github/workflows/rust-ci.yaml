@@ -110,9 +110,6 @@ jobs:
           # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
 
-      - name: Install cargo-deny
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: cargo install --locked cargo-deny --version ${{ env.CARGO_DENY_VERSION }}
 
       - name: Run tests with Docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
