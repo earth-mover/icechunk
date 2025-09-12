@@ -183,3 +183,20 @@ jobs:
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
+
+  nightly:
+    name: Upload nightly wheels
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: [linux, musllinux, windows, macos, sdist]
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload nightly wheels
+        uses: scientific-python/upload-nightly-action@82396a2ed4269ba06c6b2988bb4fd7672769da06
+        with:
+          artifacts_path: dist
+          anaconda_nightly_upload_token: ${{ secrets.ANACONDA_ORG_UPLOAD_TOKEN }}
