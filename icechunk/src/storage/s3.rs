@@ -302,7 +302,7 @@ impl S3Storage {
         }
 
         if let Some(klass) = settings.storage_class() {
-            let klass = klass.as_str().into();
+            let klass = klass.clone();
             req = req.storage_class(klass);
         }
 

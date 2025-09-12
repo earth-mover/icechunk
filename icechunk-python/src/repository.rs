@@ -42,7 +42,7 @@ use crate::{
         format_option_to_string,
     },
     errors::PyIcechunkStoreError,
-    export::{PyAllHistory, PyRefsHistory, PySingleSnapshot, PyVersionSelection},
+    export::{PyAllHistory, PyRefsHistory, PySingleSnapshot},
     impl_pickle,
     session::PySession,
     streams::PyAsyncGenerator,
@@ -774,7 +774,11 @@ impl PyRepository {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let repo = self.0.write().await;
                 let destination = destination.0;
-                icechunk_export::export(&repo, destination, &versions).await.unwrap(); //FIXME:unwrap
+                let progress = Arc::new(icechunk_export::ProgressBars::default());
+                // FIXME: configuration
+                icechunk_export::export(&repo, destination, &versions, progress, 100)
+                    .await
+                    .unwrap(); //FIXME:unwrap
                 Ok(())
             })
         })

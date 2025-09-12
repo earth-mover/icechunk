@@ -1789,6 +1789,7 @@ dependencies = [
 name = "icechunk-export"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "chrono",
  "err-into",
@@ -1796,7 +1797,9 @@ dependencies = [
  "icechunk",
  "indicatif",
  "itertools",
+ "thiserror 2.0.16",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3821,6 +3824,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

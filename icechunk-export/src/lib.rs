@@ -1,309 +1,135 @@
 use std::{
     collections::HashSet,
-    fs::File,
-    hash::Hash,
-    io::{BufRead as _, BufReader},
-    path::Path,
-    sync::{Arc, atomic::AtomicU64},
-    time::{Duration, Instant},
+    sync::{Arc, atomic::AtomicUsize},
 };
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
-use err_into::ErrorInto;
-use futures::{
-    SinkExt,
-    stream::{self, FuturesUnordered},
-};
 use icechunk::{
-    Repository, Storage, StorageError,
+    Repository, Storage,
     asset_manager::AssetManager,
-    config::S3Options,
+    error::ICError,
     format::{
-        ChunkId, ManifestId, SnapshotId, manifest::ChunkPayload, repo_info::RepoInfo,
+        ChunkId, IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult,
+        ManifestId, SnapshotId,
+        format_constants::SpecVersionBin,
+        manifest::ChunkPayload,
+        repo_info::{RepoInfo, UpdateType},
+        snapshot::Snapshot,
     },
-    new_s3_storage,
     ops::gc::{GCConfig, find_retained},
-    repository::{RepositoryError, RepositoryResult},
-    storage::Settings,
+    refs::Ref,
+    repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
+    storage::{Settings, StorageErrorKind},
 };
-use indicatif::ProgressBar;
+use indicatif::{MultiProgress, ProgressBar};
 use itertools::Itertools as _;
 use tokio::{
     io::AsyncReadExt as _,
     sync::{
         OwnedSemaphorePermit, Semaphore,
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, UnboundedReceiver, UnboundedSender},
     },
 };
+use tokio_util::task::TaskTracker;
 
-// fn parse_file_lines<P: AsRef<Path>>(
-//     path: P,
-// ) -> impl Iterator<Item = Result<(u64, String), Box<dyn std::error::Error>>> {
-//     let file = File::open(path).expect("Failed to open file");
-//     let reader = BufReader::new(file);
-//
-//     reader.lines().map(|line_result| {
-//         let line = line_result?;
-//         let parts: Vec<&str> = line.splitn(2, ' ').collect();
-//
-//         if parts.len() != 2 {
-//             return Err(format!("Invalid line format: {}", line).into());
-//         }
-//
-//         let number = parts[0].parse::<u64>()?;
-//         let text = parts[1].to_string();
-//
-//         Ok((number, text))
-//     })
-// }
-
-// pub async fn test_saturation(
-//     max_concurrent: usize,
-//     copy_chunks: usize,
-//     chunks_file_path: &Path,
-// ) -> Result<(), Box<dyn std::error::Error>> {
-//     let (tx, rx) = mpsc::channel(max_concurrent);
-//     let chunks = parse_file_lines(chunks_file_path).take(copy_chunks);
-//     let handle = tokio::spawn(copier(rx, max_concurrent));
-//     for task in chunks {
-//         match task {
-//             Ok(task) => tx.send(task).await?,
-//             Err(_) => panic!("Error reading file"),
-//         }
-//     }
-//     drop(tx);
-//     //tx.send((0, "".to_string())).await?;
-//
-//     handle.await??;
-//
-//     Ok(())
-// }
-
-// async fn copier(
-//     mut rx: Receiver<(u64, String)>,
-//     max_concurrent: usize,
-// ) -> Result<(), RepositoryError> {
-//     let config = S3Options {
-//         region: Some("us-east-1".to_string()),
-//         endpoint_url: None,
-//         anonymous: false,
-//         allow_http: false,
-//         force_path_style: false,
-//         network_stream_timeout_seconds: None,
-//     };
-//     let source_bucket = "icechunk-public-data".to_string();
-//     let source = new_s3_storage(
-//         config.clone(),
-//         source_bucket,
-//         Some("v1/era5_weatherbench2".to_string()),
-//         None,
-//     )?;
-//
-//     let destination_bucket = "icechunk-test".to_string();
-//     let destination = new_s3_storage(
-//         config.clone(),
-//         destination_bucket,
-//         Some("test-net-saturation".to_string()),
-//         None,
-//     )?;
-//
-//     let semaphore = Arc::new(Semaphore::new(max_concurrent));
-//     let settings = Arc::new(source.default_settings());
-//
-//     let (done_sender, mut done_receiver) = mpsc::channel(10_000);
-//
-//     let done_task = tokio::spawn(async move {
-//         let mut bytes_copied = 0u64;
-//         let mut chunks_copied = 0u64;
-//         let start_time = Instant::now();
-//
-//         while let Some(size) = done_receiver.recv().await {
-//             bytes_copied += size;
-//             chunks_copied += 1;
-//             if start_time.elapsed().as_secs() > 0 {
-//                 let speed = bytes_copied as f64
-//                     / 1_000_000.0
-//                     / start_time.elapsed().as_secs() as f64;
-//                 println!(
-//                     "Copied {chunks_copied} chunks. Average speed: {speed:.2} MB/sec"
-//                 );
-//             }
-//         }
-//         bytes_copied
-//     });
-//
-//     while let Some((size, id)) = rx.recv().await {
-//         let guard = semaphore.clone().acquire_owned().await?;
-//         tokio::spawn(copy_chunk(
-//             size,
-//             id,
-//             source.clone(),
-//             destination.clone(),
-//             settings.clone(),
-//             done_sender.clone(),
-//             guard,
-//         ));
-//     }
-//
-//     drop(done_sender);
-//     done_task.await?;
-//
-//     Ok(())
-// }
-
-// async fn copy_chunk(
-//     size: u64,
-//     id: String,
-//     source: Arc<dyn Storage>,
-//     destination: Arc<dyn Storage>,
-//     settings: Arc<Settings>,
-//     done: Sender<u64>,
-//     _semaphore: OwnedSemaphorePermit,
-// ) -> Result<(), StorageError> {
-//     let key = format!("chunks/{id}");
-//     //println!("Copying {key}");
-//     let (mut reader, _) =
-//         source.get_object(settings.as_ref(), key.as_str(), None).await?;
-//
-//     let mut buffer = Vec::with_capacity(1024 * 1024);
-//     reader.read_to_end(&mut buffer).await?;
-//     let bytes = Bytes::from_owner(buffer);
-//
-//     destination
-//         .put_object(
-//             settings.as_ref(),
-//             key.as_str(),
-//             bytes,
-//             None,
-//             Default::default(),
-//             None,
-//         )
-//         .await?;
-//     //println!("Done {key}");
-//     done.send(size).await.unwrap();
-//     Ok(())
-// }
-
+#[derive(Debug, PartialEq, Eq)]
 pub enum VersionSelection {
     SingleSnapshot(SnapshotId),
     AllHistory,
     // TODO: can we do refs here instead of String?
-    RefsHistory { branches: Vec<String>, tags: Vec<String> },
+    RefsHistory {
+        branches: Vec<String>,
+        tags: Vec<String>,
+        main_points_to: Option<SnapshotId>,
+    },
 }
 
-pub struct ExportConfig<'a> {
-    pub source: &'a Repository,
-    pub destination: Arc<dyn Storage>,
-    pub versions: VersionSelection,
-    pub update_config: bool,
+fn all_history_as_refs_history(repo: &RepoInfo) -> IcechunkResult<VersionSelection> {
+    let branches = repo.branch_names()?.map(|s| s.to_string());
+    let tags = repo.tag_names()?.map(|s| s.to_string());
+    Ok(VersionSelection::RefsHistory {
+        branches: branches.collect(),
+        tags: tags.collect(),
+        main_points_to: None,
+    })
+}
+
+fn collect_requested_snapshots(
+    repo: &RepoInfo,
+    branches: &Vec<String>,
+    tags: &Vec<String>,
+) -> IcechunkResult<HashSet<SnapshotId>> {
+    let branch_roots = branches
+        .iter()
+        .map(|name| repo.resolve_branch(name))
+        .map_ok(|snap_id| repo.ancestry(&snap_id));
+    let tag_roots = tags
+        .iter()
+        .map(|name| repo.resolve_tag(name))
+        .map_ok(|snap_id| repo.ancestry(&snap_id));
+    let mut res = HashSet::new();
+    for it in branch_roots.chain(tag_roots) {
+        for snap_id in it?? {
+            if !res.insert(snap_id?.id) {
+                // we don'n need to continue because
+                // we have already seen this snapshot and all its ancestry
+                break;
+            }
+        }
+    }
+    Ok(res)
 }
 
 fn select_snapshots(
     repo: &RepoInfo,
     versions: &VersionSelection,
-) -> RepositoryResult<HashSet<SnapshotId>> {
+) -> ExportResult<HashSet<SnapshotId>> {
     match versions {
         VersionSelection::SingleSnapshot(snapshot_id) => {
             Ok(HashSet::from([snapshot_id.clone()]))
         }
         VersionSelection::AllHistory => {
-            let branches = repo.branch_names()?.map(|s| s.to_string());
-            let tags = repo.tag_names()?.map(|s| s.to_string());
-            let selection = VersionSelection::RefsHistory {
-                branches: branches.collect(),
-                tags: tags.collect(),
-            };
+            let selection = all_history_as_refs_history(repo)
+                .map_err(|e| ExportError::from(ExportErrorKind::FormatError(e.kind)))?;
             select_snapshots(repo, &selection)
         }
-        VersionSelection::RefsHistory { branches, tags } => {
-            let branch_roots = branches
-                .iter()
-                .map(|name| repo.resolve_branch(name))
-                .map_ok(|snap_id| repo.ancestry(&snap_id));
-            let tag_roots = tags
-                .iter()
-                .map(|name| repo.resolve_tag(name))
-                .map_ok(|snap_id| repo.ancestry(&snap_id));
-            let mut res = HashSet::new();
-            for it in branch_roots.chain(tag_roots) {
-                for snap_id in it?? {
-                    if !res.insert(snap_id?.id) {
-                        // we don'n need to continue because
-                        // we have already seen this snapshot and all its ancestry
-                        break;
-                    }
-                }
+        VersionSelection::RefsHistory { branches, tags, main_points_to } => {
+            if main_points_to.is_none()
+                && !branches.contains(&Ref::DEFAULT_BRANCH.to_string())
+            {
+                return Err(ExportErrorKind::InvalidVersionSelection(
+                    "target repository needs a `main` branch, if `main_points_to` is not specified, `main` must be included in the exported branches".to_string(),
+                ).into());
+            }
+            let res = collect_requested_snapshots(repo, branches, tags)
+                .map_err(|e| ExportError::from(ExportErrorKind::FormatError(e.kind)))?;
+            if let Some(sid) = main_points_to
+                && !res.contains(sid)
+            {
+                return Err(ExportErrorKind::InvalidVersionSelection(
+                    "target repository needs a valid `main` branch, the snapshot in `main_points_to` is not exported by this version selection".to_string(),
+                ).into());
             }
             Ok(res)
         }
     }
 }
 
-enum ObjectType {
+pub enum ObjectType {
     Chunk,
     Manifest,
     TransactionLog,
     Snapshot,
 }
-//
-// struct CopyMetadata {
-//     object_type: ObjectType,
-//     object_size: u64,
-// }
 
 enum Operation {
-    Copy { from: String, to: String, object_type: ObjectType, object_size: Option<u64> },
+    Copy { path: String, object_type: ObjectType, object_size: Option<u64> },
 }
 
-// async fn process_snap_ids(
-//     mut rec: Receiver<SnapshotId>,
-//     mut sender: Sender<ManifestId>,
-//     asset_manager: Arc<AssetManager>,
-//     known_manifests: &HashSet<ManifestId>,
-//     max_snapshots_in_memory: usize,
-// ) {
-//     let semaphore = Arc::new(Semaphore::new(max_snapshots_in_memory));
-//     while let Some(sid) = rec.recv().await {
-//         let guard = semaphore.acquire().await.unwrap();
-//         let snap = asset_manager.fetch_snapshot(&sid).await.unwrap();
-//         for mfile in snap.manifest_files() {
-//             if !known_manifests.contains(&mfile.id) {
-//                 sender.send(mfile.id).await;
-//             }
-//         }
-//     }
-// }
-
-// fn export_snaps(
-//     source: Arc<AssetManager>,
-//     destination: Arc<AssetManager>,
-//     missing_snaps: HashSet<SnapshotId>,
-//     known_manifests: HashSet<ManifestId>,
-//     known_chunks: HashSet<ChunkId>,
-// ) {
-//     let max_concurrent_snaps = 100; // FIXME: tune, configurable
-//
-//     let (snap_id_tx, snap_id_rx) = mpsc::channel(max_concurrent_snaps);
-//     let snap_id_task_handle = tokio::spawn(process_snap_ids(rx, max_concurrent));
-//     let handle = tokio::spawn(copier(rx, max_concurrent));
-//     for task in chunks {
-//         match task {
-//             Ok(task) => tx.send(task).await?,
-//             Err(_) => panic!("Error reading file"),
-//         }
-//     }
-//     drop(tx);
-//     //tx.send((0, "".to_string())).await?;
-//
-//     handle.await??;
-//
-//     Ok(())
-// }
-
 async fn calculate_diff(
-    repo: &RepoInfo,
-    versions: &VersionSelection,
+    requested_snaps: &HashSet<SnapshotId>,
     destination: Arc<dyn Storage>,
 ) -> RepositoryResult<(HashSet<SnapshotId>, HashSet<ManifestId>, HashSet<ChunkId>)> {
     // FIXME: tune caches
@@ -322,205 +148,326 @@ async fn calculate_diff(
     let (dest_chunks, dest_manifests, dest_snapshots) =
         find_retained(destination.asset_manager().clone(), &gc_config).await?;
 
-    let source_snaps = select_snapshots(repo, versions)?;
-    let missing_snaps = &source_snaps - &dest_snapshots;
+    let missing_snaps = requested_snaps - &dest_snapshots;
 
     Ok((missing_snaps, dest_manifests, dest_chunks))
 }
 
+pub type ObjectSize = u64;
+pub type OperationResult = (ObjectType, ObjectSize);
+
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ExportErrorKind {
+    #[error(transparent)]
+    StorageError(StorageErrorKind),
+    #[error(transparent)]
+    RepositoryError(RepositoryErrorKind),
+    #[error(transparent)]
+    FormatError(IcechunkFormatErrorKind),
+    #[error("I/O error")]
+    IOError(#[from] std::io::Error),
+
+    #[error("invalid selection of versions to export: {0}")]
+    InvalidVersionSelection(String),
+}
+
+pub type ExportError = ICError<ExportErrorKind>;
+
+pub type ExportResult<T> = Result<T, ExportError>;
+
+impl From<ExportErrorKind> for ExportError {
+    fn from(value: ExportErrorKind) -> Self {
+        Self::new(value)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Endpoint {
+    pub storage: Arc<dyn Storage>,
+    pub settings: Arc<Settings>,
+}
+
 async fn copy_object(
-    from_path: String,
-    to_path: String,
+    path: String,
     object_type: ObjectType,
     object_size: Option<u64>,
-    source: Arc<dyn Storage>,
-    destination: Arc<dyn Storage>,
-    source_settings: Arc<Settings>,
-    destination_settings: Arc<Settings>,
-    result: Sender<Result<(ObjectType, u64), Box<dyn std::error::Error + Send>>>,
-    _semaphore: OwnedSemaphorePermit,
-) -> Result<(), Box<dyn std::error::Error + Send>> {
-    let object_size = do_copy_object(
-        from_path,
-        to_path,
-        object_size,
-        source,
-        destination,
-        source_settings,
-        destination_settings,
-    )
-    .await
-    .map_err(|e| {
-        let e: Box<dyn std::error::Error + Send> = Box::new(e);
-        e
-    })?;
-    result.send(Ok((object_type, object_size))).await.unwrap();
-    Ok(())
+    source: Endpoint,
+    destination: Endpoint,
+    result: UnboundedSender<ExportResult<OperationResult>>,
+    semaphore: OwnedSemaphorePermit,
+) {
+    let res = do_copy_object(path.as_str(), object_size, source, destination)
+        .await
+        .map(|size| (object_type, size));
+
+    drop(semaphore);
+
+    // we can expect here because the result Receiver is never closed
+    #[allow(clippy::expect_used)]
+    result
+        .send(res)
+        .expect("Unexpected error: Failed to send copy_object operation response");
 }
 
 async fn do_copy_object(
-    from_path: String,
-    to_path: String,
+    path: &str,
     object_size: Option<u64>,
-    source: Arc<dyn Storage>,
-    destination: Arc<dyn Storage>,
-    source_settings: Arc<Settings>,
-    destination_settings: Arc<Settings>,
-) -> Result<u64, StorageError> {
+    source: Endpoint,
+    destination: Endpoint,
+) -> ExportResult<u64> {
     let range = object_size.map(|n| 0..n);
     let (mut reader, _) = source
-        .get_object(source_settings.as_ref(), from_path.as_str(), range.as_ref())
-        .await?;
+        .storage
+        .get_object(source.settings.as_ref(), path, range.as_ref())
+        .await
+        .map_err(|e| ExportError::from(ExportErrorKind::StorageError(e.kind)))?;
 
     // TODO: better capacity
     let mut buffer = Vec::with_capacity(object_size.unwrap_or(1024 * 1024) as usize);
-    reader.read_to_end(&mut buffer).await?;
+    reader
+        .read_to_end(&mut buffer)
+        .await
+        .map_err(|e| ExportError::from(ExportErrorKind::IOError(e)))?;
     let bytes = Bytes::from_owner(buffer);
     let len = bytes.len() as u64;
 
     destination
+        .storage
         .put_object(
-            destination_settings.as_ref(),
-            to_path.as_str(),
+            destination.settings.as_ref(),
+            path,
             bytes,
             None,
             Default::default(),
             None,
         )
-        .await?;
+        .await
+        .map_err(|e| ExportError::from(ExportErrorKind::StorageError(e.kind)))?;
     Ok(len)
 }
 
 async fn execute_operations(
-    mut rec: Receiver<Operation>,
-    result: Sender<Result<(ObjectType, u64), Box<dyn std::error::Error + Send>>>,
+    mut rec: UnboundedReceiver<Operation>,
+    result: UnboundedSender<ExportResult<OperationResult>>,
     source: Arc<dyn Storage>,
     destination: Arc<dyn Storage>,
-    concurrent_operations: usize,
-) -> Result<(), Box<dyn std::error::Error + Send>> {
-    let source_settings = Arc::new(source.default_settings());
-    let destination_settings = Arc::new(destination.default_settings());
+    max_concurrent_operations: usize,
+    task_tracker: TaskTracker,
+) -> usize {
+    let settings = Arc::new(source.default_settings());
+    let source = Endpoint { storage: source, settings };
+    let settings = Arc::new(destination.default_settings());
+    let destination = Endpoint { storage: destination, settings };
 
-    let semaphore = Arc::new(Semaphore::new(concurrent_operations));
+    let mut spawned = 0;
+    let semaphore = Arc::new(Semaphore::new(max_concurrent_operations));
     while let Some(op) = rec.recv().await {
+        spawned += 1;
         match op {
-            Operation::Copy { from, to, object_type, object_size } => {
-                let guard = semaphore.clone().acquire_owned().await.unwrap();
-                // FIXME:
-                //tokio::time::sleep(Duration::from_millis(400)).await;
-                tokio::spawn(copy_object(
-                    from,
-                    to,
+            Operation::Copy { path, object_type, object_size } => {
+                // we can expect here because the semaphore is never closed
+                #[allow(clippy::expect_used)]
+                let guard =
+                    semaphore.clone().acquire_owned().await.expect(
+                        "Unexpected error executing operation: semaphore is closed",
+                    );
+                task_tracker.spawn(copy_object(
+                    path,
                     object_type,
                     object_size,
                     source.clone(),
                     destination.clone(),
-                    source_settings.clone(),
-                    destination_settings.clone(),
                     result.clone(),
                     guard,
                 ));
             }
         }
     }
-    Ok(())
+    spawned
 }
 
-async fn receive_operation_result(
-    mut rec: Receiver<Result<(ObjectType, u64), Box<dyn std::error::Error + Send>>>,
+#[async_trait]
+pub trait ProgresListener {
+    async fn completed(&self, object_type: ObjectType, object_size: u64);
+    async fn discovered(&self, object_type: ObjectType, count: u64);
+    async fn done(&self);
+}
+
+#[derive(Debug)]
+pub struct ProgressBars {
     chunk_progress: ProgressBar,
     manifest_progress: ProgressBar,
     snapshot_progress: ProgressBar,
+    transaction_progress: ProgressBar,
     bytes_progress: ProgressBar,
-) {
+    _multi: MultiProgress,
+}
+
+impl Default for ProgressBars {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProgressBars {
+    pub fn new() -> Self {
+        let multi = indicatif::MultiProgress::new();
+        // unwrapping is allowed when creating templates because the
+        // template string is verified to work
+        #[allow(clippy::unwrap_used)]
+        let bytes_sty = indicatif::ProgressStyle::with_template(
+            "{prefix:16.green} {binary_bytes} [{binary_bytes_per_sec}]",
+        )
+        .unwrap();
+        #[allow(clippy::unwrap_used)]
+        let chunks_sty = indicatif::ProgressStyle::with_template(
+            "{prefix:16.green} {bar:60} {human_pos:>}/{human_len} [{eta}]",
+        )
+        .unwrap();
+        #[allow(clippy::unwrap_used)]
+        let others_sty = indicatif::ProgressStyle::with_template(
+            "{prefix:16.green} {bar:60} {human_pos:>}/{human_len}",
+        )
+        .unwrap();
+        let bytes_progress = indicatif::ProgressBar::new(0);
+        let snapshot_progress = indicatif::ProgressBar::new(0);
+        let transaction_progress = indicatif::ProgressBar::new(0);
+        let manifest_progress = indicatif::ProgressBar::new(0);
+        let chunk_progress = indicatif::ProgressBar::new(0);
+        multi
+            .add(chunk_progress.clone())
+            .with_style(chunks_sty.clone())
+            .with_prefix("🧊 Chunks:");
+        multi
+            .add(manifest_progress.clone())
+            .with_style(others_sty.clone())
+            .with_prefix("📜 Manifests:");
+        multi
+            .add(snapshot_progress.clone())
+            .with_style(others_sty.clone())
+            .with_prefix("📸 Snapshots:");
+        multi
+            .add(transaction_progress.clone())
+            .with_style(others_sty.clone())
+            .with_prefix("🤝 Transactions:");
+        multi.add(bytes_progress.clone()).with_style(bytes_sty).with_prefix("💾 Copied:");
+        ProgressBars {
+            chunk_progress,
+            manifest_progress,
+            snapshot_progress,
+            transaction_progress,
+            bytes_progress,
+            _multi: multi,
+        }
+    }
+}
+
+#[async_trait]
+impl ProgresListener for ProgressBars {
+    async fn completed(&self, object_type: ObjectType, object_size: u64) {
+        match object_type {
+            ObjectType::Chunk => self.chunk_progress.inc(1),
+            ObjectType::Manifest => self.manifest_progress.inc(1),
+            ObjectType::TransactionLog => self.transaction_progress.inc(1),
+            ObjectType::Snapshot => self.snapshot_progress.inc(1),
+        }
+        self.bytes_progress.inc(object_size);
+    }
+    async fn discovered(&self, object_type: ObjectType, count: u64) {
+        match object_type {
+            ObjectType::Chunk => self.chunk_progress.inc_length(count),
+            ObjectType::Manifest => self.manifest_progress.inc_length(count),
+            ObjectType::TransactionLog => self.transaction_progress.inc_length(count),
+            ObjectType::Snapshot => self.snapshot_progress.inc_length(count),
+        }
+    }
+    async fn done(&self) {
+        self.chunk_progress.abandon();
+        self.manifest_progress.abandon();
+        self.transaction_progress.abandon();
+        self.snapshot_progress.abandon();
+        self.bytes_progress.abandon();
+    }
+}
+
+async fn receive_operation_result(
+    mut rec: UnboundedReceiver<ExportResult<OperationResult>>,
+    progress_listener: Arc<dyn ProgresListener + Send + Sync>,
+) -> ExportResult<usize> {
+    let results = AtomicUsize::new(0);
     while let Some(res) = rec.recv().await {
+        results.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match res {
             Ok((object_type, object_size)) => match object_type {
                 ObjectType::Chunk => {
-                    chunk_progress.inc(1);
-                    bytes_progress.inc(object_size);
+                    progress_listener.completed(ObjectType::Chunk, object_size).await;
                 }
                 ObjectType::Manifest => {
-                    manifest_progress.inc(1);
-                    bytes_progress.inc(object_size);
+                    progress_listener.completed(ObjectType::Manifest, object_size).await;
                 }
-                ObjectType::TransactionLog => todo!(),
+                ObjectType::TransactionLog => {
+                    progress_listener
+                        .completed(ObjectType::TransactionLog, object_size)
+                        .await;
+                }
                 ObjectType::Snapshot => {
-                    snapshot_progress.inc(1);
-                    bytes_progress.inc(object_size);
+                    progress_listener.completed(ObjectType::Snapshot, object_size).await;
                 }
             },
-            Err(err) => panic!("{}", err.to_string()),
+            Err(err) => return Err(err),
         }
     }
+    Ok(results.into_inner())
 }
 
 pub async fn export(
     source: &Repository,
     destination: Arc<dyn Storage>,
     versions: &VersionSelection,
+    progress_listener: Arc<dyn ProgresListener + Send + Sync>,
+    max_concurrent_operations: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // FIXME: fail for v1 repos
-    let multi = indicatif::MultiProgress::new();
-    let bytes_sty = indicatif::ProgressStyle::with_template(
-        "{prefix:15.green} {binary_bytes} [{binary_bytes_per_sec}]",
-    )
-    .unwrap();
-    let chunks_sty = indicatif::ProgressStyle::with_template(
-        "{prefix:15.green} {bar:60} {human_pos:>}/{human_len} [{eta}]",
-    )
-    .unwrap();
-    let others_sty = indicatif::ProgressStyle::with_template(
-        "{prefix:15.green} {bar:60} {human_pos:>}/{human_len}",
-    )
-    .unwrap();
-    let bytes_progress = indicatif::ProgressBar::new(0);
-    let snapshots_progress = indicatif::ProgressBar::new(0);
-    let manifests_progress = indicatif::ProgressBar::new(0);
-    let chunks_progress = indicatif::ProgressBar::new(0);
-    multi
-        .add(chunks_progress.clone())
-        .with_style(chunks_sty.clone())
-        .with_prefix("🧊 Chunks:");
-    multi
-        .add(manifests_progress.clone())
-        .with_style(others_sty.clone())
-        .with_prefix("📜 Manifests:");
-    multi
-        .add(snapshots_progress.clone())
-        .with_style(others_sty.clone())
-        .with_prefix("📸 Snapshots:");
-    multi.add(bytes_progress.clone()).with_style(bytes_sty).with_prefix("💾 Copied:");
+    if source.spec_version() < SpecVersionBin::V2dot0 {
+        return Err("export cannot run on Icechunk version 1 repositories.".into());
+    }
 
     let (source_repo_info, _) = source.asset_manager().fetch_repo_info().await?;
+    let requested_snaps = select_snapshots(&source_repo_info, versions)?;
     let (missing_snapshots, mut dest_manifests, mut dest_chunks) =
-        calculate_diff(&source_repo_info, versions, destination.clone()).await?;
-    snapshots_progress.set_length(missing_snapshots.len() as u64);
+        calculate_diff(&requested_snaps, destination.clone()).await?;
+    progress_listener
+        .discovered(ObjectType::Snapshot, missing_snapshots.len() as u64)
+        .await;
+    progress_listener
+        .discovered(ObjectType::TransactionLog, missing_snapshots.len() as u64)
+        .await;
 
-    let (op_result_sender, op_result_receiver) = mpsc::channel(100_000_000); // FIXME:
-    let (op_execute_sender, op_execute_receiver) = mpsc::channel(100_000_000); // FIXME:
+    // TODO: should we limit these channels?
+    let (op_result_sender, op_result_receiver) = mpsc::unbounded_channel();
+    let (op_execute_sender, op_execute_receiver) = mpsc::unbounded_channel();
+
+    let operations_tracker = TaskTracker::new();
 
     let op_exec_handle = tokio::spawn(execute_operations(
         op_execute_receiver,
         op_result_sender,
         source.storage().clone(),
         destination.clone(),
-        512, // FIXME:
+        max_concurrent_operations,
+        operations_tracker.clone(),
     ));
 
     let op_result_handle = tokio::spawn(receive_operation_result(
         op_result_receiver,
-        chunks_progress.clone(),
-        manifests_progress.clone(),
-        snapshots_progress.clone(),
-        bytes_progress.clone(),
+        Arc::clone(&progress_listener),
     ));
 
     for snap_id in missing_snapshots {
         let snap = source.asset_manager().fetch_snapshot(&snap_id).await?;
         for mfile in snap.manifest_files() {
             if !dest_manifests.contains(&mfile.id) {
-                manifests_progress.inc_length(1);
+                progress_listener.discovered(ObjectType::Manifest, 1).await;
                 dest_manifests.insert(mfile.id.clone());
                 let manifest = source
                     .asset_manager()
@@ -536,52 +483,144 @@ pub async fn export(
                         }
                         ChunkPayload::Ref(chunk_ref) => {
                             dest_chunks.insert(chunk_ref.id.clone());
-                            chunks_progress.inc_length(1);
-                            let from_path = AssetManager::chunk_path(&chunk_ref.id);
-                            let to_path = from_path.clone();
+                            progress_listener.discovered(ObjectType::Chunk, 1).await;
+                            let path = AssetManager::chunk_path(&chunk_ref.id);
                             let op = Operation::Copy {
-                                from: from_path,
-                                to: to_path,
+                                path,
                                 object_type: ObjectType::Chunk,
                                 object_size: Some(chunk_ref.length),
                             };
-                            op_execute_sender.send(op).await?;
+                            op_execute_sender.send(op)?;
                         }
                         _ => {
-                            panic!("Unknown payload type");
+                            return Err(
+                                "bug in export, unknown chunk payload type".into()
+                            );
                         }
                     }
                 }
 
                 //copy manifest
-                let from_path = AssetManager::manifest_path(&manifest.id());
-                let to_path = from_path.clone();
+                let path = AssetManager::manifest_path(&manifest.id());
                 let op = Operation::Copy {
-                    from: from_path,
-                    to: to_path,
+                    path,
                     object_type: ObjectType::Manifest,
                     object_size: Some(mfile.size_bytes),
                 };
-                op_execute_sender.send(op).await?;
+                op_execute_sender.send(op)?;
             }
         }
-        // copy snapshot
-        let from_path = AssetManager::snapshot_path(&snap.id());
-        let to_path = from_path.clone();
+        // copy tx log
+        let path = AssetManager::transaction_path(&snap.id());
         let op = Operation::Copy {
-            from: from_path,
-            to: to_path,
+            path,
+            object_size: None,
+            object_type: ObjectType::TransactionLog,
+        };
+        op_execute_sender.send(op)?;
+
+        // copy snapshot
+        let path = AssetManager::snapshot_path(&snap.id());
+        let op = Operation::Copy {
+            path,
             object_size: None,
             object_type: ObjectType::Snapshot,
         };
-        op_execute_sender.send(op).await?;
+        op_execute_sender.send(op)?;
     }
 
     drop(op_execute_sender);
-    op_exec_handle.await?.unwrap();
-    op_result_handle.await?;
+    let spawned_ops = op_exec_handle.await?;
+    let received_results = op_result_handle.await??;
 
+    operations_tracker.close();
+    operations_tracker.wait().await;
+
+    let new_repo_info =
+        update_repo_info(source_repo_info.as_ref(), &requested_snaps, versions);
+
+    let x = destination.;
+
+    progress_listener.done().await;
+
+    dbg!(spawned_ops);
+    dbg!(received_results);
+    println!("---------------- {}", spawned_ops);
+    println!(" ///////// {received_results}");
     Ok(())
+}
+
+fn update_repo_info(
+    original: &RepoInfo,
+    requested_snaps: &HashSet<SnapshotId>,
+    selection: &VersionSelection,
+) -> IcechunkResult<RepoInfo> {
+    match selection {
+        VersionSelection::SingleSnapshot(snapshot_id) => {
+            let tags = original.tags()?.filter(|(_, sid)| requested_snaps.contains(sid));
+            let branches = original.branches()?.filter_map(|(name, sid)| {
+                if name == Ref::DEFAULT_BRANCH {
+                    Some((Ref::DEFAULT_BRANCH, snapshot_id.clone()))
+                } else if requested_snaps.contains(&sid) {
+                    Some((name, sid))
+                } else {
+                    None
+                }
+            });
+            let initial_snap = original.find_snapshot(&Snapshot::INITIAL_SNAPSHOT_ID)?;
+            let mut target_snap = original.find_snapshot(snapshot_id)?;
+            target_snap.parent_id = Some(initial_snap.id.clone());
+
+            RepoInfo::new(
+                tags,
+                branches,
+                std::iter::empty(),
+                [initial_snap, target_snap],
+                &UpdateType::RepoInitializedUpdate,
+                None,
+            )
+        }
+        VersionSelection::AllHistory => {
+            let snapshots: Vec<_> = original.all_snapshots()?.try_collect()?;
+            RepoInfo::new(
+                original.tags()?,
+                original.branches()?,
+                std::iter::empty(),
+                snapshots,
+                &UpdateType::RepoInitializedUpdate,
+                None,
+            )
+        }
+        VersionSelection::RefsHistory { main_points_to, branches, .. } => {
+            assert!(
+                branches.contains(&Ref::DEFAULT_BRANCH.to_string())
+                    || main_points_to.is_some()
+            );
+            let tags = original.tags()?.filter(|(_, sid)| requested_snaps.contains(sid));
+            let branches = original.branches()?.filter_map(|(name, sid)| {
+                // at the beginning of export is checked that main_points_to points to an exported
+                // snapshot
+                if name == Ref::DEFAULT_BRANCH
+                    && let Some(sid) = main_points_to
+                {
+                    Some((Ref::DEFAULT_BRANCH, sid.clone()))
+                } else if requested_snaps.contains(&sid) {
+                    Some((name, sid))
+                } else {
+                    None
+                }
+            });
+            let snapshots: Vec<_> = original.all_snapshots()?.try_collect()?;
+            RepoInfo::new(
+                tags,
+                branches,
+                std::iter::empty(),
+                snapshots,
+                &UpdateType::RepoInitializedUpdate,
+                None,
+            )
+        }
+    }
 }
 
 #[cfg(test)]

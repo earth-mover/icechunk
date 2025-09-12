@@ -464,6 +464,10 @@ impl AssetManager {
         format!("{SNAPSHOTS_FILE_PATH}/{id}")
     }
 
+    pub fn transaction_path(id: &SnapshotId) -> String {
+        format!("{TRANSACTION_LOGS_FILE_PATH}/{id}")
+    }
+
     #[instrument(skip(self, bytes))]
     pub async fn write_chunk(
         &self,
@@ -1003,7 +1007,7 @@ async fn write_new_tx_log(
     .await??;
 
     debug!(%transaction_id, size_bytes=buffer.len(), "Writing transaction log");
-    let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
+    let path = AssetManager::transaction_path(&transaction_id);
     let settings = storage::Settings {
         storage_class: storage_settings.metadata_storage_class().cloned(),
         ..storage_settings.clone()
@@ -1025,7 +1029,7 @@ async fn fetch_transaction_log(
     semaphore: &Semaphore,
 ) -> RepositoryResult<Arc<TransactionLog>> {
     debug!(%transaction_id, "Downloading transaction log");
-    let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
+    let path = AssetManager::transaction_path(transaction_id);
     let _permit = semaphore.acquire().await?;
     let (read, _) = storage.get_object(storage_settings, path.as_str(), None).await?;
 

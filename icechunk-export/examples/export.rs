@@ -4,7 +4,7 @@ use icechunk::{
     Repository, Storage, config::S3Credentials, new_local_filesystem_storage,
     new_s3_storage,
 };
-use icechunk_export::export;
+use icechunk_export::{ProgressBars, export};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,7 +27,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = Repository::open(None, source_storage, Default::default()).await?;
     let destination_path = Path::new("/tmp/test-export");
     let destination = new_local_filesystem_storage(destination_path).await?;
-    export(&source, destination, &icechunk_export::VersionSelection::AllHistory).await?;
+    export(
+        &source,
+        destination,
+        &icechunk_export::VersionSelection::AllHistory,
+        Arc::new(ProgressBars::new()),
+        100,
+    )
+    .await?;
+    println!("done");
 
     Ok(())
 }

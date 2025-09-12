@@ -20,6 +20,9 @@ itertools = "0.14.0"
 futures = "0.3.31"
 chrono = "0.4.42"
 indicatif = "0.18.0"
+thiserror = "2.0.16"
+tokio-util = { version = "0.7.16", features = ["rt"] }
+async-trait = "0.1.89"
 
 [lints]
 workspace = true
