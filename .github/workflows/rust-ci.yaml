@@ -33,17 +33,13 @@ env:
   RUST_CHANNEL: '1.89.0'
 
 jobs:
-  rust:
-    name: Rust CI
+  rust-safe:
+    name: Rust CI (Safe Tests)
     timeout-minutes: 20
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: ./
-    #permissions:
-      #contents: read
-      #actions: read
-      #pull-requests: read
 
     strategy:
       fail-fast: false
@@ -94,17 +90,80 @@ jobs:
           # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
 
-      - name: Run basic tests
+      - name: Run safe tests
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
           just compile-tests "--locked"
-          just test --lib
+          just test  # Runs all tests except #[ignore] ones (safe: unit tests + MinIO/Azurite)
 
-      - name: Run integration tests with external services
-        if: |
-          (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') &&
-          (github.event.pull_request.head.repo.full_name == github.repository ||
-           contains(github.event.pull_request.labels.*.name, 'test-external-services'))
+      - name: Run doc tests
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          just doctest
+
+      - name: Run examples
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          just run-all-examples
+
+      - name: Run unit tests only
+        if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
+        run: |
+          cargo test --lib
+
+  rust-external-services:
+    name: Rust CI (External Services)
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    environment:
+      name: external-services
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    defaults:
+      run:
+        working-directory: ./
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+
+      - name: Stand up docker services
+        run: |
+          docker compose up -d
+
+      - name: Wait for containers to be ready
+        run: |
+          for _ in {1..30}; do
+              if curl --silent --fail http://localhost:9000/minio/health/live; then
+              break
+              fi
+              sleep 1
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+          for _ in {1..60}; do
+              if curl --silent --fail "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
+              break
+              fi
+              sleep 1
+          done
+
+      - name: Install Just
+        run: sudo snap install --edge --classic just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          # workspaces: "rust -> target"
+          key: ${{ env.RUST_CHANNEL }}
+
+      - name: Run external service tests
         env:
           RUST_LOG: trace
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
@@ -123,25 +182,39 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          just test
+          # Run only the external service tests (AWS, R2, Tigris) - excludes MinIO tests
+          cargo test --all --all-targets -- --ignored "_in_aws"
+          cargo test --all --all-targets -- --ignored "_in_r2"
+          cargo test --all --all-targets -- --ignored "_in_tigris"
 
-      - name: Run doc tests
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: |
-          just doctest
+  rust-cron-integration:
+    name: Rust CI (Cron Integration Tests)
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    if: github.event_name == 'cron'
+    environment:
+      name: external-services
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    defaults:
+      run:
+        working-directory: ./
 
-      - name: Run examples
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: |
-          just run-all-examples
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
-      - name: Run unit tests only
-        if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
+      - name: Install Rust toolchain
         run: |
-          cargo test --lib
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.RUST_CHANNEL }}
 
       - name: Run integration tests against object stores
-        if: github.event_name == 'cron'
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
