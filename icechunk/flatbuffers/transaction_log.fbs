@@ -1,6 +1,6 @@
-include "object_ids.fbs";
+include "common.fbs";
 
-namespace gen;
+namespace generated;
 
 table ChunkIndices {
   coords: [uint32] (required);
@@ -13,6 +13,11 @@ table ArrayUpdatedChunks {
   // the coordinates of all the chunks modified in this transaction for this array
   // sorted in ascending lexicographical order
   chunks: [ChunkIndices] (required);
+}
+
+table MoveOperation {
+  from: string (required);
+  to: string (required);
 }
 
 table TransactionLog {
@@ -47,6 +52,10 @@ table TransactionLog {
   // chunk ref changes made in this transaction
   // sorted in ascending order of the node_id of the ArrayUpdatedChunks
   updated_chunks: [ArrayUpdatedChunks] (required);
+
+  // sorted in application order, oldest first
+  // Added in spec version: 2.0
+  moved_nodes: [MoveOperation];
 }
 
 root_type TransactionLog;
