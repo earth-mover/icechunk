@@ -118,7 +118,7 @@ jobs:
     # Run for cron events or when deployment protection is triggered
     if: github.event_name == 'cron' || github.event_name == 'pull_request' || github.event_name == 'push'
     environment:
-      name: external-services
+      name: ci-with-secrets
       url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     defaults:
       run:
