@@ -52,7 +52,7 @@ jobs:
 
       - name: Run clippy linting
         run: |
-          just lint -p icechunk -p icechunk-python
+          just lint --workspace
 
       - name: Run doc tests
         run: |
