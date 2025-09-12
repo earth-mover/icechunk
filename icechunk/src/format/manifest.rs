@@ -470,6 +470,15 @@ impl Manifest {
             array_manifest.refs().iter().map(|r| ref_to_payload(r))
         })
     }
+
+    pub fn nodes(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.root().arrays().iter().map(|array_manifest| array_manifest.node_id().into())
+    }
+
+    pub fn node_refs(&self, node: &NodeId) -> Option<usize> {
+        let manifest = self.root();
+        lookup_node(manifest, node).map(|am| am.refs().len())
+    }
 }
 
 fn lookup_node<'a>(
