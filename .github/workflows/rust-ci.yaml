@@ -11,6 +11,13 @@ on:
   schedule:
     # three times a day to run the integration tests that take a long time
     - cron:  '33 3,10,15 * * *'
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to checkout'
+        required: false
+        type: string
+        default: ''
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -47,7 +54,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
 
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -87,8 +94,17 @@ jobs:
           # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
 
-      - name: Run tests with Docker services
+      - name: Run basic tests
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          just compile-tests "--locked"
+          just test --lib
+
+      - name: Run integration tests with external services
+        if: |
+          (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') &&
+          (github.event.pull_request.head.repo.full_name == github.repository ||
+           contains(github.event.pull_request.labels.*.name, 'test-external-services'))
         env:
           RUST_LOG: trace
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
@@ -107,7 +123,6 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          just compile-tests "--locked"
           just test
 
       - name: Run doc tests
