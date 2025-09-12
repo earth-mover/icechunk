@@ -1,0 +1,17 @@
+name: Test External PR with Secrets
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to test'
+        required: true
+        type: number
+
+jobs:
+  test:
+    name: Test PR #${{ github.event.inputs.pr_number }}
+    uses: ./.github/workflows/rust-ci.yaml
+    with:
+      ref: refs/pull/${{ github.event.inputs.pr_number }}/merge
+    secrets: inherit
