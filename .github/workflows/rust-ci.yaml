@@ -113,8 +113,10 @@ jobs:
 
   rust-external-services:
     name: Rust CI (External Services)
-    timeout-minutes: 20
+    timeout-minutes: 30
     runs-on: ubuntu-latest
+    # Run for cron events or when deployment protection is triggered
+    if: github.event_name == 'cron' || github.event_name == 'pull_request' || github.event_name == 'push'
     environment:
       name: external-services
       url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -127,26 +129,6 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
-
-      - name: Stand up docker services
-        run: |
-          docker compose up -d
-
-      - name: Wait for containers to be ready
-        run: |
-          for _ in {1..30}; do
-              if curl --silent --fail http://localhost:9000/minio/health/live; then
-              break
-              fi
-              sleep 1
-          done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
-          for _ in {1..60}; do
-              if curl --silent --fail "http://localhost:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
-              break
-              fi
-              sleep 1
-          done
 
       - name: Install Just
         run: sudo snap install --edge --classic just
@@ -182,54 +164,14 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          # Run only the external service tests (AWS, R2, Tigris) - excludes MinIO tests
-          cargo test --all --all-targets -- --ignored "_in_aws"
-          cargo test --all --all-targets -- --ignored "_in_r2"
-          cargo test --all --all-targets -- --ignored "_in_tigris"
-
-  rust-cron-integration:
-    name: Rust CI (Cron Integration Tests)
-    timeout-minutes: 30
-    runs-on: ubuntu-latest
-    if: github.event_name == 'cron'
-    environment:
-      name: external-services
-      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-    defaults:
-      run:
-        working-directory: ./
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Install Rust toolchain
-        run: |
-          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
-          rustup default ${{ env.RUST_CHANNEL }}
-
-      - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ env.RUST_CHANNEL }}
-
-      - name: Run integration tests against object stores
-        env:
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-
-          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
-          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
-          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-
-        run: |
-          cargo test --all --all-targets -- --ignored
+          if [[ "${{ github.event_name }}" == "cron" ]]; then
+            # Cron job: run all ignored tests (comprehensive integration testing)
+            echo "Running comprehensive integration tests for cron job"
+            cargo test --all --all-targets -- --ignored
+          else
+            # Manual approval: run only specific external service tests (AWS, R2, Tigris)
+            echo "Running targeted external service tests"
+            cargo test --all --all-targets "_in_aws" -- --ignored
+            cargo test --all --all-targets "_in_r2" -- --ignored
+            cargo test --all --all-targets "_in_tigris" -- --ignored
+          fi
