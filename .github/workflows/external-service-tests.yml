@@ -1,0 +1,127 @@
+name: External Service Tests
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to checkout'
+        required: false
+        type: string
+        default: ''
+      needs_approval:
+        description: 'Whether this run needs manual approval'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  run-tests-auto:
+    name: External Service Tests (Auto)
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.needs_approval }}
+    defaults:
+      run:
+        working-directory: ./
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Just
+        run: sudo snap install --edge --classic just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.RUST_CHANNEL }}
+
+      - name: Run external service tests
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          if [[ "${{ github.event_name }}" == "cron" ]]; then
+            echo "Running comprehensive integration tests for cron job"
+            cargo test --all --all-targets -- --ignored
+          else
+            echo "Running targeted external service tests"
+            cargo test --all --all-targets "_in_aws" -- --ignored
+            cargo test --all --all-targets "_in_r2" -- --ignored
+            cargo test --all --all-targets "_in_tigris" -- --ignored
+          fi
+
+  run-tests-approval:
+    name: External Service Tests (Approval Required)
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    if: ${{ inputs.needs_approval }}
+    environment:
+      name: ci-with-secrets
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    defaults:
+      run:
+        working-directory: ./
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Just
+        run: sudo snap install --edge --classic just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.RUST_CHANNEL }}
+
+      - name: Run external service tests
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          if [[ "${{ github.event_name }}" == "cron" ]]; then
+            echo "Running comprehensive integration tests for cron job"
+            cargo test --all --all-targets -- --ignored
+          else
+            echo "Running targeted external service tests"
+            cargo test --all --all-targets "_in_aws" -- --ignored
+            cargo test --all --all-targets "_in_r2" -- --ignored
+            cargo test --all --all-targets "_in_tigris" -- --ignored
+          fi
