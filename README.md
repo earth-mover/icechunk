@@ -13,6 +13,7 @@
 > **Icechunk 1.0 is released!** Better API, more performance and stability
 ---
 
+small test change
 Icechunk is an open-source (Apache 2.0), transactional storage engine for tensor / ND-array data designed for use on cloud object storage.
 Icechunk works together with **[Zarr](https://zarr.dev/)**, augmenting the Zarr core data model with features
 that enhance performance, collaboration, and safety in a cloud-computing context.
