@@ -8,8 +8,8 @@ name: Python CI and library release
 on:
   workflow_dispatch:
     inputs:
-      skip_pypi_release:
-        description: 'Skip PyPI release'
+      pypi_release:
+        description: 'Make a PyPI release'
         required: true
         default: false
         type: boolean
@@ -249,7 +249,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write # IMPORTANT: this permission is mandatory for trusted publishing
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_pypi_release }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.pypi_release }}
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
       - uses: actions/download-artifact@v5
