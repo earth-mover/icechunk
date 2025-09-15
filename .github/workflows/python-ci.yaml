@@ -61,8 +61,10 @@ jobs:
             DISTANCE=$(git rev-list $(git describe --tags --match 'v*' --abbrev=0)..HEAD --count)
             HASH=$(git rev-parse --short HEAD)
 
-            # Build PEP 440 compliant version (always use .dev format)
-            VERSION="${TAG}.dev${DISTANCE}+g${HASH}"
+            # Build SemVer compliant version for Cargo.toml (use -dev instead of .dev)
+            # maturin will normalize the - to a .
+            # prepend HASH with g to follow convention from git describe
+            VERSION="${TAG}-dev${DISTANCE}+g${HASH}"
             echo "Git version: ${TAG}, distance: ${DISTANCE}, hash: ${HASH}"
             echo "Using git-based version: $VERSION"
           else
