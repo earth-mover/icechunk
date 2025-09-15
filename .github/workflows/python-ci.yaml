@@ -107,6 +107,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Update version in Cargo.toml
+        if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         run: |
           sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml
       - name: Build wheels
@@ -142,6 +143,7 @@ jobs:
         with:
           python-version: 3.x
       - name: Update version in Cargo.toml
+        if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         run: |
           sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml
       - name: Build wheels
@@ -174,6 +176,7 @@ jobs:
           python-version: 3.x
           architecture: ${{ matrix.platform.target }}
       - name: Update version in Cargo.toml
+        if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         run: |
           (Get-Content Cargo.toml) -replace '^version = ".*"', 'version = "${{ needs.version.outputs.version }}"' | Set-Content Cargo.toml
         shell: powershell
@@ -205,6 +208,7 @@ jobs:
         with:
           python-version: 3.x
       - name: Update version in Cargo.toml
+        if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         run: |
           sed -i '' 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml
       - name: Build wheels
@@ -225,6 +229,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Update version in Cargo.toml
+        if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         run: |
           sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml
       - name: Build sdist
