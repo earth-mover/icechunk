@@ -1499,6 +1499,10 @@ class PyRepository:
     async def inspect_snapshot_async(
         self, snapshot_id: str, *, pretty: bool = True
     ) -> str: ...
+    def inspect_manifest(self, manifest_id: str, *, pretty: bool = True) -> str: ...
+    async def inspect_manifest_async(
+        self, manifest_id: str, *, pretty: bool = True
+    ) -> str: ...
 
 class PySession:
     @classmethod
