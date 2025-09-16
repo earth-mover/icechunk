@@ -1,6 +1,6 @@
-include "object_ids.fbs";
+include "common.fbs";
 
-namespace gen;
+namespace generated;
 
 // We don't use unions and datastructures for the different types of refs
 // If we do that, the manifest grows in size a lot, because of the extra
