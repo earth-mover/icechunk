@@ -92,7 +92,17 @@ jobs:
           && steps.mypy.outcome == 'failure'
           && github.repository_owner == 'earth-mover'
         shell: bash
+        working-directory: .
         run: |
+          # Debug: Show current working directory and file structure
+          echo "Current working directory: $(pwd)"
+          echo "Contents of current directory:"
+          ls -la
+          echo "Looking for .github directory:"
+          ls -la .github/ || echo ".github directory not found"
+          echo "Looking for template file:"
+          ls -la .github/mypy-failure-template.md || echo "Template file not found"
+
           # Read the template and mypy output
           template=$(cat .github/mypy-failure-template.md)
 
@@ -118,6 +128,7 @@ jobs:
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
+        if: always()
         uses: actions/cache/restore@v4
         with:
           path: icechunk-python/.hypothesis/
@@ -126,6 +137,7 @@ jobs:
             cache-hypothesis-
 
       - name: describe environment
+        if: always()
         shell: bash
         working-directory: icechunk-python
         run: |
@@ -136,6 +148,7 @@ jobs:
 
       - name: pytest
         id: pytest-icechunk
+        if: always()
         shell: bash
         working-directory: icechunk-python
         run: |
@@ -155,7 +168,7 @@ jobs:
 
       - name: Generate and publish the pytest report
         if: |
-          failure()
+          always()
           && steps.pytest-icechunk.outcome == 'failure'
           && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
