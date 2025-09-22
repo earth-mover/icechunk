@@ -11,7 +11,7 @@ import zarr
 from icechunk import IcechunkStore, Session
 from icechunk.session import ForkSession
 from icechunk.vendor.xarray import _choose_default_mode
-from xarray import DataArray, Dataset
+from xarray import DataArray, Dataset, DataTree
 from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
 
@@ -181,8 +181,39 @@ class _XarrayDatasetWriter:
         return session_merge_reduction(stored_arrays, split_every=split_every)
 
 
+# Overload for DataTree - restricted parameters
+@overload
+def to_icechunk(
+    obj: DataTree,
+    session: Session,
+    *,
+    mode: ZarrWriteModes | None = None,
+    safe_chunks: bool = True,
+    encoding: Mapping[Any, Any] | None = None,
+    chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
+    split_every: int | None = None,
+) -> None: ...
+
+
+# Overload for DataArray/Dataset - full parameters
+@overload
 def to_icechunk(
     obj: DataArray | Dataset,
+    session: Session,
+    *,
+    group: str | None = None,
+    mode: ZarrWriteModes | None = None,
+    safe_chunks: bool = True,
+    append_dim: Hashable | None = None,
+    region: Region = None,
+    encoding: Mapping[Any, Any] | None = None,
+    chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
+    split_every: int | None = None,
+) -> None: ...
+
+
+def to_icechunk(
+    obj: DataArray | Dataset | DataTree,
     session: Session,
     *,
     group: str | None = None,
@@ -199,8 +230,10 @@ def to_icechunk(
 
     Parameters
     ----------
-    obj: DataArray or Dataset
-        Xarray object to write
+    obj: DataArray, Dataset, or DataTree
+        Xarray object to write. 
+        
+        Note: When passing a DataTree, the ``append_dim``, ``region``, and ``group`` parameters are not yet supported.
     session : icechunk.Session
         Writable Icechunk Session
     mode : {"w", "w-", "a", "a-", r+", None}, optional
@@ -276,6 +309,20 @@ def to_icechunk(
         ``append_dim`` at the same time. To create empty arrays to fill
         in with ``region``, use the `_XarrayDatasetWriter` directly.
     """
+    # Validate parameters for DataTree
+    if isinstance(obj, DataTree):
+        if group is not None:
+            raise NotImplementedError(
+                "specifying a root group for the tree has not been implemented"
+            )
+        if append_dim is not None:
+            raise NotImplementedError(
+                "The 'append_dim' parameter is not yet supported when writing DataTree objects."
+            )
+        if region is not None:
+            raise NotImplementedError(
+                "The 'region' parameter is not yet supported when writing DataTree objects."
+            )
 
     as_dataset = _make_dataset(obj)
 
@@ -321,13 +368,22 @@ def to_icechunk(
 def _make_dataset(obj: DataArray) -> Dataset: ...
 @overload
 def _make_dataset(obj: Dataset) -> Dataset: ...
-def _make_dataset(obj: DataArray | Dataset) -> Dataset:
+@overload
+def _make_dataset(obj: "DataTree") -> Dataset: ...
+def _make_dataset(obj: DataArray | Dataset | "DataTree") -> Dataset:
     """Copied from DataArray.to_zarr"""
     DATAARRAY_NAME = "__xarray_dataarray_name__"
     DATAARRAY_VARIABLE = "__xarray_dataarray_variable__"
 
     if isinstance(obj, Dataset):
         return obj
+
+    if DataTree is not None and isinstance(obj, DataTree):
+        # For DataTree, we currently only support the root dataset
+        # Implementation will be provided later
+        raise NotImplementedError(
+            "DataTree support is not yet implemented. Please provide the implementation."
+        )
 
     assert isinstance(obj, DataArray)
 
