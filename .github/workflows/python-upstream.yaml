@@ -50,7 +50,7 @@ jobs:
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: "3.13"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -89,7 +89,6 @@ jobs:
         if: |
           failure()
           && steps.mypy.outcome == 'failure'
-          && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
         shell: bash
         run: |
@@ -163,7 +162,6 @@ jobs:
         with:
           log-path: icechunk-python/output-pytest-log.jsonl
 
-
   xarray-backends:
     name: xarray-tests-upstream
     runs-on: ubuntu-latest
@@ -201,7 +199,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
