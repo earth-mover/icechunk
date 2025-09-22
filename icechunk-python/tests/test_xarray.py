@@ -49,6 +49,39 @@ def create_test_data(
     return obj
 
 
+def create_test_datatree() -> xr.DataTree:
+    return xr.DataTree.from_dict(
+        {
+            "/": xr.Dataset(
+                data_vars={
+                    "bar": ("x", ["hello", "world"]),
+                },
+                coords={
+                    "x": ("x", [1, 2]), # inherited dimension coordinate that can't be overriden
+                    "w": ("x", [0.1, 0.2]), # inherited non-dimension coordinate to override
+                },
+            ),
+            "/a": xr.Dataset(
+                data_vars={
+                    "foo": ("x", ["alpha", "beta"]),
+                },
+                coords={
+                    "w": ("x", [10, 20]),  # override inherited non-dimension coordinate
+                    "z": ("z", ["alpha", "beta"]),  # non-inherited dimension coordinate
+                },
+            ),
+            "/b": xr.Dataset(
+                data_vars={
+                    "foo": ("x", ["gamma", "delta"]),
+                },
+                coords={
+                    "z": ("z", ["alpha", "beta", "gamma"]),  # override inherited non-dimension coordinate with different length (i.e. multi-resolution)
+                },
+            ),
+        }
+    )
+
+
 @contextlib.contextmanager
 def roundtrip(
     data: xr.Dataset, *, commit: bool = False
@@ -62,10 +95,31 @@ def roundtrip(
             yield ds
 
 
-def test_xarray_to_icechunk() -> None:
+def test_xarray_dataset_to_icechunk() -> None:
     ds = create_test_data()
     with roundtrip(ds) as actual:
         assert_identical(actual, ds)
+
+
+@contextlib.contextmanager
+def roundtrip_datatree(
+    dt: xr.DataTree, *, commit: bool = False
+) -> Generator[xr.DataTree, None, None]:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo = Repository.create(local_filesystem_storage(tmpdir))
+        session = repo.writable_session("main")
+        to_icechunk(dt, session=session, mode="w")
+        session.commit("write")
+        with xr.open_datatree(session.store, consolidated=False, engine="zarr") as dt:
+            yield dt
+
+
+def test_xarray_datatree_to_icechunk() -> None:
+    dt = create_test_datatree()
+    with roundtrip_datatree(dt) as actual:
+        print(actual)
+        print(dt)
+        assert_identical(actual, dt)
 
 
 def test_repeated_to_icechunk_serial() -> None:
