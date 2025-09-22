@@ -185,7 +185,25 @@ class _XarrayDatasetWriter:
         return session_merge_reduction(stored_arrays, split_every=split_every)
 
 
-# Overload for DataTree - restricted parameters
+
+def write_ds(ds, store, safe_chunks, group, mode, append_dim, region, encoding, chunkmanager_store_kwargs):
+    writer = _XarrayDatasetWriter(ds, store=store, safe_chunks=safe_chunks)
+    writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
+
+    # write metadata
+    writer.write_metadata(encoding)
+    # write in-memory arrays
+    writer.write_eager()
+    # eagerly write dask arrays
+    maybe_fork_session = writer.write_lazy(
+        chunkmanager_store_kwargs=chunkmanager_store_kwargs
+    )
+
+    return maybe_fork_session
+
+
+
+# overload because several kwargs are currently forbidden for DataTree
 @overload
 def to_icechunk(
     obj: DataTree,
@@ -199,7 +217,6 @@ def to_icechunk(
 ) -> None: ...
 
 
-# Overload for DataArray/Dataset - full parameters
 @overload
 def to_icechunk(
     obj: DataArray | Dataset,
@@ -328,10 +345,11 @@ def to_icechunk(
                 "The 'region' parameter is not yet supported when writing DataTree objects."
             )
 
-    as_dataset = _make_dataset(obj)
-
     # This ugliness is needed so that we allow users to call `to_icechunk` with a dirty Session
     # for _serial_ writes
+
+    # TODO DataTree does not implement `__dask_graph__`, unlike `Dataset`, so will this ever trigger?
+    # TODO this doesn't even trigger for the current Dataset tests, because they use non-dask data...
     is_dask = is_dask_collection(obj)
     fork: Session | ForkSession
     if is_dask:
@@ -343,18 +361,30 @@ def to_icechunk(
     else:
         fork = session
 
-    writer = _XarrayDatasetWriter(as_dataset, store=fork.store, safe_chunks=safe_chunks)
+    if isinstance(obj, DataTree):
+        dt = obj
+        
+        if encoding is None:
+            encoding = {}
+        if set(encoding) - set(dt.groups):
+            raise ValueError(
+                f"unexpected encoding group name(s) provided: {set(encoding) - set(dt.groups)}"
+            )
+        
+        # TODO expose this
+        write_inherited_coords = False
 
-    writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
+        for rel_path, node in dt.subtree_with_keys:
+            at_root = node is dt
+            dataset = node.to_dataset(inherit=write_inherited_coords or at_root)
 
-    # write metadata
-    writer.write_metadata(encoding)
-    # write in-memory arrays
-    writer.write_eager()
-    # eagerly write dask arrays
-    maybe_fork_session = writer.write_lazy(
-        chunkmanager_store_kwargs=chunkmanager_store_kwargs
-    )
+            # TODO what do I do with all these maybe_fork_sessions here?
+            maybe_fork_session = write_ds(ds=dataset, store=fork.store, safe_chunks=safe_chunks, group=dt[rel_path].path, mode=mode, append_dim=append_dim, region=region, encoding=encoding, chunkmanager_store_kwargs=chunkmanager_store_kwargs)
+
+    else:
+        as_dataset = _make_dataset(obj)
+        maybe_fork_session = write_ds(ds=as_dataset, store=fork.store, safe_chunks=safe_chunks, group=group, mode=mode, append_dim=append_dim, region=region, encoding=encoding, chunkmanager_store_kwargs=chunkmanager_store_kwargs)
+    
     if is_dask:
         if maybe_fork_session is None:
             raise RuntimeError(
@@ -372,22 +402,13 @@ def to_icechunk(
 def _make_dataset(obj: DataArray) -> Dataset: ...
 @overload
 def _make_dataset(obj: Dataset) -> Dataset: ...
-@overload
-def _make_dataset(obj: "DataTree") -> Dataset: ...
-def _make_dataset(obj: DataArray | Dataset | "DataTree") -> Dataset:
+def _make_dataset(obj: DataArray | Dataset) -> Dataset:
     """Copied from DataArray.to_zarr"""
     DATAARRAY_NAME = "__xarray_dataarray_name__"
     DATAARRAY_VARIABLE = "__xarray_dataarray_variable__"
 
     if isinstance(obj, Dataset):
         return obj
-
-    if DataTree is not None and isinstance(obj, DataTree):
-        # For DataTree, we currently only support the root dataset
-        # Implementation will be provided later
-        raise NotImplementedError(
-            "DataTree support is not yet implemented. Please provide the implementation."
-        )
 
     assert isinstance(obj, DataArray)
 
