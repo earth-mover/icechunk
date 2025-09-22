@@ -376,9 +376,6 @@ class IcechunkStore(Store, SyncMixin):
 
         Partial writes are no longer used by Zarr, so this is always false.
         """
-        # TODO: Remove this test mypy error
-        test_mypy_error: str = 123  # This will cause a mypy error for testing
-        print(test_mypy_error)
         return self._store.supports_partial_writes  # type: ignore[return-value]
 
     async def set_partial_values(
