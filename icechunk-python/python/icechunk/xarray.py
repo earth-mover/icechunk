@@ -32,7 +32,10 @@ if Version(xr.__version__) < Version("2024.10.0"):
     )
 
 if Version(xr.__version__) > Version("2025.09.0"):
-    from xarray.backends.writers import _validate_dataset_names, dump_to_store # type: ignore[import-not-found]
+    from xarray.backends.writers import (  # type: ignore[import-not-found]
+        _validate_dataset_names,
+        dump_to_store,
+    )
 else:
     from xarray.backends.api import _validate_dataset_names, dump_to_store
 
@@ -185,8 +188,17 @@ class _XarrayDatasetWriter:
         return session_merge_reduction(stored_arrays, split_every=split_every)
 
 
-
-def write_ds(ds, store, safe_chunks, group, mode, append_dim, region, encoding, chunkmanager_store_kwargs):
+def write_ds(
+    ds,
+    store,
+    safe_chunks,
+    group,
+    mode,
+    append_dim,
+    region,
+    encoding,
+    chunkmanager_store_kwargs,
+):
     writer = _XarrayDatasetWriter(ds, store=store, safe_chunks=safe_chunks)
     writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 
@@ -200,7 +212,6 @@ def write_ds(ds, store, safe_chunks, group, mode, append_dim, region, encoding, 
     )
 
     return maybe_fork_session
-
 
 
 # overload because several kwargs are currently forbidden for DataTree, and ``write_inherited_coords`` only applies to DataTree
@@ -231,7 +242,6 @@ def to_icechunk(
     encoding: Mapping[Any, Any] | None = None,
     chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
     split_every: int | None = None,
-
 ) -> None: ...
 
 
@@ -255,8 +265,8 @@ def to_icechunk(
     Parameters
     ----------
     obj: DataArray, Dataset, or DataTree
-        Xarray object to write. 
-        
+        Xarray object to write.
+
         Note: When passing a DataTree, the ``append_dim``, ``region``, and ``group`` parameters are not yet supported.
     session : icechunk.Session
         Writable Icechunk Session
@@ -370,7 +380,7 @@ def to_icechunk(
 
     if isinstance(obj, DataTree):
         dt = obj
-        
+
         if encoding is None:
             encoding = {}
         if set(encoding) - set(dt.groups):
@@ -383,12 +393,32 @@ def to_icechunk(
             dataset = node.to_dataset(inherit=write_inherited_coords or at_root)
 
             # TODO what do I do with all these maybe_fork_sessions here?
-            maybe_fork_session = write_ds(ds=dataset, store=fork.store, safe_chunks=safe_chunks, group=dt[rel_path].path, mode=mode, append_dim=append_dim, region=region, encoding=encoding, chunkmanager_store_kwargs=chunkmanager_store_kwargs)
+            maybe_fork_session = write_ds(
+                ds=dataset,
+                store=fork.store,
+                safe_chunks=safe_chunks,
+                group=dt[rel_path].path,
+                mode=mode,
+                append_dim=append_dim,
+                region=region,
+                encoding=encoding,
+                chunkmanager_store_kwargs=chunkmanager_store_kwargs,
+            )
 
     else:
         as_dataset = _make_dataset(obj)
-        maybe_fork_session = write_ds(ds=as_dataset, store=fork.store, safe_chunks=safe_chunks, group=group, mode=mode, append_dim=append_dim, region=region, encoding=encoding, chunkmanager_store_kwargs=chunkmanager_store_kwargs)
-    
+        maybe_fork_session = write_ds(
+            ds=as_dataset,
+            store=fork.store,
+            safe_chunks=safe_chunks,
+            group=group,
+            mode=mode,
+            append_dim=append_dim,
+            region=region,
+            encoding=encoding,
+            chunkmanager_store_kwargs=chunkmanager_store_kwargs,
+        )
+
     if is_dask:
         if maybe_fork_session is None:
             raise RuntimeError(

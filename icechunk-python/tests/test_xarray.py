@@ -57,8 +57,14 @@ def create_test_datatree() -> xr.DataTree:
                     "bar": ("x", ["hello", "world"]),
                 },
                 coords={
-                    "x": ("x", [1, 2]), # inherited dimension coordinate that can't be overriden
-                    "w": ("x", [0.1, 0.2]), # inherited non-dimension coordinate to override
+                    "x": (
+                        "x",
+                        [1, 2],
+                    ),  # inherited dimension coordinate that can't be overridden
+                    "w": (
+                        "x",
+                        [0.1, 0.2],
+                    ),  # inherited non-dimension coordinate to override
                 },
             ),
             "/a": xr.Dataset(
@@ -75,7 +81,10 @@ def create_test_datatree() -> xr.DataTree:
                     "foo": ("x", ["gamma", "delta"]),
                 },
                 coords={
-                    "z": ("z", ["alpha", "beta", "gamma"]),  # override inherited non-dimension coordinate with different length (i.e. multi-resolution)
+                    "z": (
+                        "z",
+                        ["alpha", "beta", "gamma"],
+                    ),  # override inherited non-dimension coordinate with different length (i.e. multi-resolution)
                 },
             ),
         }
@@ -117,8 +126,6 @@ def roundtrip_datatree(
 def test_xarray_datatree_to_icechunk() -> None:
     dt = create_test_datatree()
     with roundtrip_datatree(dt) as actual:
-        print(actual)
-        print(dt)
         assert_identical(actual, dt)
 
 
