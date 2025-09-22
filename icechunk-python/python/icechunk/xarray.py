@@ -31,6 +31,11 @@ if Version(xr.__version__) < Version("2024.10.0"):
         f"Writing to icechunk requires Xarray>=2024.10.0 but you have {xr.__version__}. Please upgrade."
     )
 
+if Version(xr.__version__) > Version("2025.09.0"):
+    from xarray.backends.writers import _validate_dataset_names, dump_to_store
+else:
+    from xarray.backends.api import _validate_dataset_names, dump_to_store
+
 
 def is_dask_collection(x: Any) -> bool:
     if has_dask:
@@ -125,7 +130,6 @@ class _XarrayDatasetWriter:
         This method creates new Zarr arrays when necessary, writes attributes,
         and any in-memory arrays.
         """
-        from xarray.backends.api import _validate_dataset_names, dump_to_store
 
         # validate Dataset keys, DataArray names
         _validate_dataset_names(self.dataset)
@@ -302,7 +306,8 @@ def to_icechunk(
     writer.write_eager()
     # eagerly write dask arrays
     maybe_fork_session = writer.write_lazy(
-        chunkmanager_store_kwargs=chunkmanager_store_kwargs
+        chunkmanager_store_kwargs=chunkmanager_store_kwargs,
+        split_every=split_every,
     )
     if is_dask:
         if maybe_fork_session is None:
