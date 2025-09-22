@@ -84,7 +84,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          mypy python 2>&1 | tee mypy-output.log || true
+          mypy python 2>&1 | tee mypy-output.log
 
       - name: Create mypy failure issue
         if: |
