@@ -864,6 +864,21 @@ impl Session {
     }
 
     #[instrument(skip(self))]
+    pub async fn all_node_chunks<'a>(
+        &'a self,
+        node: &'a NodeSnapshot,
+    ) -> impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a {
+        updated_node_chunks_iterator(
+            self.asset_manager.as_ref(),
+            &self.change_set,
+            &self.snapshot_id,
+            node.clone(),
+            ManifestExtents::ALL,
+        )
+        .await
+    }
+
+    #[instrument(skip(self))]
     pub async fn chunk_coordinates<'a, 'b: 'a>(
         &'a self,
         array_path: &'b Path,

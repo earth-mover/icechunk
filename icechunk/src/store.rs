@@ -24,7 +24,7 @@ use crate::{
     format::{
         ByteRange, ChunkIndices, ChunkOffset, Path, PathError,
         manifest::{ChunkPayload, VirtualChunkRef},
-        snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
+        snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot, NodeType},
     },
     refs::{RefError, RefErrorKind},
     repository::{RepositoryError, RepositoryErrorKind},
@@ -557,8 +557,6 @@ impl Store {
         &self,
         prefix: &str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send + use<>> {
-        // TODO: this is inefficient because it filters based on the prefix, instead of only
-        // generating items that could potentially match
         let meta = self.list_metadata_prefix(prefix, false).await?;
         let chunks = self.list_chunks_prefix(prefix).await?;
         // FIXME: this is wrong, we are realizing all keys in memory
@@ -748,8 +746,8 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + use<'a>> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
-            let repository = Arc::clone(&self.session).read_owned().await;
-            for node in repository.list_nodes().await? {
+            let session = Arc::clone(&self.session).read_owned().await;
+            for node in session.list_nodes().await? {
                 // TODO: handle non-utf8?
                 let meta_key = Key::Metadata { node_path: node?.path }.to_string();
                 if is_prefix_match(&meta_key, prefix) {
@@ -770,19 +768,24 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + use<'a>> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
-            let repository = Arc::clone(&self.session).read_owned().await;
-            // TODO: this is inefficient because it filters based on the prefix, instead of only
-            // generating items that could potentially match
-            for await maybe_path_chunk in repository.all_chunks().await.map_err(StoreError::from)? {
-                // FIXME: utf8 handling
-                match maybe_path_chunk {
-                    Ok((path, chunk)) => {
-                        let chunk_key = Key::Chunk { node_path: path, coords: chunk.coord }.to_string();
-                        if is_prefix_match(&chunk_key, prefix) {
-                            yield chunk_key;
+            let session = Arc::clone(&self.session).read_owned().await;
+            for node in session.list_nodes().await? {
+                let node = node?;
+                if node.node_type() == NodeType::Array &&
+                    // FIXME: utf8 handling
+                    // skip the initial / in the path
+                    is_prefix_match(&node.path.to_string()[1..], prefix) {
+                        for await maybe_path_chunk in session.all_node_chunks(&node).await {
+                            match maybe_path_chunk {
+                                Ok((path, chunk)) => {
+                                    let chunk_key = Key::Chunk { node_path: path, coords: chunk.coord }.to_string();
+                                    if is_prefix_match(&chunk_key, prefix) {
+                                        yield chunk_key;
+                                    }
+                                }
+                                Err(err) => Err(err)?
+                            }
                         }
-                    }
-                    Err(err) => Err(err)?
                 }
             }
         };
