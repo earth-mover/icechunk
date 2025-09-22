@@ -94,15 +94,6 @@ jobs:
         shell: bash
         working-directory: .
         run: |
-          # Debug: Show current working directory and file structure
-          echo "Current working directory: $(pwd)"
-          echo "Contents of current directory:"
-          ls -la
-          echo "Looking for .github directory:"
-          ls -la .github/ || echo ".github directory not found"
-          echo "Looking for template file:"
-          ls -la .github/mypy-failure-template.md || echo "Template file not found"
-
           # Read the template and mypy output
           template=$(cat .github/mypy-failure-template.md)
 
