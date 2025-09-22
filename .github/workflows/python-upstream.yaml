@@ -75,13 +75,46 @@ jobs:
           uv pip list
 
       - name: mypy
+        id: mypy
+        continue-on-error: true
         shell: bash
         working-directory: icechunk-python
         run: |
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          mypy python
+          mypy python 2>&1 | tee mypy-output.log || true
+
+      - name: Create mypy failure issue
+        if: |
+          failure()
+          && steps.mypy.outcome == 'failure'
+          && github.event_name == 'schedule'
+          && github.repository_owner == 'earth-mover'
+        shell: bash
+        run: |
+          # Read the template and mypy output
+          template=$(cat .github/mypy-failure-template.md)
+
+          mypy_output="No mypy output captured"
+          if [ -f "icechunk-python/mypy-output.log" ]; then
+            mypy_output=$(cat icechunk-python/mypy-output.log)
+          fi
+
+          # Replace placeholders
+          issue_body="${template//\{\{WORKFLOW\}\}/${{ github.workflow }}}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/${{ github.run_id }}}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}}"
+          issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
+          issue_body="${issue_body//\{\{MYPY_OUTPUT\}\}/$mypy_output}"
+
+          # Create the issue using gh CLI
+          echo "$issue_body" | gh issue create \
+            --title "Nightly MyPy type checking failed with upstream dependencies" \
+            --body-file - \
+            --label "CI,upstream,mypy"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
@@ -102,7 +135,7 @@ jobs:
           pip list
 
       - name: pytest
-        id: status
+        id: pytest-icechunk
         shell: bash
         working-directory: icechunk-python
         run: |
@@ -120,10 +153,10 @@ jobs:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
 
-      - name: Generate and publish the report
+      - name: Generate and publish the pytest report
         if: |
           failure()
-          && steps.status.outcome == 'failure'
+          && steps.pytest-icechunk.outcome == 'failure'
           && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
         uses: xarray-contrib/issue-from-pytest-log@v1
@@ -191,7 +224,7 @@ jobs:
           uv pip list
 
       - name: pytest
-        id: status
+        id: pytest-xarray-backends
         shell: bash
         working-directory: icechunk/icechunk-python
         env:
@@ -203,10 +236,10 @@ jobs:
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
           pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 
-      - name: Generate and publish the report
+      - name: Generate and publish the xarray backends report
         if: |
           failure()
-          && steps.status.outcome == 'failure'
+          && steps.pytest-xarray-backends.outcome == 'failure'
           && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
         uses: xarray-contrib/issue-from-pytest-log@v1
