@@ -203,7 +203,7 @@ def write_ds(ds, store, safe_chunks, group, mode, append_dim, region, encoding, 
 
 
 
-# overload because several kwargs are currently forbidden for DataTree
+# overload because several kwargs are currently forbidden for DataTree, and ``write_inherited_coords`` only applies to DataTree
 @overload
 def to_icechunk(
     obj: DataTree,
@@ -213,6 +213,7 @@ def to_icechunk(
     safe_chunks: bool = True,
     encoding: Mapping[Any, Any] | None = None,
     chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
+    write_inherited_coords: bool = False,
     split_every: int | None = None,
 ) -> None: ...
 
@@ -230,6 +231,7 @@ def to_icechunk(
     encoding: Mapping[Any, Any] | None = None,
     chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
     split_every: int | None = None,
+
 ) -> None: ...
 
 
@@ -244,6 +246,7 @@ def to_icechunk(
     region: Region = None,
     encoding: Mapping[Any, Any] | None = None,
     chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
+    write_inherited_coords: bool = False,
     split_every: int | None = None,
 ) -> None:
     """
@@ -312,6 +315,11 @@ def to_icechunk(
         Additional keyword arguments passed on to the `ChunkManager.store` method used to store
         chunked arrays. For example for a dask array additional kwargs will be passed eventually to
         `dask.array.store()`. Experimental API that should not be relied upon.
+    write_inherited_coords : bool, default: False
+        If true, replicate inherited coordinates on all descendant nodes.
+        Otherwise, only write coordinates at the level at which they are
+        originally defined. This saves disk space, but requires opening the
+        full tree to load inherited coordinates.
     split_every: int, optional
         Number of tasks to merge at every level of the tree reduction.
 
@@ -349,7 +357,6 @@ def to_icechunk(
     # for _serial_ writes
 
     # TODO DataTree does not implement `__dask_graph__`, unlike `Dataset`, so will this ever trigger?
-    # TODO this doesn't even trigger for the current Dataset tests, because they use non-dask data...
     is_dask = is_dask_collection(obj)
     fork: Session | ForkSession
     if is_dask:
@@ -370,9 +377,6 @@ def to_icechunk(
             raise ValueError(
                 f"unexpected encoding group name(s) provided: {set(encoding) - set(dt.groups)}"
             )
-        
-        # TODO expose this
-        write_inherited_coords = False
 
         for rel_path, node in dt.subtree_with_keys:
             at_root = node is dt
