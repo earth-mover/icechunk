@@ -9,6 +9,7 @@ from packaging.version import Version
 import xarray as xr
 import zarr
 from icechunk import IcechunkStore, Session
+from icechunk.distributed import merge_sessions
 from icechunk.session import ForkSession
 from icechunk.vendor.xarray import _choose_default_mode
 from xarray import DataArray, Dataset, DataTree
@@ -198,7 +199,7 @@ def write_ds(
     region,
     encoding,
     chunkmanager_store_kwargs,
-):
+) -> ForkSession | None:
     writer = _XarrayDatasetWriter(ds, store=store, safe_chunks=safe_chunks)
     writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 
@@ -388,6 +389,7 @@ def to_icechunk(
                 f"unexpected encoding group name(s) provided: {set(encoding) - set(dt.groups)}"
             )
 
+        maybe_forked_sessions: list[ForkSession | None] = []
         for rel_path, node in dt.subtree_with_keys:
             at_root = node is dt
             dataset = node.to_dataset(inherit=write_inherited_coords or at_root)
@@ -404,6 +406,14 @@ def to_icechunk(
                 encoding=encoding,
                 chunkmanager_store_kwargs=chunkmanager_store_kwargs,
             )
+            maybe_forked_sessions.append(maybe_fork_session)
+
+        # TODO assumes bool(ForkSession) evaluates to True
+        # TODO add is_dask check here, once its actually supported
+        if any(maybe_forked_sessions):
+            maybe_fork_session = merge_sessions(maybe_forked_sessions)
+        else:
+            maybe_fork_session = None
 
     else:
         as_dataset = _make_dataset(obj)
