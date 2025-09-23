@@ -1438,8 +1438,7 @@ impl From<Session> for ChangeSet {
 }
 
 pub fn is_prefix_match(key: &str, prefix: &str) -> bool {
-    let tomatch =
-        if prefix != String::from('/') { key.strip_prefix(prefix) } else { Some(key) };
+    let tomatch = if prefix != "/" { key.strip_prefix(prefix) } else { Some(key) };
     match tomatch {
         None => false,
         Some(rest) => {
