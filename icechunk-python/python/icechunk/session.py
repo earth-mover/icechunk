@@ -387,7 +387,7 @@ class Session:
                 "You should not need to fork a read-only session. Read-only sessions can be pickled and transmitted directly."
             )
         self._allow_changes = True
-        return ForkSession(self._session)
+        return ForkSession(PySession.from_bytes(self._session.as_bytes()))
 
 
 class ForkSession(Session):
