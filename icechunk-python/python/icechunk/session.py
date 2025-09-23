@@ -387,6 +387,10 @@ class Session:
                 "You should not need to fork a read-only session. Read-only sessions can be pickled and transmitted directly."
             )
         self._allow_changes = True
+        # force a deep-copy of the underlying Session,
+        # so that multiple forks can be created and
+        # used independently in a local session.
+        # See test_dask.py::test_fork_session_deep_copies for an example
         return ForkSession(PySession.from_bytes(self._session.as_bytes()))
 
 

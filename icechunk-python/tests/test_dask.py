@@ -90,3 +90,25 @@ def test_xarray_to_icechunk_nested_pickling(scheduler) -> None:
             session.commit("wrote another commit.")
             with xr.open_zarr(session.store, consolidated=False) as actual:
                 assert_identical(actual, newds)
+
+
+@pytest.mark.parametrize("scheduler", ["threads", "processes"])
+def test_fork_session_deep_copies(scheduler) -> None:
+    with dask.config.set(scheduler=scheduler):
+        ds = create_test_data(dim_sizes=(2, 3, 4)).chunk(-1)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Repository.create(local_filesystem_storage(tmpdir))
+
+            session = repo.writable_session("main")
+            ds.to_zarr(session.store, mode="w", compute=False)
+            session.commit("expand store in prep for region writes")
+
+            session = repo.writable_session("main")
+            forks = [session.fork() for _ in range(ds.sizes["dim3"])]
+            for t, fork in zip(range(ds.sizes["dim3"]), forks, strict=True):
+                to_icechunk(ds.isel(dim3=[t]), fork, region="auto")
+            session.merge(*forks)
+            session.commit("yaya writes succeeded")
+
+            actual = xr.open_dataset(repo.readonly_session("main").store, engine="zarr")
+            xr.testing.assert_identical(actual, ds)
