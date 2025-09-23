@@ -32,7 +32,10 @@ if Version(xr.__version__) < Version("2024.10.0"):
     )
 
 if Version(xr.__version__) > Version("2025.09.0"):
-    from xarray.backends.writers import _validate_dataset_names, dump_to_store # type: ignore[import-not-found]
+    from xarray.backends.writers import (  # type: ignore[import-not-found]
+        _validate_dataset_names,
+        dump_to_store,
+    )
 else:
     from xarray.backends.api import _validate_dataset_names, dump_to_store
 
