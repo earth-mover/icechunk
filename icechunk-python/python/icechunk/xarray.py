@@ -394,7 +394,6 @@ def to_icechunk(
             at_root = node is dt
             dataset = node.to_dataset(inherit=write_inherited_coords or at_root)
 
-            # TODO what do I do with all these maybe_fork_sessions here?
             maybe_fork_session = write_ds(
                 ds=dataset,
                 store=fork.store,
@@ -411,6 +410,7 @@ def to_icechunk(
         # TODO assumes bool(ForkSession) evaluates to True
         # TODO add is_dask check here, once its actually supported
         if any(maybe_forked_sessions):
+            # Note: This should be safe since each iteration of the loop writes to a different group, so there are no conflicts.
             maybe_fork_session = merge_sessions(maybe_forked_sessions)
         else:
             maybe_fork_session = None
