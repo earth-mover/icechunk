@@ -26,6 +26,7 @@ jobs:
   build:
     name: upstream-dev
     runs-on: ubuntu-latest
+    continue-on-error: true
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
       || github.event_name == 'workflow_dispatch'
@@ -42,7 +43,7 @@ jobs:
       - name: Wait for MinIO to be ready
         run: |
           for _ in {1..10}; do
-              if curl --silent --fail http://minio:9000/minio/health/live; then
+              if curl --silent --fail http://localhost:9000/minio/health/live; then
               break
               fi
               sleep 3
@@ -50,7 +51,7 @@ jobs:
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: "3.13"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -61,6 +62,7 @@ jobs:
           working-directory: icechunk-python
           # target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
+          sccache: true
           # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
 
       - name: setup
@@ -75,16 +77,50 @@ jobs:
           uv pip list
 
       - name: mypy
+        id: mypy
         shell: bash
         working-directory: icechunk-python
         run: |
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          mypy python
+          mypy python 2>&1 | tee mypy-output.log
+
+      - name: Create mypy failure issue
+        if: |
+          always()
+          && steps.mypy.outcome == 'failure'
+          && github.event_name == 'schedule'
+          && github.repository_owner == 'earth-mover'
+        shell: bash
+        working-directory: .
+        run: |
+          # Read the template and mypy output
+          template=$(cat .github/mypy-failure-template.md)
+
+          mypy_output="No mypy output captured"
+          if [ -f "icechunk-python/mypy-output.log" ]; then
+            mypy_output=$(cat icechunk-python/mypy-output.log)
+          fi
+
+          # Replace placeholders
+          issue_body="${template//\{\{WORKFLOW\}\}/${{ github.workflow }}}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/${{ github.run_id }}}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}}"
+          issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
+          issue_body="${issue_body//\{\{MYPY_OUTPUT\}\}/$mypy_output}"
+
+          # Create the issue using gh CLI
+          echo "$issue_body" | gh issue create \
+            --title "Nightly MyPy type checking failed with upstream dependencies" \
+            --body-file - \
+            --label "CI"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
+        if: always()
         uses: actions/cache/restore@v4
         with:
           path: icechunk-python/.hypothesis/
@@ -93,6 +129,7 @@ jobs:
             cache-hypothesis-
 
       - name: describe environment
+        if: always()
         shell: bash
         working-directory: icechunk-python
         run: |
@@ -102,7 +139,8 @@ jobs:
           pip list
 
       - name: pytest
-        id: status
+        id: pytest-icechunk
+        if: always()
         shell: bash
         working-directory: icechunk-python
         run: |
@@ -120,16 +158,15 @@ jobs:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
 
-      - name: Generate and publish the report
+      - name: Generate and publish the pytest report
         if: |
-          failure()
-          && steps.status.outcome == 'failure'
+          always()
+          && steps.pytest-icechunk.outcome == 'failure'
           && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
         uses: xarray-contrib/issue-from-pytest-log@v1
         with:
           log-path: icechunk-python/output-pytest-log.jsonl
-
 
   xarray-backends:
     name: xarray-tests-upstream
@@ -153,7 +190,7 @@ jobs:
         working-directory: icechunk
         run: |
           for _ in {1..10}; do
-              if curl --silent --fail http://minio:9000/minio/health/live; then
+              if curl --silent --fail http://localhost:9000/minio/health/live; then
               break
               fi
               sleep 3
@@ -168,7 +205,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -191,7 +228,7 @@ jobs:
           uv pip list
 
       - name: pytest
-        id: status
+        id: pytest-xarray-backends
         shell: bash
         working-directory: icechunk/icechunk-python
         env:
@@ -203,10 +240,10 @@ jobs:
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
           pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
 
-      - name: Generate and publish the report
+      - name: Generate and publish the xarray backends report
         if: |
           failure()
-          && steps.status.outcome == 'failure'
+          && steps.pytest-xarray-backends.outcome == 'failure'
           && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
         uses: xarray-contrib/issue-from-pytest-log@v1
