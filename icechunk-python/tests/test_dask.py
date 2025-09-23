@@ -95,7 +95,7 @@ def test_xarray_to_icechunk_nested_pickling(scheduler) -> None:
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
 def test_fork_session_deep_copies(scheduler) -> None:
     with dask.config.set(scheduler=scheduler):
-        ds = create_test_data(dim_sizes=(2, 3, 4)).chunk(-1)
+        ds = create_test_data(dim_sizes=(2, 3, 4)).drop_encoding().chunk(dim3=1)
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Repository.create(local_filesystem_storage(tmpdir))
 
