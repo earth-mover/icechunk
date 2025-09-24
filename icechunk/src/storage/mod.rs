@@ -903,7 +903,7 @@ pub fn new_tigris_storage(
 ) -> StorageResult<Arc<dyn Storage>> {
     let config = S3Options {
         endpoint_url: Some(
-            config.endpoint_url.unwrap_or("https://t3.storage.dev".to_string()),
+            config.endpoint_url.unwrap_or("https://fly.storage.tigris.dev".to_string()),
         ),
         ..config
     };
