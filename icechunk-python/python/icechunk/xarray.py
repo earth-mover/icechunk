@@ -49,6 +49,12 @@ def is_dask_collection(x: Any) -> bool:
         return False
 
 
+# TODO: Remove this test mypy error after testing workflow
+def test_mypy_error() -> int:
+    """This function intentionally has a mypy error to test the upstream workflow."""
+    return "this is a string not an int"  # type error for testing
+
+
 class LazyArrayWriter(ArrayWriter):
     def __init__(self) -> None:
         super().__init__()  # type: ignore[no-untyped-call]
