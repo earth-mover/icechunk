@@ -32,12 +32,15 @@ if Version(xr.__version__) < Version("2024.10.0"):
     )
 
 if Version(xr.__version__) > Version("2025.09.0"):
-    from xarray.backends.writers import (  # type: ignore[import-not-found]
+    from xarray.backends.writers import (  # type: ignore[import-not-found,unused-ignore]
         _validate_dataset_names,
         dump_to_store,
     )
 else:
-    from xarray.backends.api import _validate_dataset_names, dump_to_store
+    from xarray.backends.api import (  # type: ignore[attr-defined,no-redef]
+        _validate_dataset_names,
+        dump_to_store,
+    )
 
 
 def is_dask_collection(x: Any) -> bool:
@@ -144,7 +147,7 @@ class _XarrayDatasetWriter:
         # This writes the metadata (zarr.json) for all arrays
         # This also will resize arrays for any appends
         self.writer = LazyArrayWriter()
-        dump_to_store(self.dataset, self.xarray_store, self.writer, encoding=encoding)
+        dump_to_store(self.dataset, self.xarray_store, self.writer, encoding=encoding)  # type: ignore[no-untyped-call]
 
         self._initialized = True
 
