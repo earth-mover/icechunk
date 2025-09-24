@@ -37,7 +37,7 @@ if Version(xr.__version__) > Version("2025.09.0"):
         dump_to_store,
     )
 else:
-    from xarray.backends.api import (  # type: ignore[attr-defined,no-redef]
+    from xarray.backends.api import (  # type: ignore[attr-defined,no-redef,unused-ignore]
         _validate_dataset_names,
         dump_to_store,
     )
@@ -147,7 +147,7 @@ class _XarrayDatasetWriter:
         # This writes the metadata (zarr.json) for all arrays
         # This also will resize arrays for any appends
         self.writer = LazyArrayWriter()
-        dump_to_store(self.dataset, self.xarray_store, self.writer, encoding=encoding)  # type: ignore[no-untyped-call]
+        dump_to_store(self.dataset, self.xarray_store, self.writer, encoding=encoding)  # type: ignore[no-untyped-call,unused-ignore]
 
         self._initialized = True
 
