@@ -13,6 +13,7 @@ use futures::{
     Stream, StreamExt, TryStreamExt,
     stream::{FuturesOrdered, FuturesUnordered},
 };
+use itertools::Itertools;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -28,7 +29,8 @@ use crate::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
         snapshot::{
-            ManifestFileInfo, NodeData, Snapshot, SnapshotInfo, SnapshotProperties,
+            ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
+            SnapshotProperties,
         },
         transaction_log::{Diff, DiffBuilder},
     },
@@ -857,7 +859,12 @@ impl Repository {
             // TODO: unnest this code
             if let Ok(snap) = asset_manager.fetch_snapshot(&snapshot_id).await {
                 let snap_c = Arc::clone(&snap);
-                for node in snap.iter_arc() {
+                for node in snap
+                    .iter_arc()
+                    .filter_ok(|node| node.node_type() == NodeType::Array)
+                    // TODO: make configurable
+                    .take(50)
+                {
                     match node {
                         Err(err) => {
                             error!(error=%err, "Error retrieving snapshot nodes");
