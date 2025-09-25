@@ -81,8 +81,6 @@ struct SnapshotInfoInspect {
     //path: String,
     //size_bytes: u64,
     id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parent_id: Option<String>,
     flushed_at: DateTime<Utc>,
     commit_message: String,
     metadata: SnapshotProperties,
@@ -98,7 +96,6 @@ async fn inspect_snapshot(
     let snap = asset_manager.fetch_snapshot(id).await?;
     let res = SnapshotInfoInspect {
         id: snap.id().to_string(),
-        parent_id: snap.parent_id().map(|p| p.to_string()),
         flushed_at: snap.flushed_at()?,
         commit_message: snap.message(),
         metadata: snap.metadata()?,
@@ -136,7 +133,7 @@ mod tests {
     async fn test_print_snapshot() -> Result<(), Box<dyn std::error::Error>> {
         let st = Arc::new(
             ObjectStorage::new_local_filesystem(&PathBuf::from(
-                "../icechunk-python/tests/data/split-repo",
+                "../icechunk-python/tests/data/split-repo-v2",
             ))
             .await?,
         );

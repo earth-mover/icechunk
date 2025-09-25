@@ -361,7 +361,7 @@ prop_compose! {
         virtual_chunk_containers in option::of(virtual_chunk_containers()),
         manifest in option::of(manifest_config()),
         storage in option::of(storage_settings()),
-
+        previous_file in option::of(any::<PathBuf>().prop_map(|path| path.to_string_lossy().to_string())),
         )
     -> RepositoryConfig {
         RepositoryConfig{
@@ -373,6 +373,7 @@ prop_compose! {
             manifest,
             virtual_chunk_containers,
             storage,
+            previous_file,
         }
     }
 }

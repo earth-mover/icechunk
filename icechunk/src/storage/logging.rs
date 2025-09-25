@@ -1,25 +1,21 @@
 use std::{
     fmt,
     ops::Range,
+    pin::Pin,
     sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::stream::BoxStream;
+use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncRead;
 
 use super::{
-    DeleteObjectsResult, FetchConfigResult, GetRefResult, ListInfo, Reader, Settings,
-    Storage, StorageError, StorageResult, UpdateConfigResult, VersionInfo,
-    WriteRefResult,
+    DeleteObjectsResult, ListInfo, Settings, Storage, StorageError, StorageResult,
+    VersionInfo, VersionedUpdateResult,
 };
-use crate::{
-    format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
-    private,
-};
+use crate::private;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoggingStorage {
@@ -64,142 +60,37 @@ impl Storage for LoggingStorage {
         self.backend.can_write()
     }
 
-    async fn fetch_config(
+    async fn put_object(
         &self,
         settings: &Settings,
-    ) -> StorageResult<FetchConfigResult> {
-        self.backend.fetch_config(settings).await
-    }
-    async fn update_config(
-        &self,
-        settings: &Settings,
-        config: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<UpdateConfigResult> {
-        self.backend.update_config(settings, config, previous_version).await
-    }
-
-    async fn fetch_snapshot(
-        &self,
-        settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        self.fetch_log
-            .lock()
-            .expect("poison lock")
-            .push(("fetch_snapshot".to_string(), id.to_string()));
-        self.backend.fetch_snapshot(settings, id).await
-    }
-
-    async fn fetch_transaction_log(
-        &self,
-        settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        self.fetch_log
-            .lock()
-            .expect("poison lock")
-            .push(("fetch_transaction_log".to_string(), id.to_string()));
-        self.backend.fetch_transaction_log(settings, id).await
-    }
-
-    async fn fetch_manifest_known_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-        size: u64,
-    ) -> StorageResult<Reader> {
-        self.fetch_log
-            .lock()
-            .expect("poison lock")
-            .push(("fetch_manifest_splitting".to_string(), id.to_string()));
-        self.backend.fetch_manifest_known_size(settings, id, size).await
-    }
-
-    async fn fetch_manifest_unknown_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        self.fetch_log
-            .lock()
-            .expect("poison lock")
-            .push(("fetch_manifest_single_request".to_string(), id.to_string()));
-        self.backend.fetch_manifest_unknown_size(settings, id).await
-    }
-
-    async fn fetch_chunk(
-        &self,
-        settings: &Settings,
-        id: &ChunkId,
-        range: &Range<ChunkOffset>,
-    ) -> Result<Bytes, StorageError> {
-        self.fetch_log
-            .lock()
-            .expect("poison lock")
-            .push(("fetch_chunk".to_string(), id.to_string()));
-        self.backend.fetch_chunk(settings, id, range).await
-    }
-
-    async fn write_snapshot(
-        &self,
-        settings: &Settings,
-        id: SnapshotId,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        self.backend.write_snapshot(settings, id, metadata, bytes).await
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("put_object".to_string(), path.to_string()));
+        self.backend
+            .put_object(settings, path, bytes, content_type, metadata, previous_version)
+            .await
     }
 
-    async fn write_transaction_log(
+    async fn copy_object(
         &self,
         settings: &Settings,
-        id: SnapshotId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        self.backend.write_transaction_log(settings, id, metadata, bytes).await
-    }
-
-    async fn write_manifest(
-        &self,
-        settings: &Settings,
-        id: ManifestId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        self.backend.write_manifest(settings, id, metadata, bytes).await
-    }
-
-    async fn write_chunk(
-        &self,
-        settings: &Settings,
-        id: ChunkId,
-        bytes: Bytes,
-    ) -> Result<(), StorageError> {
-        self.backend.write_chunk(settings, id, bytes).await
-    }
-
-    async fn get_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-    ) -> StorageResult<GetRefResult> {
-        self.backend.get_ref(settings, ref_key).await
-    }
-
-    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>> {
-        self.backend.ref_names(settings).await
-    }
-
-    async fn write_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-        bytes: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<WriteRefResult> {
-        self.backend.write_ref(settings, ref_key, bytes, previous_version).await
+        from: &str,
+        to: &str,
+        content_type: Option<&str>,
+        version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("copy_object".to_string(), format!("{from} -> {to}")));
+        self.backend.copy_object(settings, from, to, content_type, version).await
     }
 
     async fn list_objects<'a>(
@@ -207,6 +98,10 @@ impl Storage for LoggingStorage {
         settings: &Settings,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("list_objects".to_string(), prefix.to_string()));
         self.backend.list_objects(settings, prefix).await
     }
 
@@ -216,32 +111,38 @@ impl Storage for LoggingStorage {
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("delete_batch".to_string(), prefix.to_string()));
         self.backend.delete_batch(settings, prefix, batch).await
     }
 
-    async fn get_snapshot_last_modified(
+    async fn get_object_last_modified(
         &self,
+        path: &str,
         settings: &Settings,
-        snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>> {
-        self.backend.get_snapshot_last_modified(settings, snapshot).await
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("get_object_last_modified".to_string(), path.to_string()));
+        self.backend.get_object_last_modified(path, settings).await
     }
 
-    async fn get_object_range_buf(
+    async fn get_object_range(
         &self,
         settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
-        self.backend.get_object_range_buf(settings, key, range).await
-    }
-
-    async fn get_object_range_read(
-        &self,
-        settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        self.backend.get_object_range_read(settings, key, range).await
+        path: &str,
+        range: Option<&Range<u64>>,
+    ) -> StorageResult<(
+        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+        VersionInfo,
+    )> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("get_object_range".to_string(), path.to_string()));
+        self.backend.get_object_range(settings, path, range).await
     }
 }
