@@ -90,6 +90,7 @@ jobs:
         if: |
           always()
           && steps.mypy.outcome == 'failure'
+          && github.event_name == 'schedule'
           && github.repository_owner == 'earth-mover'
         shell: bash
         working-directory: .
