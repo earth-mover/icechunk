@@ -1,5 +1,22 @@
 # Changelog
 
+## Python Icechunk Library 1.1.6
+
+### Features
+
+- `Storage.new_tigris` now uses the new Tigris endpoint `t3.storage.dev` by default.
+- Repositories in Tigris object store now use the
+  `X-Tigris-Consistent` header for better consistency.
+
+### Fixes
+
+- `ForkSession` can now be used without serializing it.
+
+### Performance
+
+- Significant speed improvements for `Store.list_prefix` and
+  `Store.getsize_prefix` when prefix is not empty.
+
 ## Python Icechunk Library 1.1.5
 
 ### Features
