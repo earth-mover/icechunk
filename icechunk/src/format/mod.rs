@@ -1,5 +1,6 @@
 use core::fmt;
 use std::{
+    cmp::Ordering,
     convert::Infallible,
     fmt::{Debug, Display},
     hash::Hash,
@@ -460,6 +461,37 @@ impl TryFrom<String> for Path {
     fn try_from(value: String) -> Result<Self, Self::Error> {
         value.as_str().try_into()
     }
+}
+
+#[inline(always)]
+pub fn lookup_index_by_key<'a, T: ::flatbuffers::Follow<'a> + 'a, K: Ord>(
+    v: ::flatbuffers::Vector<'a, T>,
+    key: K,
+    f: fn(&<T as ::flatbuffers::Follow<'a>>::Inner, &K) -> Ordering,
+) -> Option<usize> {
+    if v.is_empty() {
+        return None;
+    }
+
+    let mut left: usize = 0;
+    let mut right = v.len() - 1;
+
+    while left <= right {
+        let mid = (left + right) / 2;
+        let value = v.get(mid);
+        match f(&value, &key) {
+            Ordering::Equal => return Some(mid),
+            Ordering::Less => left = mid + 1,
+            Ordering::Greater => {
+                if mid == 0 {
+                    return None;
+                }
+                right = mid - 1;
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
