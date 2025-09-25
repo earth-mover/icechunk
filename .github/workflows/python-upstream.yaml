@@ -191,22 +191,6 @@ jobs:
         with:
           path: "icechunk"
 
-      - name: Stand up MinIO
-        working-directory: icechunk
-        run: |
-          docker compose up -d minio
-
-      - name: Wait for MinIO to be ready
-        working-directory: icechunk
-        run: |
-          for _ in {1..10}; do
-              if curl --silent --fail http://localhost:9000/minio/health/live; then
-              break
-              fi
-              sleep 3
-          done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
-
       - uses: actions/checkout@v5
         with:
           repository: "pydata/xarray"
@@ -237,6 +221,21 @@ jobs:
           uv pip install pytest-mypy-plugins
           uv pip list
 
+      - name: Stand up MinIO
+        working-directory: icechunk
+        run: |
+          docker compose up -d minio
+
+      - name: Wait for MinIO to be ready
+        working-directory: icechunk
+        run: |
+          for _ in {1..10}; do
+              if curl --silent --fail http://localhost:9000/minio/health/live; then
+              break
+              fi
+              sleep 3
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
       - name: pytest
         id: pytest-xarray-backends
         shell: bash
