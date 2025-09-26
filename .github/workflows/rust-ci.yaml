@@ -189,6 +189,13 @@ jobs:
         with:
           key: ${{ env.RUST_CHANNEL }}
 
+      - name: Debug External PR Environment
+        run: |
+          echo "=== External PR Job Debug ==="
+          echo "Job: rust-external-services-external"
+          echo "Current environment: ${GITHUB_ENVIRONMENT:-none}"
+          echo "This should be 'ci-with-secrets'"
+
       - name: Debug PR context
         run: |
           echo "=== PR Context Debug ==="
