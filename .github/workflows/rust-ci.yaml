@@ -135,6 +135,15 @@ jobs:
         with:
           key: ${{ env.RUST_CHANNEL }}
 
+      - name: Debug PR context
+        run: |
+          echo "=== PR Context Debug ==="
+          echo "Event name: ${{ github.event_name }}"
+          echo "Head repo: ${{ github.event.pull_request.head.repo.full_name }}"
+          echo "Base repo: ${{ github.repository }}"
+          echo "Is external PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}"
+          echo "Environment should be: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ci-with-secrets' || 'null' }}"
+
       - name: Check environment variables
         env:
           R2_BUCKET: ${{ vars.R2_BUCKET }}
