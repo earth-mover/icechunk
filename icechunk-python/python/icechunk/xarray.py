@@ -24,8 +24,13 @@ ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 
 try:
     has_dask = importlib.util.find_spec("dask") is not None
+    if has_dask:
+        from dask.highlevelgraph import HighLevelGraph
+    else:
+        HighLevelGraph = None
 except ImportError:
     has_dask = False
+    HighLevelGraph = None
 
 if Version(xr.__version__) < Version("2024.10.0"):
     raise ValueError(
@@ -45,9 +50,37 @@ def is_dask_collection(x: Any) -> bool:
     if has_dask:
         import dask
 
-        return dask.base.is_dask_collection(x)
+        if isinstance(x, DataTree):
+            return bool(datatree_dask_graph(x))
+        else:
+            return dask.base.is_dask_collection(x)
     else:
         return False
+
+
+def datatree_dask_graph(dt: DataTree) -> "HighLevelGraph | None":  # type: ignore[name-defined]
+    # copied from `Dataset.__dask_graph__()`.
+    # Should ideally be upstreamed into xarray as part of making DataTree a true dask collection - see https://github.com/pydata/xarray/issues/9355.
+
+    all_variables = {
+        f"{path}/{var_name}" if path != "." else var_name: variable
+        for path, node in dt.subtree_with_keys
+        for var_name, variable in node.variables.items()
+    }
+
+    graphs = {k: v.__dask_graph__() for k, v in all_variables.items()}
+    graphs = {k: v for k, v in graphs.items() if v is not None}
+    if not graphs:
+        return None
+    else:
+        try:
+            from dask.highlevelgraph import HighLevelGraph
+
+            return HighLevelGraph.merge(*graphs.values())
+        except ImportError:
+            from dask import sharedict
+
+            return sharedict.merge(*graphs.values())
 
 
 class LazyArrayWriter(ArrayWriter):
@@ -366,8 +399,6 @@ def to_icechunk(
 
     # This ugliness is needed so that we allow users to call `to_icechunk` with a dirty Session
     # for _serial_ writes
-
-    # TODO DataTree does not implement `__dask_graph__`, unlike `Dataset`, so will this ever trigger?
     is_dask = is_dask_collection(obj)
     fork: Session | ForkSession
     if is_dask:
@@ -407,9 +438,7 @@ def to_icechunk(
             )
             maybe_forked_sessions.append(maybe_fork_session)
 
-        # TODO assumes bool(ForkSession) evaluates to True
-        # TODO add is_dask check here, once its actually supported
-        if any(maybe_forked_sessions):
+        if any(maybe_forked_sessions) and is_dask:
             # Note: This should be safe since each iteration of the loop writes to a different group, so there are no conflicts.
             maybe_fork_session = merge_sessions(maybe_forked_sessions)
         else:
