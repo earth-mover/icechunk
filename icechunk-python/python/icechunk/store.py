@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator, Iterable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from icechunk._icechunk_python import PyStore, VirtualChunkSpec
 from zarr.abc.store import (
@@ -371,9 +371,12 @@ class IcechunkStore(Store, SyncMixin):
         return await self._store.delete_dir(prefix)
 
     @property
-    def supports_partial_writes(self) -> bool:
-        """Does the store support partial writes?"""
-        return self._store.supports_partial_writes
+    def supports_partial_writes(self) -> Literal[False]:
+        """Does the store support partial writes?
+
+        Partial writes are no longer used by Zarr, so this is always false.
+        """
+        return self._store.supports_partial_writes  # type: ignore[return-value]
 
     async def set_partial_values(
         self, key_start_values: Iterable[tuple[str, int, BytesLike]]
