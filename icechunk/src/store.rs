@@ -2323,7 +2323,7 @@ mod tests {
         assert!(store.exists("a/zarr.json").await?);
         assert!(store.exists("b/zarr.json").await?);
 
-        repo.reset_branch("main", &prev_snap).await?;
+        repo.reset_branch("main", &prev_snap, None).await?;
         let ds = Arc::new(RwLock::new(
             repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?,
         ));

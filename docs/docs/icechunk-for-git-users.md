@@ -71,10 +71,22 @@ In git, you can reset a branch to previous commit. Similarly, in Icechunk you ca
 repo.reset_branch("my-new-branch", "198273178639187")
 ```
 
+At this point, the tip of the branch is now the snapshot `198273178639187` and any changes made to the branch will be based on this snapshot. This also means the history of the branch is now same as the ancestry of this snapshot.
+
 !!! warning
     This is a destructive operation. It will overwrite the branch reference with the snapshot immediately. It can only be undone by resetting the branch again.
 
-At this point, the tip of the branch is now the snapshot `198273178639187` and any changes made to the branch will be based on this snapshot. This also means the history of the branch is now same as the ancestry of this snapshot.
+To make `reset_branch` less dangerous, you can pass an optional third argument, the snapshot id currently pointed
+by the branch:
+
+```python
+# reset the branch to the initial commit
+repo.reset_branch("my-new-branch", "1CECHNKREP0F1RSTCMT0", from_snapshot_id="198273178639187")
+```
+
+If the branch is not currently pointing to snapshot `198273178639187`, the operation will be rejected
+with an exception. Using this approach, you can make sure to only reset a branch if no ether commits
+were done to it since you last checked.
 
 ### Branch History
 
