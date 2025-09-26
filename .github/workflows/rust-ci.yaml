@@ -135,6 +135,35 @@ jobs:
         with:
           key: ${{ env.RUST_CHANNEL }}
 
+      - name: Check environment variables
+        env:
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_BUCKET: ${{ vars.S3_BUCKET }}
+          AWS_REGION: ${{ vars.S3_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TIGRIS_BUCKET: ${{ vars.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ vars.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== Environment Variables Status ==="
+          echo "R2_BUCKET: ${R2_BUCKET:+SET} ${R2_BUCKET:-UNSET}"
+          echo "R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:+SET} ${R2_ACCESS_KEY_ID:-UNSET}"
+          echo "R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:+SET} ${R2_SECRET_ACCESS_KEY:-UNSET}"
+          echo "R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:+SET} ${R2_ACCOUNT_ID:-UNSET}"
+          echo "AWS_BUCKET: ${AWS_BUCKET:+SET} ${AWS_BUCKET:-UNSET}"
+          echo "AWS_REGION: ${AWS_REGION:+SET} ${AWS_REGION:-UNSET}"
+          echo "AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:+SET} ${AWS_ACCESS_KEY_ID:-UNSET}"
+          echo "AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:+SET} ${AWS_SECRET_ACCESS_KEY:-UNSET}"
+          echo "TIGRIS_BUCKET: ${TIGRIS_BUCKET:+SET} ${TIGRIS_BUCKET:-UNSET}"
+          echo "TIGRIS_REGION: ${TIGRIS_REGION:+SET} ${TIGRIS_REGION:-UNSET}"
+          echo "TIGRIS_ACCESS_KEY_ID: ${TIGRIS_ACCESS_KEY_ID:+SET} ${TIGRIS_ACCESS_KEY_ID:-UNSET}"
+          echo "TIGRIS_SECRET_ACCESS_KEY: ${TIGRIS_SECRET_ACCESS_KEY:+SET} ${TIGRIS_SECRET_ACCESS_KEY:-UNSET}"
+
       - name: Run external service tests
         env:
           RUST_LOG: trace
@@ -153,10 +182,10 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "cron" ]]; then
             echo "Running comprehensive integration tests for cron job"
-            cargo test --all --all-targets -- --ignored
+            cargo test --package icechunk -- --ignored
           else
             echo "Running targeted external service tests"
-            cargo test --all --all-targets "_in_aws" -- --ignored
-            cargo test --all --all-targets "_in_r2" -- --ignored
-            cargo test --all --all-targets "_in_tigris" -- --ignored
+            cargo test --package icechunk "_in_aws" -- --ignored
+            cargo test --package icechunk "_in_r2" -- --ignored
+            cargo test --package icechunk "_in_tigris" -- --ignored
           fi
