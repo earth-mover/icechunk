@@ -976,6 +976,41 @@ impl Session {
         self._commit(message, properties, false).await
     }
 
+    pub async fn flush(
+        &mut self,
+        message: &str,
+        properties: Option<SnapshotProperties>,
+    ) -> SessionResult<SnapshotId> {
+        info!(old_snapshot_id=%self.snapshot_id(), "Flush started");
+
+        let default_metadata = self.default_commit_metadata.clone();
+        let properties = properties
+            .map(|p| {
+                let mut merged = default_metadata.clone();
+                merged.extend(p.into_iter());
+                merged
+            })
+            .unwrap_or(default_metadata);
+
+        let flush_data = FlushProcess::new(
+            Arc::clone(&self.asset_manager),
+            &self.change_set,
+            self.snapshot_id(),
+            &self.splits,
+        );
+        let id = do_flush(flush_data, message, properties, false).await?;
+
+        // if the commit was successful, we update the session to be
+        // a read only session pointed at the new snapshot
+        self.change_set = ChangeSet::default();
+        self.snapshot_id = id.clone();
+        // Once committed, the session is now read only, which we control
+        // by setting the branch_name to None (you can only write to a branch session)
+        self.branch_name = None;
+
+        Ok(id)
+    }
+
     #[instrument(skip(self, properties))]
     pub async fn rewrite_manifests(
         &mut self,
@@ -1945,7 +1980,7 @@ impl ManifestSplittingConfig {
     }
 }
 
-async fn flush(
+async fn do_flush(
     mut flush_data: FlushProcess<'_>,
     message: &str,
     properties: SnapshotProperties,
@@ -2142,7 +2177,8 @@ async fn do_commit(
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
     let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id, splits);
-    let new_snapshot = flush(flush_data, message, properties, rewrite_manifests).await?;
+    let new_snapshot =
+        do_flush(flush_data, message, properties, rewrite_manifests).await?;
 
     debug!(branch_name, new_snapshot_id=%new_snapshot, "Updating branch");
     let id = match update_branch(
@@ -3794,6 +3830,61 @@ mod tests {
             }
             _ => panic!("Expected InvalidIndex Error"),
         }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_flush() -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository().await;
+        let mut session = repository.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+
+        let path: Path = "/array".try_into().unwrap();
+        session.add_array(path.clone(), basic_shape(), None, Bytes::new()).await?;
+        session
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        let meta: SnapshotProperties = [("test".to_string(), 42.into())].into();
+        let snap_id = session.flush("flush", Some(meta.clone())).await?;
+
+        let chunk = get_chunk(
+            session
+                .get_chunk_reader(&path, &ChunkIndices(vec![0]), &ByteRange::ALL)
+                .await?,
+        )
+        .await?;
+        assert_eq!(chunk, Some(Bytes::from_static(br#"hello"#)));
+        assert!(session.branch().is_none());
+        assert!(session.changes().is_empty());
+
+        repository
+            .reset_branch("main", &snap_id, Some(&Snapshot::INITIAL_SNAPSHOT_ID))
+            .await?;
+        let parents: Vec<_> = repository
+            .ancestry(&VersionInfo::BranchTipRef("main".to_string()))
+            .await?
+            .try_collect()
+            .await?;
+        assert_eq!(parents.len(), 2);
+        assert_eq!(&parents[0].id, &snap_id);
+        assert_eq!(&parents[0].message, "flush");
+        assert_eq!(&parents[0].metadata, &meta);
+        assert_eq!(&parents[1].id, &Snapshot::INITIAL_SNAPSHOT_ID);
+
+        let session = repository
+            .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+            .await?;
+        let chunk = get_chunk(
+            session
+                .get_chunk_reader(&path, &ChunkIndices(vec![0]), &ByteRange::ALL)
+                .await?,
+        )
+        .await?;
+        assert_eq!(chunk, Some(Bytes::from_static(br#"hello"#)));
         Ok(())
     }
 
