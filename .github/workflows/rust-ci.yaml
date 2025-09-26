@@ -143,9 +143,12 @@ jobs:
           echo "Base repo: ${{ github.repository }}"
           echo "Is external PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}"
           echo "Environment should be: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ci-with-secrets' || 'null' }}"
+          echo "Current environment: ${GITHUB_ENVIRONMENT:-none}"
+          echo "Job URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Check environment variables
         env:
+          DEBUG_VAR: "DEBUG"
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -160,18 +163,19 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
         run: |
           echo "=== Environment Variables Status ==="
-          echo "R2_BUCKET: ${R2_BUCKET:+SET} ${R2_BUCKET:-UNSET}"
-          echo "R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:+SET} ${R2_ACCESS_KEY_ID:-UNSET}"
-          echo "R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:+SET} ${R2_SECRET_ACCESS_KEY:-UNSET}"
-          echo "R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:+SET} ${R2_ACCOUNT_ID:-UNSET}"
-          echo "AWS_BUCKET: ${AWS_BUCKET:+SET} ${AWS_BUCKET:-UNSET}"
-          echo "AWS_REGION: ${AWS_REGION:+SET} ${AWS_REGION:-UNSET}"
-          echo "AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:+SET} ${AWS_ACCESS_KEY_ID:-UNSET}"
-          echo "AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:+SET} ${AWS_SECRET_ACCESS_KEY:-UNSET}"
-          echo "TIGRIS_BUCKET: ${TIGRIS_BUCKET:+SET} ${TIGRIS_BUCKET:-UNSET}"
-          echo "TIGRIS_REGION: ${TIGRIS_REGION:+SET} ${TIGRIS_REGION:-UNSET}"
-          echo "TIGRIS_ACCESS_KEY_ID: ${TIGRIS_ACCESS_KEY_ID:+SET} ${TIGRIS_ACCESS_KEY_ID:-UNSET}"
-          echo "TIGRIS_SECRET_ACCESS_KEY: ${TIGRIS_SECRET_ACCESS_KEY:+SET} ${TIGRIS_SECRET_ACCESS_KEY:-UNSET}"
+          echo "DEBUG_VAR: '${DEBUG_VAR}' - using \${VAR:+SET}: '${DEBUG_VAR:+SET}' - using \${VAR:-UNSET}: '${DEBUG_VAR:-UNSET}'"
+          echo "R2_BUCKET: '${R2_BUCKET}' - Status: ${R2_BUCKET:+SET}${R2_BUCKET:-UNSET}"
+          echo "R2_ACCESS_KEY_ID: Status: ${R2_ACCESS_KEY_ID:+SET}${R2_ACCESS_KEY_ID:-UNSET}"
+          echo "R2_SECRET_ACCESS_KEY: Status: ${R2_SECRET_ACCESS_KEY:+SET}${R2_SECRET_ACCESS_KEY:-UNSET}"
+          echo "R2_ACCOUNT_ID: Status: ${R2_ACCOUNT_ID:+SET}${R2_ACCOUNT_ID:-UNSET}"
+          echo "AWS_BUCKET: '${AWS_BUCKET}' - Status: ${AWS_BUCKET:+SET}${AWS_BUCKET:-UNSET}"
+          echo "AWS_REGION: '${AWS_REGION}' - Status: ${AWS_REGION:+SET}${AWS_REGION:-UNSET}"
+          echo "AWS_ACCESS_KEY_ID: Status: ${AWS_ACCESS_KEY_ID:+SET}${AWS_ACCESS_KEY_ID:-UNSET}"
+          echo "AWS_SECRET_ACCESS_KEY: Status: ${AWS_SECRET_ACCESS_KEY:+SET}${AWS_SECRET_ACCESS_KEY:-UNSET}"
+          echo "TIGRIS_BUCKET: '${TIGRIS_BUCKET}' - Status: ${TIGRIS_BUCKET:+SET}${TIGRIS_BUCKET:-UNSET}"
+          echo "TIGRIS_REGION: '${TIGRIS_REGION}' - Status: ${TIGRIS_REGION:+SET}${TIGRIS_REGION:-UNSET}"
+          echo "TIGRIS_ACCESS_KEY_ID: Status: ${TIGRIS_ACCESS_KEY_ID:+SET}${TIGRIS_ACCESS_KEY_ID:-UNSET}"
+          echo "TIGRIS_SECRET_ACCESS_KEY: Status: ${TIGRIS_SECRET_ACCESS_KEY:+SET}${TIGRIS_SECRET_ACCESS_KEY:-UNSET}"
 
       - name: Run external service tests
         env:
