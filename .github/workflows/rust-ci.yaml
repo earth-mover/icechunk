@@ -104,13 +104,67 @@ jobs:
         run: |
           cargo test --lib
 
-  rust-external-services:
-    name: Rust CI (External Services)
+  rust-external-services-internal:
+    name: Rust CI (External Services - Internal)
     timeout-minutes: 30
     runs-on: ubuntu-latest
-    if: github.event_name == 'cron' || github.event_name == 'pull_request' || github.event_name == 'push'
-    # Apply environment protection only for external PRs
-    environment: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ci-with-secrets' }}
+    if: (github.event_name == 'cron' || github.event_name == 'pull_request' || github.event_name == 'push') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
+    defaults:
+      run:
+        working-directory: ./
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Just
+        run: sudo snap install --edge --classic just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.RUST_CHANNEL }}
+
+      - name: Run external service tests (Internal)
+        env:
+          RUST_LOG: trace
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_BUCKET: ${{ vars.S3_BUCKET }}
+          AWS_REGION: ${{ vars.S3_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TIGRIS_BUCKET: ${{ vars.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ vars.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          if [[ "${{ github.event_name }}" == "cron" ]]; then
+            echo "Running comprehensive integration tests for cron job"
+            cargo test --package icechunk -- --ignored
+          else
+            echo "Running targeted external service tests"
+            cargo test --package icechunk "_in_aws" -- --ignored
+            cargo test --package icechunk "_in_r2" -- --ignored
+            cargo test --package icechunk "_in_tigris" -- --ignored
+          fi
+
+  rust-external-services-external:
+    name: Rust CI (External Services - External PR)
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    environment: ci-with-secrets
     defaults:
       run:
         working-directory: ./
@@ -143,7 +197,9 @@ jobs:
           echo "Base repo: ${{ github.repository }}"
           echo "Is external PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}"
           echo "Environment should be: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ci-with-secrets' || 'null' }}"
+          echo "Actual environment expression: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ci-with-secrets' }}"
           echo "Current environment: ${GITHUB_ENVIRONMENT:-none}"
+          echo "Workflow SHA: ${{ github.sha }}"
           echo "Job URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Check environment variables
