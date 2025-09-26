@@ -142,8 +142,8 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          AWS_BUCKET: ${{ vars.AWS_BUCKET }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_BUCKET: ${{ vars.S3_BUCKET }}
+          AWS_REGION: ${{ vars.S3_REGION }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           TIGRIS_BUCKET: ${{ vars.TIGRIS_BUCKET }}
