@@ -574,7 +574,8 @@ impl Repository {
     pub async fn reset_branch(
         &self,
         branch: &str,
-        snapshot_id: &SnapshotId,
+        to_snapshot_id: &SnapshotId,
+        from_snapshot_id: Option<&SnapshotId>,
     ) -> RepositoryResult<()> {
         if !self.storage.can_write() {
             return Err(RepositoryErrorKind::ReadonlyStorage(
@@ -585,16 +586,19 @@ impl Repository {
         raise_if_invalid_snapshot_id(
             self.storage.as_ref(),
             &self.storage_settings,
-            snapshot_id,
+            to_snapshot_id,
         )
         .await?;
-        let branch_tip = self.lookup_branch(branch).await?;
+        let branch_tip = match from_snapshot_id {
+            Some(snap) => snap,
+            None => &self.lookup_branch(branch).await?,
+        };
         update_branch(
             self.storage.as_ref(),
             &self.storage_settings,
             branch,
-            snapshot_id.clone(),
-            Some(&branch_tip),
+            to_snapshot_id.clone(),
+            Some(branch_tip),
         )
         .await
         .err_into()
