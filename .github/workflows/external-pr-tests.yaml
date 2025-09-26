@@ -1,0 +1,100 @@
+name: External PR Tests (with secrets)
+
+on:
+  workflow_run:
+    workflows: ["Rust CI"]
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  external-pr-tests:
+    name: External PR Tests
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_repository.full_name != github.repository
+    environment: ci-with-secrets
+    defaults:
+      run:
+        working-directory: ./
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Install Just
+        run: sudo snap install --edge --classic just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update 1.89.0
+          rustup component add --toolchain 1.89.0 rustfmt rust-src clippy
+          rustup default 1.89.0
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: 1.89.0
+
+      - name: Debug environment
+        run: |
+          echo "=== External PR Workflow Run Debug ==="
+          echo "Workflow run event: ${{ github.event.workflow_run.event }}"
+          echo "Head repo: ${{ github.event.workflow_run.head_repository.full_name }}"
+          echo "Base repo: ${{ github.repository }}"
+          echo "Head SHA: ${{ github.event.workflow_run.head_sha }}"
+          echo "Current environment: ${GITHUB_ENVIRONMENT:-none}"
+
+      - name: Check environment variables
+        env:
+          DEBUG_VAR: "DEBUG"
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_BUCKET: ${{ vars.S3_BUCKET }}
+          AWS_REGION: ${{ vars.S3_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TIGRIS_BUCKET: ${{ vars.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ vars.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== Environment Variables Status ==="
+          echo "DEBUG_VAR: '${DEBUG_VAR}' - Status: ${DEBUG_VAR:+SET}${DEBUG_VAR:-UNSET}"
+          echo "R2_BUCKET: '${R2_BUCKET}' - Status: ${R2_BUCKET:+SET}${R2_BUCKET:-UNSET}"
+          echo "R2_ACCESS_KEY_ID: Status: ${R2_ACCESS_KEY_ID:+SET}${R2_ACCESS_KEY_ID:-UNSET}"
+          echo "R2_SECRET_ACCESS_KEY: Status: ${R2_SECRET_ACCESS_KEY:+SET}${R2_SECRET_ACCESS_KEY:-UNSET}"
+          echo "R2_ACCOUNT_ID: Status: ${R2_ACCOUNT_ID:+SET}${R2_ACCOUNT_ID:-UNSET}"
+          echo "AWS_BUCKET: '${AWS_BUCKET}' - Status: ${AWS_BUCKET:+SET}${AWS_BUCKET:-UNSET}"
+          echo "AWS_REGION: '${AWS_REGION}' - Status: ${AWS_REGION:+SET}${AWS_REGION:-UNSET}"
+          echo "AWS_ACCESS_KEY_ID: Status: ${AWS_ACCESS_KEY_ID:+SET}${AWS_ACCESS_KEY_ID:-UNSET}"
+          echo "AWS_SECRET_ACCESS_KEY: Status: ${AWS_SECRET_ACCESS_KEY:+SET}${AWS_SECRET_ACCESS_KEY:-UNSET}"
+          echo "TIGRIS_BUCKET: '${TIGRIS_BUCKET}' - Status: ${TIGRIS_BUCKET:+SET}${TIGRIS_BUCKET:-UNSET}"
+          echo "TIGRIS_REGION: '${TIGRIS_REGION}' - Status: ${TIGRIS_REGION:+SET}${TIGRIS_REGION:-UNSET}"
+          echo "TIGRIS_ACCESS_KEY_ID: Status: ${TIGRIS_ACCESS_KEY_ID:+SET}${TIGRIS_ACCESS_KEY_ID:-UNSET}"
+          echo "TIGRIS_SECRET_ACCESS_KEY: Status: ${TIGRIS_SECRET_ACCESS_KEY:+SET}${TIGRIS_SECRET_ACCESS_KEY:-UNSET}"
+
+      - name: Run external service tests
+        env:
+          RUST_LOG: trace
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_BUCKET: ${{ vars.S3_BUCKET }}
+          AWS_REGION: ${{ vars.S3_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TIGRIS_BUCKET: ${{ vars.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ vars.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "Running external service tests with secrets access"
+          cargo test --package icechunk "_in_aws" -- --ignored
+          cargo test --package icechunk "_in_r2" -- --ignored
+          cargo test --package icechunk "_in_tigris" -- --ignored
