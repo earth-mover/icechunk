@@ -12,7 +12,7 @@ use std::{
 use async_stream::try_stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use serde::{Deserialize, Serialize, de};
 use serde_with::{TryFromInto, serde_as};
 use thiserror::Error;
@@ -748,9 +748,27 @@ impl Store {
         strip_prefix: bool,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + use<'a>> {
         let prefix = prefix.trim_end_matches('/');
+        // TODO: Handling preceding "/" is ugly!
+        let path =
+            format!("/{}", prefix.trim_start_matches('/')).try_into().map_err(|_| {
+                StoreErrorKind::BadKeyPrefix {
+                    prefix: prefix.to_owned(),
+                    message: "Cannot convert to a path".to_string(),
+                }
+            })?;
+
+        let session = Arc::clone(&self.session).read_owned().await;
+        if path != Path::root() {
+            let _ = session.get_node(&path).await.map_err(|_| {
+                StoreErrorKind::BadKeyPrefix {
+                    prefix: prefix.to_owned(),
+                    message: "Only prefixes pointing to a group or array are allowed"
+                        .to_string(),
+                }
+            })?;
+        }
         let res = try_stream! {
-            let session = Arc::clone(&self.session).read_owned().await;
-            for node in session.list_nodes().await? {
+            for node in session.list_nodes(&path).await? {
                 // TODO: handle non-utf8?
                 let meta_key = Key::Metadata { node_path: node?.path }.to_string();
                 if is_prefix_match(&meta_key, prefix) {
@@ -781,16 +799,23 @@ impl Store {
                 }
             })?;
 
-            if path != Path::root() {
-                let _ = session.get_node(&path).await.map_err(|_| {
+            let nodes = if path == Path::root() {
+                Either::Left(session.list_nodes(&Path::root()).await?)
+            } else {
+                let node = session.get_node(&path).await.map_err(|_| {
                     StoreErrorKind::BadKeyPrefix {
                         prefix: prefix.to_owned(),
                         message: "Only prefixes pointing to a group or array are allowed".to_string(),
                     }
                 })?;
-            }
+                match node.node_type() {
+                    NodeType::Group => Either::Left(session.list_nodes(&node.path).await?),
+                    NodeType::Array => Either::Right(iter::once(Ok(node))),
+                }
+            };
 
-            for node in session.list_nodes().await? {
+
+            for node in nodes {
                 let node = node?;
                 if node.node_type() == NodeType::Array &&
                     // FIXME: utf8 handling
@@ -2323,7 +2348,7 @@ mod tests {
         assert!(store.exists("a/zarr.json").await?);
         assert!(store.exists("b/zarr.json").await?);
 
-        repo.reset_branch("main", &prev_snap).await?;
+        repo.reset_branch("main", &prev_snap, None).await?;
         let ds = Arc::new(RwLock::new(
             repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?,
         ));

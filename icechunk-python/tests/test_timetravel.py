@@ -232,13 +232,21 @@ async def test_branch_reset() -> None:
 
     group = zarr.open_group(store=store)
     group.create_group("b")
-    session.commit("group b")
+    last_commit = session.commit("group b")
 
     keys = {k async for k in store.list()}
     assert "a/zarr.json" in keys
     assert "b/zarr.json" in keys
 
-    repo.reset_branch("main", prev_snapshot_id)
+    with pytest.raises(ic.IcechunkError, match="branch update conflict"):
+        repo.reset_branch(
+            "main", prev_snapshot_id, from_snapshot_id="1CECHNKREP0F1RSTCMT0"
+        )
+
+    assert last_commit == repo.lookup_branch("main")
+
+    repo.reset_branch("main", prev_snapshot_id, from_snapshot_id=last_commit)
+    assert prev_snapshot_id == repo.lookup_branch("main")
 
     session = repo.readonly_session("main")
     store = session.store

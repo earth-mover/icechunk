@@ -178,6 +178,7 @@ jobs:
         working-directory: icechunk/icechunk-python
         env:
           ICECHUNK_XARRAY_BACKENDS_TESTS: 1
+          ICECHUNK_LOG: trace
         run: |
           set -e
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
