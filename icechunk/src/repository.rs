@@ -864,7 +864,7 @@ impl Repository {
             if let Ok(snap) = asset_manager.fetch_snapshot(&snapshot_id).await {
                 let snap_c = Arc::clone(&snap);
                 for node in snap
-                    .iter_arc()
+                    .iter_arc(&Path::root())
                     .filter_ok(|node| node.node_type() == NodeType::Array)
                     // TODO: make configurable
                     .take(50)
