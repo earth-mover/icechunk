@@ -237,7 +237,7 @@ let ds = Repository::update(Arc::clone(&storage), ObjectId::from("{v2_id:?}"));
 async fn print_nodes(ds: &Session) -> Result<(), SessionError> {
     println!("### List of nodes");
     let rows = ds
-        .list_nodes()
+        .list_nodes(&Path::root())
         .await?
         .map(|n| n.unwrap())
         .sorted_by_key(|n| n.path.clone())
