@@ -309,7 +309,8 @@ def to_icechunk(
     writer.write_eager()
     # eagerly write dask arrays
     maybe_fork_session = writer.write_lazy(
-        chunkmanager_store_kwargs=chunkmanager_store_kwargs
+        chunkmanager_store_kwargs=chunkmanager_store_kwargs,
+        split_every=split_every,
     )
     if is_dask:
         if maybe_fork_session is None:
