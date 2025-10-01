@@ -162,6 +162,7 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
     def save(self, target, ds, **kwargs):
         # not really important here
         kwargs.pop("compute", None)
+        kwargs.pop("align_chunks", None)
         to_icechunk(ds, session=target.session, **kwargs)
 
     def test_zarr_append_chunk_partial(self):
