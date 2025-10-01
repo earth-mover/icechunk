@@ -35,6 +35,150 @@ class S3Options:
             If set to 0, timeout is disabled. Default is 60 seconds.
         """
 
+    @property
+    def region(self) -> str | None:
+        """
+        Optional region to use for the storage backend.
+
+        Returns
+        -------
+        str | None
+            The region configured for the storage backend.
+        """
+        ...
+
+    @region.setter
+    def region(self, value: str | None) -> None:
+        """
+        Set the region to use for the storage backend.
+
+        Parameters
+        ----------
+        value: str | None
+            The region to use for the storage backend.
+        """
+        ...
+
+    @property
+    def endpoint_url(self) -> str | None:
+        """
+        Optional endpoint URL for the storage backend.
+
+        Returns
+        -------
+        str | None
+            The endpoint URL configured for the storage backend.
+        """
+        ...
+
+    @endpoint_url.setter
+    def endpoint_url(self, value: str | None) -> None:
+        """
+        Set the endpoint URL for the storage backend.
+
+        Parameters
+        ----------
+        value: str | None
+            The endpoint URL to use for the storage backend.
+        """
+        ...
+
+    @property
+    def allow_http(self) -> bool:
+        """
+        Whether HTTP requests are allowed for the storage backend.
+
+        Returns
+        -------
+        bool
+            ``True`` when HTTP requests to the storage backend are permitted.
+        """
+        ...
+
+    @allow_http.setter
+    def allow_http(self, value: bool) -> None:
+        """
+        Set whether HTTP requests are allowed for the storage backend.
+
+        Parameters
+        ----------
+        value: bool
+            ``True`` to allow HTTP requests to the storage backend, ``False`` otherwise.
+        """
+        ...
+
+    @property
+    def anonymous(self) -> bool:
+        """
+        Whether to use anonymous credentials (unsigned requests).
+
+        Returns
+        -------
+        bool
+            ``True`` when anonymous access is configured.
+        """
+        ...
+
+    @anonymous.setter
+    def anonymous(self, value: bool) -> None:
+        """
+        Set whether to use anonymous credentials.
+
+        Parameters
+        ----------
+        value: bool
+            ``True`` to perform unsigned requests, ``False`` to sign requests.
+        """
+        ...
+
+    @property
+    def force_path_style(self) -> bool:
+        """
+        Whether to force path-style bucket addressing.
+
+        Returns
+        -------
+        bool
+            ``True`` when path-style addressing is forced.
+        """
+        ...
+
+    @force_path_style.setter
+    def force_path_style(self, value: bool) -> None:
+        """
+        Set whether to force path-style bucket addressing.
+
+        Parameters
+        ----------
+        value: bool
+            ``True`` to always use path-style addressing, ``False`` to allow virtual-host style.
+        """
+        ...
+
+    @property
+    def network_stream_timeout_seconds(self) -> int | None:
+        """
+        Timeout in seconds for idle network streams.
+
+        Returns
+        -------
+        int | None
+            The timeout duration; ``0`` disables the timeout and ``None`` uses the default.
+        """
+        ...
+
+    @network_stream_timeout_seconds.setter
+    def network_stream_timeout_seconds(self, value: int | None) -> None:
+        """
+        Set the timeout for idle network streams.
+
+        Parameters
+        ----------
+        value: int | None
+            Timeout duration in seconds. Use ``0`` to disable or ``None`` for the default.
+        """
+        ...
+
 class ObjectStoreConfig:
     class InMemory:
         def __init__(self) -> None: ...
@@ -1395,8 +1539,12 @@ class PyRepository:
     async def lookup_branch_async(self, branch: str) -> str: ...
     def lookup_snapshot(self, snapshot_id: str) -> SnapshotInfo: ...
     async def lookup_snapshot_async(self, snapshot_id: str) -> SnapshotInfo: ...
-    def reset_branch(self, branch: str, snapshot_id: str) -> None: ...
-    async def reset_branch_async(self, branch: str, snapshot_id: str) -> None: ...
+    def reset_branch(
+        self, branch: str, to_snapshot_id: str, from_snapshot_id: str | None
+    ) -> None: ...
+    async def reset_branch_async(
+        self, branch: str, to_snapshot_id: str, from_snapshot_id: str | None
+    ) -> None: ...
     def delete_branch(self, branch: str) -> None: ...
     async def delete_branch_async(self, branch: str) -> None: ...
     def delete_tag(self, tag: str) -> None: ...
