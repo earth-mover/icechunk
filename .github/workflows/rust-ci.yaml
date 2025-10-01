@@ -123,7 +123,7 @@ jobs:
     timeout-minutes: 30
     runs-on: ubuntu-latest
     # Skip external service tests for external PRs (they can't access secrets anyway)
-    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository)
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     defaults:
       run:
         working-directory: ./
