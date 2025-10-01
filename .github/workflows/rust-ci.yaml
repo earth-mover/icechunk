@@ -104,10 +104,11 @@ jobs:
         run: |
           cargo test --lib
 
-  rust-external-services-internal:
-    name: Rust CI (External Services - Internal)
+  rust-external-services:
+    name: Rust CI (External Services)
     timeout-minutes: 30
     runs-on: ubuntu-latest
+    # Skip external service tests for external PRs (they can't access secrets anyway)
     if: (github.event_name == 'cron' || github.event_name == 'pull_request' || github.event_name == 'push') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
     defaults:
       run:
@@ -133,7 +134,7 @@ jobs:
         with:
           key: ${{ env.RUST_CHANNEL }}
 
-      - name: Run external service tests (Internal)
+      - name: Run external service tests
         env:
           RUST_LOG: trace
           R2_BUCKET: ${{ vars.R2_BUCKET }}
@@ -158,6 +159,3 @@ jobs:
             cargo test --package icechunk "_in_r2" -- --ignored
             cargo test --package icechunk "_in_tigris" -- --ignored
           fi
-
-  # External PRs will trigger the "External PR Tests" workflow via workflow_run
-  # This provides a secure way to run tests with secrets for external PRs
