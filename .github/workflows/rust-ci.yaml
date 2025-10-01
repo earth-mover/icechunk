@@ -104,12 +104,26 @@ jobs:
         run: |
           cargo test --lib
 
+  debug-external-pr-check:
+    name: Debug External PR Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Debug PR info
+        run: |
+          echo "=== PR Debug Info ==="
+          echo "Event: ${{ github.event_name }}"
+          echo "Head repo: ${{ github.event.pull_request.head.repo.full_name }}"
+          echo "Base repo: ${{ github.repository }}"
+          echo "Are they equal: ${{ github.event.pull_request.head.repo.full_name == github.repository }}"
+          echo "Condition result: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository) }}"
+
   rust-external-services:
     name: Rust CI (External Services)
     timeout-minutes: 30
     runs-on: ubuntu-latest
     # Skip external service tests for external PRs (they can't access secrets anyway)
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository)
     defaults:
       run:
         working-directory: ./
@@ -133,6 +147,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ env.RUST_CHANNEL }}
+
+      - name: Debug job execution
+        run: |
+          echo "=== Debug Job Execution ==="
+          echo "Event: ${{ github.event_name }}"
+          echo "Head repo: ${{ github.event.pull_request.head.repo.full_name }}"
+          echo "Base repo: ${{ github.repository }}"
+          echo "Should run: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository) }}"
 
       - name: Run external service tests
         env:
