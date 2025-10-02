@@ -31,6 +31,7 @@ from xarray.tests.test_backends import (
     ZarrBase,
     # needed otherwise not discovered
     default_zarr_format,  # noqa: F401, RUF100
+    tmp_store,  # noqa: F401, RUF100
 )
 
 
