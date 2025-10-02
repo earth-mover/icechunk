@@ -92,6 +92,7 @@ class _XarrayDatasetWriter:
     store: IcechunkStore = field(kw_only=True)
 
     safe_chunks: bool = field(kw_only=True, default=True)
+    align_chunks: bool = field(kw_only=True, default=False)
 
     _initialized: bool = field(default=False, repr=False)
 
@@ -124,6 +125,7 @@ class _XarrayDatasetWriter:
             append_dim=append_dim,
             write_region=region,
             safe_chunks=self.safe_chunks,
+            align_chunks=self.align_chunks,
             synchronizer=None,
             consolidated=False,
             consolidate_on_close=False,
@@ -198,6 +200,7 @@ def to_icechunk(
     group: str | None = None,
     mode: ZarrWriteModes | None = None,
     safe_chunks: bool = True,
+    align_chunks: bool = False,
     append_dim: Hashable | None = None,
     region: Region = None,
     encoding: Mapping[Any, Any] | None = None,
@@ -302,7 +305,9 @@ def to_icechunk(
     else:
         fork = session
 
-    writer = _XarrayDatasetWriter(as_dataset, store=fork.store, safe_chunks=safe_chunks)
+    writer = _XarrayDatasetWriter(
+        as_dataset, store=fork.store, safe_chunks=safe_chunks, align_chunks=align_chunks
+    )
 
     writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 
