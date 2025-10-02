@@ -158,7 +158,7 @@ jobs:
         run: |
           set -e
           uv venv
-          uv pip install icechunk['test'] --find-links dist
+          uv pip install icechunk['test'] --no-index --find-links dist
           uv pip install pytest-mypy-plugins
 
       # this is here instead of earlier to give minio more time to get up and running
