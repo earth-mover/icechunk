@@ -316,6 +316,7 @@ impl From<GcsBearerCredential> for PyGcsBearerCredential {
 #[pyclass(name = "GcsCredentials")]
 #[derive(Clone, Debug)]
 pub enum PyGcsCredentials {
+    Anonymous(),
     FromEnv(),
     Static(PyGcsStaticCredentials),
     Refreshable { pickled_function: Vec<u8>, current: Option<PyGcsBearerCredential> },
@@ -324,6 +325,7 @@ pub enum PyGcsCredentials {
 impl From<PyGcsCredentials> for GcsCredentials {
     fn from(value: PyGcsCredentials) -> Self {
         match value {
+            PyGcsCredentials::Anonymous() => GcsCredentials::Anonymous,
             PyGcsCredentials::FromEnv() => GcsCredentials::FromEnv,
             PyGcsCredentials::Static(creds) => GcsCredentials::Static(creds.into()),
             PyGcsCredentials::Refreshable { pickled_function, current } => {
