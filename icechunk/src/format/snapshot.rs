@@ -8,6 +8,8 @@ use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::format::lookup_index_by_key;
+
 use super::{
     AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind,
     IcechunkResult, ManifestId, NodeId, Path, SnapshotId,
@@ -521,14 +523,27 @@ impl Snapshot {
         res.try_into()
     }
 
+    pub fn get_node_index(&self, path: &Path) -> IcechunkResult<usize> {
+        let path_str = path.to_string();
+        let res =
+            lookup_index_by_key(self.root().nodes(), path_str.as_str(), |node, path| {
+                node.path().cmp(path)
+            })
+            .ok_or(IcechunkFormatError::from(
+                IcechunkFormatErrorKind::NodeNotFound { path: path.clone() },
+            ))?;
+        Ok(res)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = IcechunkResult<NodeSnapshot>> + '_ {
         self.root().nodes().iter().map(|node| node.try_into().err_into())
     }
 
     pub fn iter_arc(
         self: Arc<Self>,
-    ) -> impl Iterator<Item = IcechunkResult<NodeSnapshot>> {
-        NodeIterator { snapshot: self, last_index: 0 }
+        parent_group: &Path,
+    ) -> impl Iterator<Item = IcechunkResult<NodeSnapshot>> + use<> {
+        NodeIterator::new(self, parent_group)
     }
 
     pub fn len(&self) -> usize {
@@ -551,7 +566,17 @@ impl Snapshot {
 
 struct NodeIterator {
     snapshot: Arc<Snapshot>,
-    last_index: usize,
+    next_index: usize,
+    prefix: String,
+}
+
+impl NodeIterator {
+    fn new(snapshot: Arc<Snapshot>, parent_group: &Path) -> Self {
+        let next_index = snapshot.get_node_index(parent_group).unwrap_or_default();
+        let prefix = parent_group.to_string();
+        let prefix = if prefix == "/" { String::new() } else { prefix };
+        NodeIterator { snapshot, next_index, prefix }
+    }
 }
 
 impl Iterator for NodeIterator {
@@ -559,10 +584,24 @@ impl Iterator for NodeIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         let nodes = self.snapshot.root().nodes();
-        if self.last_index < nodes.len() {
-            let res = Some(nodes.get(self.last_index).try_into().err_into());
-            self.last_index += 1;
-            res
+        if self.next_index < nodes.len() {
+            let node: IcechunkResult<NodeSnapshot> =
+                nodes.get(self.next_index).try_into();
+
+            match node {
+                Ok(res) => {
+                    if let Some(after_prefix) =
+                        res.path.to_string().strip_prefix(self.prefix.as_str())
+                        && (after_prefix.is_empty() || after_prefix.starts_with('/'))
+                    {
+                        self.next_index += 1;
+                        Some(Ok(res))
+                    } else {
+                        None
+                    }
+                }
+                Err(err) => Some(Err(err)),
+            }
         } else {
             None
         }

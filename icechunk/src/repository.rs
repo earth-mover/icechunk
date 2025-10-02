@@ -1,5 +1,4 @@
 use async_stream::try_stream;
-use itertools::Itertools as _;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     future::ready,
@@ -13,6 +12,7 @@ use futures::{
     Stream, StreamExt, TryStreamExt,
     stream::{self, FuturesOrdered, FuturesUnordered},
 };
+use itertools::Itertools;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -33,7 +33,8 @@ use crate::{
         format_constants::SpecVersionBin,
         repo_info::{RepoInfo, UpdateType},
         snapshot::{
-            ManifestFileInfo, NodeData, Snapshot, SnapshotInfo, SnapshotProperties,
+            ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
+            SnapshotProperties,
         },
         transaction_log::{Diff, DiffBuilder},
     },
@@ -830,7 +831,8 @@ impl Repository {
     pub async fn reset_branch(
         &self,
         branch: &str,
-        snapshot_id: &SnapshotId,
+        to_snapshot_id: &SnapshotId,
+        from_snapshot_id: Option<&SnapshotId>,
     ) -> RepositoryResult<()> {
         if !self.storage.can_write() {
             return Err(RepositoryErrorKind::ReadonlyStorage(
@@ -852,7 +854,17 @@ impl Repository {
         } else {
             Some(self.asset_manager.backup_path_for_repo_info())
         };
-        match ri.update_branch(branch, snapshot_id, backup_path.as_deref()) {
+
+        if let Some(from_snapshot_id) = from_snapshot_id
+            && &ri.resolve_branch(branch)? != from_snapshot_id
+        {
+            return Err(RepositoryErrorKind::Conflict {
+                expected_parent: Some(from_snapshot_id.clone()),
+                actual_parent: Some(from_snapshot_id.clone()),
+            }
+            .into());
+        }
+        match ri.update_branch(branch, to_snapshot_id, backup_path.as_deref()) {
             Ok(new_ri) => {
                 let _ = self
                     .asset_manager
@@ -1334,7 +1346,12 @@ impl Repository {
             // TODO: unnest this code
             if let Ok(snap) = asset_manager.fetch_snapshot(&snapshot_id).await {
                 let snap_c = Arc::clone(&snap);
-                for node in snap.iter_arc() {
+                for node in snap
+                    .iter_arc(&Path::root())
+                    .filter_ok(|node| node.node_type() == NodeType::Array)
+                    // TODO: make configurable
+                    .take(50)
+                {
                     match node {
                         Err(err) => {
                             error!(error=%err, "Error retrieving snapshot nodes");

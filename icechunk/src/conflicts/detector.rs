@@ -70,7 +70,7 @@ impl ConflictSolver for ConflictDetector {
             Ok(None)
         });
 
-        let path_finder = PathFinder::new(current_repo.list_nodes().await?);
+        let path_finder = PathFinder::new(current_repo.list_nodes(&Path::root()).await?);
 
         let updated_arrays_already_updated = current_changes
             .updated_arrays()

@@ -1,5 +1,46 @@
 # Changelog
 
+## Python Icechunk Library 1.1.7
+
+### Features
+
+- New `Session.flush` method allows creating new snapshots without updating the current branch.
+  This is useful to store temporary updates, that can later be made permanent by pointing
+  a tag to them (`Repository.create_tag`), or a new branch (`Repository.create_branch`), or
+  an existing branch (`Repository.reset_branch`).
+- Added `from_snapshot_id` argument to `reset_branch`. This allows to safely reset a branch,
+  conditionally on its current tip snapshot.
+- Added support for `align_chunks` and `split_every` arguments in `to_icechunk`.
+
+### Performance
+
+- `Store.list_dir` is more than an order of magnitude faster in repositories with
+  thousands of groups/arrays. `Store.list_prefix` is also faster.
+- Increased default snapshot cache size to 500k groups/arrays. This is a better default as we see
+  people creating larger Icechunk repositories. Of course, this can be modified using
+  [`icechunk.CachingConfig`](https://icechunk.io/en/latest/configuration/#caching).
+
+### Fixes
+
+- `S3Options` getters and setters added to interface stub file for proper type checking.
+
+## Python Icechunk Library 1.1.6
+
+### Features
+
+- `Storage.new_tigris` now uses the new Tigris endpoint `t3.storage.dev` by default.
+- Repositories in Tigris object store now use the
+  `X-Tigris-Consistent` header for better consistency.
+
+### Fixes
+
+- `ForkSession` can now be used without serializing it.
+
+### Performance
+
+- Significant speed improvements for `Store.list_prefix` and
+  `Store.getsize_prefix` when prefix is not empty.
+
 ## Python Icechunk Library 1.1.5
 
 ### Features

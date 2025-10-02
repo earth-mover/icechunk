@@ -407,7 +407,7 @@ impl Session {
         match self.get_group(&path).await {
             Ok(parent) => {
                 let nodes_iter: Vec<NodeSnapshot> = self
-                    .list_nodes()
+                    .list_nodes(&path)
                     .await?
                     .filter_ok(|node| node.path.starts_with(&parent.path))
                     .try_collect()?;
@@ -949,7 +949,7 @@ impl Session {
     pub async fn clear(&mut self) -> SessionResult<()> {
         // TODO: can this be a delete_group("/") instead?
         let to_delete: Vec<(NodeType, Path)> = self
-            .list_nodes()
+            .list_nodes(&Path::root())
             .await?
             .map_ok(|node| (node.node_type(), node.path))
             .try_collect()?;
@@ -1003,10 +1003,17 @@ impl Session {
     }
 
     #[instrument(skip(self))]
-    pub async fn list_nodes(
-        &self,
-    ) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + '_> {
-        updated_nodes(&self.asset_manager, self.change_set(), &self.snapshot_id).await
+    pub async fn list_nodes<'a>(
+        &'a self,
+        parent_group: &Path,
+    ) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + use<'a>> {
+        updated_nodes(
+            parent_group,
+            &self.asset_manager,
+            self.change_set(),
+            &self.snapshot_id,
+        )
+        .await
     }
 
     #[instrument(skip(self))]
@@ -1014,6 +1021,21 @@ impl Session {
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_> {
         all_chunks(&self.asset_manager, self.change_set(), self.snapshot_id()).await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn all_node_chunks<'a>(
+        &'a self,
+        node: &'a NodeSnapshot,
+    ) -> impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a {
+        updated_node_chunks_iterator(
+            self.asset_manager.as_ref(),
+            &self.change_set,
+            &self.snapshot_id,
+            node.clone(),
+            ManifestExtents::ALL,
+        )
+        .await
     }
 
     #[instrument(skip(self))]
@@ -1117,6 +1139,93 @@ impl Session {
         self._commit(message, properties, false, CommitMethod::Amend).await
     }
 
+    pub async fn flush(
+        &mut self,
+        message: &str,
+        properties: Option<SnapshotProperties>,
+    ) -> SessionResult<SnapshotId> {
+        info!(old_snapshot_id=%self.snapshot_id(), "Flush started");
+
+        let default_metadata = self.default_commit_metadata.clone();
+        let properties = properties
+            .map(|p| {
+                let mut merged = default_metadata.clone();
+                merged.extend(p.into_iter());
+                merged
+            })
+            .unwrap_or(default_metadata);
+
+        let flush_data = FlushProcess::new(
+            Arc::clone(&self.asset_manager),
+            &self.change_set,
+            self.snapshot_id(),
+            &self.splits,
+        );
+        let new_snap =
+            do_flush(flush_data, message, properties, false, CommitMethod::NewCommit)
+                .await?;
+
+        // FIXME: all this should be in a loop for retries
+        loop {
+            let (repo_info, repo_info_version) =
+                self.asset_manager.fetch_repo_info().await?;
+
+            let backup_path = if repo_info_version.is_create() {
+                None
+            } else {
+                Some(self.asset_manager.backup_path_for_repo_info())
+            };
+
+            let update_type = UpdateType::NewDetachedSnapshotUpdate {
+                new_snap_id: new_snap.id().clone(),
+            };
+            let new_snapshot_info = SnapshotInfo {
+                parent_id: Some(self.snapshot_id().clone()),
+                ..new_snap.as_ref().try_into()?
+            };
+            let new_repo_info = Arc::new(repo_info.add_snapshot(
+                new_snapshot_info,
+                None,
+                &update_type,
+                backup_path.as_deref(),
+            )?);
+
+            match self
+                .asset_manager
+                .update_repo_info(
+                    Arc::clone(&new_repo_info),
+                    &repo_info_version,
+                    backup_path.as_deref(),
+                )
+                .await
+            {
+                Ok(_) => {
+                    info!(
+                        parent_id=%self.snapshot_id(),
+                        new_snapshot_id=%new_snap.id(),
+                        "Flush done"
+                    );
+                    // if the commit was successful, we update the session to be
+                    // a read only session pointed at the new snapshot
+                    self.change_set = ChangeSet::for_edits();
+                    self.snapshot_id = new_snap.id().clone();
+                    // Once committed, the session is now read only, which we control
+                    // by setting the branch_name to None (you can only write to a branch session)
+                    self.branch_name = None;
+
+                    return Ok(new_snap.id().clone());
+                }
+                Err(RepositoryError {
+                    kind: RepositoryErrorKind::RepoInfoUpdated,
+                    ..
+                }) => {
+                    debug!("flush retrying repo object update");
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
     #[instrument(skip(self, properties))]
     pub async fn rewrite_manifests(
         &mut self,
@@ -1124,7 +1233,7 @@ impl Session {
         properties: Option<SnapshotProperties>,
         commit_method: CommitMethod,
     ) -> SessionResult<SnapshotId> {
-        let nodes = self.list_nodes().await?.collect::<Vec<_>>();
+        let nodes = self.list_nodes(&Path::root()).await?.collect::<Vec<_>>();
         // We need to populate the `splits` before calling `commit`.
         // In the normal chunk setting workflow, that would've been done by `set_chunk_ref`
         for node in nodes.into_iter().flatten() {
@@ -1395,12 +1504,13 @@ impl Session {
 
 /// Warning: The presence of a single error may mean multiple missing items
 async fn updated_chunk_iterator<'a>(
+    parent_group: &Path,
     asset_manager: &'a AssetManager,
     change_set: &'a ChangeSet,
     snapshot_id: &'a SnapshotId,
-) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
+) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + use<'a>> {
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
-    let nodes = futures::stream::iter(snapshot.iter_arc());
+    let nodes = futures::stream::iter(snapshot.iter_arc(parent_group));
     let res = nodes.and_then(move |node| async move {
         // Note: Confusingly, these NodeSnapshot instances have the metadata stored in the snapshot.
         // We have not applied any changeset updates. At the moment, the downstream code only
@@ -1574,8 +1684,7 @@ impl From<Session> for ChangeSet {
 }
 
 pub fn is_prefix_match(key: &str, prefix: &str) -> bool {
-    let tomatch =
-        if prefix != String::from('/') { key.strip_prefix(prefix) } else { Some(key) };
+    let tomatch = if prefix != "/" { key.strip_prefix(prefix) } else { Some(key) };
     match tomatch {
         None => false,
         Some(rest) => {
@@ -1614,14 +1723,15 @@ pub async fn get_chunk(
 
 /// Yields nodes in the base snapshot, applying any relevant updates in the changeset
 async fn updated_existing_nodes<'a>(
+    parent_group: &Path,
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a + use<'a>> {
+) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + use<'a>> {
     let updated_nodes = asset_manager
         .fetch_snapshot(parent_id)
         .await?
-        .iter_arc()
+        .iter_arc(parent_group)
         .filter_map_ok(move |node| change_set.update_existing_node(node))
         .map(|n| match n {
             Ok(n) => Ok(n),
@@ -1634,11 +1744,12 @@ async fn updated_existing_nodes<'a>(
 /// Yields nodes with the snapshot, applying any relevant updates in the changeset,
 /// *and* new nodes in the changeset
 async fn updated_nodes<'a>(
+    parent_group: &Path,
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
-) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + 'a + use<'a>> {
-    Ok(updated_existing_nodes(asset_manager, change_set, parent_id)
+) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + use<'a>> {
+    Ok(updated_existing_nodes(parent_group, asset_manager, change_set, parent_id)
         .await?
         .chain(change_set.new_nodes_iterator().map(Ok)))
 }
@@ -1745,7 +1856,8 @@ async fn all_chunks<'a>(
     snapshot_id: &'a SnapshotId,
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + 'a> {
     let existing_array_chunks =
-        updated_chunk_iterator(asset_manager, change_set, snapshot_id).await?;
+        updated_chunk_iterator(&Path::root(), asset_manager, change_set, snapshot_id)
+            .await?;
     let new_array_chunks =
         futures::stream::iter(change_set.new_arrays_chunk_iterator().map(Ok));
     Ok(existing_array_chunks.chain(new_array_chunks))
@@ -2108,7 +2220,7 @@ pub enum CommitMethod {
     Amend,
 }
 
-async fn flush(
+async fn do_flush(
     mut flush_data: FlushProcess<'_>,
     message: &str,
     properties: SnapshotProperties,
@@ -2189,6 +2301,7 @@ async fn flush(
     // gather and sort nodes:
     // this is a requirement for Snapshot::from_iter
     let mut all_nodes: Vec<_> = updated_nodes(
+        &Path::root(),
         flush_data.asset_manager.as_ref(),
         flush_data.change_set,
         flush_data.parent_id,
@@ -2313,7 +2426,8 @@ async fn do_commit(
     let flush_data =
         FlushProcess::new(Arc::clone(&asset_manager), change_set, snapshot_id, splits);
     let new_snapshot =
-        flush(flush_data, message, properties, rewrite_manifests, commit_method).await?;
+        do_flush(flush_data, message, properties, rewrite_manifests, commit_method)
+            .await?;
     let new_snapshot_id = new_snapshot.id();
 
     let mut attempt = 1;
@@ -2364,7 +2478,7 @@ async fn do_commit(
 
         let new_repo_info = Arc::new(repo_info.add_snapshot(
             new_snapshot_info,
-            branch_name,
+            Some(branch_name),
             &update_type,
             backup_path.as_deref(),
         )?);
@@ -2972,7 +3086,7 @@ mod tests {
         .await?;
         let repo_info = RepoInfo::initial((&initial).try_into()?).add_snapshot(
             snapshot.as_ref().try_into()?,
-            "main",
+            Some("main"),
             &UpdateType::NewCommitUpdate { branch: "main".to_string() },
             None,
         )?;
@@ -3500,7 +3614,7 @@ mod tests {
         ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         ds.add_group("/1".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
         ds.delete_group("/1".try_into().unwrap()).await?;
-        assert_eq!(ds.list_nodes().await?.count(), 1);
+        assert_eq!(ds.list_nodes(&Path::root()).await?.count(), 1);
         ds.commit("commit", None).await?;
 
         let ds = repository
@@ -3508,7 +3622,7 @@ mod tests {
             .await?;
         assert!(ds.get_group(&Path::root()).await.is_ok());
         assert!(ds.get_group(&"/1".try_into().unwrap()).await.is_err());
-        assert_eq!(ds.list_nodes().await?.count(), 1);
+        assert_eq!(ds.list_nodes(&Path::root()).await?.count(), 1);
         Ok(())
     }
 
@@ -3524,7 +3638,7 @@ mod tests {
         ds.delete_group("/1".try_into().unwrap()).await?;
         assert!(ds.get_group(&Path::root()).await.is_ok());
         assert!(ds.get_group(&"/1".try_into().unwrap()).await.is_err());
-        assert_eq!(ds.list_nodes().await?.count(), 1);
+        assert_eq!(ds.list_nodes(&Path::root()).await?.count(), 1);
         Ok(())
     }
 
@@ -3542,7 +3656,7 @@ mod tests {
         let ds = repository
             .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
             .await?;
-        assert_eq!(ds.list_nodes().await?.count(), 0);
+        assert_eq!(ds.list_nodes(&Path::root()).await?.count(), 0);
         Ok(())
     }
 
@@ -3967,7 +4081,7 @@ mod tests {
         assert!(session.get_group(&Path::root()).await.is_ok());
         assert!(session.get_group(&"/a".try_into().unwrap()).await.is_ok());
         assert!(session.get_group(&"/b".try_into().unwrap()).await.is_ok());
-        assert_eq!(session.list_nodes().await?.count(), 3);
+        assert_eq!(session.list_nodes(&Path::root()).await?.count(), 3);
 
         let last =
             repo.resolve_version(&VersionInfo::BranchTipRef("main".to_string())).await?;
@@ -4126,7 +4240,7 @@ mod tests {
         assert!(session.get_node(&Path::new("/foo/old/array").unwrap()).await.is_err());
 
         assert_equal(
-            session.list_nodes().await?.map(|n| n.unwrap().path),
+            session.list_nodes(&Path::root()).await?.map(|n| n.unwrap().path),
             [
                 Path::new("/").unwrap(),
                 Path::new("/foo/new").unwrap(),
@@ -4283,6 +4397,61 @@ mod tests {
             session.get_chunk_ref(&apath, &ChunkIndices(vec![9])).await?,
             Some(ChunkPayload::Inline("9".into()))
         );
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_flush() -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository().await;
+        let mut session = repository.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+
+        let path: Path = "/array".try_into().unwrap();
+        session.add_array(path.clone(), basic_shape(), None, Bytes::new()).await?;
+        session
+            .set_chunk_ref(
+                path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("hello".into())),
+            )
+            .await?;
+        let meta: SnapshotProperties = [("test".to_string(), 42.into())].into();
+        let snap_id = session.flush("flush", Some(meta.clone())).await?;
+
+        let chunk = get_chunk(
+            session
+                .get_chunk_reader(&path, &ChunkIndices(vec![0]), &ByteRange::ALL)
+                .await?,
+        )
+        .await?;
+        assert_eq!(chunk, Some(Bytes::from_static(br#"hello"#)));
+        assert!(session.branch().is_none());
+        assert!(session.change_set().is_empty());
+
+        repository
+            .reset_branch("main", &snap_id, Some(&Snapshot::INITIAL_SNAPSHOT_ID))
+            .await?;
+        let parents: Vec<_> = repository
+            .ancestry(&VersionInfo::BranchTipRef("main".to_string()))
+            .await?
+            .try_collect()
+            .await?;
+        assert_eq!(parents.len(), 2);
+        assert_eq!(&parents[0].id, &snap_id);
+        assert_eq!(&parents[0].message, "flush");
+        assert_eq!(&parents[0].metadata, &meta);
+        assert_eq!(&parents[1].id, &Snapshot::INITIAL_SNAPSHOT_ID);
+
+        let session = repository
+            .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
+            .await?;
+        let chunk = get_chunk(
+            session
+                .get_chunk_reader(&path, &ChunkIndices(vec![0]), &ByteRange::ALL)
+                .await?,
+        )
+        .await?;
+        assert_eq!(chunk, Some(Bytes::from_static(br#"hello"#)));
         Ok(())
     }
 

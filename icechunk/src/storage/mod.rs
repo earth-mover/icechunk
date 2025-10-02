@@ -737,22 +737,26 @@ pub fn new_tigris_storage(
         ),
         ..config
     };
-    let mut extra_write_headers = Vec::with_capacity(1);
-    let mut extra_read_headers = Vec::with_capacity(2);
+    let mut extra_write_headers = Vec::with_capacity(2);
+    let mut extra_read_headers = Vec::with_capacity(3);
 
     if !use_weak_consistency {
         // TODO: Tigris will need more than this to offer good eventually consistent behavior
         // For example: we should use no-cache for branches and config file
         if let Some(region) = config.region.as_ref() {
-            extra_write_headers.push(("X-Tigris-Region".to_string(), region.clone()));
-            extra_read_headers.push(("X-Tigris-Region".to_string(), region.clone()));
+            extra_write_headers.push(("X-Tigris-Regions".to_string(), region.clone()));
+            extra_write_headers
+                .push(("X-Tigris-Consistent".to_string(), "true".to_string()));
+
+            extra_read_headers.push(("X-Tigris-Regions".to_string(), region.clone()));
             extra_read_headers
                 .push(("Cache-Control".to_string(), "no-cache".to_string()));
+            extra_read_headers
+                .push(("X-Tigris-Consistent".to_string(), "true".to_string()));
         } else {
             return Err(StorageErrorKind::Other("Tigris storage requires a region to provide full consistency. Either set the region for the bucket or use the read-only, eventually consistent storage by passing `use_weak_consistency=True` (experts only)".to_string()).into());
         }
     }
-
     let st = S3Storage::new(
         config,
         bucket,

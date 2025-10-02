@@ -34,8 +34,8 @@ use repository::{
     PyBranchCreatedUpdate, PyBranchDeletedUpdate, PyBranchResetUpdate,
     PyCommitAmendedUpdate, PyConfigChangedUpdate, PyDiff, PyExpirationRanUpdate,
     PyGCRanUpdate, PyGCSummary, PyManifestFileInfo, PyNewCommitUpdate,
-    PyRepoInitializedUpdate, PyRepoMigratedUpdate, PyRepository, PySnapshotInfo,
-    PyTagCreatedUpdate, PyTagDeletedUpdate, PyUpdateType,
+    PyNewDetachedSnapshotUpdate, PyRepoInitializedUpdate, PyRepoMigratedUpdate,
+    PyRepository, PySnapshotInfo, PyTagCreatedUpdate, PyTagDeletedUpdate, PyUpdateType,
 };
 use session::PySession;
 use store::{PyStore, VirtualChunkSpec};
@@ -207,6 +207,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBranchDeletedUpdate>()?;
     m.add_class::<PyBranchResetUpdate>()?;
     m.add_class::<PyNewCommitUpdate>()?;
+    m.add_class::<PyNewDetachedSnapshotUpdate>()?;
     m.add_class::<PyCommitAmendedUpdate>()?;
     m.add_class::<PyGCRanUpdate>()?;
     m.add_class::<PyExpirationRanUpdate>()?;

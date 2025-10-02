@@ -12,7 +12,7 @@ use std::{
 use async_stream::try_stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use serde::{Deserialize, Serialize, de};
 use serde_with::{TryFromInto, serde_as};
 use thiserror::Error;
@@ -24,7 +24,7 @@ use crate::{
     format::{
         ByteRange, ChunkIndices, ChunkOffset, Path, PathError,
         manifest::{ChunkPayload, VirtualChunkRef},
-        snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
+        snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot, NodeType},
     },
     refs::{RefError, RefErrorKind},
     repository::{RepositoryError, RepositoryErrorKind},
@@ -82,8 +82,8 @@ pub enum StoreErrorKind {
     SerializationError(#[from] Box<rmp_serde::encode::Error>),
     #[error("store method `{0}` is not implemented by Icechunk")]
     Unimplemented(&'static str),
-    #[error("bad key prefix: `{0}`")]
-    BadKeyPrefix(String),
+    #[error("bad key prefix ({prefix}): {message}")]
+    BadKeyPrefix { prefix: String, message: String },
     #[error("error during parallel execution of get_partial_values")]
     PartialValuesPanic,
     #[error("cannot write to read-only store")]
@@ -442,11 +442,14 @@ impl Store {
         if self.read_only().await {
             return Err(StoreErrorKind::ReadOnly.into());
         }
-        let prefix = prefix.trim_start_matches("/").trim_end_matches("/");
+        let prefix = prefix.trim_start_matches('/').trim_end_matches('/');
         // TODO: Handling preceding "/" is ugly!
-        let path = format!("/{prefix}")
-            .try_into()
-            .map_err(|_| StoreErrorKind::BadKeyPrefix(prefix.to_owned()))?;
+        let path = format!("/{prefix}").try_into().map_err(|_| {
+            StoreErrorKind::BadKeyPrefix {
+                prefix: prefix.to_owned(),
+                message: "Cannot convert to a path".to_string(),
+            }
+        })?;
 
         let mut guard = self.session.write().await;
         let node = guard.get_node(&path).await;
@@ -557,8 +560,6 @@ impl Store {
         &self,
         prefix: &str,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + Send + use<>> {
-        // TODO: this is inefficient because it filters based on the prefix, instead of only
-        // generating items that could potentially match
         let meta = self.list_metadata_prefix(prefix, false).await?;
         let chunks = self.list_chunks_prefix(prefix).await?;
         // FIXME: this is wrong, we are realizing all keys in memory
@@ -638,13 +639,13 @@ impl Store {
                                 {
                                     let trimmed = chunk_key
                                         .trim_start_matches(prefix)
-                                        .trim_start_matches("/");
+                                        .trim_start_matches('/');
                                     if trimmed.is_empty() {
                                         // we were provided with a prefix that is a path to a chunk key
                                         None
                                     } else if let Some((chunk_prefix, _)) =
                                         // if we can split it, this is a valid prefix to return
-                                        trimmed.split_once("/")
+                                        trimmed.split_once('/')
                                     {
                                         Some(ListDirItem::Prefix(
                                             chunk_prefix.to_string(),
@@ -747,14 +748,32 @@ impl Store {
         strip_prefix: bool,
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + use<'a>> {
         let prefix = prefix.trim_end_matches('/');
+        // TODO: Handling preceding "/" is ugly!
+        let path =
+            format!("/{}", prefix.trim_start_matches('/')).try_into().map_err(|_| {
+                StoreErrorKind::BadKeyPrefix {
+                    prefix: prefix.to_owned(),
+                    message: "Cannot convert to a path".to_string(),
+                }
+            })?;
+
+        let session = Arc::clone(&self.session).read_owned().await;
+        if path != Path::root() {
+            let _ = session.get_node(&path).await.map_err(|_| {
+                StoreErrorKind::BadKeyPrefix {
+                    prefix: prefix.to_owned(),
+                    message: "Only prefixes pointing to a group or array are allowed"
+                        .to_string(),
+                }
+            })?;
+        }
         let res = try_stream! {
-            let repository = Arc::clone(&self.session).read_owned().await;
-            for node in repository.list_nodes().await? {
+            for node in session.list_nodes(&path).await? {
                 // TODO: handle non-utf8?
                 let meta_key = Key::Metadata { node_path: node?.path }.to_string();
                 if is_prefix_match(&meta_key, prefix) {
                     if strip_prefix {
-                        yield meta_key.trim_start_matches(prefix).trim_start_matches("/").to_string();
+                        yield meta_key.trim_start_matches(prefix).trim_start_matches('/').to_string();
                     } else {
                         yield meta_key;
                     }
@@ -770,19 +789,47 @@ impl Store {
     ) -> StoreResult<impl Stream<Item = StoreResult<String>> + 'a + use<'a>> {
         let prefix = prefix.trim_end_matches('/');
         let res = try_stream! {
-            let repository = Arc::clone(&self.session).read_owned().await;
-            // TODO: this is inefficient because it filters based on the prefix, instead of only
-            // generating items that could potentially match
-            for await maybe_path_chunk in repository.all_chunks().await.map_err(StoreError::from)? {
-                // FIXME: utf8 handling
-                match maybe_path_chunk {
-                    Ok((path, chunk)) => {
-                        let chunk_key = Key::Chunk { node_path: path, coords: chunk.coord }.to_string();
-                        if is_prefix_match(&chunk_key, prefix) {
-                            yield chunk_key;
-                        }
+            let session = Arc::clone(&self.session).read_owned().await;
+
+            // TODO: Handling preceding "/" is ugly!
+            let path = format!("/{}", prefix.trim_start_matches('/') ).try_into().map_err(|_| {
+                StoreErrorKind::BadKeyPrefix {
+                    prefix: prefix.to_owned(),
+                    message: "Cannot convert to a path".to_string(),
+                }
+            })?;
+
+            let nodes = if path == Path::root() {
+                Either::Left(session.list_nodes(&Path::root()).await?)
+            } else {
+                let node = session.get_node(&path).await.map_err(|_| {
+                    StoreErrorKind::BadKeyPrefix {
+                        prefix: prefix.to_owned(),
+                        message: "Only prefixes pointing to a group or array are allowed".to_string(),
                     }
-                    Err(err) => Err(err)?
+                })?;
+                match node.node_type() {
+                    NodeType::Group => Either::Left(session.list_nodes(&node.path).await?),
+                    NodeType::Array => Either::Right(iter::once(Ok(node))),
+                }
+            };
+
+
+            for node in nodes {
+                let node = node?;
+                if node.node_type() == NodeType::Array &&
+                    // FIXME: utf8 handling
+                    // skip the initial / in the path
+                    is_prefix_match(&node.path.to_string()[1..], prefix) {
+                        for await maybe_path_chunk in session.all_node_chunks(&node).await {
+                            match maybe_path_chunk {
+                                Ok((path, chunk)) => {
+                                    let chunk_key = Key::Chunk { node_path: path, coords: chunk.coord }.to_string();
+                                    yield chunk_key;
+                                }
+                                Err(err) => Err(err)?
+                            }
+                        }
                 }
             }
         };
@@ -1227,10 +1274,7 @@ mod tests {
         Ok(version1)
     }
 
-    async fn keys(
-        store: &Store,
-        prefix: &str,
-    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    async fn keys(store: &Store, prefix: &str) -> Result<Vec<String>, StoreError> {
         let mut res = store.list_prefix(prefix).await?.try_collect::<Vec<_>>().await?;
         res.sort();
         Ok(res)
@@ -1685,6 +1729,7 @@ mod tests {
         assert!(!store.exists("zarr.json").await.unwrap());
 
         assert_eq!(all_keys(&store).await.unwrap(), Vec::<String>::new());
+        assert_eq!(all_keys(&store).await.unwrap(), keys(&store, "").await.unwrap());
         store
             .set(
                 "zarr.json",
@@ -1695,6 +1740,7 @@ mod tests {
         assert!(!store.is_empty("").await.unwrap());
         assert!(store.exists("zarr.json").await.unwrap());
         assert_eq!(all_keys(&store).await.unwrap(), vec!["zarr.json".to_string()]);
+        assert_eq!(all_keys(&store).await.unwrap(), keys(&store, "").await.unwrap());
         store
             .set(
                 "group/zarr.json",
@@ -1705,6 +1751,7 @@ mod tests {
             all_keys(&store).await.unwrap(),
             vec!["group/zarr.json".to_string(), "zarr.json".to_string()]
         );
+        assert_eq!(all_keys(&store).await.unwrap(), keys(&store, "").await.unwrap());
         assert_eq!(
             keys(&store, "group/").await.unwrap(),
             vec!["group/zarr.json".to_string()]
@@ -1724,6 +1771,7 @@ mod tests {
                 "zarr.json".to_string()
             ]
         );
+        assert_eq!(all_keys(&store).await.unwrap(), keys(&store, "").await.unwrap());
         assert_eq!(
             keys(&store, "group/").await.unwrap(),
             vec!["group/array/zarr.json".to_string(), "group/zarr.json".to_string()]
@@ -1797,6 +1845,7 @@ mod tests {
                 "zarr.json".to_string()
             ]
         );
+        assert_eq!(all_keys(&store).await.unwrap(), keys(&store, "").await.unwrap());
 
         session.write().await.commit("foo", None).await?;
 
@@ -1825,6 +1874,17 @@ mod tests {
                 "zarr.json".to_string()
             ]
         );
+        assert_eq!(all_keys(&store).await.unwrap(), keys(&store, "").await.unwrap());
+
+        for bad_prefix in ["arr", "/arr", "/arr/", "zarr", "array/c", "array/c/0"] {
+            assert!(matches!(
+                keys(&store, bad_prefix).await,
+                Err(StoreError {
+                    kind: StoreErrorKind::BadKeyPrefix { message, .. },
+                    ..
+                }) if message.contains("group or array")
+            ));
+        }
 
         Ok(())
     }
@@ -2288,7 +2348,7 @@ mod tests {
         assert!(store.exists("a/zarr.json").await?);
         assert!(store.exists("b/zarr.json").await?);
 
-        repo.reset_branch("main", &prev_snap).await?;
+        repo.reset_branch("main", &prev_snap, None).await?;
         let ds = Arc::new(RwLock::new(
             repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?,
         ));

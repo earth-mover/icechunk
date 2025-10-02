@@ -213,13 +213,13 @@ pub mod generated {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_UPDATE_TYPE: u8 = 12;
+    pub const ENUM_MAX_UPDATE_TYPE: u8 = 13;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 13] = [
+    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 14] = [
         UpdateType::NONE,
         UpdateType::RepoInitializedUpdate,
         UpdateType::RepoMigratedUpdate,
@@ -231,6 +231,7 @@ pub mod generated {
         UpdateType::BranchResetUpdate,
         UpdateType::NewCommitUpdate,
         UpdateType::CommitAmendedUpdate,
+        UpdateType::NewDetachedSnapshotUpdate,
         UpdateType::GCRanUpdate,
         UpdateType::ExpirationRanUpdate,
     ];
@@ -251,11 +252,12 @@ pub mod generated {
         pub const BranchResetUpdate: Self = Self(8);
         pub const NewCommitUpdate: Self = Self(9);
         pub const CommitAmendedUpdate: Self = Self(10);
-        pub const GCRanUpdate: Self = Self(11);
-        pub const ExpirationRanUpdate: Self = Self(12);
+        pub const NewDetachedSnapshotUpdate: Self = Self(11);
+        pub const GCRanUpdate: Self = Self(12);
+        pub const ExpirationRanUpdate: Self = Self(13);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 12;
+        pub const ENUM_MAX: u8 = 13;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::NONE,
             Self::RepoInitializedUpdate,
@@ -268,6 +270,7 @@ pub mod generated {
             Self::BranchResetUpdate,
             Self::NewCommitUpdate,
             Self::CommitAmendedUpdate,
+            Self::NewDetachedSnapshotUpdate,
             Self::GCRanUpdate,
             Self::ExpirationRanUpdate,
         ];
@@ -285,6 +288,7 @@ pub mod generated {
                 Self::BranchResetUpdate => Some("BranchResetUpdate"),
                 Self::NewCommitUpdate => Some("NewCommitUpdate"),
                 Self::CommitAmendedUpdate => Some("CommitAmendedUpdate"),
+                Self::NewDetachedSnapshotUpdate => Some("NewDetachedSnapshotUpdate"),
                 Self::GCRanUpdate => Some("GCRanUpdate"),
                 Self::ExpirationRanUpdate => Some("ExpirationRanUpdate"),
                 _ => None,
@@ -5275,6 +5279,127 @@ pub mod generated {
             ds.finish()
         }
     }
+    pub enum NewDetachedSnapshotUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct NewDetachedSnapshotUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for NewDetachedSnapshotUpdate<'a> {
+        type Inner = NewDetachedSnapshotUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> NewDetachedSnapshotUpdate<'a> {
+        pub const VT_NEW_SNAP_ID: flatbuffers::VOffsetT = 4;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            NewDetachedSnapshotUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args NewDetachedSnapshotUpdateArgs<'args>,
+        ) -> flatbuffers::WIPOffset<NewDetachedSnapshotUpdate<'bldr>> {
+            let mut builder = NewDetachedSnapshotUpdateBuilder::new(_fbb);
+            if let Some(x) = args.new_snap_id {
+                builder.add_new_snap_id(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn new_snap_id(&self) -> &'a ObjectId12 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<ObjectId12>(NewDetachedSnapshotUpdate::VT_NEW_SNAP_ID, None)
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for NewDetachedSnapshotUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<ObjectId12>("new_snap_id", Self::VT_NEW_SNAP_ID, true)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct NewDetachedSnapshotUpdateArgs<'a> {
+        pub new_snap_id: Option<&'a ObjectId12>,
+    }
+    impl<'a> Default for NewDetachedSnapshotUpdateArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            NewDetachedSnapshotUpdateArgs {
+      new_snap_id: None, // required field
+    }
+        }
+    }
+
+    pub struct NewDetachedSnapshotUpdateBuilder<
+        'a: 'b,
+        'b,
+        A: flatbuffers::Allocator + 'a,
+    > {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a>
+        NewDetachedSnapshotUpdateBuilder<'a, 'b, A>
+    {
+        #[inline]
+        pub fn add_new_snap_id(&mut self, new_snap_id: &ObjectId12) {
+            self.fbb_.push_slot_always::<&ObjectId12>(
+                NewDetachedSnapshotUpdate::VT_NEW_SNAP_ID,
+                new_snap_id,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> NewDetachedSnapshotUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            NewDetachedSnapshotUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<NewDetachedSnapshotUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(
+                o,
+                NewDetachedSnapshotUpdate::VT_NEW_SNAP_ID,
+                "new_snap_id",
+            );
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for NewDetachedSnapshotUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("NewDetachedSnapshotUpdate");
+            ds.field("new_snap_id", &self.new_snap_id());
+            ds.finish()
+        }
+    }
     pub enum GCRanUpdateOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -5812,6 +5937,22 @@ pub mod generated {
 
         #[inline]
         #[allow(non_snake_case)]
+        pub fn latest_update_as_new_detached_snapshot_update(
+            &self,
+        ) -> Option<NewDetachedSnapshotUpdate<'a>> {
+            if self.latest_update_type() == UpdateType::NewDetachedSnapshotUpdate {
+                let u = self.latest_update();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { NewDetachedSnapshotUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
         pub fn latest_update_as_gcran_update(&self) -> Option<GCRanUpdate<'a>> {
             if self.latest_update_type() == UpdateType::GCRanUpdate {
                 let u = self.latest_update();
@@ -5869,6 +6010,7 @@ pub mod generated {
           UpdateType::BranchResetUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<BranchResetUpdate>>("UpdateType::BranchResetUpdate", pos),
           UpdateType::NewCommitUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<NewCommitUpdate>>("UpdateType::NewCommitUpdate", pos),
           UpdateType::CommitAmendedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<CommitAmendedUpdate>>("UpdateType::CommitAmendedUpdate", pos),
+          UpdateType::NewDetachedSnapshotUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<NewDetachedSnapshotUpdate>>("UpdateType::NewDetachedSnapshotUpdate", pos),
           UpdateType::GCRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<GCRanUpdate>>("UpdateType::GCRanUpdate", pos),
           UpdateType::ExpirationRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ExpirationRanUpdate>>("UpdateType::ExpirationRanUpdate", pos),
           _ => Ok(()),
@@ -6134,6 +6276,14 @@ pub mod generated {
                 }
                 UpdateType::CommitAmendedUpdate => {
                     if let Some(x) = self.latest_update_as_commit_amended_update() {
+                        ds.field("latest_update", &x)
+                    } else {
+                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::NewDetachedSnapshotUpdate => {
+                    if let Some(x) = self.latest_update_as_new_detached_snapshot_update()
+                    {
                         ds.field("latest_update", &x)
                     } else {
                         ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")

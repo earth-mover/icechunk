@@ -148,7 +148,7 @@ pub async fn do_test_gc(
     }
 
     // Reset the branch to leave the latest commit dangling
-    repo.reset_branch("main", &first_snap_id).await?;
+    repo.reset_branch("main", &first_snap_id, None).await?;
 
     // we still have all the chunks
     assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);

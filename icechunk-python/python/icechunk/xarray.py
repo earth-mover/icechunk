@@ -32,12 +32,15 @@ if Version(xr.__version__) < Version("2024.10.0"):
     )
 
 if Version(xr.__version__) > Version("2025.09.0"):
-    from xarray.backends.writers import (  # type: ignore[import-not-found]
+    from xarray.backends.writers import (  # type: ignore[import-not-found,unused-ignore]
         _validate_dataset_names,
         dump_to_store,
     )
 else:
-    from xarray.backends.api import _validate_dataset_names, dump_to_store
+    from xarray.backends.api import (  # type: ignore[attr-defined,no-redef,unused-ignore]
+        _validate_dataset_names,
+        dump_to_store,
+    )
 
 
 def is_dask_collection(x: Any) -> bool:
@@ -89,6 +92,7 @@ class _XarrayDatasetWriter:
     store: IcechunkStore = field(kw_only=True)
 
     safe_chunks: bool = field(kw_only=True, default=True)
+    align_chunks: bool = field(kw_only=True, default=False)
 
     _initialized: bool = field(default=False, repr=False)
 
@@ -121,6 +125,7 @@ class _XarrayDatasetWriter:
             append_dim=append_dim,
             write_region=region,
             safe_chunks=self.safe_chunks,
+            align_chunks=self.align_chunks,
             synchronizer=None,
             consolidated=False,
             consolidate_on_close=False,
@@ -144,7 +149,7 @@ class _XarrayDatasetWriter:
         # This writes the metadata (zarr.json) for all arrays
         # This also will resize arrays for any appends
         self.writer = LazyArrayWriter()
-        dump_to_store(self.dataset, self.xarray_store, self.writer, encoding=encoding)
+        dump_to_store(self.dataset, self.xarray_store, self.writer, encoding=encoding)  # type: ignore[no-untyped-call,unused-ignore]
 
         self._initialized = True
 
@@ -195,6 +200,7 @@ def to_icechunk(
     group: str | None = None,
     mode: ZarrWriteModes | None = None,
     safe_chunks: bool = True,
+    align_chunks: bool = False,
     append_dim: Hashable | None = None,
     region: Region = None,
     encoding: Mapping[Any, Any] | None = None,
@@ -261,6 +267,16 @@ def to_icechunk(
         Note: Even with these validations it can still be unsafe to write
         two or more chunked arrays in the same location in parallel if they are
         not writing in independent regions.
+    align_chunks: bool, default False
+        If True, rechunks the Dask array to align with Zarr chunks before writing.
+        This ensures each Dask chunk maps to one or more contiguous Zarr chunks,
+        which avoids race conditions.
+        Internally, the process sets safe_chunks=False and tries to preserve
+        the original Dask chunking as much as possible.
+        Note: While this alignment avoids write conflicts stemming from chunk
+        boundary misalignment, it does not protect against race conditions
+        if multiple uncoordinated processes write to the same
+        Zarr array concurrently.
     chunkmanager_store_kwargs : dict, optional
         Additional keyword arguments passed on to the `ChunkManager.store` method used to store
         chunked arrays. For example for a dask array additional kwargs will be passed eventually to
@@ -299,7 +315,9 @@ def to_icechunk(
     else:
         fork = session
 
-    writer = _XarrayDatasetWriter(as_dataset, store=fork.store, safe_chunks=safe_chunks)
+    writer = _XarrayDatasetWriter(
+        as_dataset, store=fork.store, safe_chunks=safe_chunks, align_chunks=align_chunks
+    )
 
     writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 
@@ -309,7 +327,8 @@ def to_icechunk(
     writer.write_eager()
     # eagerly write dask arrays
     maybe_fork_session = writer.write_lazy(
-        chunkmanager_store_kwargs=chunkmanager_store_kwargs
+        chunkmanager_store_kwargs=chunkmanager_store_kwargs,
+        split_every=split_every,
     )
     if is_dask:
         if maybe_fork_session is None:

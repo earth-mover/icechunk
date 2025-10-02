@@ -418,6 +418,68 @@ class Session:
             )
         return await self._session.amend_async(message, metadata)
 
+    def flush(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Save the changes in the session to a new snapshot without modifying the current branch.
+
+        When successful, the writable session is completed and the session is now read-only and based on the new snapshot. The ID of the new snapshot is returned.
+
+        Parameters
+        ----------
+        message : str
+            The message to write with the commit.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+
+        Returns
+        -------
+        str
+            The ID of the new snapshot.
+        """
+        if self._allow_changes:
+            warnings.warn(
+                "Committing a session after forking, and without merging will not work. "
+                "Merge back in the remote changes first using Session.merge().",
+                UserWarning,
+                stacklevel=2,
+            )
+        return self._session.flush(message, metadata)
+
+    async def flush_async(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Save the changes in the session to a new snapshot without modifying the current branch.
+
+        When successful, the writable session is completed and the session is now read-only and based on the new snapshot. The ID of the new snapshot is returned.
+
+        Parameters
+        ----------
+        message : str
+            The message to write with the commit.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+
+        Returns
+        -------
+        str
+            The ID of the new snapshot.
+        """
+        if self._allow_changes:
+            warnings.warn(
+                "Flushing a session after forking, and without merging will not work. "
+                "Merge back in the remote changes first using Session.merge().",
+                UserWarning,
+                stacklevel=2,
+            )
+        return await self._session.flush_async(message, metadata)
+
     def rebase(self, solver: ConflictSolver) -> None:
         """
         Rebase the session to the latest ancestry of the branch.
@@ -550,6 +612,28 @@ class ForkSession(Session):
     ) -> NoReturn:
         raise TypeError(
             "Cannot commit a fork of a Session. If you are using uncooperative writes, "
+            "please send the Repository object to your workers, not a Session. "
+            "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
+        )
+
+    def flush(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> NoReturn:
+        raise TypeError(
+            "Cannot flush a fork of a Session. If you are using uncooperative writes, "
+            "please send the Repository object to your workers, not a Session. "
+            "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
+        )
+
+    async def flush_async(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> NoReturn:
+        raise TypeError(
+            "Cannot flush a fork of a Session. If you are using uncooperative writes, "
             "please send the Repository object to your workers, not a Session. "
             "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
         )

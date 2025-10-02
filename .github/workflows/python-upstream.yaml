@@ -18,6 +18,9 @@ permissions:
   contents: read
   issues: write
 
+env:
+  PYTHON_VERSION: '3.13'
+
 defaults:
   run:
     working-directory: ./icechunk-python
@@ -51,10 +54,12 @@ jobs:
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -72,8 +77,11 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
+          python --version
           uv pip install --group upstream --pre
-          uv pip install icechunk --no-deps --find-links dist --force-reinstall --pre
+          PY_TAG="cp${PYTHON_VERSION//./}"
+          WHEEL=$(ls dist/*-${PY_TAG}-*.whl)
+          uv pip install "$WHEEL" --no-deps --force-reinstall
           uv pip list
 
       - name: mypy
@@ -86,7 +94,7 @@ jobs:
           source .venv/bin/activate
           mypy python 2>&1 | tee mypy-output.log
 
-      - name: Create mypy failure issue
+      - name: Create or update mypy failure issue
         if: |
           always()
           && steps.mypy.outcome == 'failure'
@@ -110,11 +118,22 @@ jobs:
           issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
           issue_body="${issue_body//\{\{MYPY_OUTPUT\}\}/$mypy_output}"
 
-          # Create the issue using gh CLI
-          echo "$issue_body" | gh issue create \
-            --title "Nightly MyPy type checking failed with upstream dependencies" \
-            --body-file - \
-            --label "CI"
+          # Check for existing open issue with same title
+          issue_title="Nightly MyPy type checking failed with upstream dependencies"
+          existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
+
+          if [ -n "$existing_issue" ]; then
+            echo "Found existing open issue #$existing_issue, updating it..."
+            echo "$issue_body" | gh issue edit "$existing_issue" --body-file -
+            echo "Updated existing issue #$existing_issue with latest mypy output"
+          else
+            echo "No existing open issue found, creating new one..."
+            echo "$issue_body" | gh issue create \
+              --title "$issue_title" \
+              --body-file - \
+              --label "CI"
+            echo "Created new issue"
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -181,6 +200,41 @@ jobs:
         with:
           path: "icechunk"
 
+      - uses: actions/checkout@v5
+        with:
+          repository: "pydata/xarray"
+          path: "xarray"
+          fetch-depth: 0 # Fetch all history for all branches and tags.
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: icechunk/icechunk-python
+          args: --release --out dist --find-interpreter
+
+      - name: setup
+        shell: bash
+        working-directory: icechunk/icechunk-python
+        run: |
+          set -e
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python --version
+          PY_TAG="cp${PYTHON_VERSION//./}"
+          WHEEL=$(ls dist/*-${PY_TAG}-*.whl)
+          uv pip install "$WHEEL" --group upstream
+          uv pip install pytest-mypy-plugins
+          uv pip list
+
       - name: Stand up MinIO
         working-directory: icechunk
         run: |
@@ -196,37 +250,6 @@ jobs:
               sleep 3
           done
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
-
-      - uses: actions/checkout@v5
-        with:
-          repository: "pydata/xarray"
-          path: "xarray"
-          fetch-depth: 0 # Fetch all history for all branches and tags.
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: icechunk/icechunk-python
-          args: --release --out dist --find-interpreter
-
-      - name: setup
-        shell: bash
-        working-directory: icechunk/icechunk-python
-        run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          uv pip install icechunk --group upstream --find-links dist --pre
-          uv pip install pytest-mypy-plugins
-          uv pip list
-
       - name: pytest
         id: pytest-xarray-backends
         shell: bash

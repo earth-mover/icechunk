@@ -64,6 +64,7 @@ pub enum UpdateType {
     BranchResetUpdate { name: String, previous_snap_id: SnapshotId },
     NewCommitUpdate { branch: String },
     CommitAmendedUpdate { branch: String, previous_snap_id: SnapshotId },
+    NewDetachedSnapshotUpdate { new_snap_id: SnapshotId },
     GCRanUpdate,
     ExpirationRanUpdate,
 }
@@ -284,7 +285,7 @@ impl RepoInfo {
     pub fn add_snapshot(
         &self,
         snap: SnapshotInfo,
-        branch: &str,
+        branch: Option<&str>,
         update_type: &UpdateType,
         previous_file: Option<&str>,
     ) -> IcechunkResult<Self> {
@@ -305,7 +306,7 @@ impl RepoInfo {
             if idx as usize >= new_index { (name, idx + 1) } else { (name, idx) }
         });
         let branches = self.all_branches()?.map(|(name, idx)| {
-            if name == branch {
+            if Some(name) == branch {
                 (name, new_index as u32)
             } else if idx as usize >= new_index {
                 (name, idx + 1)
@@ -662,6 +663,11 @@ impl RepoInfo {
                     previous_snap_id,
                 })
             }
+            generated::UpdateType::NewDetachedSnapshotUpdate => {
+                let up = root.latest_update_as_new_detached_snapshot_update().unwrap();
+                let new_snap_id = SnapshotId::new(up.new_snap_id().0);
+                Ok(UpdateType::NewDetachedSnapshotUpdate { new_snap_id })
+            }
             generated::UpdateType::GCRanUpdate => Ok(UpdateType::GCRanUpdate),
             generated::UpdateType::ExpirationRanUpdate => {
                 Ok(UpdateType::ExpirationRanUpdate)
@@ -937,6 +943,20 @@ fn update_type_to_fb<'bldr>(
                 ),
             ))
         }
+        UpdateType::NewDetachedSnapshotUpdate { new_snap_id } => {
+            let object_id12 = generated::ObjectId12::new(&new_snap_id.0);
+            let new_snap_id = Some(&object_id12);
+            Ok((
+                generated::UpdateType::NewDetachedSnapshotUpdate,
+                Some(
+                    generated::NewDetachedSnapshotUpdate::create(
+                        builder,
+                        &generated::NewDetachedSnapshotUpdateArgs { new_snap_id },
+                    )
+                    .as_union_value(),
+                ),
+            ))
+        }
         UpdateType::GCRanUpdate => Ok((
             generated::UpdateType::GCRanUpdate,
             Some(
@@ -987,7 +1007,7 @@ mod tests {
         };
         let repo = repo.add_snapshot(
             snap2.clone(),
-            "main",
+            Some("main"),
             &UpdateType::NewCommitUpdate { branch: "main".to_string() },
             Some("foo/bar"),
         )?;
@@ -1014,7 +1034,7 @@ mod tests {
         };
         let repo = repo.add_snapshot(
             snap3.clone(),
-            "main",
+            Some("main"),
             &UpdateType::NewCommitUpdate { branch: "main".to_string() },
             None,
         )?;
@@ -1080,7 +1100,7 @@ mod tests {
         };
         let repo = repo.add_snapshot(
             snap2,
-            "main",
+            Some("main"),
             &UpdateType::NewCommitUpdate { branch: "main".to_string() },
             None,
         )?;

@@ -196,7 +196,7 @@ async fn list_task(ds: Arc<RwLock<Session>>, barrier: Arc<Barrier>) {
         let nodes = ds
             .read()
             .await
-            .list_nodes()
+            .list_nodes(&Path::root())
             .await
             .expect("list_nodes failed")
             .map(|n| n.unwrap().path.to_string())

@@ -408,9 +408,9 @@ impl DiffBuilder {
 
     pub async fn to_diff(self, from: &Session, to: &Session) -> SessionResult<Diff> {
         let nodes: HashMap<NodeId, Path> = from
-            .list_nodes()
+            .list_nodes(&Path::root())
             .await?
-            .chain(to.list_nodes().await?)
+            .chain(to.list_nodes(&Path::root()).await?)
             .map_ok(|n| (n.id, n.path))
             .try_collect()?;
         Ok(Diff::from_diff_builder(self, nodes))
