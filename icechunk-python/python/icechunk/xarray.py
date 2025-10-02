@@ -92,6 +92,7 @@ class _XarrayDatasetWriter:
     store: IcechunkStore = field(kw_only=True)
 
     safe_chunks: bool = field(kw_only=True, default=True)
+    align_chunks: bool = field(kw_only=True, default=False)
 
     _initialized: bool = field(default=False, repr=False)
 
@@ -124,6 +125,7 @@ class _XarrayDatasetWriter:
             append_dim=append_dim,
             write_region=region,
             safe_chunks=self.safe_chunks,
+            align_chunks=self.align_chunks,
             synchronizer=None,
             consolidated=False,
             consolidate_on_close=False,
@@ -198,6 +200,7 @@ def to_icechunk(
     group: str | None = None,
     mode: ZarrWriteModes | None = None,
     safe_chunks: bool = True,
+    align_chunks: bool = False,
     append_dim: Hashable | None = None,
     region: Region = None,
     encoding: Mapping[Any, Any] | None = None,
@@ -264,6 +267,16 @@ def to_icechunk(
         Note: Even with these validations it can still be unsafe to write
         two or more chunked arrays in the same location in parallel if they are
         not writing in independent regions.
+    align_chunks: bool, default False
+        If True, rechunks the Dask array to align with Zarr chunks before writing.
+        This ensures each Dask chunk maps to one or more contiguous Zarr chunks,
+        which avoids race conditions.
+        Internally, the process sets safe_chunks=False and tries to preserve
+        the original Dask chunking as much as possible.
+        Note: While this alignment avoids write conflicts stemming from chunk
+        boundary misalignment, it does not protect against race conditions
+        if multiple uncoordinated processes write to the same
+        Zarr array concurrently.
     chunkmanager_store_kwargs : dict, optional
         Additional keyword arguments passed on to the `ChunkManager.store` method used to store
         chunked arrays. For example for a dask array additional kwargs will be passed eventually to
@@ -302,7 +315,9 @@ def to_icechunk(
     else:
         fork = session
 
-    writer = _XarrayDatasetWriter(as_dataset, store=fork.store, safe_chunks=safe_chunks)
+    writer = _XarrayDatasetWriter(
+        as_dataset, store=fork.store, safe_chunks=safe_chunks, align_chunks=align_chunks
+    )
 
     writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 

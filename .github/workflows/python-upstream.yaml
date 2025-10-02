@@ -18,6 +18,9 @@ permissions:
   contents: read
   issues: write
 
+env:
+  PYTHON_VERSION: '3.13'
+
 defaults:
   run:
     working-directory: ./icechunk-python
@@ -51,10 +54,12 @@ jobs:
           docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -72,8 +77,11 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
+          python --version
           uv pip install --group upstream --pre
-          uv pip install icechunk --no-deps --find-links dist --force-reinstall --pre
+          PY_TAG="cp${PYTHON_VERSION//./}"
+          WHEEL=$(ls dist/*-${PY_TAG}-*.whl)
+          uv pip install "$WHEEL" --no-deps --force-reinstall
           uv pip list
 
       - name: mypy
@@ -200,10 +208,12 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -218,7 +228,10 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          uv pip install icechunk --group upstream --find-links dist --pre
+          python --version
+          PY_TAG="cp${PYTHON_VERSION//./}"
+          WHEEL=$(ls dist/*-${PY_TAG}-*.whl)
+          uv pip install "$WHEEL" --group upstream
           uv pip install pytest-mypy-plugins
           uv pip list
 
