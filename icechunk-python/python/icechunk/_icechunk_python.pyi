@@ -1688,6 +1688,16 @@ class PySession:
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
     ) -> str: ...
+    def flush(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str: ...
+    async def flush_async(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str: ...
     def rebase(self, solver: ConflictSolver) -> None: ...
     async def rebase_async(self, solver: ConflictSolver) -> None: ...
 
