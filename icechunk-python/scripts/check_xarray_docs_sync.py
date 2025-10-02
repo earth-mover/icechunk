@@ -169,6 +169,121 @@ def normalize_doc_text(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def highlight_line_with_char_diff(
+    line: str, other_line: str, style: str, similarity_threshold: float = 0.5
+) -> Text:
+    """
+    Highlight a line with character-level differences if lines are similar.
+
+    Parameters
+    ----------
+    line : str
+        The line to highlight
+    other_line : str
+        The line to compare against
+    style : str
+        Style to apply ("red" or "green")
+    similarity_threshold : float
+        Minimum similarity ratio to apply character-level diff
+
+    Returns
+    -------
+    Text
+        Rich Text object with highlighted differences
+    """
+    char_matcher = difflib.SequenceMatcher(None, line, other_line)
+    similarity = char_matcher.ratio()
+    text = Text()
+
+    if similarity > similarity_threshold:
+        # Lines are similar enough for character-level diff
+        for tag, i1, i2, _j1, _j2 in char_matcher.get_opcodes():
+            if tag == "equal":
+                text.append(line[i1:i2])
+            else:
+                # Highlight character differences with bold
+                text.append(line[i1:i2], style=f"bold {style}")
+    else:
+        # Lines too different, highlight entire line
+        text.append(line, style=style)
+
+    return text
+
+
+def build_diff_text(
+    lines: list[str], other_lines: list[str], style: str, is_source: bool
+) -> Text:
+    """
+    Build rich Text with highlighted differences between two sets of lines.
+
+    Parameters
+    ----------
+    lines : list[str]
+        Lines to highlight (xarray if is_source=True, icechunk if False)
+    other_lines : list[str]
+        Lines to compare against
+    style : str
+        Base style for differences ("red" or "green")
+    is_source : bool
+        True if these are source lines (xarray), False if target (icechunk)
+
+    Returns
+    -------
+    Text
+        Rich Text object with highlighted differences
+    """
+    if is_source:
+        # For xarray (source), we want to show deletions in red
+        matcher = difflib.SequenceMatcher(None, lines, other_lines)
+    else:
+        # For icechunk (target), we want to show insertions in green
+        matcher = difflib.SequenceMatcher(None, other_lines, lines)
+
+    text = Text()
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        # Get the correct indices based on which version we're building
+        my_i1, my_i2, other_i1, other_i2 = (
+            (i1, i2, j1, j2) if is_source else (j1, j2, i1, i2)
+        )
+
+        if tag == "equal":
+            text.append("".join(lines[my_i1:my_i2]))
+        elif (tag == "delete" and is_source) or (tag == "insert" and not is_source):
+            # Lines missing in other version
+            text.append("".join(lines[my_i1:my_i2]), style=style)
+        elif tag == "replace":
+            # Check if it's a single line replacement for character-level diff
+            if my_i2 - my_i1 == 1 and other_i2 - other_i1 == 1:
+                text.append(
+                    highlight_line_with_char_diff(
+                        lines[my_i1], other_lines[other_i1], style
+                    )
+                )
+            else:
+                # Multiple lines - highlight all
+                text.append("".join(lines[my_i1:my_i2]), style=style)
+
+    return text
+
+
+def create_comparison_table(xr_text: Text, ic_text: Text) -> Table:
+    """Create a rich Table for side-by-side documentation comparison."""
+    table = Table(show_header=True, show_lines=True, expand=True)
+    table.add_column(
+        "Expected (xarray)\n[dim][red]missing text shown in red[/red][/dim]",
+        style="white",
+        width=60,
+    )
+    table.add_column(
+        "Actual (icechunk)\n[dim][green]extra text shown in green[/green][/dim]",
+        style="white",
+        width=60,
+    )
+    table.add_row(xr_text, ic_text)
+    return table
+
+
 def compare_docs(
     icechunk_docs: dict[str, str],
     xarray_docs: dict[str, str],
@@ -213,84 +328,12 @@ def compare_docs(
             xr_lines = xr_normalized.splitlines(keepends=True)
             ic_lines = ic_normalized.splitlines(keepends=True)
 
-            # Use difflib to identify differences at line level
-            matcher = difflib.SequenceMatcher(None, xr_lines, ic_lines)
+            # Build highlighted text for both versions
+            xr_text = build_diff_text(xr_lines, ic_lines, "red", is_source=True)
+            ic_text = build_diff_text(ic_lines, xr_lines, "green", is_source=False)
 
-            # Build xarray version with missing lines in red
-            xr_text = Text()
-            for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-                if tag == "equal":
-                    xr_text.append("".join(xr_lines[i1:i2]))
-                elif tag == "delete":
-                    # Lines in xarray but missing in icechunk - red
-                    xr_text.append("".join(xr_lines[i1:i2]), style="red")
-                elif tag == "replace":
-                    # Check if lines are similar enough for character-level diff
-                    if i2 - i1 == 1 and j2 - j1 == 1:
-                        # Single line replacement - do character-level diff
-                        xr_line = xr_lines[i1]
-                        ic_line = ic_lines[j1]
-                        char_matcher = difflib.SequenceMatcher(None, xr_line, ic_line)
-                        similarity = char_matcher.ratio()
-
-                        if similarity > 0.5:  # Lines are similar enough
-                            for ctag, ci1, ci2, _cj1, _cj2 in char_matcher.get_opcodes():
-                                if ctag == "equal":
-                                    xr_text.append(xr_line[ci1:ci2])
-                                else:
-                                    # Highlight character differences
-                                    xr_text.append(xr_line[ci1:ci2], style="bold red")
-                        else:
-                            # Lines too different, highlight entire line
-                            xr_text.append(xr_line, style="red")
-                    else:
-                        # Multiple lines - highlight all
-                        xr_text.append("".join(xr_lines[i1:i2]), style="red")
-
-            # Build icechunk version with extra lines in green
-            ic_text = Text()
-            for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-                if tag == "equal":
-                    ic_text.append("".join(ic_lines[j1:j2]))
-                elif tag == "insert":
-                    # Lines in icechunk but not in xarray - green
-                    ic_text.append("".join(ic_lines[j1:j2]), style="green")
-                elif tag == "replace":
-                    # Check if lines are similar enough for character-level diff
-                    if i2 - i1 == 1 and j2 - j1 == 1:
-                        # Single line replacement - do character-level diff
-                        xr_line = xr_lines[i1]
-                        ic_line = ic_lines[j1]
-                        char_matcher = difflib.SequenceMatcher(None, xr_line, ic_line)
-                        similarity = char_matcher.ratio()
-
-                        if similarity > 0.5:  # Lines are similar enough
-                            for ctag, _ci1, _ci2, cj1, cj2 in char_matcher.get_opcodes():
-                                if ctag == "equal":
-                                    ic_text.append(ic_line[cj1:cj2])
-                                else:
-                                    # Highlight character differences
-                                    ic_text.append(ic_line[cj1:cj2], style="bold green")
-                        else:
-                            # Lines too different, highlight entire line
-                            ic_text.append(ic_line, style="green")
-                    else:
-                        # Multiple lines - highlight all
-                        ic_text.append("".join(ic_lines[j1:j2]), style="green")
-
-            # Create a table for side-by-side comparison
-            table = Table(show_header=True, show_lines=True, expand=True)
-            table.add_column(
-                "Expected (xarray)\n[dim][red]missing text shown in red[/red][/dim]",
-                style="white",
-                width=60,
-            )
-            table.add_column(
-                "Actual (icechunk)\n[dim][green]extra text shown in green[/green][/dim]",
-                style="white",
-                width=60,
-            )
-            table.add_row(xr_text, ic_text)
+            # Display side-by-side comparison
+            table = create_comparison_table(xr_text, ic_text)
             console.print(table)
             console.print()
             all_match = False
