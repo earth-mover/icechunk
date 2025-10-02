@@ -486,8 +486,8 @@ def main() -> int:
     parser.add_argument(
         "--known-diffs",
         type=Path,
-        default=Path(__file__).parent.parent / ".known-xarray-doc-diffs.json",
-        help="Path to known diffs config file (default: .known-xarray-doc-diffs.json)",
+        default=Path(__file__).parent / "known-xarray-doc-diffs.json",
+        help="Path to known diffs config file (default: scripts/known-xarray-doc-diffs.json)",
     )
     parser.add_argument(
         "--update-known-diffs",
