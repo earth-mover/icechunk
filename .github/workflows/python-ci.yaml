@@ -7,6 +7,17 @@ name: Python CI and library release
 
 on:
   workflow_dispatch:
+    inputs:
+      pypi_release:
+        description: 'Make a PyPI release'
+        required: true
+        default: false
+        type: boolean
+      use_git_version:
+        description: 'Use git-based version for nightly builds'
+        required: true
+        default: true
+        type: boolean
   schedule:
     # run every day at 4am
     - cron: '0 4 * * *'
@@ -23,8 +34,49 @@ defaults:
     working-directory: ./icechunk-python
 
 jobs:
+  version:
+    name: Generate dynamic version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # Need full history for git describe
+
+      - name: Generate version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]] || [[ "${{ inputs.use_git_version }}" == "true" ]]; then
+            # For nightly builds, use component-based git describe approach
+
+            # Verify we have proper git tags
+            if ! git describe --tags --match "v*" >/dev/null 2>&1; then
+              echo "❌ ERROR: No version tags found. Please create a tag like 'v1.0.0' first."
+              exit 1
+            fi
+
+            # Get components from git (much simpler than parsing)
+            TAG=$(git describe --tags --match 'v*' --abbrev=0 | sed 's/^v//')
+            DISTANCE=$(git rev-list $(git describe --tags --match 'v*' --abbrev=0)..HEAD --count)
+            HASH=$(git rev-parse --short HEAD)
+
+            # Build SemVer compliant version for Cargo.toml (use -dev instead of .dev)
+            # maturin will normalize the - to a .
+            # prepend HASH with g to follow convention from git describe
+            VERSION="${TAG}-dev${DISTANCE}+g${HASH}"
+            echo "Git version: ${TAG}, distance: ${DISTANCE}, hash: ${HASH}"
+            echo "Using git-based version: $VERSION"
+          else
+            # For regular releases, use version from Cargo.toml
+            VERSION=$(grep '^version = ' icechunk-python/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+            echo "Using Cargo.toml version: $VERSION"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
   linux:
     runs-on: ${{ matrix.platform.runner }}
+    needs: version
     strategy:
       matrix:
         platform:
@@ -56,6 +108,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+      - name: Update version in Cargo.toml
+        if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -71,6 +127,7 @@ jobs:
 
   musllinux:
     runs-on: ${{ matrix.platform.runner }}
+    needs: version
     strategy:
       matrix:
         platform:
@@ -87,6 +144,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: 3.x
+      - name: Update version in Cargo.toml
+        if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -102,6 +163,7 @@ jobs:
 
   windows:
     runs-on: ${{ matrix.platform.runner }}
+    needs: version
     strategy:
       matrix:
         platform:
@@ -115,6 +177,11 @@ jobs:
         with:
           python-version: 3.x
           architecture: ${{ matrix.platform.target }}
+      - name: Update version in Cargo.toml
+        if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
+        run: |
+          (Get-Content Cargo.toml) -replace '^version = ".*"', 'version = "${{ needs.version.outputs.version }}"' | Set-Content Cargo.toml
+        shell: powershell
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -129,6 +196,7 @@ jobs:
 
   macos:
     runs-on: ${{ matrix.platform.runner }}
+    needs: version
     strategy:
       matrix:
         platform:
@@ -141,6 +209,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: 3.x
+      - name: Update version in Cargo.toml
+        if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
+        run: |
+          sed -i '' 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -155,8 +227,13 @@ jobs:
 
   sdist:
     runs-on: ubuntu-latest
+    needs: version
     steps:
       - uses: actions/checkout@v5
+      - name: Update version in Cargo.toml
+        if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
@@ -174,7 +251,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write # IMPORTANT: this permission is mandatory for trusted publishing
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.pypi_release }}
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
       - uses: actions/download-artifact@v5
@@ -183,3 +260,20 @@ jobs:
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
+
+  nightly:
+    name: Upload nightly wheels
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: [linux, musllinux, windows, macos, sdist]
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload nightly wheels
+        uses: scientific-python/upload-nightly-action@b36e8c0c10dbcfd2e05bf95f17ef8c14fd708dbf
+        with:
+          artifacts_path: dist
+          anaconda_nightly_upload_token: ${{ secrets.ANACONDA_ORG_UPLOAD_TOKEN }}

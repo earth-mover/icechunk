@@ -45,15 +45,15 @@ run-all-examples:
 
 # fast pre-commit - format and lint only
 pre-commit-fast:
-  just format "--check"
-  just lint "-p icechunk -p icechunk-python"
+  just format
+  just lint "--workspace"
 
 # medium pre-commit - includes compilation checks (~2-3 minutes)
 pre-commit $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
   just compile-tests "--locked"
   just build
-  just format "--check"
-  just lint "-p icechunk -p icechunk-python"
+  just format
+  just lint "--workspace"
   just check-deps
 
 # full pre-commit for CI - runs all checks including tests
@@ -61,14 +61,14 @@ pre-commit-ci $RUSTFLAGS="-D warnings -W unreachable-pub -W bare-trait-objects":
   just compile-tests "--locked"
   just build
   just format "--check"
-  just lint "-p icechunk -p icechunk-python"
+  just lint "--workspace"
   just doctest
   just test
   just run-all-examples
   just check-deps
 
 pre-commit-python:
-  just format "--check -p icechunk-python"
+  just format "-p icechunk-python"
   just lint "-p icechunk-python"
 
 bench-compare *args:

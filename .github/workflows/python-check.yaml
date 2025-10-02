@@ -20,25 +20,10 @@ defaults:
     working-directory: ./icechunk-python
 
 jobs:
-  build:
+  build-wheels:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Install Just
-        run: sudo snap install --edge --classic just
-      - name: Stand up MinIO
-        run: |
-          docker compose up -d minio
-
-      - name: Wait for MinIO to be ready
-        run: |
-          for _ in {1..10}; do
-              if curl --silent --fail http://minio:9000/minio/health/live; then
-              break
-              fi
-              sleep 3
-          done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
@@ -47,34 +32,34 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           working-directory: icechunk-python
-          # target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
-          # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
+          sccache: true
 
-      - name: Cargo lint + format icechunk-python
-        shell: bash
-        working-directory: icechunk
-        run: |
-          just pre-commit-python
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-wheels
+          path: icechunk-python/dist
 
-      - name: mypy
-        shell: bash
-        working-directory: icechunk-python
+  test:
+    runs-on: ubuntu-latest
+    needs: [build-wheels]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Stand up MinIO
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install icechunk['test'] --find-links dist --force-reinstall --pre
-          mypy python
+          docker compose up -d minio
 
-      - name: pre-commit lint
-        shell: bash
-        working-directory: icechunk-python
-        run: |
-          set -e
-          source .venv/bin/activate
-          pip install pre-commit
-          SKIP=just-rust pre-commit run --all-files
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Download wheels
+        uses: actions/download-artifact@v5
+        with:
+          name: test-wheels
+          path: icechunk-python/dist
 
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
@@ -85,32 +70,41 @@ jobs:
           restore-keys: |
             cache-hypothesis-
 
-      - name: describe environment
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          working-directory: icechunk-python
+
+      - name: Install dependencies
         shell: bash
         working-directory: icechunk-python
         run: |
           set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip list
+          # Create virtual environment and install the built wheel
+          uv venv
+          uv pip install icechunk['test'] --find-links dist
 
-      - name: pytest
+      # this is here instead of earlier to give minio more time to get up and running
+      # checking and waiting only right before we need it
+      - name: Wait for MinIO to be ready
+        run: |
+          for _ in {1..30}; do
+              if curl --silent --fail http://localhost:9000/minio/health/live; then
+              break
+              fi
+              sleep 1
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
+      - name: Run pytest
         shell: bash
         working-directory: icechunk-python
         run: |
           set -e
-          python3 -m venv .venv
           source .venv/bin/activate
-          pytest -n 4
-
-      # - name: python examples
-      #   shell: bash
-      #   working-directory: icechunk-python
-      #   run: |
-      #     set -e
-      #     python3 -m venv .venv
-      #     source .venv/bin/activate
-      #     sh examples/run_in_ci.sh
+          # Run tests
+          python -m pytest -n 4
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
@@ -123,6 +117,7 @@ jobs:
 
   xarray-backends:
     runs-on: ubuntu-latest
+    needs: [build-wheels]
     steps:
       - uses: actions/checkout@v5
         with:
@@ -133,16 +128,6 @@ jobs:
         run: |
           docker compose up -d minio
 
-      - name: Wait for MinIO to be ready
-        working-directory: icechunk
-        run: |
-          for _ in {1..10}; do
-              if curl --silent --fail http://minio:9000/minio/health/live; then
-              break
-              fi
-              sleep 3
-          done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
 
       - uses: actions/checkout@v5
         with:
@@ -154,22 +139,47 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
+      - name: Download wheels
+        uses: actions/download-artifact@v5
         with:
-          working-directory: icechunk/icechunk-python
-          args: --release --out dist --find-interpreter
+          name: test-wheels
+          path: icechunk/icechunk-python/dist
 
-      - name: pytest
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
         shell: bash
         working-directory: icechunk/icechunk-python
         env:
           ICECHUNK_XARRAY_BACKENDS_TESTS: 1
         run: |
           set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install icechunk['test'] --find-links dist --force-reinstall --pre
-          pip install pytest-mypy-plugins
+          uv venv
+          uv pip install icechunk['test'] --find-links dist
+          uv pip install pytest-mypy-plugins
+
+      # this is here instead of earlier to give minio more time to get up and running
+      # checking and waiting only right before we need it
+      - name: Wait for MinIO to be ready
+        working-directory: icechunk
+        run: |
+          for _ in {1..30}; do
+              if curl --silent --fail http://localhost:9000/minio/health/live; then
+              break
+              fi
+              sleep 1
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+      - name: Run xarray backends tests
+        shell: bash
+        working-directory: icechunk/icechunk-python
+        env:
+          ICECHUNK_XARRAY_BACKENDS_TESTS: 1
+        run: |
+          set -e
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
+          source .venv/bin/activate
+          python -m pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
