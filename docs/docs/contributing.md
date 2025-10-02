@@ -45,7 +45,6 @@ Create / activate a virtual environment:
     uv sync
     ```
 
-
 Install `maturin`:
 
 === "Venv"
@@ -85,8 +84,6 @@ Install `maturin`:
     maturin develop --uv --extras=test,benchmark
     ```
 
-
-
 #### Testing
 
 The full Python test suite depends on S3 and Azure compatible object stores.
@@ -99,6 +96,34 @@ They can be run from the root of the repo with `docker compose up` (`ctrl-c` the
     uv run pytest
     ```
 
+#### Running Xarray Backend Tests
+
+Icechunk includes integration tests that verify compatibility with Xarray's zarr backend API. These tests require the Xarray repository to be cloned locally.
+
+Set the environment variables (adjust `XARRAY_DIR` to point to your local Xarray clone):
+
+```bash
+export ICECHUNK_XARRAY_BACKENDS_TESTS=1
+export XARRAY_DIR=~/Documents/dev/xarray  # or your xarray location
+```
+
+Run the Xarray backend tests:
+
+```bash
+python -m pytest -xvs tests/run_xarray_backends_tests.py \
+  -c $XARRAY_DIR/pyproject.toml \
+  -W ignore \
+  --override-ini="addopts="
+```
+
+To run a specific Xarray test you have first specify a class defined in `@icechunk-python/tests/run_xarray_backends_tests.py` and then specify an xarray test. For example:
+
+```bash
+python -m pytest -xvs tests/run_xarray_backends_tests.py::TestIcechunkStoreFilesystem::test_pickle \
+  -c $XARRAY_DIR/pyproject.toml \
+  -W ignore \
+  --override-ini="addopts="
+```
 
 ### Rust Development Workflow
 
@@ -111,6 +136,7 @@ cargo install just
 ```
 
 Or using other package managers:
+
 - **macOS**: `brew install just`
 - **Ubuntu**: `snap install --edge --classic just`
 
@@ -183,6 +209,7 @@ pre-commit install
 ```
 
 The pre-commit configuration automatically runs:
+
 - **Every commit**: Fast Python and Rust checks (~2 seconds total)
 - **Before push**: Medium Rust checks (compilation + dependencies)
 - **Manual**: Full CI-level checks when needed
