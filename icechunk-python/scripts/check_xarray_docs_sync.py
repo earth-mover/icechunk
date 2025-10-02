@@ -26,6 +26,8 @@ Usage:
 
 import argparse
 import difflib
+import hashlib
+import json
 import re
 import sys
 from pathlib import Path
@@ -267,6 +269,34 @@ def build_diff_text(
     return text
 
 
+def compute_diff_hash(xr_normalized: str, ic_normalized: str) -> str:
+    """
+    Compute a hash of the diff between two normalized documentation strings.
+
+    Parameters
+    ----------
+    xr_normalized : str
+        Normalized xarray documentation
+    ic_normalized : str
+        Normalized icechunk documentation
+
+    Returns
+    -------
+    str
+        SHA256 hash of the diff
+    """
+    # Create a unified diff to capture the actual differences
+    diff_lines = list(
+        difflib.unified_diff(
+            xr_normalized.splitlines(keepends=True),
+            ic_normalized.splitlines(keepends=True),
+            lineterm="",
+        )
+    )
+    diff_text = "".join(diff_lines)
+    return hashlib.sha256(diff_text.encode()).hexdigest()[:16]
+
+
 def create_comparison_table(xr_text: Text, ic_text: Text) -> Table:
     """Create a rich Table for side-by-side documentation comparison."""
     table = Table(show_header=True, show_lines=True, expand=True)
@@ -284,23 +314,60 @@ def create_comparison_table(xr_text: Text, ic_text: Text) -> Table:
     return table
 
 
+class ParamDiff(NamedTuple):
+    """Represents a documentation difference for a parameter."""
+
+    param: str
+    diff_hash: str
+    xr_normalized: str
+    ic_normalized: str
+
+
+def load_known_diffs(config_path: Path) -> dict[str, dict[str, str]]:
+    """
+    Load known acceptable documentation differences from config file.
+
+    Returns dict mapping param name to {"hash": str, "reason": str}
+    """
+    if not config_path.exists():
+        return {}
+
+    with open(config_path) as f:
+        data: dict[str, dict[str, dict[str, str]]] = json.load(f)
+    return data.get("known_diffs", {})
+
+
+def save_known_diffs(config_path: Path, known_diffs: dict[str, dict[str, str]]) -> None:
+    """Save known acceptable documentation differences to config file."""
+    data = {"known_diffs": known_diffs}
+    with open(config_path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
 def compare_docs(
     icechunk_docs: dict[str, str],
     xarray_docs: dict[str, str],
     param_names: list[str],
     console: Console,
-) -> tuple[bool, list[str], list[str]]:
+    known_diffs: dict[str, dict[str, str]] | None = None,
+) -> tuple[bool, list[str], list[str], list[ParamDiff]]:
     """
     Compare documentation for specified parameters.
 
+    Parameters
+    ----------
+    known_diffs : dict[str, dict[str, str]] | None
+        Optional dict of known acceptable diffs {param: {"hash": str, "reason": str}}
+
     Returns
     -------
-    tuple[bool, list[str], list[str]]
-        (all_match, missing_params, missing_in_xarray)
+    tuple[bool, list[str], list[str], list[ParamDiff]]
+        (all_match, missing_params, missing_in_xarray, diffs_found)
     """
     all_match = True
     missing_params = []
     missing_in_xarray = []
+    diffs_found: list[ParamDiff] = []
 
     for param in param_names:
         ic_doc = icechunk_docs.get(param, "")
@@ -320,9 +387,29 @@ def compare_docs(
         xr_normalized = normalize_doc_text(xr_doc)
 
         if ic_normalized != xr_normalized:
-            console.print(
-                f"\n[bold]❌ Documentation mismatch for parameter '{param}':[/bold]\n"
+            diff_hash = compute_diff_hash(xr_normalized, ic_normalized)
+            diffs_found.append(ParamDiff(param, diff_hash, xr_normalized, ic_normalized))
+
+            # Check if this is a known acceptable diff
+            is_known_diff = (
+                known_diffs is not None
+                and param in known_diffs
+                and known_diffs[param].get("hash") == diff_hash
             )
+
+            if is_known_diff:
+                reason = known_diffs[param].get("reason", "No reason provided")  # type: ignore[index]
+                console.print(
+                    f"\n[yellow]⚠️  Known difference for parameter '{param}':[/yellow]"
+                )
+                console.print(f"   Reason: {reason}")
+                console.print(f"   Hash: {diff_hash}\n")
+            else:
+                console.print(
+                    f"\n[bold]❌ Documentation mismatch for parameter '{param}':[/bold]"
+                )
+                console.print(f"[dim]Diff hash: {diff_hash}[/dim]\n")
+                all_match = False
 
             # Split into lines for line-based comparison
             xr_lines = xr_normalized.splitlines(keepends=True)
@@ -336,9 +423,8 @@ def compare_docs(
             table = create_comparison_table(xr_text, ic_text)
             console.print(table)
             console.print()
-            all_match = False
 
-    return all_match, missing_params, missing_in_xarray
+    return all_match, missing_params, missing_in_xarray, diffs_found
 
 
 def main() -> int:
@@ -396,6 +482,17 @@ def main() -> int:
         "-v",
         action="store_true",
         help="Show detailed comparison output",
+    )
+    parser.add_argument(
+        "--known-diffs",
+        type=Path,
+        default=Path(__file__).parent.parent / ".known-xarray-doc-diffs.json",
+        help="Path to known diffs config file (default: .known-xarray-doc-diffs.json)",
+    )
+    parser.add_argument(
+        "--update-known-diffs",
+        action="store_true",
+        help="Update known diffs config with current diff hashes",
     )
 
     args = parser.parse_args()
@@ -486,10 +583,31 @@ def main() -> int:
     icechunk_docstring = icechunk_match.group(1)
     icechunk_docs = extract_param_docs(icechunk_docstring, PARAMS_TO_CHECK)
 
+    # Load known diffs if available
+    known_diffs = load_known_diffs(args.known_diffs)
+
     # Compare
-    all_match, missing_params, missing_in_xarray = compare_docs(
-        icechunk_docs, xarray_docs, PARAMS_TO_CHECK, console
+    all_match, missing_params, missing_in_xarray, diffs_found = compare_docs(
+        icechunk_docs, xarray_docs, PARAMS_TO_CHECK, console, known_diffs
     )
+
+    # Update known diffs if requested
+    if args.update_known_diffs and diffs_found:
+        console.print("\n[bold]Updating known diffs file...[/bold]")
+        for diff in diffs_found:
+            if diff.param not in known_diffs:
+                known_diffs[diff.param] = {
+                    "hash": diff.diff_hash,
+                    "reason": "TODO: Add reason for this difference",
+                }
+                console.print(f"  Added {diff.param}: {diff.diff_hash}")
+            elif known_diffs[diff.param]["hash"] != diff.diff_hash:
+                console.print(
+                    f"  [yellow]Hash changed for {diff.param}:[/yellow] {known_diffs[diff.param]['hash']} -> {diff.diff_hash}"
+                )
+                known_diffs[diff.param]["hash"] = diff.diff_hash
+        save_known_diffs(args.known_diffs, known_diffs)
+        console.print(f"[green]Saved to {args.known_diffs}[/green]\n")
 
     # Print summary at the end
     console.print("\n" + "=" * 80)
@@ -518,13 +636,34 @@ def main() -> int:
             console.print(f"  • {param}")
         console.print()
 
+    if diffs_found:
+        known_count = sum(
+            1
+            for d in diffs_found
+            if d.param in known_diffs and known_diffs[d.param]["hash"] == d.diff_hash
+        )
+        unknown_count = len(diffs_found) - known_count
+        console.print(
+            f"[bold]Documentation differences:[/bold] {len(diffs_found)} total "
+            f"({known_count} known, {unknown_count} unknown)"
+        )
+        console.print()
+
     if all_match:
         console.print("[green]✅ All documentation is consistent![/green]")
         return 0
     else:
-        console.print(
-            "[yellow]💡 Tip: Update the docstrings in icechunk/xarray.py to match xarray's docs[/yellow]"
-        )
+        if args.update_known_diffs:
+            console.print(
+                "[yellow]💡 Known diffs updated. Review and add reasons in {args.known_diffs}[/yellow]"
+            )
+        else:
+            console.print(
+                "[yellow]💡 Tip: Update the docstrings in icechunk/xarray.py to match xarray's docs[/yellow]"
+            )
+            console.print(
+                "[dim]   Or use --update-known-diffs to mark current diffs as known[/dim]"
+            )
         return 1
 
 

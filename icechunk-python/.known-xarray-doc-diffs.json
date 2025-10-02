@@ -1,0 +1,8 @@
+{
+  "known_diffs": {
+    "chunkmanager_store_kwargs": {
+      "hash": "a8d6501584a8bb34",
+      "reason": "Sphinx :py:func: formatting difference - icechunk uses plain backticks"
+    }
+  }
+}
