@@ -125,6 +125,28 @@ python -m pytest -xvs tests/run_xarray_backends_tests.py::TestIcechunkStoreFiles
   --override-ini="addopts="
 ```
 
+#### Checking Xarray Documentation Consistency
+
+Icechunk's `to_icechunk` function shares several parameters with Xarray's `to_zarr` function. To ensure documentation stays in sync, use the documentation checker script.
+
+From the `icechunk-python` directory:
+
+```bash
+# Set XARRAY_DIR to point to your local Xarray clone
+export XARRAY_DIR=~/Documents/dev/xarray
+
+# Run the documentation consistency check
+uv run scripts/check_xarray_docs_sync.py
+```
+
+The script will display a side-by-side comparison of any documentation differences, with missing text highlighted in red. This helps maintain consistency with Xarray's upstream documentation.
+
+You can also specify the Xarray path directly:
+
+```bash
+uv run scripts/check_xarray_docs_sync.py --xarray-path ~/Documents/dev/xarray
+```
+
 ### Rust Development Workflow
 
 #### Prerequisites
