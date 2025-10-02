@@ -51,10 +51,6 @@ jobs:
           docker compose up -d minio
 
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-
       - name: Download wheels
         uses: actions/download-artifact@v5
         with:
@@ -74,7 +70,7 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          working-directory: icechunk-python
+          python-version: '3.11'
 
       - name: Install dependencies
         shell: bash
@@ -82,8 +78,9 @@ jobs:
         run: |
           set -e
           uv venv
-          # Find and install the locally built wheel with test extras
-          WHEEL=$(ls dist/*.whl)
+          source .venv/bin/activate
+          python --version
+          WHEEL=$(ls dist/*-cp311-*.whl)
           uv pip install "${WHEEL}[test]"
 
       # this is here instead of earlier to give minio more time to get up and running
@@ -136,10 +133,6 @@ jobs:
           path: "xarray"
           fetch-depth: 0 # Fetch all history for all branches and tags.
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-
       - name: Download wheels
         uses: actions/download-artifact@v5
         with:
@@ -150,14 +143,7 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-
-      - name: List available wheels
-        working-directory: icechunk/icechunk-python
-        run: |
-          echo "=== Available wheel files ==="
-          ls -lh dist/
-          echo "=== First wheel file contents ==="
-          unzip -l dist/icechunk-*.whl | head -50 || true
+          python-version: '3.11'
 
       - name: Install dependencies
         shell: bash
@@ -167,8 +153,9 @@ jobs:
         run: |
           set -e
           uv venv
-          # Find and install the locally built wheel with test extras
-          WHEEL=$(ls dist/*.whl)
+          source .venv/bin/activate
+          python --version
+          WHEEL=$(ls dist/*-cp311-*.whl)
           uv pip install "${WHEEL}[test]"
           uv pip install pytest-mypy-plugins
 
