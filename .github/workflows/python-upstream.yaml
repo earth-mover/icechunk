@@ -73,7 +73,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           uv pip install --group upstream --pre
-          uv pip install icechunk --no-deps --find-links dist --force-reinstall --pre
+          uv pip install dist/*.whl --no-deps --force-reinstall
           uv pip list
 
       - name: mypy
@@ -218,7 +218,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          uv pip install icechunk --group upstream --find-links dist --pre
+          uv pip install dist/*.whl --group upstream
           uv pip install pytest-mypy-plugins
           uv pip list
 

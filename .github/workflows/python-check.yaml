@@ -83,7 +83,7 @@ jobs:
           set -e
           # Create virtual environment and install the built wheel
           uv venv
-          uv pip install icechunk['test'] --find-links dist
+          uv pip install dist/*.whl[test]
 
       # this is here instead of earlier to give minio more time to get up and running
       # checking and waiting only right before we need it
@@ -150,6 +150,14 @@ jobs:
         with:
           enable-cache: true
 
+      - name: List available wheels
+        working-directory: icechunk/icechunk-python
+        run: |
+          echo "=== Available wheel files ==="
+          ls -lh dist/
+          echo "=== Wheel file contents ==="
+          unzip -l dist/*.whl | head -50
+
       - name: Install dependencies
         shell: bash
         working-directory: icechunk/icechunk-python
@@ -158,7 +166,7 @@ jobs:
         run: |
           set -e
           uv venv
-          uv pip install icechunk['test'] --no-index --find-links dist
+          uv pip install dist/*.whl[test]
           uv pip install pytest-mypy-plugins
 
       # this is here instead of earlier to give minio more time to get up and running
