@@ -1,5 +1,29 @@
 # Changelog
 
+## Python Icechunk Library 1.1.7
+
+### Features
+
+- New `Session.flush` method allows creating new snapshots without updating the current branch.
+  This is useful to store temporary updates, that can later be made permanent by pointing
+  a tag to them (`Repository.create_tag`), or a new branch (`Repository.create_branch`), or
+  an existing branch (`Repository.reset_branch`).
+- Added `from_snapshot_id` argument to `reset_branch`. This allows to safely reset a branch,
+  conditionally on its current tip snapshot.
+- Added support for `align_chunks` and `split_every` arguments in `to_icechunk`.
+
+### Performance
+
+- `Store.list_dir` is more than an order of magnitude faster in repositories with
+  thousands of groups/arrays. `Store.list_prefix` is also faster.
+- Increased default snapshot cache size to 500k groups/arrays. This is a better default as we see
+  people creating larger Icechunk repositories. Of course, this can be modified using
+  [`icechunk.CachingConfig`](https://icechunk.io/en/latest/configuration/#caching).
+
+### Fixes
+
+- `S3Options` getters and setters added to interface stub file for proper type checking.
+
 ## Python Icechunk Library 1.1.6
 
 ### Features
