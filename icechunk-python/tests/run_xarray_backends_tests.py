@@ -19,7 +19,7 @@ from icechunk import (
     local_filesystem_storage,
     s3_storage,
 )
-from icechunk.xarray import to_icechunk
+from icechunk.xarray import is_dask_collection, to_icechunk
 from xarray.testing import assert_identical
 
 # needed otherwise not discovered
@@ -140,8 +140,9 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
             pytest.skip("v2 not supported")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Repository.create(local_filesystem_storage(tmpdir))
-            session = repo.writable_session("main")
+            storage = local_filesystem_storage(tmpdir)
+            self._repo = Repository.create(storage)
+            session = self._repo.writable_session("main")
             yield session.store
 
     @contextlib.contextmanager
@@ -153,15 +154,47 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
             {"test": xr.DataArray(data, dims=("x", "y"), coords={"x": x, "y": y})}
         )
         with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Repository.create(local_filesystem_storage(tmpdir))
-            session = repo.writable_session("main")
+            storage = local_filesystem_storage(tmpdir)
+            self._repo = Repository.create(storage)
+            session = self._repo.writable_session("main")
             self.save(session.store, ds)
             session.commit("initial commit")
-            yield repo.writable_session("main").store, ds
+            yield self._repo.writable_session("main").store, ds
 
     def save(self, target, ds, **kwargs):
         # not really important here
         kwargs.pop("compute", None)
+
+        # Check if we have dask arrays
+        has_dask = any(is_dask_collection(var.data) for var in ds.variables.values())
+
+        # Special handling for dask arrays to support multiple writes to the same store.
+        #
+        # Context: Some xarray tests (e.g., test_dataset_to_zarr_align_chunks_true) call
+        # save() multiple times on the same store object to test append/region writes.
+        #
+        # Background: to_icechunk() handles dask vs non-dask arrays differently:
+        #   - Non-dask: Writes directly to the session (allows uncommitted changes)
+        #   - Dask: Uses fork/merge for parallel workers, which:
+        #       1. session.fork() creates a child session
+        #       2. Workers write chunks, changes are merged back to parent session
+        #       3. After merge, the parent session has uncommitted changes
+        #
+        # Problem: to_icechunk() only allows dask writes on clean sessions (safety check
+        # to avoid consistency issues during fork/merge). A second dask write fails with:
+        #   "Calling `to_icechunk` is not allowed on a Session with uncommitted changes"
+        #
+        # Solution: Before each dask write, if there are uncommitted changes from a previous
+        # write, commit them and refresh the session for the next fork/merge cycle.
+        if has_dask and hasattr(self, "_repo"):
+            session = target.session
+            if session.has_uncommitted_changes:
+                session.commit("intermediate commit")
+                # After commit, session is read-only. Get a fresh writable session and
+                # update the store so subsequent operations see the committed data.
+                new_store = self._repo.writable_session("main").store
+                target._store = new_store._store
+
         to_icechunk(ds, session=target.session, **kwargs)
 
     def test_zarr_append_chunk_partial(self):
