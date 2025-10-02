@@ -141,7 +141,7 @@ uv run scripts/check_xarray_docs_sync.py
 
 The script will display a side-by-side comparison of any documentation differences, with missing text highlighted in red.
 
-**Known Differences**: Some differences are acceptable (e.g., Sphinx formatting like `:py:func:` vs plain backticks). These are tracked in `scripts/known-xarray-doc-diffs.json`. Known differences are displayed but don't cause the check to fail.
+**Known Differences**: Some differences are acceptable (e.g., Sphinx formatting like `:py:func:` doesn't work in mkdocs). These are tracked in `scripts/known-xarray-doc-diffs.json`. Known differences are displayed but don't cause the check to fail.
 
 **Updating Known Differences**: After making intentional documentation changes, update the known diffs file:
 
