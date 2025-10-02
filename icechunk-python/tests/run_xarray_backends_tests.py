@@ -163,10 +163,6 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
         # not really important here
         kwargs.pop("compute", None)
         to_icechunk(ds, session=target.session, **kwargs)
-        # Commit after each save so that subsequent calls to save() don't fail with
-        # "Session has uncommitted changes" error. Some tests (e.g. test_dataset_to_zarr_align_chunks_true)
-        # call save() multiple times.
-        target.session.commit("test commit")
 
     def test_zarr_append_chunk_partial(self):
         pytest.skip(
