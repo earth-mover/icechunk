@@ -25,8 +25,6 @@ icechunk = { path = "../icechunk", version = "0.3.11", features = ["logs"] }
 itertools = "0.14.0"
 pyo3 = { version = "0.24.2", features = [
   "chrono",
-  #  do we really need this one?
-  #  "extension-module",
   "experimental-async",
   "multiple-pymethods",
 ] }
