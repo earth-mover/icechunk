@@ -434,7 +434,7 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
         }
         Command::Config(ConfigCommand::List) => config_list(&config, stdout()).await,
     }
-    .map_err(|e| anyhow::anyhow!("❌ {}", e))
+    .map_err(|e| anyhow::anyhow!("❌ {e}"))
 }
 
 #[cfg(test)]

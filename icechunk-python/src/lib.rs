@@ -109,8 +109,7 @@ fn check_filter_for_misspellings(filter: &str) {
         })
         .for_each(|sanitized| {
             eprintln!(
-                "WARNING: Did you mean 'icechunk' instead of '{}' in log filter?",
-                sanitized
+                "WARNING: Did you mean 'icechunk' instead of '{sanitized}' in log filter?"
             );
         });
 }
