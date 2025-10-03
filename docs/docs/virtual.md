@@ -12,7 +12,7 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
 
     Currently, Icechunk support virtual references to data stored in `s3` compatible,`gcs`, `http/https`, and  `local` storage backends. Support for [`azure`](https://github.com/earth-mover/icechunk/issues/602) is on the roadmap.
 
-!!! warning "Security concerns with virtual chunks"
+!!! warning "Security considerations with virtual chunks"
 
     Virtual chunks let Icechunk point to external locations (s3://, http://, file://, etc.), which means a malicious repo could try to trick your code into reading sensitive data from your machine or other sources.
 
