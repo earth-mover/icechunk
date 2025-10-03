@@ -14,8 +14,8 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
 
 !!! warning "Security concerns with virtual chunks"
 
-    Virtual chunks let Icechunk point to external locations (s3://, http://, file://, etc.), which means a malicious repo could try to trick your code into reading sensitive data from your machine or other sources. 
-    
+    Virtual chunks let Icechunk point to external locations (s3://, http://, file://, etc.), which means a malicious repo could try to trick your code into reading sensitive data from your machine or other sources.
+
     To protect you, Icechunk is safe by default: it won't read from these locations unless you explicitly allow it. This requires (1) defining trusted virtual chunk containers when writing data, and (2) passing ``authorize_virtual_chunk_access`` when opening a repo, so you stay in control of what external paths get accessed.
 
 ## Creating a virtual dataset with VirtualiZarr
