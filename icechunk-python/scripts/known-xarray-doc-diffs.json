@@ -1,0 +1,16 @@
+{
+  "known_diffs": {
+    "chunkmanager_store_kwargs": {
+      "hash": "a8d6501584a8bb34",
+      "reason": "Sphinx :py:func: formatting difference - icechunk can't use this linking"
+    },
+    "region": {
+      "hash": "cfc5079627d24948",
+      "reason": "We ignore compute"
+    },
+    "safe_chunks": {
+      "hash": "6ef0cc7884b81da2",
+      "reason": "we ignore compute"
+    }
+  }
+}
