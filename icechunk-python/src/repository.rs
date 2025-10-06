@@ -29,7 +29,7 @@ use pyo3::{
     IntoPyObjectExt,
     exceptions::PyValueError,
     prelude::*,
-    types::{PyDict, PyNone, PyType},
+    types::{PyDict, PyNone, PySet, PyType},
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
@@ -748,6 +748,13 @@ impl PyRepository {
 
     pub fn storage(&self) -> PyStorage {
         PyStorage(Arc::clone(self.0.blocking_read().storage()))
+    }
+
+    #[getter]
+    fn authorized_virtual_container_prefixes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PySet>> {
+        let containers = self.0.blocking_read().authorized_virtual_containers().clone();
+        let prefixes: HashSet<String> = containers.keys().cloned().collect();
+        PySet::new(py, prefixes.iter().map(|s| s.as_str()))
     }
 
     pub fn set_default_commit_metadata(

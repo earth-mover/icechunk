@@ -408,6 +408,18 @@ class Repository:
             The repository storage instance.
         """
         return self._repository.storage()
+    
+    @property
+    def authorized_virtual_container_prefixes(self) -> set[str]:
+        """
+        Get all authorized virtual chunk container prefixes.
+
+        Returns
+        -------
+        url_prefixes: set[str]
+            The set of authorized url prefixes for each virtual chunk container 
+        """
+        return self._repository.authorized_virtual_container_prefixes
 
     def reopen(
         self,
