@@ -404,6 +404,7 @@ def gcs_storage(
     service_account_key: str | None = None,
     application_credentials: str | None = None,
     bearer_token: str | None = None,
+    anonymous: bool | None = None,
     from_env: bool | None = None,
     config: dict[str, str] | None = None,
     get_credentials: Callable[[], GcsBearerCredential] | None = None,
@@ -425,6 +426,8 @@ def gcs_storage(
         The path to the application credentials file
     bearer_token: str | None
         The bearer token to use for the object store
+    anonymous: bool | None
+        If set to True requests to the object store will not be signed
     from_env: bool | None
         Fetch credentials from the operative system environment
     config: dict[str, str] | None
@@ -444,6 +447,7 @@ def gcs_storage(
         application_credentials=application_credentials,
         bearer_token=bearer_token,
         from_env=from_env,
+        anonymous=anonymous,
         get_credentials=get_credentials,
         scatter_initial_credentials=scatter_initial_credentials,
     )
