@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library 1.1.9
+
+### Fixes
+
+- Improvements for `anonymous` access to GCS Storage
+
 ## Python Icechunk Library 1.1.8
 
 ### Features
