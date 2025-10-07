@@ -2,6 +2,10 @@
 
 ## Python Icechunk Library 1.1.9
 
+### Features
+
+- Add `authorized_virtual_container_prefixes` to `Repository` to access the prefixes currently whitelisted for virtual chunk access
+
 ### Fixes
 
 - Improvements for `anonymous` access to GCS Storage
