@@ -755,8 +755,7 @@ impl PyRepository {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PySet>> {
-        let containers = self.0.blocking_read().authorized_virtual_containers().clone();
-        let prefixes: HashSet<String> = containers.keys().cloned().collect();
+        let prefixes = self.0.blocking_read().authorized_virtual_container_prefixes();
         PySet::new(py, prefixes.iter().map(|s| s.as_str()))
     }
 

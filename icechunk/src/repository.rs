@@ -455,8 +455,8 @@ impl Repository {
         &self.asset_manager
     }
 
-    pub fn authorized_virtual_containers(&self) -> &HashMap<String, Option<Credentials>> {
-        &self.authorized_virtual_containers
+    pub fn authorized_virtual_container_prefixes(&self) -> HashSet<String> {
+        self.authorized_virtual_containers.keys().cloned().collect()
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
