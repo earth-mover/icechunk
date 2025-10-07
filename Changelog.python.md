@@ -10,6 +10,10 @@
 
 - Improvements for `anonymous` access to GCS Storage
 
+### Breaking Changes
+
+- This release removes the `windows x86` wheels from the PyPI release.
+
 ## Python Icechunk Library 1.1.8
 
 ### Features
