@@ -1510,6 +1510,8 @@ class PyRepository:
     def config(self) -> RepositoryConfig: ...
     def storage_settings(self) -> StorageSettings: ...
     def storage(self) -> Storage: ...
+    @property
+    def authorized_virtual_container_prefixes(self) -> set[str]: ...
     def reopen(
         self,
         *,
@@ -1996,6 +1998,10 @@ class GcsCredentials:
 
     This can be used to authenticate with a google cloud storage backend.
     """
+    class Anonymous:
+        """Uses anonymous credentials"""
+        def __init__(self) -> None: ...
+
     class FromEnv:
         """Uses credentials from environment variables"""
         def __init__(self) -> None: ...
@@ -2014,7 +2020,10 @@ class GcsCredentials:
         ) -> None: ...
 
 AnyGcsCredential = (
-    GcsCredentials.FromEnv | GcsCredentials.Static | GcsCredentials.Refreshable
+    GcsCredentials.Anonymous
+    | GcsCredentials.FromEnv
+    | GcsCredentials.Static
+    | GcsCredentials.Refreshable
 )
 
 class AzureStaticCredentials:
