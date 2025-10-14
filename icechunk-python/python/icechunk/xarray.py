@@ -119,7 +119,7 @@ class _XarrayDatasetWriter:
 
         # align_chunks was added in xarray 2025.06.0
         # For backwards compatibility, only pass it if supported
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "store": self.store,
             "group": group,
             "mode": concrete_mode,
