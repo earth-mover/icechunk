@@ -37,6 +37,8 @@ jobs:
           working-directory: icechunk-python
           args: --release --out dist --find-interpreter
           sccache: true
+        env:
+          CARGO_TERM_QUIET: true
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -147,9 +149,11 @@ jobs:
           - name: minimum
             version: "2025.01.2"
             checkout-ref: "v2025.01.2"
+            zarr: "3.0.8"
           - name: latest
             version: "latest"
             checkout-ref: "main"
+            zarr: "latest"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -200,8 +204,15 @@ jobs:
             echo "Installing xarray ${{ matrix.xarray-version.version }}"
             uv pip install --upgrade 'xarray==${{ matrix.xarray-version.version }}'
           fi
-          echo "Installed xarray version:"
-          python -c "import xarray; print(xarray.__version__)"
+          # Install specific zarr version based on matrix
+          if [ "${{ matrix.xarray-version.zarr }}" = "latest" ]; then
+            echo "Using latest zarr (already installed)"
+          else
+            echo "Installing zarr ${{ matrix.xarray-version.zarr }}"
+            uv pip install --upgrade 'zarr==${{ matrix.xarray-version.zarr }}'
+          fi
+          echo "Installed package versions:"
+          python -c "import xarray; import zarr; print(f'xarray: {xarray.__version__}'); print(f'zarr: {zarr.__version__}')"
 
       # this is here instead of earlier to give minio more time to get up and running
       # checking and waiting only right before we need it
@@ -220,7 +231,6 @@ jobs:
         working-directory: icechunk/icechunk-python
         env:
           ICECHUNK_XARRAY_BACKENDS_TESTS: 1
-          ICECHUNK_LOG: trace
         run: |
           set -e
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
