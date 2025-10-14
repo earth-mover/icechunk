@@ -119,6 +119,17 @@ jobs:
   test-min-versions:
     runs-on: ubuntu-latest
     needs: [build-wheels]
+    strategy:
+      matrix:
+        deps-version:
+          - name: minimum
+            xarray: "2025.01.2"
+            dask: "2024.11.0"
+            distributed: "2024.11.0"
+          - name: latest
+            xarray: "latest"
+            dask: "latest"
+            distributed: "latest"
     steps:
       - uses: actions/checkout@v5
       - name: Stand up MinIO
@@ -137,7 +148,7 @@ jobs:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install dependencies with minimum versions
+      - name: Install dependencies - ${{ matrix.deps-version.name }}
         shell: bash
         working-directory: icechunk-python
         run: |
@@ -146,11 +157,16 @@ jobs:
           source .venv/bin/activate
           python --version
           WHEEL=$(ls dist/*-cp311-*.whl)
-          # Install wheel with test dependencies, then force minimum versions
+          # Install wheel with test dependencies
           uv pip install "${WHEEL}[test]"
-          # Force minimum versions for key dependencies to test backwards compatibility
-          uv pip install --upgrade 'xarray==2025.01.2' 'dask==2024.11.0' 'distributed==2024.11.0'
-          echo "Installed package versions (should show minimum xarray, dask, etc):"
+          # Install specific versions based on matrix
+          if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
+            echo "Installing minimum versions:"
+            uv pip install --upgrade 'xarray==${{ matrix.deps-version.xarray }}' 'dask==${{ matrix.deps-version.dask }}' 'distributed==${{ matrix.deps-version.distributed }}'
+          else
+            echo "Using latest versions (already installed)"
+          fi
+          echo "Installed package versions:"
           uv pip list | grep -E "(xarray|dask|distributed|zarr|pytest|mypy)"
 
       - name: Wait for MinIO to be ready
@@ -169,12 +185,21 @@ jobs:
         run: |
           set -e
           source .venv/bin/activate
-          # Run tests to ensure compatibility with minimum versions
+          # Run all tests to ensure compatibility with minimum versions
           python -m pytest -n 4
 
   xarray-backends:
     runs-on: ubuntu-latest
     needs: [build-wheels]
+    strategy:
+      matrix:
+        xarray-version:
+          - name: minimum
+            version: "2025.01.2"
+            checkout-ref: "v2025.01.2"
+          - name: latest
+            version: "latest"
+            checkout-ref: "main"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -190,6 +215,7 @@ jobs:
         with:
           repository: "pydata/xarray"
           path: "xarray"
+          ref: ${{ matrix.xarray-version.checkout-ref }}
           fetch-depth: 0 # Fetch all history for all branches and tags.
 
       - name: Download wheels
@@ -217,6 +243,15 @@ jobs:
           WHEEL=$(ls dist/*-cp311-*.whl)
           uv pip install "${WHEEL}[test]"
           uv pip install pytest-mypy-plugins
+          # Install specific xarray version based on matrix
+          if [ "${{ matrix.xarray-version.version }}" = "latest" ]; then
+            echo "Using xarray from git checkout (latest)"
+          else
+            echo "Installing xarray ${{ matrix.xarray-version.version }}"
+            uv pip install --upgrade 'xarray==${{ matrix.xarray-version.version }}'
+          fi
+          echo "Installed xarray version:"
+          python -c "import xarray; print(xarray.__version__)"
 
       # this is here instead of earlier to give minio more time to get up and running
       # checking and waiting only right before we need it
