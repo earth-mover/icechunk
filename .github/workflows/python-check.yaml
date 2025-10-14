@@ -54,10 +54,12 @@ jobs:
             xarray: "2025.01.2"
             dask: "2024.11.0"
             distributed: "2024.11.0"
+            zarr: "3.0.8"
           - name: latest
             xarray: "latest"
             dask: "latest"
             distributed: "latest"
+            zarr: "latest"
     steps:
       - uses: actions/checkout@v5
       - name: Stand up MinIO
@@ -99,7 +101,7 @@ jobs:
           # Install specific versions based on matrix
           if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
             echo "Installing minimum versions:"
-            uv pip install --upgrade 'xarray==${{ matrix.deps-version.xarray }}' 'dask==${{ matrix.deps-version.dask }}' 'distributed==${{ matrix.deps-version.distributed }}'
+            uv pip install --upgrade 'xarray==${{ matrix.deps-version.xarray }}' 'dask==${{ matrix.deps-version.dask }}' 'distributed==${{ matrix.deps-version.distributed }}' 'zarr==${{ matrix.deps-version.zarr }}'
           else
             echo "Using latest versions (already installed)"
           fi
