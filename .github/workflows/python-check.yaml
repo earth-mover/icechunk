@@ -54,7 +54,7 @@ jobs:
             xarray: "2025.01.2"
             dask: "2024.11.0"
             distributed: "2024.11.0"
-            zarr: "3.0.8"
+            zarr: "3.1.0"
           - name: latest
             xarray: "latest"
             dask: "latest"
