@@ -116,6 +116,62 @@ jobs:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
 
+  test-min-versions:
+    runs-on: ubuntu-latest
+    needs: [build-wheels]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Stand up MinIO
+        run: |
+          docker compose up -d minio
+
+      - name: Download wheels
+        uses: actions/download-artifact@v5
+        with:
+          name: test-wheels
+          path: icechunk-python/dist
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies with minimum versions
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          uv venv
+          source .venv/bin/activate
+          python --version
+          WHEEL=$(ls dist/*-cp311-*.whl)
+          # Install wheel with test dependencies, then force minimum versions
+          uv pip install "${WHEEL}[test]"
+          # Force minimum versions for key dependencies to test backwards compatibility
+          uv pip install --upgrade 'xarray==2025.01.2' 'dask==2024.11.0' 'distributed==2024.11.0'
+          echo "Installed package versions (should show minimum xarray, dask, etc):"
+          uv pip list | grep -E "(xarray|dask|distributed|zarr|pytest|mypy)"
+
+      - name: Wait for MinIO to be ready
+        run: |
+          for _ in {1..30}; do
+              if curl --silent --fail http://localhost:9000/minio/health/live; then
+              break
+              fi
+              sleep 1
+          done
+          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
+
+      - name: Run pytest with minimum versions
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          source .venv/bin/activate
+          # Run tests to ensure compatibility with minimum versions
+          python -m pytest -n 4
+
   xarray-backends:
     runs-on: ubuntu-latest
     needs: [build-wheels]
