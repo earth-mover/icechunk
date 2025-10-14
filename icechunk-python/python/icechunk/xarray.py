@@ -117,20 +117,26 @@ class _XarrayDatasetWriter:
             mode=mode, append_dim=append_dim, region=region
         )
 
-        self.xarray_store = ZarrStore.open_group(
-            store=self.store,
-            group=group,
-            mode=concrete_mode,
-            zarr_format=3,
-            append_dim=append_dim,
-            write_region=region,
-            safe_chunks=self.safe_chunks,
-            align_chunks=self.align_chunks,
-            synchronizer=None,
-            consolidated=False,
-            consolidate_on_close=False,
-            zarr_version=None,
-        )
+        # align_chunks was added in xarray 2025.06.0
+        # For backwards compatibility, only pass it if supported
+        kwargs = {
+            "store": self.store,
+            "group": group,
+            "mode": concrete_mode,
+            "zarr_format": 3,
+            "append_dim": append_dim,
+            "write_region": region,
+            "safe_chunks": self.safe_chunks,
+            "synchronizer": None,
+            "consolidated": False,
+            "consolidate_on_close": False,
+            "zarr_version": None,
+        }
+
+        if Version(xr.__version__) >= Version("2025.06.0"):
+            kwargs["align_chunks"] = self.align_chunks
+
+        self.xarray_store = ZarrStore.open_group(**kwargs)
         self.dataset = self.xarray_store._validate_and_autodetect_region(self.dataset)
 
     def write_metadata(self, encoding: Mapping[Any, Any] | None = None) -> None:
