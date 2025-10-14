@@ -2,10 +2,17 @@ from typing import Any
 
 import pytest
 from numpy.testing import assert_array_equal
+from packaging.version import Version
 
 from icechunk import IcechunkStore, Repository, in_memory_storage
 
 pytest.importorskip("hypothesis")
+import zarr
+
+pytestmark = pytest.mark.skipif(
+    Version(zarr.__version__) < Version("3.1.0"),
+    reason="BytesCodec Issuess with less than 3.1.0",
+)
 
 import hypothesis.strategies as st
 from hypothesis import assume, given, settings

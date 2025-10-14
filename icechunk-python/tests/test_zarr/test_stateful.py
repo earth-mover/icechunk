@@ -15,6 +15,7 @@ from hypothesis.stateful import (
     rule,
     run_state_machine_as_test,
 )
+from packaging.version import Version
 
 import icechunk as ic
 import zarr
@@ -375,6 +376,10 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         )
 
 
+@pytest.mark.skipif(
+    Version(zarr.__version__) < Version("3.1.0"),
+    reason="zarr test strategies incompatible with zarr < 3.1.0",
+)
 def test_zarr_hierarchy() -> None:
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(in_memory_storage())
