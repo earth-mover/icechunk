@@ -125,6 +125,35 @@ python -m pytest -xvs tests/run_xarray_backends_tests.py::TestIcechunkStoreFiles
   --override-ini="addopts="
 ```
 
+#### Checking Xarray Documentation Consistency
+
+Icechunk's `to_icechunk` function shares several parameters with Xarray's `to_zarr` function. To ensure documentation stays in sync, use the documentation checker script.
+
+From the `icechunk-python` directory:
+
+```bash
+# Set XARRAY_DIR to point to your local Xarray clone
+export XARRAY_DIR=~/Documents/dev/xarray
+
+# Run the documentation consistency check
+uv run scripts/check_xarray_docs_sync.py
+```
+
+The script will display a side-by-side comparison of any documentation differences, with missing text highlighted in red.
+
+**Known Differences**: Some differences are acceptable (e.g., Sphinx formatting like `:py:func:` doesn't work in mkdocs). These are tracked in `scripts/known-xarray-doc-diffs.json`. Known differences are displayed but don't cause the check to fail.
+
+**Updating Known Differences**: After making intentional documentation changes, update the known diffs file:
+
+```bash
+# Mark current diffs as known (creates/updates scripts/known-xarray-doc-diffs.json)
+uv run scripts/check_xarray_docs_sync.py --update-known-diffs
+
+# Edit scripts/known-xarray-doc-diffs.json to add reasons for each difference
+```
+
+**CI Integration**: The script returns exit code 0 if only known differences exist, allowing CI to pass while still displaying diffs for review.
+
 ### Rust Development Workflow
 
 #### Prerequisites
