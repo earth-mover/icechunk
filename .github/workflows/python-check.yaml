@@ -208,9 +208,18 @@ jobs:
           set -e
           source .venv/bin/activate
           XARRAY_VERSION=$(python -c "import xarray; print(xarray.__version__)")
-          echo "Checking out xarray v${XARRAY_VERSION}"
+          # Convert version to tag format (e.g., 2025.1.2 -> v2025.01.2)
+          XARRAY_TAG=$(python -c "
+          import xarray
+          v = xarray.__version__
+          parts = v.split('.')
+          # Zero-pad month to 2 digits
+          tag = f'v{parts[0]}.{parts[1].zfill(2)}.{parts[2]}'
+          print(tag)
+          ")
+          echo "Checking out xarray ${XARRAY_TAG} (version ${XARRAY_VERSION})"
           cd ../../
-          git clone --depth 1 --branch "v${XARRAY_VERSION}" https://github.com/pydata/xarray.git xarray
+          git clone --depth 1 --branch "${XARRAY_TAG}" https://github.com/pydata/xarray.git xarray
 
       - name: Wait for MinIO to be ready
         working-directory: icechunk
