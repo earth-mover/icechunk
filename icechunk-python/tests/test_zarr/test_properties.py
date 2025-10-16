@@ -2,14 +2,15 @@ from typing import Any
 
 import pytest
 from numpy.testing import assert_array_equal
+from packaging.version import Version
 
 from icechunk import IcechunkStore, Repository, in_memory_storage
 
 pytest.importorskip("hypothesis")
-
 import hypothesis.strategies as st
 from hypothesis import assume, given, settings
 
+import zarr
 from zarr.testing.strategies import arrays, numpy_arrays
 
 
@@ -26,6 +27,11 @@ icechunk_stores = st.builds(create)
 def test_roundtrip(data: st.DataObject, nparray: Any) -> None:
     # TODO: support size-0 arrays GH392
     assume(nparray.size > 0)
+
+    # Skip bytes, unicode string, and datetime dtypes with zarr < 3.1.0
+    # These have codec/dtype issues that were fixed in 3.1.0's dtype refactor
+    if Version(zarr.__version__) < Version("3.1.0"):
+        assume(nparray.dtype.kind not in ("S", "U", "M", "m"))
 
     zarray = data.draw(
         arrays(
