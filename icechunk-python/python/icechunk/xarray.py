@@ -1,6 +1,6 @@
-import importlib
 from collections.abc import Hashable, Mapping, MutableMapping
 from dataclasses import dataclass, field
+from importlib.util import find_spec
 from typing import Any, Literal, overload
 
 import numpy as np
@@ -22,7 +22,7 @@ ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 
 
 try:
-    has_dask = importlib.util.find_spec("dask") is not None
+    has_dask = find_spec("dask") is not None
 except ImportError:
     has_dask = False
 
@@ -45,9 +45,9 @@ else:
 
 def is_dask_collection(x: Any) -> bool:
     if has_dask:
-        import dask
+        from dask.base import is_dask_collection
 
-        return dask.base.is_dask_collection(x)
+        return is_dask_collection(x)
     else:
         return False
 
