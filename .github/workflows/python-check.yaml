@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: '3.11'
+  PYTHON_VERSION: "3.11"
 
 defaults:
   run:
@@ -37,6 +37,8 @@ jobs:
           working-directory: icechunk-python
           args: --release --out dist --find-interpreter
           sccache: true
+        env:
+          CARGO_TERM_QUIET: true
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -47,12 +49,24 @@ jobs:
   test:
     runs-on: ubuntu-latest
     needs: [build-wheels]
+    strategy:
+      matrix:
+        deps-version:
+          - name: minimum
+            xarray: "2025.01.2"
+            dask: "2024.11.0"
+            distributed: "2024.11.0"
+            zarr: "3.0.8"
+          - name: latest
+            xarray: "latest-release"
+            dask: "latest-release"
+            distributed: "latest-release"
+            zarr: "latest-release"
     steps:
       - uses: actions/checkout@v5
       - name: Stand up MinIO
         run: |
           docker compose up -d minio
-
 
       - name: Download wheels
         uses: actions/download-artifact@v5
@@ -70,12 +84,12 @@ jobs:
             cache-hypothesis-
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install dependencies
+      - name: Install dependencies - ${{ matrix.deps-version.name }}
         shell: bash
         working-directory: icechunk-python
         run: |
@@ -85,6 +99,15 @@ jobs:
           python --version
           WHEEL=$(ls dist/*-cp311-*.whl)
           uv pip install "${WHEEL}[test]"
+          # Install specific versions based on matrix
+          if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
+            echo "Installing minimum versions:"
+            uv pip install --upgrade 'xarray==${{ matrix.deps-version.xarray }}' 'dask==${{ matrix.deps-version.dask }}' 'distributed==${{ matrix.deps-version.distributed }}' 'zarr==${{ matrix.deps-version.zarr }}'
+          else
+            echo "Using latest versions (already installed)"
+          fi
+          echo "Installed package versions:"
+          uv pip list | grep -E "(xarray|dask|distributed|zarr)"
 
       # this is here instead of earlier to give minio more time to get up and running
       # checking and waiting only right before we need it
@@ -114,11 +137,20 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: icechunk-python/.hypothesis/
-          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}-${{ matrix.deps-version.name }}
 
   xarray-backends:
     runs-on: ubuntu-latest
     needs: [build-wheels]
+    strategy:
+      matrix:
+        xarray-version:
+          - name: minimum
+            version: "2025.01.2"
+            zarr: "3.0.8"
+          - name: latest-release
+            version: "latest-release"
+            zarr: "latest-release"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -129,13 +161,6 @@ jobs:
         run: |
           docker compose up -d minio
 
-
-      - uses: actions/checkout@v5
-        with:
-          repository: "pydata/xarray"
-          path: "xarray"
-          fetch-depth: 0 # Fetch all history for all branches and tags.
-
       - name: Download wheels
         uses: actions/download-artifact@v5
         with:
@@ -143,7 +168,7 @@ jobs:
           path: icechunk/icechunk-python/dist
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           python-version: ${{ env.PYTHON_VERSION }}
@@ -161,9 +186,39 @@ jobs:
           WHEEL=$(ls dist/*-cp311-*.whl)
           uv pip install "${WHEEL}[test]"
           uv pip install pytest-mypy-plugins
+          # Install specific xarray version based on matrix
+          if [ "${{ matrix.xarray-version.version }}" != "latest-release" ]; then
+            echo "Installing xarray ${{ matrix.xarray-version.version }}"
+            uv pip install --upgrade 'xarray==${{ matrix.xarray-version.version }}'
+          fi
+          # Install specific zarr version based on matrix
+          if [ "${{ matrix.xarray-version.zarr }}" != "latest-release" ]; then
+            echo "Installing zarr ${{ matrix.xarray-version.zarr }}"
+            uv pip install --upgrade 'zarr==${{ matrix.xarray-version.zarr }}'
+          fi
+          echo "Installed package versions:"
+          python -c "import xarray; import zarr; print(f'xarray: {xarray.__version__}'); print(f'zarr: {zarr.__version__}')"
 
-      # this is here instead of earlier to give minio more time to get up and running
-      # checking and waiting only right before we need it
+      - name: Checkout xarray at installed version
+        shell: bash
+        working-directory: icechunk/icechunk-python
+        run: |
+          set -e
+          source .venv/bin/activate
+          XARRAY_VERSION=$(python -c "import xarray; print(xarray.__version__)")
+          # Convert version to tag format (e.g., 2025.1.2 -> v2025.01.2)
+          XARRAY_TAG=$(python -c "
+          import xarray
+          v = xarray.__version__
+          parts = v.split('.')
+          # Zero-pad month to 2 digits
+          tag = f'v{parts[0]}.{parts[1].zfill(2)}.{parts[2]}'
+          print(tag)
+          ")
+          echo "Checking out xarray ${XARRAY_TAG} (version ${XARRAY_VERSION})"
+          cd ../../
+          git clone --depth 1 --branch "${XARRAY_TAG}" https://github.com/pydata/xarray.git xarray
+
       - name: Wait for MinIO to be ready
         working-directory: icechunk
         run: |
@@ -179,9 +234,36 @@ jobs:
         working-directory: icechunk/icechunk-python
         env:
           ICECHUNK_XARRAY_BACKENDS_TESTS: 1
-          ICECHUNK_LOG: trace
         run: |
           set -e
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
           source .venv/bin/activate
           python -m pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
+
+  check-xarray-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: "icechunk"
+
+      - uses: actions/checkout@v5
+        with:
+          repository: "pydata/xarray"
+          path: "xarray"
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check xarray documentation consistency
+        shell: bash
+        working-directory: icechunk/icechunk-python
+        env:
+          XARRAY_DIR: ../../xarray
+        run: |
+          set -e
+          uv run scripts/check_xarray_docs_sync.py
