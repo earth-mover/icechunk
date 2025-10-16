@@ -17,7 +17,11 @@ async def async_ancestry(
     return [parent async for parent in repo.async_ancestry(**kwargs)]
 
 
-def test_timetravel() -> None:
+@pytest.mark.parametrize(
+    "using_flush",
+    [False, True],
+)
+def test_timetravel(using_flush: bool) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = ic.Repository.create(
@@ -48,7 +52,12 @@ def test_timetravel() -> None:
     assert status.updated_arrays == set()
     assert status.updated_groups == set()
 
-    first_snapshot_id = session.commit("commit 1")
+    if using_flush:
+        first_snapshot_id = session.flush("commit 1")
+        repo.reset_branch("main", first_snapshot_id)
+    else:
+        first_snapshot_id = session.commit("commit 1")
+
     assert session.read_only
 
     session = repo.writable_session("main")
@@ -59,7 +68,11 @@ def test_timetravel() -> None:
     air_temp[:, :] = 54
     assert air_temp[200, 6] == 54
 
-    new_snapshot_id = session.commit("commit 2")
+    if using_flush:
+        new_snapshot_id = session.flush("commit 2")
+        repo.reset_branch("main", new_snapshot_id)
+    else:
+        new_snapshot_id = session.commit("commit 2")
 
     session = repo.readonly_session(snapshot_id=first_snapshot_id)
     store = session.store
@@ -99,7 +112,12 @@ def test_timetravel() -> None:
     group = zarr.open_group(store=store)
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
     air_temp[:, :] = 90
-    feature_snapshot_id = session.commit("commit 3")
+
+    if using_flush:
+        feature_snapshot_id = session.flush("commit 3")
+        repo.reset_branch("feature", feature_snapshot_id)
+    else:
+        feature_snapshot_id = session.commit("commit 3")
 
     branches = repo.list_branches()
     assert branches == set(["main", "feature"])
@@ -232,13 +250,21 @@ async def test_branch_reset() -> None:
 
     group = zarr.open_group(store=store)
     group.create_group("b")
-    session.commit("group b")
+    last_commit = session.commit("group b")
 
     keys = {k async for k in store.list()}
     assert "a/zarr.json" in keys
     assert "b/zarr.json" in keys
 
-    repo.reset_branch("main", prev_snapshot_id)
+    with pytest.raises(ic.IcechunkError, match="branch update conflict"):
+        repo.reset_branch(
+            "main", prev_snapshot_id, from_snapshot_id="1CECHNKREP0F1RSTCMT0"
+        )
+
+    assert last_commit == repo.lookup_branch("main")
+
+    repo.reset_branch("main", prev_snapshot_id, from_snapshot_id=last_commit)
+    assert prev_snapshot_id == repo.lookup_branch("main")
 
     session = repo.readonly_session("main")
     store = session.store
@@ -317,7 +343,11 @@ async def test_default_commit_metadata() -> None:
     assert snap.metadata == {"user": "test"}
 
 
-async def test_timetravel_async() -> None:
+@pytest.mark.parametrize(
+    "using_flush",
+    [False, True],
+)
+async def test_timetravel_async(using_flush: bool) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = await ic.Repository.create_async(
@@ -346,7 +376,11 @@ async def test_timetravel_async() -> None:
     assert status.updated_arrays == set()
     assert status.updated_groups == set()
 
-    first_snapshot_id = await session.commit_async("commit 1")
+    if using_flush:
+        first_snapshot_id = await session.flush_async("commit 1")
+        await repo.reset_branch_async("main", first_snapshot_id)
+    else:
+        first_snapshot_id = await session.commit_async("commit 1")
     assert session.read_only
 
     session = await repo.writable_session_async("main")
@@ -356,7 +390,11 @@ async def test_timetravel_async() -> None:
     air_temp[:, :] = 54
     assert air_temp[200, 6] == 54
 
-    new_snapshot_id = await session.commit_async("commit 2")
+    if using_flush:
+        new_snapshot_id = await session.flush_async("commit 2")
+        await repo.reset_branch_async("main", new_snapshot_id)
+    else:
+        new_snapshot_id = await session.commit_async("commit 2")
 
     session = await repo.readonly_session_async(snapshot_id=first_snapshot_id)
     store = session.store
@@ -393,7 +431,12 @@ async def test_timetravel_async() -> None:
     group = zarr.open_group(store=session.store)
     air_temp = cast(zarr.core.array.Array, group["air_temp"])
     air_temp[:, :] = 90
-    feature_snapshot_id = await session.commit_async("commit 3")
+
+    if using_flush:
+        feature_snapshot_id = await session.flush_async("commit 3")
+        await repo.reset_branch_async("feature", feature_snapshot_id)
+    else:
+        feature_snapshot_id = await session.commit_async("commit 3")
 
     branches = await repo.list_branches_async()
     assert branches == set(["main", "feature"])

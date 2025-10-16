@@ -1,6 +1,6 @@
 [package]
 name = "icechunk-python"
-version = "1.1.6"
+version = "1.1.9"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -21,23 +21,21 @@ crate-type = ["cdylib"]
 bytes = "1.10.1"
 chrono = { version = "0.4.42" }
 futures = "0.3.31"
-icechunk = { path = "../icechunk", version = "0.3.10", features = ["logs"] }
+icechunk = { path = "../icechunk", version = "0.3.13", features = ["logs"] }
 itertools = "0.14.0"
 pyo3 = { version = "0.24.2", features = [
   "chrono",
-  #  do we really need this one?
-  #  "extension-module",
   "experimental-async",
   "multiple-pymethods",
 ] }
 pyo3-async-runtimes = { version = "0.24", features = ["tokio-runtime"] }
 async-stream = "0.3.6"
-thiserror = "2.0.16"
+thiserror = "2.0.17"
 tokio = "1.47"
 serde_json = "1.0.145"
 async-trait = "0.1.89"
-typetag = "0.2.20"
-serde = { version = "1.0.226", features = ["derive", "rc"] }
+typetag = "0.2.21"
+serde = { version = "1.0.228", features = ["derive", "rc"] }
 miette = { version = "7.6.0", features = ["fancy"] }
 clap = { version = "4.5", features = ["derive"], optional = true }
 rand = "0.9.2"

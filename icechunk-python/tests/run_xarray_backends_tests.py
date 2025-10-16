@@ -16,7 +16,6 @@ import zarr
 from icechunk import (
     IcechunkStore,
     Repository,
-    in_memory_storage,
     local_filesystem_storage,
     s3_storage,
 )
@@ -32,6 +31,7 @@ from xarray.tests.test_backends import (
     ZarrBase,
     # needed otherwise not discovered
     default_zarr_format,  # noqa: F401, RUF100
+    tmp_store,  # noqa: F401, RUF100
 )
 
 
@@ -105,7 +105,8 @@ class TestIcechunkStoreFilesystem(IcechunkStoreBase):
 class TestIcechunkStoreMemory(IcechunkStoreBase):
     @contextlib.contextmanager
     def create_repo(self) -> Generator[Repository]:
-        yield Repository.create(in_memory_storage())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield Repository.create(local_filesystem_storage(tmpdir))
 
     def test_pickle(self) -> None:
         pytest.skip("pickling memory store is not supported")
@@ -137,9 +138,11 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
     def create_zarr_target(self) -> Generator[IcechunkStore]:
         if zarr.config.config["default_zarr_format"] == 2:
             pytest.skip("v2 not supported")
-        repo = Repository.create(in_memory_storage())
-        session = repo.writable_session("main")
-        yield session.store
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Repository.create(local_filesystem_storage(tmpdir))
+            session = repo.writable_session("main")
+            yield session.store
 
     @contextlib.contextmanager
     def create(self):
@@ -149,11 +152,12 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
         ds = xr.Dataset(
             {"test": xr.DataArray(data, dims=("x", "y"), coords={"x": x, "y": y})}
         )
-        repo = Repository.create(in_memory_storage())
-        session = repo.writable_session("main")
-        self.save(session.store, ds)
-        session.commit("initial commit")
-        yield repo.writable_session("main").store, ds
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Repository.create(local_filesystem_storage(tmpdir))
+            session = repo.writable_session("main")
+            self.save(session.store, ds)
+            session.commit("initial commit")
+            yield repo.writable_session("main").store, ds
 
     def save(self, target, ds, **kwargs):
         # not really important here
@@ -176,6 +180,11 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
         )
 
     def test_zarr_region_chunk_partial_offset(self):
+        pytest.skip(
+            "this test requires multiple saves, and is meant to exercise Xarray logic."
+        )
+
+    def test_dataset_to_zarr_align_chunks_true(self, tmp_store) -> None:  # noqa: F811
         pytest.skip(
             "this test requires multiple saves, and is meant to exercise Xarray logic."
         )

@@ -29,7 +29,7 @@ use pyo3::{
     IntoPyObjectExt,
     exceptions::PyValueError,
     prelude::*,
-    types::{PyDict, PyNone, PyType},
+    types::{PyDict, PyNone, PySet, PyType},
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
@@ -750,6 +750,15 @@ impl PyRepository {
         PyStorage(Arc::clone(self.0.blocking_read().storage()))
     }
 
+    #[getter]
+    fn authorized_virtual_container_prefixes<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PySet>> {
+        let prefixes = self.0.blocking_read().authorized_virtual_container_prefixes();
+        PySet::new(py, prefixes.iter().map(|s| s.as_str()))
+    }
+
     pub fn set_default_commit_metadata(
         &self,
         py: Python<'_>,
@@ -973,21 +982,33 @@ impl PyRepository {
         &self,
         py: Python<'_>,
         branch_name: &str,
-        snapshot_id: &str,
+        to_snapshot_id: &str,
+        from_snapshot_id: Option<&str>,
     ) -> PyResult<()> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.allow_threads(move || {
-            let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
+            let to_snapshot_id = SnapshotId::try_from(to_snapshot_id).map_err(|_| {
                 PyIcechunkStoreError::RepositoryError(
-                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+                    RepositoryErrorKind::InvalidSnapshotId(to_snapshot_id.to_owned())
+                        .into(),
                 )
             })?;
+
+            let from_snapshot_id = from_snapshot_id
+                .map(|sid| {
+                    SnapshotId::try_from(sid).map_err(|_| {
+                        PyIcechunkStoreError::RepositoryError(
+                            RepositoryErrorKind::InvalidSnapshotId(sid.to_owned()).into(),
+                        )
+                    })
+                })
+                .transpose()?;
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 self.0
                     .read()
                     .await
-                    .reset_branch(branch_name, &snapshot_id)
+                    .reset_branch(branch_name, &to_snapshot_id, from_snapshot_id.as_ref())
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(())
@@ -999,20 +1020,31 @@ impl PyRepository {
         &'py self,
         py: Python<'py>,
         branch_name: &str,
-        snapshot_id: &str,
+        to_snapshot_id: &str,
+        from_snapshot_id: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
         let branch_name = branch_name.to_owned();
-        let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
+        let to_snapshot_id = SnapshotId::try_from(to_snapshot_id).map_err(|_| {
             PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+                RepositoryErrorKind::InvalidSnapshotId(to_snapshot_id.to_owned()).into(),
             )
         })?;
+
+        let from_snapshot_id = from_snapshot_id
+            .map(|sid| {
+                SnapshotId::try_from(sid).map_err(|_| {
+                    PyIcechunkStoreError::RepositoryError(
+                        RepositoryErrorKind::InvalidSnapshotId(sid.to_owned()).into(),
+                    )
+                })
+            })
+            .transpose()?;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let repository = repository.read().await;
             repository
-                .reset_branch(&branch_name, &snapshot_id)
+                .reset_branch(&branch_name, &to_snapshot_id, from_snapshot_id.as_ref())
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(())

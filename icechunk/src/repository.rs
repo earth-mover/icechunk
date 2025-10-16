@@ -455,6 +455,10 @@ impl Repository {
         &self.asset_manager
     }
 
+    pub fn authorized_virtual_container_prefixes(&self) -> HashSet<String> {
+        self.authorized_virtual_containers.keys().cloned().collect()
+    }
+
     /// Returns the sequence of parents of the current session, in order of latest first.
     #[instrument(skip(self))]
     pub async fn snapshot_ancestry(
@@ -574,7 +578,8 @@ impl Repository {
     pub async fn reset_branch(
         &self,
         branch: &str,
-        snapshot_id: &SnapshotId,
+        to_snapshot_id: &SnapshotId,
+        from_snapshot_id: Option<&SnapshotId>,
     ) -> RepositoryResult<()> {
         if !self.storage.can_write() {
             return Err(RepositoryErrorKind::ReadonlyStorage(
@@ -585,16 +590,19 @@ impl Repository {
         raise_if_invalid_snapshot_id(
             self.storage.as_ref(),
             &self.storage_settings,
-            snapshot_id,
+            to_snapshot_id,
         )
         .await?;
-        let branch_tip = self.lookup_branch(branch).await?;
+        let branch_tip = match from_snapshot_id {
+            Some(snap) => snap,
+            None => &self.lookup_branch(branch).await?,
+        };
         update_branch(
             self.storage.as_ref(),
             &self.storage_settings,
             branch,
-            snapshot_id.clone(),
-            Some(&branch_tip),
+            to_snapshot_id.clone(),
+            Some(branch_tip),
         )
         .await
         .err_into()
@@ -860,7 +868,7 @@ impl Repository {
             if let Ok(snap) = asset_manager.fetch_snapshot(&snapshot_id).await {
                 let snap_c = Arc::clone(&snap);
                 for node in snap
-                    .iter_arc()
+                    .iter_arc(&Path::root())
                     .filter_ok(|node| node.node_type() == NodeType::Array)
                     // TODO: make configurable
                     .take(50)

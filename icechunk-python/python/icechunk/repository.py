@@ -409,6 +409,18 @@ class Repository:
         """
         return self._repository.storage()
 
+    @property
+    def authorized_virtual_container_prefixes(self) -> set[str]:
+        """
+        Get all authorized virtual chunk container prefixes.
+
+        Returns
+        -------
+        url_prefixes: set[str]
+            The set of authorized url prefixes for each virtual chunk container
+        """
+        return self._repository.authorized_virtual_container_prefixes
+
     def reopen(
         self,
         config: RepositoryConfig | None = None,
@@ -681,7 +693,9 @@ class Repository:
         """
         return await self._repository.lookup_snapshot_async(snapshot_id)
 
-    def reset_branch(self, branch: str, snapshot_id: str) -> None:
+    def reset_branch(
+        self, branch: str, snapshot_id: str, *, from_snapshot_id: str | None = None
+    ) -> None:
         """
         Reset a branch to a specific snapshot.
 
@@ -694,14 +708,19 @@ class Repository:
             The branch to reset.
         snapshot_id : str
             The snapshot ID to reset the branch to.
+        from_snapshot_id : str | None
+            If passed, the reset will only be executed if the branch currently
+            points to from_snapshot_id.
 
         Returns
         -------
         None
         """
-        self._repository.reset_branch(branch, snapshot_id)
+        self._repository.reset_branch(branch, snapshot_id, from_snapshot_id)
 
-    async def reset_branch_async(self, branch: str, snapshot_id: str) -> None:
+    async def reset_branch_async(
+        self, branch: str, snapshot_id: str, *, from_snapshot_id: str | None = None
+    ) -> None:
         """
         Reset a branch to a specific snapshot (async version).
 
@@ -714,12 +733,15 @@ class Repository:
             The branch to reset.
         snapshot_id : str
             The snapshot ID to reset the branch to.
+        from_snapshot_id : str | None
+            If passed, the reset will only be executed if the branch currently
+            points to from_snapshot_id.
 
         Returns
         -------
         None
         """
-        await self._repository.reset_branch_async(branch, snapshot_id)
+        await self._repository.reset_branch_async(branch, snapshot_id, from_snapshot_id)
 
     def delete_branch(self, branch: str) -> None:
         """
