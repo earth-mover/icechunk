@@ -1,5 +1,12 @@
 # Changelog
 
+## Python Icechunk Library 1.1.10
+
+### Fixes
+
+- Internal testing and documentation build fixes
+- Compatibility with `Xarray<2025.06.0`.
+
 ## Python Icechunk Library 1.1.9
 
 ### Features
