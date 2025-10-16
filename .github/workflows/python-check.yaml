@@ -239,3 +239,31 @@ jobs:
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
           source .venv/bin/activate
           python -m pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
+
+  check-xarray-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: "icechunk"
+
+      - uses: actions/checkout@v5
+        with:
+          repository: "pydata/xarray"
+          path: "xarray"
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check xarray documentation consistency
+        shell: bash
+        working-directory: icechunk/icechunk-python
+        env:
+          XARRAY_DIR: ../../xarray
+        run: |
+          set -e
+          uv run scripts/check_xarray_docs_sync.py
