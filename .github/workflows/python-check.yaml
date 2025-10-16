@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: '3.11'
+  PYTHON_VERSION: "3.11"
 
 defaults:
   run:
@@ -67,7 +67,6 @@ jobs:
       - name: Stand up MinIO
         run: |
           docker compose up -d minio
-
 
       - name: Download wheels
         uses: actions/download-artifact@v5
@@ -164,14 +163,6 @@ jobs:
         run: |
           docker compose up -d minio
 
-
-      - uses: actions/checkout@v5
-        with:
-          repository: "pydata/xarray"
-          path: "xarray"
-          ref: ${{ matrix.xarray-version.checkout-ref }}
-          fetch-depth: 0 # Fetch all history for all branches and tags.
-
       - name: Download wheels
         uses: actions/download-artifact@v5
         with:
@@ -198,24 +189,29 @@ jobs:
           uv pip install "${WHEEL}[test]"
           uv pip install pytest-mypy-plugins
           # Install specific xarray version based on matrix
-          if [ "${{ matrix.xarray-version.version }}" = "latest" ]; then
-            echo "Using xarray from git checkout (latest)"
-          else
+          if [ "${{ matrix.xarray-version.version }}" != "latest" ]; then
             echo "Installing xarray ${{ matrix.xarray-version.version }}"
             uv pip install --upgrade 'xarray==${{ matrix.xarray-version.version }}'
           fi
           # Install specific zarr version based on matrix
-          if [ "${{ matrix.xarray-version.zarr }}" = "latest" ]; then
-            echo "Using latest zarr (already installed)"
-          else
+          if [ "${{ matrix.xarray-version.zarr }}" != "latest" ]; then
             echo "Installing zarr ${{ matrix.xarray-version.zarr }}"
             uv pip install --upgrade 'zarr==${{ matrix.xarray-version.zarr }}'
           fi
           echo "Installed package versions:"
           python -c "import xarray; import zarr; print(f'xarray: {xarray.__version__}'); print(f'zarr: {zarr.__version__}')"
 
-      # this is here instead of earlier to give minio more time to get up and running
-      # checking and waiting only right before we need it
+      - name: Checkout xarray at installed version
+        shell: bash
+        working-directory: icechunk/icechunk-python
+        run: |
+          set -e
+          source .venv/bin/activate
+          XARRAY_VERSION=$(python -c "import xarray; print(xarray.__version__)")
+          echo "Checking out xarray v${XARRAY_VERSION}"
+          cd ../../
+          git clone --depth 1 --branch "v${XARRAY_VERSION}" https://github.com/pydata/xarray.git xarray
+
       - name: Wait for MinIO to be ready
         working-directory: icechunk
         run: |
