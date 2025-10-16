@@ -1,5 +1,6 @@
 from collections.abc import Hashable, Mapping, MutableMapping
 from dataclasses import dataclass, field
+from importlib.util import find_spec
 from typing import Any, Literal, overload
 
 import numpy as np
@@ -20,6 +21,11 @@ Region = Mapping[str, slice | Literal["auto"]] | Literal["auto"] | None
 ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 
 
+try:
+    has_dask = find_spec("dask") is not None
+except ImportError:
+    has_dask = False
+
 if Version(xr.__version__) < Version("2024.10.0"):
     raise ValueError(
         f"Writing to icechunk requires Xarray>=2024.10.0 but you have {xr.__version__}. Please upgrade."
@@ -35,11 +41,11 @@ else:
 
 
 def is_dask_collection(x: Any) -> bool:
-    try:
+    if has_dask:
         from dask.base import is_dask_collection
 
         return is_dask_collection(x)
-    except ImportError:
+    else:
         return False
 
 
