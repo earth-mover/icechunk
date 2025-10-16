@@ -206,6 +206,10 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         array, _ = array_and_chunks
         # TODO: support size-0 arrays GH392
         assume(array.size > 0)
+        # Skip bytes, unicode string, and datetime dtypes with zarr < 3.1.0
+        # These have codec/dtype issues that were fixed in 3.1.0's dtype refactor
+        if Version(zarr.__version__) < Version("3.1.0"):
+            assume(array.dtype.kind not in ("S", "U", "M", "m"))
         super().add_array(data, name, array_and_chunks)
 
     @precondition(lambda self: bool(self.all_groups))
@@ -376,10 +380,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         )
 
 
-@pytest.mark.skipif(
-    Version(zarr.__version__) < Version("3.1.0"),
-    reason="zarr test strategies incompatible with zarr < 3.1.0",
-)
 def test_zarr_hierarchy() -> None:
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(in_memory_storage())
