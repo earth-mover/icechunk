@@ -28,6 +28,7 @@ pub mod inspect;
 pub mod ops;
 pub mod refs;
 pub mod repository;
+pub mod repr;
 pub mod session;
 pub mod storage;
 pub mod store;

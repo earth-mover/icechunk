@@ -22,6 +22,9 @@ class Session:
         self._session = session
         self._allow_changes = False
 
+    def __repr__(self) -> str:
+        return self._session.__repr__()
+
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Session):
             return False
