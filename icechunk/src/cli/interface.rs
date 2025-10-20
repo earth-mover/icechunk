@@ -38,6 +38,8 @@ enum Command {
     Snapshot(SnapshotCommand),
     #[command(subcommand, about = "Manage configuration")]
     Config(ConfigCommand),
+    #[command(subcommand, about = "Manage references (branches and tags)")]
+    Ref(RefCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -66,6 +68,12 @@ enum ConfigCommand {
     Add(AddCommand),
     #[clap(name = "list", about = "Print the current config.")]
     List,
+}
+
+#[derive(Debug, Subcommand)]
+enum RefCommand {
+    #[clap(name = "list", about = "List all references (branches and tags) in a repository")]
+    List(RefListCommand),
 }
 
 #[derive(Debug, Args)]
@@ -103,6 +111,12 @@ struct ListCommand {
         help = "Branch to list snapshots from"
     )]
     branch: String,
+}
+
+#[derive(Debug, Args)]
+struct RefListCommand {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
 }
 
 const CONFIG_DIR: &str = "icechunk";
@@ -241,6 +255,34 @@ async fn snapshot_list(
 
     for snapshot in snapshots {
         writeln!(writer, "{:?}", snapshot.context("Failed to get snapshot")?)?;
+    }
+
+    Ok(())
+}
+
+async fn ref_list(
+    list_cmd: &RefListCommand,
+    config: &CliConfig,
+    mut writer: impl std::io::Write,
+) -> Result<()> {
+    let repo =
+        config.repos.get(&list_cmd.repo).context("Repository not found in config")?;
+    let storage = get_storage(repo).await?;
+    let config = Some(repo.get_config().clone());
+
+    let repository = Repository::open(config, Arc::clone(&storage), HashMap::new())
+        .await
+        .context(format!("Failed to open repository {:?}", list_cmd.repo))?;
+
+    let branches = repository.list_branches().await?;
+    let tags = repository.list_tags().await?;
+
+    for branch in branches {
+        writeln!(writer, "branch: {}", branch)?;
+    }
+
+    for tag in tags {
+        writeln!(writer, "tag: {}", tag)?;
     }
 
     Ok(())
@@ -422,6 +464,9 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
         Command::Snapshot(SnapshotCommand::List(list_cmd)) => {
             snapshot_list(&list_cmd, &config, stdout()).await
         }
+        Command::Ref(RefCommand::List(list_cmd)) => {
+            ref_list(&list_cmd, &config, stdout()).await
+        }
         Command::Config(ConfigCommand::Init(init_cmd)) => {
             let new_config = config_init(&init_cmd, &config).await?;
             write_config(&new_config)?;
@@ -534,5 +579,57 @@ mod tests {
         let output = String::from_utf8(writer).unwrap();
 
         assert!(output.contains("LocalFileSystem"));
+    }
+
+    #[tokio_test]
+    async fn test_ref_list() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let path = temp.path().to_path_buf();
+
+        let repo_alias = RepositoryAlias("test-repo".to_string());
+        let repo_def = RepositoryDefinition::LocalFileSystem {
+            path: path.clone(),
+            config: RepositoryConfig::default(),
+        };
+
+        let mut repos = HashMap::new();
+        repos.insert(repo_alias.clone(), repo_def);
+
+        let config = CliConfig { repos };
+
+        let init_cmd = CreateCommand { repo: repo_alias.clone() };
+
+        repo_create(&init_cmd, &config).await.unwrap();
+
+        // Open the repository and create additional branches and tags
+        let storage = get_storage(config.repos.get(&repo_alias).unwrap()).await.unwrap();
+        let repo_config = Some(config.repos.get(&repo_alias).unwrap().get_config().clone());
+        let repository =
+            Repository::open(repo_config, Arc::clone(&storage), HashMap::new()).await.unwrap();
+
+        // Get the current snapshot ID from main branch
+        let main_snapshot = repository.lookup_branch("main").await.unwrap();
+
+        // Create a new branch
+        repository.create_branch("feature", &main_snapshot).await.unwrap();
+
+        // Create a tag
+        repository.create_tag("v1.0", &main_snapshot).await.unwrap();
+
+        // Now test the ref list command
+        let list_cmd = RefListCommand { repo: repo_alias.clone() };
+
+        let mut writer = Vec::new();
+        ref_list(&list_cmd, &config, &mut writer).await.unwrap();
+
+        let output = String::from_utf8(writer).unwrap();
+
+        // Verify output contains all expected references
+        assert!(output.contains("branch: main"));
+        assert!(output.contains("branch: feature"));
+        assert!(output.contains("tag: v1.0"));
+
+        // Count the lines to ensure we have exactly 3 references
+        assert_eq!(output.lines().count(), 3);
     }
 }
