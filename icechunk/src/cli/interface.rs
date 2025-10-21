@@ -72,7 +72,10 @@ enum ConfigCommand {
 
 #[derive(Debug, Subcommand)]
 enum RefCommand {
-    #[clap(name = "list", about = "List all references (branches and tags) in a repository")]
+    #[clap(
+        name = "list",
+        about = "List all references (branches and tags) in a repository"
+    )]
     List(RefListCommand),
 }
 
@@ -603,9 +606,12 @@ mod tests {
 
         // Open the repository and create additional branches and tags
         let storage = get_storage(config.repos.get(&repo_alias).unwrap()).await.unwrap();
-        let repo_config = Some(config.repos.get(&repo_alias).unwrap().get_config().clone());
+        let repo_config =
+            Some(config.repos.get(&repo_alias).unwrap().get_config().clone());
         let repository =
-            Repository::open(repo_config, Arc::clone(&storage), HashMap::new()).await.unwrap();
+            Repository::open(repo_config, Arc::clone(&storage), HashMap::new())
+                .await
+                .unwrap();
 
         // Get the current snapshot ID from main branch
         let main_snapshot = repository.lookup_branch("main").await.unwrap();
