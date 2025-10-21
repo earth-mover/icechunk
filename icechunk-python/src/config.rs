@@ -715,6 +715,7 @@ impl From<&PyCachingConfig> for CachingConfig {
             num_transaction_changes: value.num_transaction_changes,
             num_bytes_attributes: value.num_bytes_attributes,
             num_bytes_chunks: value.num_bytes_chunks,
+            backend: Default::default(),
         }
     }
 }
