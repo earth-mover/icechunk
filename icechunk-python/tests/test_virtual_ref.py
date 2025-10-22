@@ -198,8 +198,10 @@ async def test_write_minio_virtual_refs(use_async) -> None:
     assert vref_none is None
 
     all_refs = await session.all_virtual_refs_async()
-    all_refs_dict = {key: (location, offset, length) for key, location, offset, length, _ in all_refs}
-    
+    all_refs_dict = {
+        key: (location, offset, length) for key, location, offset, length, _ in all_refs
+    }
+
     assert len(all_refs_dict) >= 2
     assert all_refs_dict.get("c/0/0/0") == (f"s3://testbucket/{prefix}/chunk-1", 0, 4)
     assert all_refs_dict.get("c/0/0/1") == (f"s3://testbucket/{prefix}/chunk-2", 1, 4)
@@ -308,7 +310,7 @@ async def test_public_virtual_refs(
         vref = await store.get_virtual_ref_async("year/c/0")
     else:
         vref = store.get_virtual_ref("year/c/0")
-    
+
     assert vref is not None
     assert vref[0] == file_path
     assert vref[1] == 22306
@@ -318,7 +320,7 @@ async def test_public_virtual_refs(
         all_refs = await session.all_virtual_refs_async()
     else:
         all_refs = session.all_virtual_refs()
-    
+
     assert len(all_refs) == 1
     assert all_refs[0][0] == "year/c/0"
     assert all_refs[0][1] == file_path
