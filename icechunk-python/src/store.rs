@@ -29,6 +29,13 @@ use crate::{
 };
 
 type KeyRanges = Vec<(String, (Option<ChunkOffset>, Option<ChunkOffset>))>;
+type VirtualRefResult = Option<(
+    String,
+    ChunkOffset,
+    ChunkLength,
+    Option<String>,
+    Option<chrono::DateTime<Utc>>,
+)>;
 
 #[derive(FromPyObject, Clone, Debug)]
 enum ChecksumArgument {
@@ -307,7 +314,7 @@ impl PyStore {
         &self,
         py: Python<'_>,
         key: String,
-    ) -> PyIcechunkStoreResult<Option<(String, ChunkOffset, ChunkLength, Option<String>, Option<chrono::DateTime<Utc>>)>> {
+    ) -> PyIcechunkStoreResult<VirtualRefResult> {
         py.allow_threads(move || {
             let store = Arc::clone(&self.0);
 
@@ -316,12 +323,18 @@ impl PyStore {
                     .get_virtual_ref(&key)
                     .await
                     .map_err(PyIcechunkStoreError::from)?;
-                
+
                 Ok(vref.map(|vref| {
                     let location = vref.location.url().to_string();
                     let (etag, last_modified) = match vref.checksum {
                         Some(Checksum::ETag(etag)) => (Some(etag.0), None),
-                        Some(Checksum::LastModified(secs)) => (None, Some(chrono::DateTime::from_timestamp(secs.0 as i64, 0).unwrap_or_default())),
+                        Some(Checksum::LastModified(secs)) => (
+                            None,
+                            Some(
+                                chrono::DateTime::from_timestamp(secs.0 as i64, 0)
+                                    .unwrap_or_default(),
+                            ),
+                        ),
                         None => (None, None),
                     };
                     (location, vref.offset, vref.length, etag, last_modified)
@@ -337,16 +350,20 @@ impl PyStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let vref = store
-                .get_virtual_ref(&key)
-                .await
-                .map_err(PyIcechunkStoreError::from)?;
-            
+            let vref =
+                store.get_virtual_ref(&key).await.map_err(PyIcechunkStoreError::from)?;
+
             Ok(vref.map(|vref| {
                 let location = vref.location.url().to_string();
                 let (etag, last_modified) = match vref.checksum {
                     Some(Checksum::ETag(etag)) => (Some(etag.0), None),
-                    Some(Checksum::LastModified(secs)) => (None, Some(chrono::DateTime::from_timestamp(secs.0 as i64, 0).unwrap_or_default())),
+                    Some(Checksum::LastModified(secs)) => (
+                        None,
+                        Some(
+                            chrono::DateTime::from_timestamp(secs.0 as i64, 0)
+                                .unwrap_or_default(),
+                        ),
+                    ),
                     None => (None, None),
                 };
                 (location, vref.offset, vref.length, etag, last_modified)
