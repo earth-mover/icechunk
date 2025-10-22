@@ -1,6 +1,6 @@
 import abc
 import datetime
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from enum import Enum
 from typing import Any, TypeAlias
 
@@ -193,16 +193,16 @@ class ObjectStoreConfig:
         def __init__(self, options: S3Options) -> None: ...
 
     class Gcs:
-        def __init__(self, opts: dict[str, str] | None = None) -> None: ...
+        def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
 
     class Azure:
-        def __init__(self, opts: dict[str, str] | None = None) -> None: ...
+        def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
 
     class Tigris:
         def __init__(self, opts: S3Options) -> None: ...
 
     class Http:
-        def __init__(self, opts: dict[str, str] | None = None) -> None: ...
+        def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
 
 AnyObjectStoreConfig = (
     ObjectStoreConfig.InMemory

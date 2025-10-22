@@ -57,6 +57,8 @@ pub enum ObjectStoreConfig {
     S3Compatible(S3Options),
     S3(S3Options),
     Gcs(HashMap<String, String>),
+    /// For compatibility reason we cannot change this structure,
+    /// but a key in this map should be "account"
     Azure(HashMap<String, String>),
     Tigris(S3Options),
 }
