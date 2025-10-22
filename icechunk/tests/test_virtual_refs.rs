@@ -533,6 +533,19 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
     let non_existent = store.get_virtual_ref("array/c/0/0/2").await?;
     assert_eq!(non_existent, None);
 
+    let session = store.session();
+    let all_refs: HashMap<String, VirtualChunkRef> = session
+        .read()
+        .await
+        .all_virtual_refs()
+        .await?
+        .try_collect()
+        .await?;
+    
+    assert_eq!(all_refs.len(), 2);
+    assert_eq!(all_refs.get("array/c/0/0/0"), Some(&ref1));
+    assert_eq!(all_refs.get("array/c/0/0/1"), Some(&ref2));
+
     assert_eq!(store.get("array/c/0/0/0", &ByteRange::ALL).await?, bytes1,);
     assert_eq!(
         store.get("array/c/0/0/1", &ByteRange::ALL).await?,
@@ -669,11 +682,27 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
     store.set_virtual_ref("year/c/3", ref_expired.clone(), false).await?;
     store.set_virtual_ref("year/c/4", ref_bad_tag.clone(), false).await?;
 
-    assert_eq!(store.get_virtual_ref("year/c/0").await?, Some(ref1));
-    assert_eq!(store.get_virtual_ref("year/c/1").await?, Some(ref2));
-    assert_eq!(store.get_virtual_ref("year/c/2").await?, Some(ref3));
-    assert_eq!(store.get_virtual_ref("year/c/3").await?, Some(ref_expired));
-    assert_eq!(store.get_virtual_ref("year/c/4").await?, Some(ref_bad_tag));
+    assert_eq!(store.get_virtual_ref("year/c/0").await?, Some(ref1.clone()));
+    assert_eq!(store.get_virtual_ref("year/c/1").await?, Some(ref2.clone()));
+    assert_eq!(store.get_virtual_ref("year/c/2").await?, Some(ref3.clone()));
+    assert_eq!(store.get_virtual_ref("year/c/3").await?, Some(ref_expired.clone()));
+    assert_eq!(store.get_virtual_ref("year/c/4").await?, Some(ref_bad_tag.clone()));
+
+    let session = store.session();
+    let all_refs: HashMap<String, VirtualChunkRef> = session
+        .read()
+        .await
+        .all_virtual_refs()
+        .await?
+        .try_collect()
+        .await?;
+    
+    assert_eq!(all_refs.len(), 5);
+    assert_eq!(all_refs.get("year/c/0"), Some(&ref1));
+    assert_eq!(all_refs.get("year/c/1"), Some(&ref2));
+    assert_eq!(all_refs.get("year/c/2"), Some(&ref3));
+    assert_eq!(all_refs.get("year/c/3"), Some(&ref_expired));
+    assert_eq!(all_refs.get("year/c/4"), Some(&ref_bad_tag));
 
     // FIXME: enable this once object_store can access public buckets without credentials
     // otherwise we get an error in GHA

@@ -197,6 +197,13 @@ async def test_write_minio_virtual_refs(use_async) -> None:
     vref_none = await store.get_virtual_ref_async("c/0/0/3")
     assert vref_none is None
 
+    all_refs = await session.all_virtual_refs_async()
+    all_refs_dict = {key: (location, offset, length) for key, location, offset, length, _ in all_refs}
+    
+    assert len(all_refs_dict) >= 2
+    assert all_refs_dict.get("c/0/0/0") == (f"s3://testbucket/{prefix}/chunk-1", 0, 4)
+    assert all_refs_dict.get("c/0/0/1") == (f"s3://testbucket/{prefix}/chunk-2", 1, 4)
+
     buffer_prototype = zarr.core.buffer.default_buffer_prototype()
 
     first = await store.get("c/0/0/0", prototype=buffer_prototype)
@@ -306,6 +313,17 @@ async def test_public_virtual_refs(
     assert vref[0] == file_path
     assert vref[1] == 22306
     assert vref[2] == 288
+
+    if use_async:
+        all_refs = await session.all_virtual_refs_async()
+    else:
+        all_refs = session.all_virtual_refs()
+    
+    assert len(all_refs) == 1
+    assert all_refs[0][0] == "year/c/0"
+    assert all_refs[0][1] == file_path
+    assert all_refs[0][2] == 22306
+    assert all_refs[0][3] == 288
 
     nodes = [n async for n in store.list()]
     assert "year/c/0" in nodes

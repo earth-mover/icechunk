@@ -933,6 +933,26 @@ impl Session {
         Ok(stream)
     }
 
+    #[instrument(skip(self))]
+    pub async fn all_virtual_refs(
+        &self,
+    ) -> SessionResult<impl Stream<Item = SessionResult<(String, VirtualChunkRef)>> + '_> {
+        let stream = self.all_chunks().await?.try_filter_map(|(path, info)| {
+            match info.payload {
+                ChunkPayload::Virtual(reference) => {
+                    let coords = info.coord.0.iter().map(|c| c.to_string()).join("/");
+                    let key = [path.to_string()[1..].to_string(), "c".to_string(), coords]
+                        .iter()
+                        .filter(|s| !s.is_empty())
+                        .join("/");
+                    ready(Ok(Some((key, reference))))
+                }
+                _ => ready(Ok(None)),
+            }
+        });
+        Ok(stream)
+    }
+
     /// Discard all uncommitted changes and return them as a `ChangeSet`
     #[instrument(skip(self))]
     pub fn discard_changes(&mut self) -> ChangeSet {

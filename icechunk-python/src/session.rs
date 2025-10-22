@@ -1,8 +1,14 @@
 use std::{borrow::Cow, ops::Deref, sync::Arc};
 
 use async_stream::try_stream;
+use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
-use icechunk::{Store, session::Session};
+use icechunk::{
+    Store,
+    format::manifest::{Checksum, SecondsSinceEpoch},
+    session::Session,
+    storage::ETag,
+};
 use pyo3::{prelude::*, types::PyType};
 use tokio::sync::{Mutex, RwLock};
 
@@ -147,6 +153,76 @@ impl PySession {
                 .all_virtual_chunk_locations()
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?
+                .try_collect()
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+
+            Ok(res)
+        })
+    }
+
+    pub fn all_virtual_refs(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<Vec<(String, String, u64, u64, Option<String>, Option<chrono::DateTime<Utc>>)>>
+    {
+        py.allow_threads(move || {
+            let session = self.0.blocking_read();
+
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let res: Vec<_> = session
+                    .all_virtual_refs()
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?
+                    .map(|result| {
+                        result.map(|(key, vref)| {
+                            let location = vref.location.url().to_string();
+                            let (etag, last_modified) = match vref.checksum {
+                                Some(Checksum::ETag(etag)) => (Some(etag.0), None),
+                                Some(Checksum::LastModified(secs)) => {
+                                    (None, Some(chrono::DateTime::from_timestamp(secs.0 as i64, 0).unwrap_or_default()))
+                                }
+                                None => (None, None),
+                            };
+                            (key, location, vref.offset, vref.length, etag, last_modified)
+                        })
+                    })
+                    .try_collect()
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?;
+
+                Ok(res)
+            })
+        })
+    }
+
+    pub fn all_virtual_refs_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<
+            _,
+            Vec<(String, String, u64, u64, Option<String>, Option<chrono::DateTime<Utc>>)>,
+        >(py, async move {
+            let session = session.read().await;
+            let res: Vec<_> = session
+                .all_virtual_refs()
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?
+                .map(|result| {
+                    result.map(|(key, vref)| {
+                        let location = vref.location.url().to_string();
+                        let (etag, last_modified) = match vref.checksum {
+                            Some(Checksum::ETag(etag)) => (Some(etag.0), None),
+                            Some(Checksum::LastModified(secs)) => {
+                                (None, Some(chrono::DateTime::from_timestamp(secs.0 as i64, 0).unwrap_or_default()))
+                            }
+                            None => (None, None),
+                        };
+                        (key, location, vref.offset, vref.length, etag, last_modified)
+                    })
+                })
                 .try_collect()
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
