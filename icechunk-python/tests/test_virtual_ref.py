@@ -182,6 +182,21 @@ async def test_write_minio_virtual_refs(use_async) -> None:
             validate_container=True,
         )
 
+    vref_0_0_0 = await store.get_virtual_ref_async("c/0/0/0")
+    assert vref_0_0_0 is not None
+    assert vref_0_0_0[0] == f"s3://testbucket/{prefix}/chunk-1"
+    assert vref_0_0_0[1] == 0
+    assert vref_0_0_0[2] == 4
+
+    vref_0_0_1 = await store.get_virtual_ref_async("c/0/0/1")
+    assert vref_0_0_1 is not None
+    assert vref_0_0_1[0] == f"s3://testbucket/{prefix}/chunk-2"
+    assert vref_0_0_1[1] == 1
+    assert vref_0_0_1[2] == 4
+
+    vref_none = await store.get_virtual_ref_async("c/0/0/3")
+    assert vref_none is None
+
     buffer_prototype = zarr.core.buffer.default_buffer_prototype()
 
     first = await store.get("c/0/0/0", prototype=buffer_prototype)
@@ -281,6 +296,16 @@ async def test_public_virtual_refs(
             offset=22306,
             length=288,
         )
+
+    if use_async:
+        vref = await store.get_virtual_ref_async("year/c/0")
+    else:
+        vref = store.get_virtual_ref("year/c/0")
+    
+    assert vref is not None
+    assert vref[0] == file_path
+    assert vref[1] == 22306
+    assert vref[2] == 288
 
     nodes = [n async for n in store.list()]
     assert "year/c/0" in nodes
@@ -392,6 +417,12 @@ def test_error_on_nonexisting_virtual_chunk_container() -> None:
         ],
     )
 
+    vref = store.get_virtual_ref("c/0")
+    assert vref is not None
+    assert vref[0] == "file:///foo"
+    assert vref[1] == 0
+    assert vref[2] == 4
+
     with pytest.raises(
         IcechunkError, match="file:///foo.* edit the repository configuration"
     ):
@@ -427,6 +458,12 @@ def test_error_on_non_authorized_virtual_chunk_container() -> None:
             ),
         ],
     )
+
+    vref = store.get_virtual_ref("c/0")
+    assert vref is not None
+    assert vref[0] == "file:///foo/bar"
+    assert vref[1] == 0
+    assert vref[2] == 4
 
     with pytest.raises(IcechunkError, match="file:///foo.*authorize"):
         array[0]

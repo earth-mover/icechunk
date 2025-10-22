@@ -303,6 +303,57 @@ impl PyStore {
         })
     }
 
+    fn get_virtual_ref(
+        &self,
+        py: Python<'_>,
+        key: String,
+    ) -> PyIcechunkStoreResult<Option<(String, ChunkOffset, ChunkLength, Option<String>, Option<chrono::DateTime<Utc>>)>> {
+        py.allow_threads(move || {
+            let store = Arc::clone(&self.0);
+
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let vref = store
+                    .get_virtual_ref(&key)
+                    .await
+                    .map_err(PyIcechunkStoreError::from)?;
+                
+                Ok(vref.map(|vref| {
+                    let location = vref.location.url().to_string();
+                    let (etag, last_modified) = match vref.checksum {
+                        Some(Checksum::ETag(etag)) => (Some(etag.0), None),
+                        Some(Checksum::LastModified(secs)) => (None, Some(chrono::DateTime::from_timestamp(secs.0 as i64, 0).unwrap_or_default())),
+                        None => (None, None),
+                    };
+                    (location, vref.offset, vref.length, etag, last_modified)
+                }))
+            })
+        })
+    }
+
+    fn get_virtual_ref_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        key: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.0);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let vref = store
+                .get_virtual_ref(&key)
+                .await
+                .map_err(PyIcechunkStoreError::from)?;
+            
+            Ok(vref.map(|vref| {
+                let location = vref.location.url().to_string();
+                let (etag, last_modified) = match vref.checksum {
+                    Some(Checksum::ETag(etag)) => (Some(etag.0), None),
+                    Some(Checksum::LastModified(secs)) => (None, Some(chrono::DateTime::from_timestamp(secs.0 as i64, 0).unwrap_or_default())),
+                    None => (None, None),
+                };
+                (location, vref.offset, vref.length, etag, last_modified)
+            }))
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn set_virtual_ref(
         &self,

@@ -362,6 +362,24 @@ impl Store {
 
     // alternate API would take array path, and a mapping from string coord to ChunkPayload
     #[instrument(skip(self))]
+    pub async fn get_virtual_ref(&self, key: &str) -> StoreResult<Option<VirtualChunkRef>> {
+        match Key::parse(key)? {
+            Key::Chunk { node_path, coords } => {
+                let session = self.session.read().await;
+                match session.get_chunk_ref(&node_path, &coords).await? {
+                    Some(ChunkPayload::Virtual(vref)) => Ok(Some(vref)),
+                    Some(ChunkPayload::Ref(_)) | Some(ChunkPayload::Inline(_)) => Ok(None),
+                    None => Ok(None),
+                }
+            }
+            Key::Metadata { .. } | Key::ZarrV2(_) => Err(StoreErrorKind::NotAllowed(
+                format!("use .get to read metadata for key {key}"),
+            )
+            .into()),
+        }
+    }
+
+    #[instrument(skip(self))]
     pub async fn set_virtual_ref(
         &self,
         key: &str,
