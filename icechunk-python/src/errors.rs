@@ -8,7 +8,7 @@ use icechunk::{
 };
 use miette::{Diagnostic, GraphicalReportHandler};
 use pyo3::{
-    PyErr,
+    IntoPyObjectExt, PyErr,
     exceptions::{PyException, PyKeyError, PyValueError},
     prelude::*,
 };
@@ -148,6 +148,15 @@ impl IcechunkError {
     fn __str__(&self) -> String {
         self.message.clone()
     }
+
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+        let cls = py.get_type::<Self>();
+        let args = (self.message.clone(),).into_py_any(py)?.into_bound(py);
+        Ok((cls.into_any(), args))
+    }
 }
 
 impl_pickle!(IcechunkError);
@@ -192,6 +201,17 @@ impl PyConflictError {
             self.expected_parent, self.actual_parent
         )
     }
+
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+        let cls = py.get_type::<Self>();
+        let args = (self.expected_parent.clone(), self.actual_parent.clone())
+            .into_py_any(py)?
+            .into_bound(py);
+        Ok((cls.into_any(), args))
+    }
 }
 
 impl_pickle!(PyConflictError);
@@ -234,6 +254,17 @@ impl PyRebaseFailedError {
             self.snapshot,
             self.conflicts.len()
         )
+    }
+
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+        let cls = py.get_type::<Self>();
+        let args = (self.snapshot.clone(), self.conflicts.clone())
+            .into_py_any(py)?
+            .into_bound(py);
+        Ok((cls.into_any(), args))
     }
 }
 
