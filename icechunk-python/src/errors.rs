@@ -8,7 +8,7 @@ use icechunk::{
 };
 use miette::{Diagnostic, GraphicalReportHandler};
 use pyo3::{
-    PyErr,
+    IntoPyObjectExt, PyErr,
     exceptions::{PyException, PyKeyError, PyValueError},
     prelude::*,
 };
@@ -136,6 +136,7 @@ impl IcechunkError {
 #[pymethods]
 impl IcechunkError {
     #[new]
+    #[pyo3(signature = (message = String::new()))]
     pub fn new(message: String) -> Self {
         Self { message }
     }
@@ -146,6 +147,15 @@ impl IcechunkError {
 
     fn __str__(&self) -> String {
         self.message.clone()
+    }
+
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+        let cls = py.get_type::<Self>();
+        let args = (self.message.clone(),).into_py_any(py)?.into_bound(py);
+        Ok((cls.into_any(), args))
     }
 }
 
@@ -172,6 +182,7 @@ impl PyConflictError {
 #[pymethods]
 impl PyConflictError {
     #[new]
+    #[pyo3(signature = (expected_parent = None, actual_parent = None))]
     pub fn new(expected_parent: Option<String>, actual_parent: Option<String>) -> Self {
         Self { expected_parent, actual_parent }
     }
@@ -189,6 +200,17 @@ impl PyConflictError {
             "Failed to commit, expected parent: {:?}, actual parent: {:?}",
             self.expected_parent, self.actual_parent
         )
+    }
+
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+        let cls = py.get_type::<Self>();
+        let args = (self.expected_parent.clone(), self.actual_parent.clone())
+            .into_py_any(py)?
+            .into_bound(py);
+        Ok((cls.into_any(), args))
     }
 }
 
@@ -214,6 +236,7 @@ impl PyRebaseFailedError {
 #[pymethods]
 impl PyRebaseFailedError {
     #[new]
+    #[pyo3(signature = (snapshot = String::new(), conflicts = Vec::new()))]
     pub fn new(snapshot: String, conflicts: Vec<PyConflict>) -> Self {
         Self { snapshot, conflicts }
     }
@@ -231,6 +254,17 @@ impl PyRebaseFailedError {
             self.snapshot,
             self.conflicts.len()
         )
+    }
+
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+        let cls = py.get_type::<Self>();
+        let args = (self.snapshot.clone(), self.conflicts.clone())
+            .into_py_any(py)?
+            .into_bound(py);
+        Ok((cls.into_any(), args))
     }
 }
 

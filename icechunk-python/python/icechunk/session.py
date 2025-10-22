@@ -1,6 +1,7 @@
 import contextlib
 import warnings
 from collections.abc import AsyncIterator, Generator
+from datetime import datetime
 from typing import Any, NoReturn, Self
 
 from icechunk import (
@@ -173,6 +174,50 @@ class Session:
             The location URLs of all virtual chunks.
         """
         return await self._session.all_virtual_chunk_locations_async()
+
+    def all_virtual_refs(
+        self,
+    ) -> list[tuple[str, str, int, int, str | datetime | None]]:
+        """
+        Return all virtual references in the session.
+
+        Returns
+        -------
+        list[tuple[str, str, int, int, str | datetime | None]]
+            A list of tuples containing:
+            - zarr_key: The full zarr key (e.g., "array/c/0/0/1")
+            - location: The storage location URL
+            - offset: Byte offset in the file
+            - length: Length in bytes
+            - checksum: Either an etag string or datetime, or None
+        """
+        result = self._session.all_virtual_refs()
+        return [
+            (key, location, offset, length, etag if etag is not None else last_modified)
+            for key, location, offset, length, etag, last_modified in result
+        ]
+
+    async def all_virtual_refs_async(
+        self,
+    ) -> list[tuple[str, str, int, int, str | datetime | None]]:
+        """
+        Return all virtual references in the session (async version).
+
+        Returns
+        -------
+        list[tuple[str, str, int, int, str | datetime | None]]
+            A list of tuples containing:
+            - zarr_key: The full zarr key (e.g., "array/c/0/0/1")
+            - location: The storage location URL
+            - offset: Byte offset in the file
+            - length: Length in bytes
+            - checksum: Either an etag string or datetime, or None
+        """
+        result = await self._session.all_virtual_refs_async()
+        return [
+            (key, location, offset, length, etag if etag is not None else last_modified)
+            for key, location, offset, length, etag, last_modified in result
+        ]
 
     async def chunk_coordinates(
         self, array_path: str, batch_size: int = 1000

@@ -232,6 +232,52 @@ class IcechunkStore(Store, SyncMixin):
         """
         return await self._store.set_if_not_exists(key, value.to_bytes())
 
+    def get_virtual_ref(
+        self, key: str
+    ) -> tuple[str, int, int, str | datetime | None] | None:
+        """Get a virtual reference for a chunk.
+
+        Parameters
+        ----------
+        key : str
+            The chunk to retrieve the reference for. This is the fully qualified zarr key eg: 'array/c/0/0/0'
+
+        Returns
+        -------
+        tuple[str, int, int, str | datetime | None] | None
+            A tuple of (location, offset, length, checksum) if the chunk has a virtual reference, None otherwise.
+            The checksum will be either an etag string or a datetime object.
+        """
+        result = self._store.get_virtual_ref(key)
+        if result is None:
+            return None
+        location, offset, length, etag, last_modified = result
+        checksum = etag if etag is not None else last_modified
+        return (location, offset, length, checksum)
+
+    async def get_virtual_ref_async(
+        self, key: str
+    ) -> tuple[str, int, int, str | datetime | None] | None:
+        """Get a virtual reference for a chunk asynchronously.
+
+        Parameters
+        ----------
+        key : str
+            The chunk to retrieve the reference for. This is the fully qualified zarr key eg: 'array/c/0/0/0'
+
+        Returns
+        -------
+        tuple[str, int, int, str | datetime | None] | None
+            A tuple of (location, offset, length, checksum) if the chunk has a virtual reference, None otherwise.
+            The checksum will be either an etag string or a datetime object.
+        """
+        result = await self._store.get_virtual_ref_async(key)
+        if result is None:
+            return None
+        location, offset, length, etag, last_modified = result
+        checksum = etag if etag is not None else last_modified
+        return (location, offset, length, checksum)
+
     def set_virtual_ref(
         self,
         key: str,
