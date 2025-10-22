@@ -136,6 +136,7 @@ impl IcechunkError {
 #[pymethods]
 impl IcechunkError {
     #[new]
+    #[pyo3(signature = (message = String::new()))]
     pub fn new(message: String) -> Self {
         Self { message }
     }
@@ -172,6 +173,7 @@ impl PyConflictError {
 #[pymethods]
 impl PyConflictError {
     #[new]
+    #[pyo3(signature = (expected_parent = None, actual_parent = None))]
     pub fn new(expected_parent: Option<String>, actual_parent: Option<String>) -> Self {
         Self { expected_parent, actual_parent }
     }
@@ -214,6 +216,7 @@ impl PyRebaseFailedError {
 #[pymethods]
 impl PyRebaseFailedError {
     #[new]
+    #[pyo3(signature = (snapshot = String::new(), conflicts = Vec::new()))]
     pub fn new(snapshot: String, conflicts: Vec<PyConflict>) -> Self {
         Self { snapshot, conflicts }
     }
