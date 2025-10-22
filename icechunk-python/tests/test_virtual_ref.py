@@ -310,7 +310,7 @@ async def test_public_virtual_refs(
         vref = await store.get_virtual_ref_async("year/c/0")
     else:
         vref = store.get_virtual_ref("year/c/0")
-    
+
     assert vref is not None
     assert vref[0].endswith("/netcdf/oscar_vel2018.nc")
     assert vref[1] == 22306
@@ -320,7 +320,7 @@ async def test_public_virtual_refs(
         all_refs = await session.all_virtual_refs_async()
     else:
         all_refs = session.all_virtual_refs()
-    
+
     assert len(all_refs) == 1
     assert all_refs[0][0] == "year/c/0"
     assert all_refs[0][1].endswith("/netcdf/oscar_vel2018.nc")
