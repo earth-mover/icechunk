@@ -120,6 +120,37 @@ prop_compose! {
     }
 }
 
+fn transfer_protocol() -> BoxedStrategy<String> {
+    prop_oneof!["https", "http"].boxed()
+}
+
+
+prop_compose! {
+    pub fn url() (protocol in transfer_protocol(),
+    remaining_url in "[a-zA-Z0-9\\-_/]*") -> String {
+        format!("{protocol}://{remaining_url}")
+    }
+}
+
+prop_compose! {
+    pub fn s3_options2()
+    (region in option::of(string_regex("[a-zA-Z0-9\\-_]*").unwrap()),
+     endpoint_url in option::of(url()),
+     network_stream_timeout_seconds in option::of(0..120u32)
+    ) ->S3Options {
+        let cpy = endpoint_url.clone();
+        S3Options{
+            region,
+            endpoint_url,
+            anonymous: false,
+            allow_http: cpy.is_none_or(|link| !link.starts_with("https")),
+            force_path_style: false,
+            network_stream_timeout_seconds
+        }
+    }
+}
+
+
 prop_compose! {
     pub fn s3_options()
     (region in option::of(string_regex("[a-zA-Z0-9\\-_]*").unwrap()),
@@ -192,9 +223,9 @@ pub fn object_store_config() -> BoxedStrategy<ObjectStoreConfig> {
         Just(InMemory),
         proptest::collection::vec(string_regex("[a-zA-Z0-9\\-_]+").unwrap(), 1..4)
             .prop_map(|s| LocalFileSystem(PathBuf::from(s.join("/")))),
-        s3_options().prop_map(S3),
-        s3_options().prop_map(S3Compatible),
-        s3_options().prop_map(Tigris),
+        s3_options2().prop_map(S3),
+        s3_options2().prop_map(S3Compatible),
+        s3_options2().prop_map(Tigris),
         any::<HashMap<String, String>>().prop_map(Gcs),
         any::<HashMap<String, String>>().prop_map(Http),
         any::<HashMap<String, String>>().prop_map(Azure),
