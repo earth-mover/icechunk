@@ -124,7 +124,6 @@ fn transfer_protocol() -> BoxedStrategy<String> {
     prop_oneof!["https", "http"].boxed()
 }
 
-
 prop_compose! {
     pub fn url() (protocol in transfer_protocol(),
     remaining_url in "[a-zA-Z0-9\\-_/]*") -> String {
@@ -136,20 +135,21 @@ prop_compose! {
     pub fn s3_options()
     (region in option::of(string_regex("[a-zA-Z0-9\\-_]*").unwrap()),
      endpoint_url in option::of(url()),
+       is_anonymous in any::<bool>(),
+        should_path_style_be_forced in any::<bool>(),
      network_stream_timeout_seconds in option::of(0..120u32)
     ) ->S3Options {
         let cpy = endpoint_url.clone();
         S3Options{
             region,
             endpoint_url,
-            anonymous: false,
+            anonymous: is_anonymous,
             allow_http: cpy.is_none_or(|link| !link.starts_with("https")),
-            force_path_style: false,
+            force_path_style: should_path_style_be_forced,
             network_stream_timeout_seconds
         }
     }
 }
-
 
 prop_compose! {
     pub fn compression_config()
