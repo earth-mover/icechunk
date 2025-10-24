@@ -625,7 +625,7 @@ pub enum Credentials {
 mod tests {
     use crate::{
         ObjectStoreConfig, RepositoryConfig, config::S3Options,
-        strategies::repository_config, virtual_chunks::VirtualChunkContainer,
+        strategies::{repository_config, object_store_config}, virtual_chunks::VirtualChunkContainer,
     };
 
     use proptest::prelude::*;
@@ -675,19 +675,28 @@ mod tests {
         assert_eq!(container, roundtrip);
     }
 
-    #[icechunk_macros::test]
-    fn test_object_store_config_serialization() {
-        let config = ObjectStoreConfig::S3(S3Options {
-            region: Some("us-east-1".to_string()),
-            endpoint_url: None,
-            anonymous: false,
-            allow_http: false,
-            force_path_style: false,
-            network_stream_timeout_seconds: None,
-        });
-        let bytes = rmp_serde::to_vec(&config).unwrap();
-        let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-        assert_eq!(config, roundtrip);
+    // #[icechunk_macros::test]
+    // fn test_object_store_config_serialization() {
+    //     let config = ObjectStoreConfig::S3(S3Options {
+    //         region: Some("us-east-1".to_string()),
+    //         endpoint_url: None,
+    //         anonymous: false,
+    //         allow_http: false,
+    //         force_path_style: false,
+    //         network_stream_timeout_seconds: None,
+    //     });
+    //     let bytes = rmp_serde::to_vec(&config).unwrap();
+    //     let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
+    //     assert_eq!(config, roundtrip);
+    // }
+
+    proptest!{
+        #[icechunk_macros::test]
+        fn test_object_store_config_serialization(config in object_store_config()) {
+            let bytes = rmp_serde::to_vec(&config).unwrap();
+            let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
+            assert_eq!(config, roundtrip);
+        }
     }
 
     proptest! {
