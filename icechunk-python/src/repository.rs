@@ -26,7 +26,7 @@ use icechunk::{
     repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
 };
 use pyo3::{
-    IntoPyObjectExt,
+    Borrowed, IntoPyObjectExt,
     exceptions::PyValueError,
     prelude::*,
     types::{PyDict, PyNone, PySet, PyType},
@@ -85,20 +85,24 @@ pub struct PyManifestFileInfo {
 
 impl_pickle!(PyManifestFileInfo);
 
-impl<'py> FromPyObject<'py> for PySnapshotProperties {
-    fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+impl<'py> FromPyObject<'_, 'py> for PySnapshotProperties {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
         let m: HashMap<String, JsonValue> = ob.extract()?;
         Ok(Self(m))
     }
 }
 
-impl<'py> FromPyObject<'py> for JsonValue {
-    fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+impl<'py> FromPyObject<'_, 'py> for JsonValue {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
         let value = ob
             .extract()
             .map(serde_json::Value::String)
             .or(ob.extract().map(serde_json::Value::Bool))
-            .or(ob.downcast().map(|_: &Bound<'py, PyNone>| serde_json::Value::Null))
+            .or(ob.cast::<PyNone>().map(|_| serde_json::Value::Null))
             .or(ob.extract().map(|n: i64| serde_json::Value::from(n)))
             .or(ob.extract().map(|n: u64| serde_json::Value::from(n)))
             .or(ob.extract().map(|n: f64| serde_json::Value::from(n)))
@@ -429,7 +433,7 @@ impl PyRepository {
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let repository =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let config = config
@@ -481,7 +485,7 @@ impl PyRepository {
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let repository =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let config = config
@@ -532,7 +536,7 @@ impl PyRepository {
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let repository =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let config = config
@@ -581,7 +585,7 @@ impl PyRepository {
     #[staticmethod]
     fn exists(py: Python<'_>, storage: PyStorage) -> PyResult<bool> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let exists = Repository::exists(storage.0.as_ref())
                     .await
@@ -615,7 +619,7 @@ impl PyRepository {
             Option<HashMap<String, Option<PyCredentials>>>,
         >,
     ) -> PyResult<Self> {
-        py.allow_threads(move || {
+        py.detach(move || {
             let config = config
                 .map(|c| c.try_into().map_err(PyValueError::new_err))
                 .transpose()?;
@@ -659,7 +663,7 @@ impl PyRepository {
         bytes: Vec<u8>,
     ) -> PyResult<Self> {
         // This is a compute intensive task, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let repository = Repository::from_bytes(bytes)
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(Self(Arc::new(RwLock::new(repository))))
@@ -668,7 +672,7 @@ impl PyRepository {
 
     fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<'_, [u8]>> {
         // This is a compute intensive task, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let bytes = self
                 .0
                 .blocking_read()
@@ -684,7 +688,7 @@ impl PyRepository {
         storage: PyStorage,
     ) -> PyResult<Option<PyRepositoryConfig>> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let res = Repository::fetch_config(storage.0.as_ref())
                     .await
@@ -712,7 +716,7 @@ impl PyRepository {
 
     fn save_config(&self, py: Python<'_>) -> PyResult<()> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let _etag = self
                     .0
@@ -764,14 +768,14 @@ impl PyRepository {
         py: Python<'_>,
         metadata: PySnapshotProperties,
     ) {
-        py.allow_threads(move || {
+        py.detach(move || {
             let metadata = metadata.into();
             self.0.blocking_write().set_default_commit_metadata(metadata);
         })
     }
 
     pub fn default_commit_metadata(&self, py: Python<'_>) -> PySnapshotProperties {
-        py.allow_threads(move || {
+        py.detach(move || {
             let metadata = self.0.blocking_read().default_commit_metadata().clone();
             metadata.into()
         })
@@ -787,7 +791,7 @@ impl PyRepository {
         snapshot_id: Option<String>,
     ) -> PyResult<PyAsyncGenerator> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let version = args_to_version_info(branch, tag, snapshot_id, None)?;
             let ancestry = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move {
@@ -804,7 +808,7 @@ impl PyRepository {
                 .map_err(PyIcechunkStoreError::RepositoryError);
 
             let parents = ancestry.and_then(|info| async move {
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     let info = PySnapshotInfo::from(info);
                     Ok(Bound::new(py, info)?.into_any().unbind())
                 })
@@ -822,7 +826,7 @@ impl PyRepository {
         snapshot_id: &str,
     ) -> PyResult<()> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
                 PyIcechunkStoreError::RepositoryError(
                     RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
@@ -867,7 +871,7 @@ impl PyRepository {
 
     pub fn list_branches(&self, py: Python<'_>) -> PyResult<BTreeSet<String>> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let branches = self
                     .0
@@ -901,7 +905,7 @@ impl PyRepository {
 
     pub fn lookup_branch(&self, py: Python<'_>, branch_name: &str) -> PyResult<String> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let tip = self
                     .0
@@ -938,7 +942,7 @@ impl PyRepository {
         snapshot_id: &str,
     ) -> PyResult<PySnapshotInfo> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
                 PyIcechunkStoreError::RepositoryError(
                     RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
@@ -986,7 +990,7 @@ impl PyRepository {
         from_snapshot_id: Option<&str>,
     ) -> PyResult<()> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let to_snapshot_id = SnapshotId::try_from(to_snapshot_id).map_err(|_| {
                 PyIcechunkStoreError::RepositoryError(
                     RepositoryErrorKind::InvalidSnapshotId(to_snapshot_id.to_owned())
@@ -1053,7 +1057,7 @@ impl PyRepository {
 
     pub fn delete_branch(&self, py: Python<'_>, branch: &str) -> PyResult<()> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 self.0
                     .read()
@@ -1085,7 +1089,7 @@ impl PyRepository {
 
     pub fn delete_tag(&self, py: Python<'_>, tag: &str) -> PyResult<()> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 self.0
                     .read()
@@ -1122,7 +1126,7 @@ impl PyRepository {
         snapshot_id: &str,
     ) -> PyResult<()> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
                 PyIcechunkStoreError::RepositoryError(
                     RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
@@ -1167,7 +1171,7 @@ impl PyRepository {
 
     pub fn list_tags(&self, py: Python<'_>) -> PyResult<BTreeSet<String>> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let tags = self
                     .0
@@ -1198,7 +1202,7 @@ impl PyRepository {
 
     pub fn lookup_tag(&self, py: Python<'_>, tag: &str) -> PyResult<String> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let tag = self
                     .0
@@ -1245,7 +1249,7 @@ impl PyRepository {
         let to = args_to_version_info(to_branch, to_tag, to_snapshot_id, None)?;
 
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let diff = self
                     .0
@@ -1295,7 +1299,7 @@ impl PyRepository {
         as_of: Option<DateTime<Utc>>,
     ) -> PyResult<PySession> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let version = args_to_version_info(branch, tag, snapshot_id, as_of)?;
             let session =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -1335,7 +1339,7 @@ impl PyRepository {
 
     pub fn writable_session(&self, py: Python<'_>, branch: &str) -> PyResult<PySession> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let session =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     self.0
@@ -1376,7 +1380,7 @@ impl PyRepository {
         metadata: Option<PySnapshotProperties>,
     ) -> PyResult<String> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let metadata = metadata.map(|m| m.into());
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -1419,7 +1423,7 @@ impl PyRepository {
         delete_expired_tags: bool,
     ) -> PyResult<HashSet<String>> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let (storage, storage_settings, asset_manager) = {
@@ -1513,7 +1517,7 @@ impl PyRepository {
         max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<PyGCSummary> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let gc_config = GCConfig::clean_all(
@@ -1596,7 +1600,7 @@ impl PyRepository {
         max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<u64> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let (storage, storage_settings, asset_manager) = {

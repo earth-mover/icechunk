@@ -161,12 +161,13 @@ fn call_pickled<PyCred>(
     pickled_function: Vec<u8>,
 ) -> Result<PyCred, PyErr>
 where
-    PyCred: for<'a> FromPyObject<'a>,
+    PyCred: for<'a, 'py> FromPyObject<'a, 'py>,
+    for<'a, 'py> <PyCred as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
 {
     let pickle_module = PyModule::import(py, "pickle")?;
     let loads_function = pickle_module.getattr("loads")?;
     let fetcher = loads_function.call1((pickled_function,))?;
-    let creds: PyCred = fetcher.call0()?.extract()?;
+    let creds: PyCred = fetcher.call0()?.extract().map_err(Into::into)?;
     Ok(creds)
 }
 
@@ -189,7 +190,7 @@ impl S3CredentialsFetcher for PythonCredentialsFetcher<S3StaticCredentials> {
                 _ => {}
             }
         }
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             call_pickled::<PyS3StaticCredentials>(py, self.pickled_function.clone())
                 .map(|c| c.into())
         })
@@ -216,7 +217,7 @@ impl GcsCredentialsFetcher for PythonCredentialsFetcher<GcsBearerCredential> {
                 _ => {}
             }
         }
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             call_pickled::<PyGcsBearerCredential>(py, self.pickled_function.clone())
                 .map(|c| c.into())
         })
@@ -864,7 +865,7 @@ pub struct PyStorageSettings {
 
 impl From<storage::Settings> for PyStorageSettings {
     fn from(value: storage::Settings) -> Self {
-        Python::with_gil(|py| Self {
+        Python::attach(|py| Self {
             #[allow(clippy::expect_used)]
             concurrency: value.concurrency.map(|c| {
                 Py::new(py, Into::<PyStorageConcurrencySettings>::into(c))
@@ -889,7 +890,7 @@ impl From<storage::Settings> for PyStorageSettings {
 
 impl From<&PyStorageSettings> for storage::Settings {
     fn from(value: &PyStorageSettings) -> Self {
-        Python::with_gil(|py| Self {
+        Python::attach(|py| Self {
             concurrency: value.concurrency.as_ref().map(|c| (&*c.borrow(py)).into()),
             retries: value.retries.as_ref().map(|c| (&*c.borrow(py)).into()),
             unsafe_use_conditional_create: value.unsafe_use_conditional_create,
@@ -945,7 +946,7 @@ impl PyStorageSettings {
     pub fn __repr__(&self) -> String {
         let inner_conc = match &self.concurrency {
             None => "None".to_string(),
-            Some(conc) => Python::with_gil(|py| {
+            Some(conc) => Python::attach(|py| {
                 let conc = &*conc.borrow(py);
                 storage_concurrency_settings_repr(conc)
             }),
@@ -953,7 +954,7 @@ impl PyStorageSettings {
 
         let inner_retries = match &self.retries {
             None => "None".to_string(),
-            Some(retries) => Python::with_gil(|py| {
+            Some(retries) => Python::attach(|py| {
                 let conc = &*retries.borrow(py);
                 storage_retries_settings_repr(conc)
             }),
@@ -1116,7 +1117,7 @@ impl PartialEq for PyManifestPreloadConfig {
 
 impl From<&PyManifestPreloadConfig> for ManifestPreloadConfig {
     fn from(value: &PyManifestPreloadConfig) -> Self {
-        Python::with_gil(|py| Self {
+        Python::attach(|py| Self {
             max_total_refs: value.max_total_refs,
             preload_if: value.preload_if.as_ref().map(|c| (&*c.borrow(py)).into()),
         })
@@ -1126,7 +1127,7 @@ impl From<&PyManifestPreloadConfig> for ManifestPreloadConfig {
 impl From<ManifestPreloadConfig> for PyManifestPreloadConfig {
     fn from(value: ManifestPreloadConfig) -> Self {
         #[allow(clippy::expect_used)]
-        Python::with_gil(|py| Self {
+        Python::attach(|py| Self {
             max_total_refs: value.max_total_refs,
             preload_if: value.preload_if.map(|c| {
                 Py::new(py, Into::<PyManifestPreloadCondition>::into(c))
@@ -1412,7 +1413,7 @@ impl PartialEq for PyManifestConfig {
 
 impl From<&PyManifestConfig> for ManifestConfig {
     fn from(value: &PyManifestConfig) -> Self {
-        Python::with_gil(|py| Self {
+        Python::attach(|py| Self {
             preload: value.preload.as_ref().map(|c| (&*c.borrow(py)).into()),
             splitting: value.splitting.as_ref().map(|c| (&*c.borrow(py)).into()),
         })
@@ -1422,7 +1423,7 @@ impl From<&PyManifestConfig> for ManifestConfig {
 impl From<ManifestConfig> for PyManifestConfig {
     fn from(value: ManifestConfig) -> Self {
         #[allow(clippy::expect_used)]
-        Python::with_gil(|py| Self {
+        Python::attach(|py| Self {
             preload: value.preload.map(|c| {
                 Py::new(py, Into::<PyManifestPreloadConfig>::into(c))
                     .expect("Cannot create instance of ManifestPreloadConfig")
@@ -1477,7 +1478,7 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
                     .try_collect()
             })
             .transpose()?;
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             Ok(Self {
                 inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
                 get_partial_values_concurrency: value.get_partial_values_concurrency,
@@ -1495,7 +1496,7 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
 impl From<RepositoryConfig> for PyRepositoryConfig {
     fn from(value: RepositoryConfig) -> Self {
         #[allow(clippy::expect_used)]
-        Python::with_gil(|py| Self {
+        Python::attach(|py| Self {
             inline_chunk_threshold_bytes: value.inline_chunk_threshold_bytes,
             get_partial_values_concurrency: value.get_partial_values_concurrency,
             compression: value.compression.map(|c| {
@@ -1590,7 +1591,7 @@ impl PyRepositoryConfig {
 
     pub fn __repr__(&self) -> String {
         #[allow(clippy::expect_used)]
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let comp: String = format_option(self.compression.as_ref().map(|c| {
                 c.call_method0(py, "__repr__")
                     .expect("Cannot call __repr__")
@@ -1665,7 +1666,7 @@ impl PyStorage {
         prefix: Option<String>,
         credentials: Option<PyS3Credentials>,
     ) -> PyResult<Self> {
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let storage = icechunk::storage::new_s3_object_store_storage(
                     config.into(),
@@ -1727,7 +1728,7 @@ impl PyStorage {
 
     #[classmethod]
     pub fn new_in_memory(_cls: &Bound<'_, PyType>, py: Python<'_>) -> PyResult<Self> {
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let storage = icechunk::storage::new_in_memory_storage()
                     .await
@@ -1744,7 +1745,7 @@ impl PyStorage {
         py: Python<'_>,
         path: PathBuf,
     ) -> PyResult<Self> {
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let storage = icechunk::storage::new_local_filesystem_storage(&path)
                     .await
@@ -1765,7 +1766,7 @@ impl PyStorage {
         credentials: Option<PyGcsCredentials>,
         config: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let storage = icechunk::storage::new_gcs_storage(
                     bucket,
@@ -1792,7 +1793,7 @@ impl PyStorage {
         credentials: Option<PyAzureCredentials>,
         config: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let storage = icechunk::storage::new_azure_blob_storage(
                     account,
