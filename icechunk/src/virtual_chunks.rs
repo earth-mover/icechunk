@@ -11,8 +11,8 @@ use aws_sdk_s3::{Client, error::SdkError, operation::get_object::GetObjectError}
 use bytes::{Buf, Bytes};
 use futures::{TryStreamExt, stream::FuturesOrdered};
 use object_store::{
-    ClientConfigKey, GetOptions, ObjectStore, gcp::GoogleConfigKey,
-    local::LocalFileSystem, path::Path,
+    ClientConfigKey, GetOptions, ObjectStore, azure::AzureConfigKey,
+    gcp::GoogleConfigKey, local::LocalFileSystem, path::Path,
 };
 use quick_cache::sync::Cache;
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ use url::Url;
 
 use crate::{
     ObjectStoreConfig,
-    config::{Credentials, GcsCredentials, S3Credentials, S3Options},
+    config::{AzureCredentials, Credentials, GcsCredentials, S3Credentials, S3Options},
     format::{
         ChunkOffset,
         manifest::{
@@ -31,7 +31,8 @@ use crate::{
     storage::{
         self,
         object_store::{
-            GcsObjectStoreBackend, HttpObjectStoreBackend, ObjectStoreBackend as _,
+            AzureObjectStoreBackend, GcsObjectStoreBackend, HttpObjectStoreBackend,
+            ObjectStoreBackend as _,
         },
         s3::{mk_client, range_to_header},
         split_in_multiple_requests,
@@ -84,10 +85,10 @@ impl VirtualChunkContainer {
                         .to_string());
                 }
             }
-            ("az", ObjectStoreConfig::Azure(_)) => {
+            ("az" | "azure" | "abfs", ObjectStoreConfig::Azure(..)) => {
                 if !url.has_host() {
                     return Err(
-                        "Url prefix for az:// containers must include a host".to_string()
+                        "Url prefix for Azure containers must include a host".to_string()
                     );
                 }
             }
@@ -148,7 +149,7 @@ impl VirtualChunkContainer {
             }
             (ObjectStoreConfig::S3(_), Some(Credentials::S3(_)) | None) => Ok(()),
             (ObjectStoreConfig::Gcs(_), Some(Credentials::Gcs(_)) | None) => Ok(()),
-            (ObjectStoreConfig::Azure(_), Some(Credentials::Azure(_)) | None) => Ok(()),
+            (ObjectStoreConfig::Azure(_), Some(Credentials::Azure(_))) => Ok(()),
             (ObjectStoreConfig::Tigris(_), Some(Credentials::S3(_)) | None) => Ok(()),
             (ObjectStoreConfig::InMemory, None) => Ok(()),
             (ObjectStoreConfig::LocalFileSystem(_), None) => Ok(()),
@@ -454,8 +455,41 @@ impl VirtualChunkResolver {
                 let root_url = format!("{}://{}", chunk_location.scheme(), hostname);
                 Ok(Arc::new(ObjectStoreFetcher::new_http(&root_url, opts).await?))
             }
-            ObjectStoreConfig::Azure { .. } => {
-                unimplemented!("support for virtual chunks on azure")
+            ObjectStoreConfig::Azure(config) => {
+                let account = config.get("account").ok_or(
+                    VirtualReferenceErrorKind::AzureConfigurationMustIncludeAccount,
+                )?;
+
+                let creds = match self.credentials.get(&cont.url_prefix) {
+                    Some(Some(Credentials::Azure(creds))) => creds,
+                    Some(Some(_)) => Err(VirtualReferenceErrorKind::InvalidCredentials(
+                        "Azure".to_string(),
+                    ))?,
+                    // FIXME: support anonymous
+                    Some(None) | None => Err(
+                        VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
+                            Box::new(cont.clone()),
+                        ),
+                    )?,
+                };
+
+                let container = if let Some(host) = chunk_location.host_str() {
+                    host.to_string()
+                } else {
+                    Err(VirtualReferenceErrorKind::CannotParseBucketName(
+                        "No bucket name found".to_string(),
+                    ))?
+                };
+                Ok(Arc::new(
+                    ObjectStoreFetcher::new_azure(
+                        account.clone(),
+                        container,
+                        None,
+                        Some(creds.clone()),
+                        config.clone(),
+                    )
+                    .await?,
+                ))
             }
             ObjectStoreConfig::InMemory => {
                 unimplemented!("support for virtual chunks in Memory")
@@ -465,7 +499,12 @@ impl VirtualChunkResolver {
 }
 
 fn is_fetcher_bucket_constrained(store: &ObjectStoreConfig) -> bool {
-    matches!(store, ObjectStoreConfig::Gcs(_) | ObjectStoreConfig::Http(_))
+    matches!(
+        store,
+        ObjectStoreConfig::Gcs(_)
+            | ObjectStoreConfig::Http(_)
+            | ObjectStoreConfig::Azure(_)
+    )
 }
 
 fn fetcher_cache_key(
@@ -662,6 +701,35 @@ impl ObjectStoreFetcher {
             .collect();
         let backend =
             GcsObjectStoreBackend { bucket, prefix, credentials, config: Some(config) };
+        let settings = storage::Settings::default();
+        let client = backend
+            .mk_object_store(&settings)
+            .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))?;
+
+        Ok(ObjectStoreFetcher { client, settings })
+    }
+
+    pub async fn new_azure(
+        account: String,
+        container: String,
+        prefix: Option<String>,
+        credentials: Option<AzureCredentials>,
+        config: HashMap<String, String>,
+    ) -> Result<Self, VirtualReferenceError> {
+        let config = config
+            .into_iter()
+            .filter_map(|(k, v)| {
+                AzureConfigKey::from_str(&k).ok().map(|key| (key, v.clone()))
+            })
+            .collect();
+        let backend = AzureObjectStoreBackend {
+            account,
+            container,
+            prefix,
+            credentials,
+            config: Some(config),
+        };
+
         let settings = storage::Settings::default();
         let client = backend
             .mk_object_store(&settings)

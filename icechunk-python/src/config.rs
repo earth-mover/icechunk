@@ -507,8 +507,8 @@ impl From<&PyObjectStoreConfig> for ObjectStoreConfig {
             PyObjectStoreConfig::Gcs(opts) => {
                 ObjectStoreConfig::Gcs(opts.clone().unwrap_or_default())
             }
-            PyObjectStoreConfig::Azure(opts) => {
-                ObjectStoreConfig::Azure(opts.clone().unwrap_or_default())
+            PyObjectStoreConfig::Azure(config) => {
+                ObjectStoreConfig::Azure(config.clone().unwrap_or_default())
             }
             PyObjectStoreConfig::Tigris(opts) => ObjectStoreConfig::Tigris(opts.into()),
             PyObjectStoreConfig::Http(opts) => {
@@ -530,7 +530,7 @@ impl From<ObjectStoreConfig> for PyObjectStoreConfig {
             }
             ObjectStoreConfig::S3(opts) => PyObjectStoreConfig::S3(opts.into()),
             ObjectStoreConfig::Gcs(opts) => PyObjectStoreConfig::Gcs(Some(opts)),
-            ObjectStoreConfig::Azure(opts) => PyObjectStoreConfig::Azure(Some(opts)),
+            ObjectStoreConfig::Azure(config) => PyObjectStoreConfig::Azure(Some(config)),
             ObjectStoreConfig::Tigris(opts) => PyObjectStoreConfig::Tigris(opts.into()),
             ObjectStoreConfig::Http(opts) => PyObjectStoreConfig::Http(Some(opts)),
         }

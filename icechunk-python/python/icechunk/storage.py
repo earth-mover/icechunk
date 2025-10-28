@@ -459,6 +459,23 @@ def gcs_storage(
     )
 
 
+def azure_store(
+    *,
+    account: str,
+    config: dict[str, str] | None = None,
+) -> ObjectStoreConfig.Azure:
+    """Build an ObjectStoreConfig instance for Azure stores.
+
+    Parameters
+    ----------
+    account: str
+        The account to which the caller must have access privileges
+    config: dict[str, str] | None
+        A dictionary of options for the Azure Blob Storage object store. See https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants for a list of possible configuration keys.
+    """
+    return ObjectStoreConfig.Azure({"account": account, **(config or {})})
+
+
 def azure_storage(
     *,
     account: str,
