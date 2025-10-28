@@ -9,6 +9,7 @@ use icechunk::{
 use miette::{Diagnostic, GraphicalReportHandler};
 use pyo3::{
     PyErr,
+    conversion::IntoPyObjectExt,
     exceptions::{PyException, PyKeyError, PyValueError},
     prelude::*,
 };
@@ -148,9 +149,11 @@ impl IcechunkError {
         self.message.clone()
     }
 
-    // Provide arguments for __new__ during unpickling
-    fn __getnewargs__(&self) -> (String,) {
-        (self.message.clone(),)
+    // Control pickling to work with tblib
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let cls = py.get_type::<IcechunkError>().into_py_any(py)?;
+        let args = (self.message.clone(),).into_py_any(py)?;
+        Ok((cls, args))
     }
 }
 
@@ -199,9 +202,12 @@ impl PyConflictError {
         )
     }
 
-    // Provide arguments for __new__ during unpickling
-    fn __getnewargs__(&self) -> (Option<String>, Option<String>) {
-        (self.expected_parent.clone(), self.actual_parent.clone())
+    // Control pickling to work with tblib
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let cls = py.get_type::<PyConflictError>().into_py_any(py)?;
+        let args =
+            (self.expected_parent.clone(), self.actual_parent.clone()).into_py_any(py)?;
+        Ok((cls, args))
     }
 }
 
@@ -246,9 +252,11 @@ impl PyRebaseFailedError {
         )
     }
 
-    // Provide arguments for __new__ during unpickling
-    fn __getnewargs__(&self) -> (String, Vec<PyConflict>) {
-        (self.snapshot.clone(), self.conflicts.clone())
+    // Control pickling to work with tblib
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let cls = py.get_type::<PyRebaseFailedError>().into_py_any(py)?;
+        let args = (self.snapshot.clone(), self.conflicts.clone()).into_py_any(py)?;
+        Ok((cls, args))
     }
 }
 
