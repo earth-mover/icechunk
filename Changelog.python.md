@@ -1,5 +1,12 @@
 # Changelog
 
+## Python Icechunk Library 1.1.11
+
+### Features
+
+- New function `azure_store` and added support for virtual chunks in Azure.
+  Virtual chunks must have URLs starting with `azure://`, `az://` or `abfs://`.
+
 ## Python Icechunk Library 1.1.10
 
 ### Fixes
