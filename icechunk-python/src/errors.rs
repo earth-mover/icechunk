@@ -147,6 +147,11 @@ impl IcechunkError {
     fn __str__(&self) -> String {
         self.message.clone()
     }
+
+    // Provide arguments for __new__ during unpickling
+    fn __getnewargs__(&self) -> (String,) {
+        (self.message.clone(),)
+    }
 }
 
 impl_pickle!(IcechunkError);
@@ -193,6 +198,11 @@ impl PyConflictError {
             self.expected_parent, self.actual_parent
         )
     }
+
+    // Provide arguments for __new__ during unpickling
+    fn __getnewargs__(&self) -> (Option<String>, Option<String>) {
+        (self.expected_parent.clone(), self.actual_parent.clone())
+    }
 }
 
 impl_pickle!(PyConflictError);
@@ -234,6 +244,11 @@ impl PyRebaseFailedError {
             self.snapshot,
             self.conflicts.len()
         )
+    }
+
+    // Provide arguments for __new__ during unpickling
+    fn __getnewargs__(&self) -> (String, Vec<PyConflict>) {
+        (self.snapshot.clone(), self.conflicts.clone())
     }
 }
 

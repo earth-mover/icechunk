@@ -121,7 +121,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
         # we intentionally pass something that has the wrong type
         credentials=s3_refreshable_credentials(returns_something_else),  # type: ignore [arg-type]
     )
-    with pytest.raises(IcechunkError, match="cannot be converted"):
+    with pytest.raises(IcechunkError, match="cannot be cast"):
         assert not Repository.exists(st)
 
 
