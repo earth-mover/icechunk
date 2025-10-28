@@ -9,6 +9,7 @@ use icechunk::{
 use miette::{Diagnostic, GraphicalReportHandler};
 use pyo3::{
     PyErr,
+    conversion::IntoPyObjectExt,
     exceptions::{PyException, PyKeyError, PyValueError},
     prelude::*,
 };
@@ -122,7 +123,7 @@ pub(crate) type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;
 
 #[pyclass(extends=PyException, subclass, module = "icechunk")]
 #[derive(Serialize, Deserialize)]
-pub struct IcechunkError {
+pub(crate) struct IcechunkError {
     #[pyo3(get)]
     message: String,
 }
@@ -136,7 +137,7 @@ impl IcechunkError {
 #[pymethods]
 impl IcechunkError {
     #[new]
-    pub fn new(message: String) -> Self {
+    pub(crate) fn new(message: String) -> Self {
         Self { message }
     }
 
@@ -147,13 +148,20 @@ impl IcechunkError {
     fn __str__(&self) -> String {
         self.message.clone()
     }
+
+    // Control pickling to work with tblib
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let cls = py.get_type::<IcechunkError>().into_py_any(py)?;
+        let args = (self.message.clone(),).into_py_any(py)?;
+        Ok((cls, args))
+    }
 }
 
 impl_pickle!(IcechunkError);
 
 #[pyclass(extends=PyException, name = "ConflictError", module = "icechunk")]
 #[derive(Serialize, Deserialize)]
-pub struct PyConflictError {
+pub(crate) struct PyConflictError {
     #[pyo3(get)]
     expected_parent: Option<String>,
     #[pyo3(get)]
@@ -172,7 +180,10 @@ impl PyConflictError {
 #[pymethods]
 impl PyConflictError {
     #[new]
-    pub fn new(expected_parent: Option<String>, actual_parent: Option<String>) -> Self {
+    pub(crate) fn new(
+        expected_parent: Option<String>,
+        actual_parent: Option<String>,
+    ) -> Self {
         Self { expected_parent, actual_parent }
     }
 
@@ -190,13 +201,21 @@ impl PyConflictError {
             self.expected_parent, self.actual_parent
         )
     }
+
+    // Control pickling to work with tblib
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let cls = py.get_type::<PyConflictError>().into_py_any(py)?;
+        let args =
+            (self.expected_parent.clone(), self.actual_parent.clone()).into_py_any(py)?;
+        Ok((cls, args))
+    }
 }
 
 impl_pickle!(PyConflictError);
 
 #[pyclass(extends=PyException, name = "RebaseFailedError", module = "icechunk")]
 #[derive(Serialize, Deserialize)]
-pub struct PyRebaseFailedError {
+pub(crate) struct PyRebaseFailedError {
     #[pyo3(get)]
     snapshot: String,
     #[pyo3(get)]
@@ -214,7 +233,7 @@ impl PyRebaseFailedError {
 #[pymethods]
 impl PyRebaseFailedError {
     #[new]
-    pub fn new(snapshot: String, conflicts: Vec<PyConflict>) -> Self {
+    pub(crate) fn new(snapshot: String, conflicts: Vec<PyConflict>) -> Self {
         Self { snapshot, conflicts }
     }
 
@@ -231,6 +250,13 @@ impl PyRebaseFailedError {
             self.snapshot,
             self.conflicts.len()
         )
+    }
+
+    // Control pickling to work with tblib
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let cls = py.get_type::<PyRebaseFailedError>().into_py_any(py)?;
+        let args = (self.snapshot.clone(), self.conflicts.clone()).into_py_any(py)?;
+        Ok((cls, args))
     }
 }
 

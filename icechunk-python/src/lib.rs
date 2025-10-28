@@ -74,7 +74,7 @@ fn cli_entrypoint(_py: Python) -> PyResult<()> {
 fn log_filters_from_env(py: Python) -> PyResult<Option<String>> {
     let os = py.import("os")?;
     let environ = os.getattr("environ")?;
-    let environ: &Bound<PyMapping> = environ.downcast()?;
+    let environ: &Bound<PyMapping> = environ.cast()?;
     let value = environ.get_item("ICECHUNK_LOG").ok().and_then(|v| v.extract().ok());
     Ok(value)
 }
