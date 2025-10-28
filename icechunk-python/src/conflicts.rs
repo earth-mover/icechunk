@@ -12,7 +12,7 @@ use crate::impl_pickle;
 
 #[pyclass(name = "ConflictType", eq)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PyConflictType {
+pub(crate) enum PyConflictType {
     NewNodeConflictsWithExistingNode = 1,
     NewNodeInInvalidGroup = 2,
     ZarrMetadataDoubleUpdate = 3,
@@ -68,7 +68,7 @@ impl_pickle!(PyConflictType);
 
 #[pyclass(name = "Conflict")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PyConflict {
+pub(crate) struct PyConflict {
     #[pyo3(get)]
     conflict_type: PyConflictType,
     #[pyo3(get)]
@@ -185,7 +185,7 @@ impl<'a> AsRef<dyn ConflictSolver + 'a + Send + Sync> for PyConflictSolver {
 
 #[pyclass(name = "BasicConflictSolver", extends=PyConflictSolver)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PyBasicConflictSolver;
+pub(crate) struct PyBasicConflictSolver;
 
 #[pymethods]
 impl PyBasicConflictSolver {
@@ -211,7 +211,7 @@ impl_pickle!(PyBasicConflictSolver);
 
 #[pyclass(name = "ConflictDetector", extends=PyConflictSolver)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PyConflictDetector;
+pub(crate) struct PyConflictDetector;
 
 #[pymethods]
 impl PyConflictDetector {
