@@ -1632,13 +1632,13 @@ impl PyRepositoryConfig {
 
 #[pyclass(name = "Storage")]
 #[derive(Clone, Debug)]
-pub struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
+pub(crate) struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
 
 #[pymethods]
 impl PyStorage {
     #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
     #[classmethod]
-    pub fn new_s3(
+    pub(crate) fn new_s3(
         _cls: &Bound<'_, PyType>,
         config: &PyS3Options,
         bucket: String,
@@ -1658,7 +1658,7 @@ impl PyStorage {
 
     #[pyo3(signature = ( config, bucket, prefix, credentials=None))]
     #[classmethod]
-    pub fn new_s3_object_store(
+    pub(crate) fn new_s3_object_store(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         config: &PyS3Options,
@@ -1684,7 +1684,7 @@ impl PyStorage {
 
     #[pyo3(signature = ( config, bucket, prefix, use_weak_consistency, credentials=None))]
     #[classmethod]
-    pub fn new_tigris(
+    pub(crate) fn new_tigris(
         _cls: &Bound<'_, PyType>,
         config: &PyS3Options,
         bucket: String,
@@ -1706,7 +1706,7 @@ impl PyStorage {
 
     #[pyo3(signature = ( config, bucket=None, prefix=None, account_id=None, credentials=None))]
     #[classmethod]
-    pub fn new_r2(
+    pub(crate) fn new_r2(
         _cls: &Bound<'_, PyType>,
         config: &PyS3Options,
         bucket: Option<String>,
@@ -1727,7 +1727,10 @@ impl PyStorage {
     }
 
     #[classmethod]
-    pub fn new_in_memory(_cls: &Bound<'_, PyType>, py: Python<'_>) -> PyResult<Self> {
+    pub(crate) fn new_in_memory(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+    ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let storage = icechunk::storage::new_in_memory_storage()
@@ -1740,7 +1743,7 @@ impl PyStorage {
     }
 
     #[classmethod]
-    pub fn new_local_filesystem(
+    pub(crate) fn new_local_filesystem(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         path: PathBuf,
@@ -1758,7 +1761,7 @@ impl PyStorage {
 
     #[classmethod]
     #[pyo3(signature = (bucket, prefix, credentials=None, *, config=None))]
-    pub fn new_gcs(
+    pub(crate) fn new_gcs(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         bucket: String,
@@ -1784,7 +1787,7 @@ impl PyStorage {
 
     #[classmethod]
     #[pyo3(signature = (account, container, prefix, credentials=None, *, config=None))]
-    pub fn new_azure_blob(
+    pub(crate) fn new_azure_blob(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         account: String,
@@ -1810,11 +1813,11 @@ impl PyStorage {
         })
     }
 
-    pub fn __repr__(&self) -> String {
+    pub(crate) fn __repr__(&self) -> String {
         format!("{}", self.0)
     }
 
-    pub fn default_settings(&self) -> PyStorageSettings {
+    pub(crate) fn default_settings(&self) -> PyStorageSettings {
         self.0.default_settings().into()
     }
 }

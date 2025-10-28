@@ -55,7 +55,7 @@ pub struct PySnapshotProperties(pub HashMap<String, JsonValue>);
 
 #[pyclass(name = "SnapshotInfo", eq)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PySnapshotInfo {
+pub(crate) struct PySnapshotInfo {
     #[pyo3(get)]
     id: String,
     #[pyo3(get)]
@@ -74,7 +74,7 @@ impl_pickle!(PySnapshotInfo);
 
 #[pyclass(name = "ManifestFileInfo", eq)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyManifestFileInfo {
+pub(crate) struct PyManifestFileInfo {
     #[pyo3(get)]
     pub id: String,
     #[pyo3(get)]
@@ -212,7 +212,7 @@ impl From<SnapshotInfo> for PySnapshotInfo {
 
 #[pymethods]
 impl PyManifestFileInfo {
-    pub fn __repr__(&self) -> String {
+    pub(crate) fn __repr__(&self) -> String {
         format!(
             r#"ManifestFileInfo(id="{id}", size_bytes={size}, num_chunk_refs={chunks})"#,
             id = self.id,
@@ -224,7 +224,7 @@ impl PyManifestFileInfo {
 
 #[pymethods]
 impl PySnapshotInfo {
-    pub fn __repr__(&self) -> String {
+    pub(crate) fn __repr__(&self) -> String {
         // TODO: escape
         format!(
             r#"SnapshotInfo(id="{id}", parent_id={parent}, written_at={at}, message="{message}")"#,
@@ -371,7 +371,7 @@ impl_pickle!(PyDiff);
 
 #[pyclass(name = "GCSummary", eq)]
 #[derive(Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct PyGCSummary {
+pub(crate) struct PyGCSummary {
     #[pyo3(get)]
     pub bytes_deleted: u64,
     #[pyo3(get)]
@@ -401,7 +401,7 @@ impl From<GCSummary> for PyGCSummary {
 
 #[pymethods]
 impl PyGCSummary {
-    pub fn __repr__(&self) -> String {
+    pub(crate) fn __repr__(&self) -> String {
         format!(
             r#"GCSummary(bytes_deleted={bytes}, chunks_deleted={chunks}, manifests_deleted={manifests}, snapshots_deleted={snapshots}, attributes_deleted={atts}, transaction_logs_deleted={txs})"#,
             bytes = self.bytes_deleted,
@@ -417,7 +417,7 @@ impl PyGCSummary {
 impl_pickle!(PyGCSummary);
 
 #[pyclass]
-pub struct PyRepository(Arc<RwLock<Repository>>);
+pub(crate) struct PyRepository(Arc<RwLock<Repository>>);
 
 #[pymethods]
 /// Most functions in this class call `Runtime.block_on` so they need to `allow_threads` so other
@@ -611,7 +611,7 @@ impl PyRepository {
     /// If authorize_virtual_chunk_access is None, it will use the same value as self
     /// If authorize_virtual_chunk_access is Some(x), it will override with x
     #[pyo3(signature = (*, config = None, authorize_virtual_chunk_access = None::<Option<HashMap<String, Option<PyCredentials>>>>))]
-    pub fn reopen(
+    pub(crate) fn reopen(
         &self,
         py: Python<'_>,
         config: Option<&PyRepositoryConfig>,
@@ -742,15 +742,15 @@ impl PyRepository {
         })
     }
 
-    pub fn config(&self) -> PyRepositoryConfig {
+    pub(crate) fn config(&self) -> PyRepositoryConfig {
         self.0.blocking_read().config().clone().into()
     }
 
-    pub fn storage_settings(&self) -> PyStorageSettings {
+    pub(crate) fn storage_settings(&self) -> PyStorageSettings {
         self.0.blocking_read().storage_settings().clone().into()
     }
 
-    pub fn storage(&self) -> PyStorage {
+    pub(crate) fn storage(&self) -> PyStorage {
         PyStorage(Arc::clone(self.0.blocking_read().storage()))
     }
 
@@ -763,7 +763,7 @@ impl PyRepository {
         PySet::new(py, prefixes.iter().map(|s| s.as_str()))
     }
 
-    pub fn set_default_commit_metadata(
+    pub(crate) fn set_default_commit_metadata(
         &self,
         py: Python<'_>,
         metadata: PySnapshotProperties,
@@ -774,7 +774,7 @@ impl PyRepository {
         })
     }
 
-    pub fn default_commit_metadata(&self, py: Python<'_>) -> PySnapshotProperties {
+    pub(crate) fn default_commit_metadata(&self, py: Python<'_>) -> PySnapshotProperties {
         py.detach(move || {
             let metadata = self.0.blocking_read().default_commit_metadata().clone();
             metadata.into()
@@ -783,7 +783,7 @@ impl PyRepository {
 
     /// Returns an object that is both a sync and an async iterator
     #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
-    pub fn async_ancestry(
+    pub(crate) fn async_ancestry(
         &self,
         py: Python<'_>,
         branch: Option<String>,
@@ -819,7 +819,7 @@ impl PyRepository {
         })
     }
 
-    pub fn create_branch(
+    pub(crate) fn create_branch(
         &self,
         py: Python<'_>,
         branch_name: &str,
@@ -869,7 +869,7 @@ impl PyRepository {
         })
     }
 
-    pub fn list_branches(&self, py: Python<'_>) -> PyResult<BTreeSet<String>> {
+    pub(crate) fn list_branches(&self, py: Python<'_>) -> PyResult<BTreeSet<String>> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -903,7 +903,11 @@ impl PyRepository {
         )
     }
 
-    pub fn lookup_branch(&self, py: Python<'_>, branch_name: &str) -> PyResult<String> {
+    pub(crate) fn lookup_branch(
+        &self,
+        py: Python<'_>,
+        branch_name: &str,
+    ) -> PyResult<String> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -936,7 +940,7 @@ impl PyRepository {
         })
     }
 
-    pub fn lookup_snapshot(
+    pub(crate) fn lookup_snapshot(
         &self,
         py: Python<'_>,
         snapshot_id: &str,
@@ -982,7 +986,7 @@ impl PyRepository {
         })
     }
 
-    pub fn reset_branch(
+    pub(crate) fn reset_branch(
         &self,
         py: Python<'_>,
         branch_name: &str,
@@ -1055,7 +1059,7 @@ impl PyRepository {
         })
     }
 
-    pub fn delete_branch(&self, py: Python<'_>, branch: &str) -> PyResult<()> {
+    pub(crate) fn delete_branch(&self, py: Python<'_>, branch: &str) -> PyResult<()> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -1087,7 +1091,7 @@ impl PyRepository {
         })
     }
 
-    pub fn delete_tag(&self, py: Python<'_>, tag: &str) -> PyResult<()> {
+    pub(crate) fn delete_tag(&self, py: Python<'_>, tag: &str) -> PyResult<()> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -1119,7 +1123,7 @@ impl PyRepository {
         })
     }
 
-    pub fn create_tag(
+    pub(crate) fn create_tag(
         &self,
         py: Python<'_>,
         tag_name: &str,
@@ -1169,7 +1173,7 @@ impl PyRepository {
         })
     }
 
-    pub fn list_tags(&self, py: Python<'_>) -> PyResult<BTreeSet<String>> {
+    pub(crate) fn list_tags(&self, py: Python<'_>) -> PyResult<BTreeSet<String>> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -1200,7 +1204,7 @@ impl PyRepository {
         )
     }
 
-    pub fn lookup_tag(&self, py: Python<'_>, tag: &str) -> PyResult<String> {
+    pub(crate) fn lookup_tag(&self, py: Python<'_>, tag: &str) -> PyResult<String> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -1235,7 +1239,7 @@ impl PyRepository {
 
     #[pyo3(signature = (*, from_branch=None, from_tag=None, from_snapshot_id=None, to_branch=None, to_tag=None, to_snapshot_id=None))]
     #[allow(clippy::too_many_arguments)]
-    pub fn diff(
+    pub(crate) fn diff(
         &self,
         py: Python<'_>,
         from_branch: Option<String>,
@@ -1290,7 +1294,7 @@ impl PyRepository {
     }
 
     #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None, as_of = None))]
-    pub fn readonly_session(
+    pub(crate) fn readonly_session(
         &self,
         py: Python<'_>,
         branch: Option<String>,
@@ -1337,7 +1341,11 @@ impl PyRepository {
         })
     }
 
-    pub fn writable_session(&self, py: Python<'_>, branch: &str) -> PyResult<PySession> {
+    pub(crate) fn writable_session(
+        &self,
+        py: Python<'_>,
+        branch: &str,
+    ) -> PyResult<PySession> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let session =
@@ -1372,7 +1380,7 @@ impl PyRepository {
     }
 
     #[pyo3(signature = (message, branch, metadata=None))]
-    pub fn rewrite_manifests(
+    pub(crate) fn rewrite_manifests(
         &self,
         py: Python<'_>,
         message: &str,
@@ -1415,7 +1423,7 @@ impl PyRepository {
     }
 
     #[pyo3(signature = (older_than, *, delete_expired_branches = false, delete_expired_tags = false))]
-    pub fn expire_snapshots(
+    pub(crate) fn expire_snapshots(
         &self,
         py: Python<'_>,
         older_than: DateTime<Utc>,
@@ -1507,7 +1515,7 @@ impl PyRepository {
         })
     }
 
-    pub fn garbage_collect(
+    pub(crate) fn garbage_collect(
         &self,
         py: Python<'_>,
         delete_object_older_than: DateTime<Utc>,
@@ -1592,7 +1600,7 @@ impl PyRepository {
         })
     }
 
-    pub fn total_chunks_storage(
+    pub(crate) fn total_chunks_storage(
         &self,
         py: Python<'_>,
         max_snapshots_in_memory: NonZeroU16,

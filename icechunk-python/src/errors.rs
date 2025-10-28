@@ -122,7 +122,7 @@ pub(crate) type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;
 
 #[pyclass(extends=PyException, subclass, module = "icechunk")]
 #[derive(Serialize, Deserialize)]
-pub struct IcechunkError {
+pub(crate) struct IcechunkError {
     #[pyo3(get)]
     message: String,
 }
@@ -136,7 +136,7 @@ impl IcechunkError {
 #[pymethods]
 impl IcechunkError {
     #[new]
-    pub fn new(message: String) -> Self {
+    pub(crate) fn new(message: String) -> Self {
         Self { message }
     }
 
@@ -153,7 +153,7 @@ impl_pickle!(IcechunkError);
 
 #[pyclass(extends=PyException, name = "ConflictError", module = "icechunk")]
 #[derive(Serialize, Deserialize)]
-pub struct PyConflictError {
+pub(crate) struct PyConflictError {
     #[pyo3(get)]
     expected_parent: Option<String>,
     #[pyo3(get)]
@@ -172,7 +172,10 @@ impl PyConflictError {
 #[pymethods]
 impl PyConflictError {
     #[new]
-    pub fn new(expected_parent: Option<String>, actual_parent: Option<String>) -> Self {
+    pub(crate) fn new(
+        expected_parent: Option<String>,
+        actual_parent: Option<String>,
+    ) -> Self {
         Self { expected_parent, actual_parent }
     }
 
@@ -196,7 +199,7 @@ impl_pickle!(PyConflictError);
 
 #[pyclass(extends=PyException, name = "RebaseFailedError", module = "icechunk")]
 #[derive(Serialize, Deserialize)]
-pub struct PyRebaseFailedError {
+pub(crate) struct PyRebaseFailedError {
     #[pyo3(get)]
     snapshot: String,
     #[pyo3(get)]
@@ -214,7 +217,7 @@ impl PyRebaseFailedError {
 #[pymethods]
 impl PyRebaseFailedError {
     #[new]
-    pub fn new(snapshot: String, conflicts: Vec<PyConflict>) -> Self {
+    pub(crate) fn new(snapshot: String, conflicts: Vec<PyConflict>) -> Self {
         Self { snapshot, conflicts }
     }
 

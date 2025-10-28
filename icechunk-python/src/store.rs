@@ -52,7 +52,7 @@ impl From<ChecksumArgument> for Checksum {
 
 #[pyclass]
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct VirtualChunkSpec {
+pub(crate) struct VirtualChunkSpec {
     #[pyo3(get)]
     index: Vec<u32>,
     #[pyo3(get)]
