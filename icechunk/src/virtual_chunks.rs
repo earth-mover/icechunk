@@ -85,7 +85,7 @@ impl VirtualChunkContainer {
                         .to_string());
                 }
             }
-            ("az" | "azure" | "abfs", ObjectStoreConfig::Azure { .. }) => {
+            ("az" | "azure" | "abfs", ObjectStoreConfig::Azure(..)) => {
                 if !url.has_host() {
                     return Err(
                         "Url prefix for Azure containers must include a host".to_string()
