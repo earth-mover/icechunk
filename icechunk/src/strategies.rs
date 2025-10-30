@@ -1,16 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-use async_trait::async_trait;
 use std::collections::HashMap;
 use std::num::{NonZeroU16, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
-use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use prop::string::string_regex;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
-use serde::{Deserialize, Serialize};
-use crate::config::{CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig, ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition, ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3CredentialsFetcher, S3Options, S3StaticCredentials, S3Credentials, GcsStaticCredentials, GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, AzureStaticCredentials, AzureCredentials, Credentials};
+use crate::config::{CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig, ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition, ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3Options, S3StaticCredentials, GcsStaticCredentials, GcsBearerCredential, AzureStaticCredentials, AzureCredentials};
 use crate::format::manifest::ManifestExtents;
 use crate::format::snapshot::{ArrayShape, DimensionName};
 use crate::format::{ChunkIndices, Path};
@@ -20,8 +17,6 @@ use crate::storage::{
 };
 use crate::virtual_chunks::VirtualChunkContainer;
 use crate::{ObjectStoreConfig, Repository, RepositoryConfig};
-use crate::config::AzureStaticCredentials::BearerToken;
-use crate::config::GcsStaticCredentials::{ApplicationCredentials, ServiceAccount, ServiceAccountKey};
 
 const MAX_NDIM: usize = 4;
 
