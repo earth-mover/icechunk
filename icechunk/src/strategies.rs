@@ -1,18 +1,16 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::num::{NonZeroU16, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
-
+use std::sync::Arc;
+use chrono::{DateTime, Utc};
 use prop::string::string_regex;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
-
-use crate::config::{
-    CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig,
-    ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
-    ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3Options,
-};
+use serde::{Deserialize, Serialize};
+use crate::config::{CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig, ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition, ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3CredentialsFetcher, S3Options, S3StaticCredentials, S3Credentials};
 use crate::format::manifest::ManifestExtents;
 use crate::format::snapshot::{ArrayShape, DimensionName};
 use crate::format::{ChunkIndices, Path};
@@ -390,4 +388,44 @@ prop_compose! {
             previous_file,
         }
     }
+}
+
+prop_compose! {
+    pub fn expiration_date() (seconds in any::<i64>()) -> Option<DateTime<Utc>> {
+        DateTime::from_timestamp_secs(seconds)
+    }
+}
+
+prop_compose! {
+    pub fn s3_static_credentials()
+    (access_key_id in any::<String>(),
+        secret_access_key in any::<String>(),
+    expires_after in expiration_date(),
+    session_token in option::of(any::<String>())) -> S3StaticCredentials {
+        S3StaticCredentials{access_key_id, secret_access_key, session_token, expires_after}
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DefaultFetcher;
+
+#[async_trait]
+#[typetag::serde]
+impl S3CredentialsFetcher for DefaultFetcher {
+    async fn get(&self) -> Result<S3StaticCredentials, String>
+    {
+        Ok(S3StaticCredentials{access_key_id: "".to_string(),
+            secret_access_key: "".to_string(),
+            session_token: None,
+       expires_after: None})
+    }
+}
+
+pub fn s3_credentials() -> BoxedStrategy<S3Credentials> {
+    use S3Credentials::*;
+ prop_oneof![
+     Just(FromEnv),
+     Just(Anonymous),
+     s3_static_credentials().prop_map(Static),
+     Just(Refreshable(Arc::new(DefaultFetcher)))].boxed()
 }
