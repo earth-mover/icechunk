@@ -1446,3 +1446,11 @@ class Repository:
         self, snapshot_id: str, *, pretty: bool = True
     ) -> str:
         return await self._repository.inspect_snapshot_async(snapshot_id, pretty=pretty)
+
+    def inspect_manifest(self, manifest_id: str, *, pretty: bool = True) -> str:
+        return self._repository.inspect_manifest(manifest_id, pretty=pretty)
+
+    async def inspect_manifest_async(
+        self, manifest_id: str, *, pretty: bool = True
+    ) -> str:
+        return await self._repository.inspect_manifest_async(manifest_id, pretty=pretty)
