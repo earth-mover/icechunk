@@ -403,30 +403,6 @@ prop_compose! {
     }
 }
 
-// #[derive(Debug, Serialize, Deserialize)]
-// struct DefaultFetcher;
-
-// #[async_trait]
-// #[typetag::serde]
-// impl S3CredentialsFetcher for DefaultFetcher {
-//     async fn get(&self) -> Result<S3StaticCredentials, String>
-//     {
-//         Ok(S3StaticCredentials{access_key_id: "".to_string(),
-//             secret_access_key: "".to_string(),
-//             session_token: None,
-//        expires_after: None})
-//     }
-// }
-
-// pub fn s3_credentials() -> BoxedStrategy<S3Credentials> {
-//     use S3Credentials::*;
-//  prop_oneof![
-//      Just(FromEnv),
-//      Just(Anonymous),
-//      s3_static_credentials().prop_map(Static),
-//      Just(Refreshable(Arc::new(DefaultFetcher)))].boxed()
-// }
-
 prop_compose! {
 pub fn gcs_bearer_credential()
     (bearer in any::<String>(),expires_after in  expiration_date()) -> GcsBearerCredential {
@@ -444,30 +420,6 @@ prop_oneof![
 ].boxed()
 }
 
-// // This type represents a default value for a data type that fetches credentials
-// // for a gcs account
-// #[derive(Debug, Serialize, Deserialize)]
-// struct DefaultGcsFetcher;
-
-// #[async_trait]
-// #[typetag::serde]
-// impl GcsCredentialsFetcher for DefaultGcsFetcher {
-//     async fn get(&self) -> Result<GcsBearerCredential, String>
-//     {
-//         Ok(GcsBearerCredential{bearer: "".to_string(), expires_after: None})
-//     }
-// }
-
-// pub fn gcs_credentials() -> BoxedStrategy<GcsCredentials> {
-//     use GcsCredentials::*;
-//     prop_oneof![
-//         Just(FromEnv),
-//        Just(Anonymous),
-//         gcs_static_credentials().prop_map(Static),
-//         Just(Refreshable(Arc::new(DefaultGcsFetcher)))
-//     ].boxed()
-// }
-
 pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
     use AzureStaticCredentials::*;
     prop_oneof![
@@ -484,12 +436,3 @@ pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
         azure_static_credentials().prop_map(Static)
     ].boxed()
 }
-
-// pub fn credentials() -> BoxedStrategy<Credentials> {
-//     use Credentials::*;
-//     prop_oneof![
-//        s3_credentials().prop_map(S3),
-//         gcs_credentials().prop_map(Gcs),
-//         azure_credentials().prop_map(Azure)
-//     ].boxed()
-// }
