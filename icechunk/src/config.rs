@@ -625,7 +625,12 @@ pub enum Credentials {
 mod tests {
     use crate::{
         ObjectStoreConfig, RepositoryConfig, config::S3Options,
-        strategies::{repository_config, object_store_config, manifest_split_condition, s3_static_credentials, gcs_static_credentials}, virtual_chunks::VirtualChunkContainer,
+        strategies::{repository_config,
+                     object_store_config,
+                     manifest_split_condition,
+                     s3_static_credentials,
+                     gcs_static_credentials,
+                     azure_credentials}, virtual_chunks::VirtualChunkContainer,
     };
 
     use proptest::prelude::*;
@@ -718,6 +723,15 @@ mod tests {
     proptest! {
         #[icechunk_macros::test]
         fn test_gcs_static_credentials_roundtrip(credentials in gcs_static_credentials()) {
+            let bytes = rmp_serde::to_vec(&credentials).unwrap();
+            let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
+            assert_eq!(credentials, roundtrip);
+        }
+    }
+
+    proptest! {
+        #[icechunk_macros::test]
+        fn test_azure_credentials_roundtrip(credentials in azure_credentials()) {
             let bytes = rmp_serde::to_vec(&credentials).unwrap();
             let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
             assert_eq!(credentials, roundtrip);
