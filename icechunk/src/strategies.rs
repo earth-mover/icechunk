@@ -10,7 +10,7 @@ use prop::string::string_regex;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
 use serde::{Deserialize, Serialize};
-use crate::config::{CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig, ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition, ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3CredentialsFetcher, S3Options, S3StaticCredentials, S3Credentials};
+use crate::config::{CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig, ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition, ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3CredentialsFetcher, S3Options, S3StaticCredentials, S3Credentials, GcsStaticCredentials, GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, AzureStaticCredentials, AzureCredentials, Credentials};
 use crate::format::manifest::ManifestExtents;
 use crate::format::snapshot::{ArrayShape, DimensionName};
 use crate::format::{ChunkIndices, Path};
@@ -20,6 +20,8 @@ use crate::storage::{
 };
 use crate::virtual_chunks::VirtualChunkContainer;
 use crate::{ObjectStoreConfig, Repository, RepositoryConfig};
+use crate::config::AzureStaticCredentials::BearerToken;
+use crate::config::GcsStaticCredentials::{ApplicationCredentials, ServiceAccount, ServiceAccountKey};
 
 const MAX_NDIM: usize = 4;
 
@@ -406,26 +408,93 @@ prop_compose! {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct DefaultFetcher;
+// #[derive(Debug, Serialize, Deserialize)]
+// struct DefaultFetcher;
 
-#[async_trait]
-#[typetag::serde]
-impl S3CredentialsFetcher for DefaultFetcher {
-    async fn get(&self) -> Result<S3StaticCredentials, String>
-    {
-        Ok(S3StaticCredentials{access_key_id: "".to_string(),
-            secret_access_key: "".to_string(),
-            session_token: None,
-       expires_after: None})
+// #[async_trait]
+// #[typetag::serde]
+// impl S3CredentialsFetcher for DefaultFetcher {
+//     async fn get(&self) -> Result<S3StaticCredentials, String>
+//     {
+//         Ok(S3StaticCredentials{access_key_id: "".to_string(),
+//             secret_access_key: "".to_string(),
+//             session_token: None,
+//        expires_after: None})
+//     }
+// }
+
+// pub fn s3_credentials() -> BoxedStrategy<S3Credentials> {
+//     use S3Credentials::*;
+//  prop_oneof![
+//      Just(FromEnv),
+//      Just(Anonymous),
+//      s3_static_credentials().prop_map(Static),
+//      Just(Refreshable(Arc::new(DefaultFetcher)))].boxed()
+// }
+
+prop_compose! {
+pub fn gcs_bearer_credential()
+    (bearer in any::<String>(),expires_after in  expiration_date()) -> GcsBearerCredential {
+        GcsBearerCredential{bearer,expires_after}
     }
 }
 
-pub fn s3_credentials() -> BoxedStrategy<S3Credentials> {
-    use S3Credentials::*;
- prop_oneof![
-     Just(FromEnv),
-     Just(Anonymous),
-     s3_static_credentials().prop_map(Static),
-     Just(Refreshable(Arc::new(DefaultFetcher)))].boxed()
+pub fn gcs_static_credentials() -> BoxedStrategy<GcsStaticCredentials> {
+    use GcsStaticCredentials::*;
+prop_oneof![
+    any::<PathBuf>().prop_map(ServiceAccount),
+    any::<String>().prop_map(ServiceAccountKey),
+    any::<PathBuf>().prop_map(ApplicationCredentials),
+    gcs_bearer_credential().prop_map(BearerToken)
+].boxed()
 }
+
+// // This type represents a default value for a data type that fetches credentials
+// // for a gcs account
+// #[derive(Debug, Serialize, Deserialize)]
+// struct DefaultGcsFetcher;
+
+// #[async_trait]
+// #[typetag::serde]
+// impl GcsCredentialsFetcher for DefaultGcsFetcher {
+//     async fn get(&self) -> Result<GcsBearerCredential, String>
+//     {
+//         Ok(GcsBearerCredential{bearer: "".to_string(), expires_after: None})
+//     }
+// }
+
+// pub fn gcs_credentials() -> BoxedStrategy<GcsCredentials> {
+//     use GcsCredentials::*;
+//     prop_oneof![
+//         Just(FromEnv),
+//        Just(Anonymous),
+//         gcs_static_credentials().prop_map(Static),
+//         Just(Refreshable(Arc::new(DefaultGcsFetcher)))
+//     ].boxed()
+// }
+
+pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
+    use AzureStaticCredentials::*;
+    prop_oneof![
+       any::<String>().prop_map(AccessKey),
+       any::<String>().prop_map(SASToken),
+       any::<String>().prop_map(BearerToken),
+    ].boxed()
+}
+
+pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
+    use AzureCredentials::*;
+    prop_oneof![
+       Just(FromEnv),
+        azure_static_credentials().prop_map(Static)
+    ].boxed()
+}
+
+// pub fn credentials() -> BoxedStrategy<Credentials> {
+//     use Credentials::*;
+//     prop_oneof![
+//        s3_credentials().prop_map(S3),
+//         gcs_credentials().prop_map(Gcs),
+//         azure_credentials().prop_map(Azure)
+//     ].boxed()
+// }

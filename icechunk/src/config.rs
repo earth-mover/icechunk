@@ -625,7 +625,7 @@ pub enum Credentials {
 mod tests {
     use crate::{
         ObjectStoreConfig, RepositoryConfig, config::S3Options,
-        strategies::{repository_config, object_store_config, manifest_split_condition}, virtual_chunks::VirtualChunkContainer,
+        strategies::{repository_config, object_store_config, manifest_split_condition, credentials}, virtual_chunks::VirtualChunkContainer,
     };
 
     use proptest::prelude::*;
@@ -705,4 +705,13 @@ mod tests {
             assert_eq!(config, roundtrip);
         }
     }
+
+    // proptest! {
+    //     #[icechunk_macros::test]
+    //     fn test_credentials_serialization_and_deserialization(credential in credentials() ) {
+    //         let bytes = rmp_serde::to_vec(&credential).unwrap();
+    //         let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
+    //         assert_eq!(credential, roundtrip);
+    //     }
+    // }
 }
