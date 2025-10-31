@@ -434,18 +434,18 @@ impl_pickle!(PyGCSummary);
 
 #[pyclass(name = "UpdateType", eq, subclass)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyUpdateType {
+pub(crate) struct PyUpdateType {
     #[pyo3(get)]
     updated_at: DateTime<Utc>,
 }
 
 #[pyclass(name = "RepoInitializedUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyRepoInitializedUpdate;
+pub(crate) struct PyRepoInitializedUpdate;
 
 #[pyclass(name = "RepoMigratedUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyRepoMigratedUpdate {
+pub(crate) struct PyRepoMigratedUpdate {
     #[pyo3(get)]
     from_version: u8,
     #[pyo3(get)]
@@ -454,33 +454,33 @@ pub struct PyRepoMigratedUpdate {
 
 #[pyclass(name = "ConfigChangedUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyConfigChangedUpdate;
+pub(crate) struct PyConfigChangedUpdate;
 
 #[pyclass(name = "GCRanUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyGCRanUpdate;
+pub(crate) struct PyGCRanUpdate;
 
 #[pyclass(name = "ExpirationRanUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyExpirationRanUpdate;
+pub(crate) struct PyExpirationRanUpdate;
 
 #[pyclass(name = "TagCreatedUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyTagCreatedUpdate {
+pub(crate) struct PyTagCreatedUpdate {
     #[pyo3(get)]
     name: String,
 }
 
 #[pyclass(name = "BranchCreatedUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyBranchCreatedUpdate {
+pub(crate) struct PyBranchCreatedUpdate {
     #[pyo3(get)]
     name: String,
 }
 
 #[pyclass(name = "TagDeletedUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyTagDeletedUpdate {
+pub(crate) struct PyTagDeletedUpdate {
     #[pyo3(get)]
     name: String,
     #[pyo3(get)]
@@ -489,7 +489,7 @@ pub struct PyTagDeletedUpdate {
 
 #[pyclass(name = "BranchDeletedUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyBranchDeletedUpdate {
+pub(crate) struct PyBranchDeletedUpdate {
     #[pyo3(get)]
     name: String,
     #[pyo3(get)]
@@ -498,7 +498,7 @@ pub struct PyBranchDeletedUpdate {
 
 #[pyclass(name = "BranchResetUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyBranchResetUpdate {
+pub(crate) struct PyBranchResetUpdate {
     #[pyo3(get)]
     name: String,
     #[pyo3(get)]
@@ -507,14 +507,14 @@ pub struct PyBranchResetUpdate {
 
 #[pyclass(name = "NewCommitUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyNewCommitUpdate {
+pub(crate) struct PyNewCommitUpdate {
     #[pyo3(get)]
     branch: String,
 }
 
 #[pyclass(name = "CommitAmendedUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyCommitAmendedUpdate {
+pub(crate) struct PyCommitAmendedUpdate {
     #[pyo3(get)]
     branch: String,
     #[pyo3(get)]
@@ -523,7 +523,7 @@ pub struct PyCommitAmendedUpdate {
 
 #[pyclass(name = "NewDetachedSnapshotUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PyNewDetachedSnapshotUpdate {
+pub(crate) struct PyNewDetachedSnapshotUpdate {
     #[pyo3(get)]
     new_snap_id: String,
 }
@@ -628,7 +628,7 @@ impl PyExpirationRanUpdate {
 }
 
 fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py<PyAny>> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let res = match update {
             UpdateType::RepoInitializedUpdate => {
                 Bound::new(py, (PyRepoInitializedUpdate, PyUpdateType { updated_at }))?
@@ -752,13 +752,13 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
 pub(crate) struct PyRepository(Arc<RwLock<Repository>>);
 
 impl PyRepository {
-    pub fn migrate_1_to_2(
+    pub(crate) fn migrate_1_to_2(
         &self,
         py: Python<'_>,
         dry_run: bool,
         delete_unused_v1_files: bool,
     ) -> PyResult<()> {
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let mut repo = self.0.write().await;
                 migrations::migrate_1_to_2(&mut repo, dry_run, delete_unused_v1_files)
@@ -771,7 +771,7 @@ impl PyRepository {
 }
 
 #[pymethods]
-/// Most functions in this class call `Runtime.block_on` so they need to `allow_threads` so other
+/// Most functions in this class call `Runtime.block_on` so they need to `detach` so other
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
     #[classmethod]
@@ -1164,9 +1164,9 @@ impl PyRepository {
         })
     }
 
-    pub fn async_ops_log(&self, py: Python<'_>) -> PyResult<PyAsyncGenerator> {
+    pub(crate) fn async_ops_log(&self, py: Python<'_>) -> PyResult<PyAsyncGenerator> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let ops = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move {
                     let repo = self.0.read().await;
@@ -1743,9 +1743,13 @@ impl PyRepository {
         })
     }
 
-    pub fn rearrange_session(&self, py: Python<'_>, branch: &str) -> PyResult<PySession> {
+    pub(crate) fn rearrange_session(
+        &self,
+        py: Python<'_>,
+        branch: &str,
+    ) -> PyResult<PySession> {
         // This function calls block_on, so we need to allow other thread python to make progress
-        py.allow_threads(move || {
+        py.detach(move || {
             let session =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     self.0

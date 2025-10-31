@@ -154,6 +154,7 @@ fn branch_key(branch_name: &str) -> RefResult<String> {
 }
 
 #[instrument(skip(storage, storage_settings))]
+#[allow(dead_code)]
 async fn create_tag(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -341,6 +342,7 @@ pub async fn list_branches(
 }
 
 #[instrument(skip(storage, storage_settings))]
+#[allow(dead_code)]
 async fn delete_branch(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -361,6 +363,7 @@ async fn delete_branch(
 }
 
 #[instrument(skip(storage, storage_settings))]
+#[allow(dead_code)]
 async fn delete_tag(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,

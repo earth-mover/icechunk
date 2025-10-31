@@ -118,7 +118,7 @@ impl PySession {
         let to = Path::new(to_path.as_str())
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let mut session = self.0.write().await;
                 session
@@ -181,7 +181,7 @@ impl PySession {
             }
         };
 
-        // TODO: allow_threads
+        // TODO: detach
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let mut session = self.0.write().await;
             session
@@ -197,7 +197,7 @@ impl PySession {
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
 
-        // TODO: allow_threads
+        // TODO: detach
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let mut session = self.0.write().await;
             session
@@ -427,7 +427,7 @@ impl PySession {
     ) -> PyResult<String> {
         let metadata = metadata.map(|m| m.into());
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
                 let snapshot_id = session
