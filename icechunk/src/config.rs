@@ -620,68 +620,18 @@ pub enum Credentials {
     Azure(AzureCredentials),
 }
 
-
-
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use crate::{
-        ObjectStoreConfig, RepositoryConfig, config::S3Options,
         strategies::{repository_config,
-                     object_store_config,
                      manifest_split_condition,
                      s3_static_credentials,
                      gcs_static_credentials,
-                     azure_credentials}, virtual_chunks::VirtualChunkContainer,
+                     azure_credentials}
     };
 
     use proptest::prelude::*;
-
-
-    #[icechunk_macros::test]
-    fn test_config_serialization() {
-        let mut config = RepositoryConfig::default();
-        let bytes = rmp_serde::to_vec(&config).unwrap();
-        let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-        assert_eq!(config, roundtrip);
-
-        config.set_virtual_chunk_container(
-            VirtualChunkContainer::new(
-                "s3://foo/bar/".to_string(),
-                ObjectStoreConfig::S3(S3Options {
-                    region: Some("us-east-1".to_string()),
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                }),
-            )
-            .unwrap(),
-        );
-        let bytes = rmp_serde::to_vec(&config).unwrap();
-        let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-        assert_eq!(config, roundtrip);
-    }
-
-    #[icechunk_macros::test]
-    fn test_virtual_container_serialization() {
-        let container = VirtualChunkContainer::new(
-            "s3://foo/bar/".to_string(),
-            ObjectStoreConfig::S3(S3Options {
-                region: Some("us-east-1".to_string()),
-                endpoint_url: None,
-                anonymous: false,
-                allow_http: false,
-                force_path_style: false,
-                network_stream_timeout_seconds: None,
-            }),
-        )
-        .unwrap();
-        let bytes = rmp_serde::to_vec(&container).unwrap();
-        let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-        assert_eq!(container, roundtrip);
-    }
 
     // This macro is used for creating multiple property tests
     // which check that the composition of deserializing and
@@ -702,64 +652,11 @@ mod tests {
         }
     }
 
-    roundtrip_serialization_tests!(test_object_store_config_serialization - object_store_config,
-    test_manifest_split_condition_serialization - manifest_split_condition);
-
-    // proptest!{
-    //     #[icechunk_macros::test]
-    //     fn test_object_store_config_serialization(config in object_store_config()) {
-    //         let bytes = rmp_serde::to_vec(&config).unwrap();
-    //         let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-    //         assert_eq!(config, roundtrip);
-    //     }
-    // }
-    //
-    // proptest!{
-    //     #[icechunk_macros::test]
-    //     fn test_manifest_split_condition_serialization(cond in manifest_split_condition()) {
-    //         let bytes = rmp_serde::to_vec(&cond).unwrap();
-    //         let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-    //         assert_eq!(cond, roundtrip);
-    //     }
-    // }
-
-    proptest! {
-        #![proptest_config(ProptestConfig {
-            cases: 50, .. ProptestConfig::default()
-        })]
-
-        #[icechunk_macros::test]
-        fn test_config_roundtrip(config in repository_config() ) {
-            let bytes = rmp_serde::to_vec(&config).unwrap();
-            let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-            assert_eq!(config, roundtrip);
-        }
-    }
-
-    proptest! {
-        #[icechunk_macros::test]
-        fn test_s3_static_credentials_roundtrip(credentials in s3_static_credentials()) {
-            let bytes = rmp_serde::to_vec(&credentials).unwrap();
-            let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-            assert_eq!(credentials, roundtrip);
-        }
-    }
-
-    proptest! {
-        #[icechunk_macros::test]
-        fn test_gcs_static_credentials_roundtrip(credentials in gcs_static_credentials()) {
-            let bytes = rmp_serde::to_vec(&credentials).unwrap();
-            let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-            assert_eq!(credentials, roundtrip);
-        }
-    }
-
-    proptest! {
-        #[icechunk_macros::test]
-        fn test_azure_credentials_roundtrip(credentials in azure_credentials()) {
-            let bytes = rmp_serde::to_vec(&credentials).unwrap();
-            let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-            assert_eq!(credentials, roundtrip);
-        }
-    }
+    roundtrip_serialization_tests!(
+        test_manifest_split_condition_serialization - manifest_split_condition,
+    test_config_roundtrip - repository_config,
+        test_s3_static_credentials_roundtrip - s3_static_credentials,
+        test_gcs_static_credentials_roundtrip - gcs_static_credentials,
+        test_azure_credentials_roundtrip - azure_credentials
+    );
 }
