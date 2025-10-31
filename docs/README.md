@@ -45,22 +45,4 @@ Builds output to: `docs/.site` directory.
 
 ### Deploying
 
-Docs are automatically deployed upon commits to `main` branch via the `./github/workflows/deploy-docs.yaml` action.
-
-You can manually deploy by running the command `mkdocs gh-deploy --force` from the directory containing the `mkdocs.yml` file.
-
-## Dev Notes
-
-#### Symlinked Files
-
-Several directories and files are symlinked into the MkDocs' `/docs`[^1] directory in order to be made available to MkDocs. Avoid modifying them directly:
-- `/docs/icechunk-python/examples/`
-- `/docs/icechunk-python/notebooks/`
-- `/docs/spec.md`
-
-These are also ignored in `.gitignore`
-
-> [!TIP]
-> See [icechunk-docs/macros.py](./macros.py) for more info.
-
-[^1]: Disambiguation: `icechunk/docs/docs`
+Docs are automatically deployed upon commits to `main` branch via readthedocs
