@@ -1356,7 +1356,7 @@ mod test {
             // the cache can only fit 6 refs.
             &CachingConfig {
                 num_snapshot_nodes: Some(0),
-                num_chunk_refs: Some(6),
+                num_chunk_refs: Some(7),
                 num_transaction_changes: Some(0),
                 num_bytes_attributes: Some(0),
                 num_bytes_chunks: Some(0),

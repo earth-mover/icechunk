@@ -45,7 +45,6 @@ Create / activate a virtual environment:
     uv sync
     ```
 
-
 Install `maturin`:
 
 === "Venv"
@@ -85,8 +84,6 @@ Install `maturin`:
     maturin develop --uv --extras=test,benchmark
     ```
 
-
-
 #### Testing
 
 The full Python test suite depends on S3 and Azure compatible object stores.
@@ -99,6 +96,122 @@ They can be run from the root of the repo with `docker compose up` (`ctrl-c` the
     uv run pytest
     ```
 
+#### Running Xarray Backend Tests
+
+Icechunk includes integration tests that verify compatibility with Xarray's zarr backend API. These tests require the Xarray repository to be cloned locally.
+
+Set the environment variables (adjust `XARRAY_DIR` to point to your local Xarray clone):
+
+```bash
+export ICECHUNK_XARRAY_BACKENDS_TESTS=1
+export XARRAY_DIR=~/Documents/dev/xarray  # or your xarray location
+```
+
+Run the Xarray backend tests:
+
+```bash
+python -m pytest -xvs tests/run_xarray_backends_tests.py \
+  -c $XARRAY_DIR/pyproject.toml \
+  -W ignore \
+  --override-ini="addopts="
+```
+
+To run a specific Xarray test you have first specify a class defined in `@icechunk-python/tests/run_xarray_backends_tests.py` and then specify an xarray test. For example:
+
+```bash
+python -m pytest -xvs tests/run_xarray_backends_tests.py::TestIcechunkStoreFilesystem::test_pickle \
+  -c $XARRAY_DIR/pyproject.toml \
+  -W ignore \
+  --override-ini="addopts="
+```
+
+#### Checking Xarray Documentation Consistency
+
+Icechunk's `to_icechunk` function shares several parameters with Xarray's `to_zarr` function. To ensure documentation stays in sync, use the documentation checker script.
+
+From the `icechunk-python` directory:
+
+```bash
+# Set XARRAY_DIR to point to your local Xarray clone
+export XARRAY_DIR=~/Documents/dev/xarray
+
+# Run the documentation consistency check
+uv run scripts/check_xarray_docs_sync.py
+```
+
+The script will display a side-by-side comparison of any documentation differences, with missing text highlighted in red.
+
+**Known Differences**: Some differences are acceptable (e.g., Sphinx formatting like `:py:func:` doesn't work in mkdocs). These are tracked in `scripts/known-xarray-doc-diffs.json`. Known differences are displayed but don't cause the check to fail.
+
+**Updating Known Differences**: After making intentional documentation changes, update the known diffs file:
+
+```bash
+# Mark current diffs as known (creates/updates scripts/known-xarray-doc-diffs.json)
+uv run scripts/check_xarray_docs_sync.py --update-known-diffs
+
+# Edit scripts/known-xarray-doc-diffs.json to add reasons for each difference
+```
+
+**CI Integration**: The script returns exit code 0 if only known differences exist, allowing CI to pass while still displaying diffs for review.
+
+### Building Documentation
+
+The documentation is built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/).
+
+**System dependencies**: Install Cairo graphics library for image processing:
+
+=== "macOS"
+
+    ```bash
+    brew install cairo
+    ```
+
+    If `mkdocs` fails to find Cairo, set the library path:
+
+    ```bash
+    export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
+    ```
+
+    You can add this to your `~/.zshrc` to make it permanent.
+
+=== "Ubuntu/Debian"
+
+    ```bash
+    sudo apt-get install libcairo2-dev
+    ```
+
+=== "Fedora/RHEL"
+
+    ```bash
+    sudo dnf install cairo-devel
+    ```
+
+From the `icechunk-python` directory:
+
+```bash
+# Install icechunk with docs dependencies
+uv sync --extra docs
+
+# Start the MkDocs development server
+cd ../docs
+uv run mkdocs serve
+```
+
+The development server will start at `http://127.0.0.1:8000` with live reload enabled.
+
+**Build static site**:
+
+```bash
+cd docs
+uv run mkdocs build
+```
+
+This builds the site to `docs/.site` directory.
+
+**Tips**:
+
+- Use `mkdocs serve --dirty` to only rebuild changed files (faster for iterative development)
+- You may need to restart if you make changes to `mkdocs.yml`
 
 ### Rust Development Workflow
 
@@ -111,6 +224,7 @@ cargo install just
 ```
 
 Or using other package managers:
+
 - **macOS**: `brew install just`
 - **Ubuntu**: `snap install --edge --classic just`
 
@@ -183,6 +297,7 @@ pre-commit install
 ```
 
 The pre-commit configuration automatically runs:
+
 - **Every commit**: Fast Python and Rust checks (~2 seconds total)
 - **Before push**: Medium Rust checks (compilation + dependencies)
 - **Manual**: Full CI-level checks when needed

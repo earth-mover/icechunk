@@ -1,6 +1,6 @@
-import importlib
 from collections.abc import Hashable, Mapping, MutableMapping
 from dataclasses import dataclass, field
+from importlib.util import find_spec
 from typing import Any, Literal, overload
 
 import numpy as np
@@ -22,7 +22,7 @@ ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 
 
 try:
-    has_dask = importlib.util.find_spec("dask") is not None
+    has_dask = find_spec("dask") is not None
 except ImportError:
     has_dask = False
 
@@ -45,9 +45,9 @@ else:
 
 def is_dask_collection(x: Any) -> bool:
     if has_dask:
-        import dask
+        from dask.base import is_dask_collection
 
-        return dask.base.is_dask_collection(x)
+        return is_dask_collection(x)
     else:
         return False
 
@@ -117,20 +117,26 @@ class _XarrayDatasetWriter:
             mode=mode, append_dim=append_dim, region=region
         )
 
-        self.xarray_store = ZarrStore.open_group(
-            store=self.store,
-            group=group,
-            mode=concrete_mode,
-            zarr_format=3,
-            append_dim=append_dim,
-            write_region=region,
-            safe_chunks=self.safe_chunks,
-            align_chunks=self.align_chunks,
-            synchronizer=None,
-            consolidated=False,
-            consolidate_on_close=False,
-            zarr_version=None,
-        )
+        # align_chunks was added in xarray 2025.06.0
+        # For backwards compatibility, only pass it if supported
+        kwargs: dict[str, Any] = {
+            "store": self.store,
+            "group": group,
+            "mode": concrete_mode,
+            "zarr_format": 3,
+            "append_dim": append_dim,
+            "write_region": region,
+            "safe_chunks": self.safe_chunks,
+            "synchronizer": None,
+            "consolidated": False,
+            "consolidate_on_close": False,
+            "zarr_version": None,
+        }
+
+        if Version(xr.__version__) >= Version("2025.06.0"):
+            kwargs["align_chunks"] = self.align_chunks
+
+        self.xarray_store = ZarrStore.open_group(**kwargs)
         self.dataset = self.xarray_store._validate_and_autodetect_region(self.dataset)
 
     def write_metadata(self, encoding: Mapping[Any, Any] | None = None) -> None:

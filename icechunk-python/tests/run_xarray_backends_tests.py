@@ -183,3 +183,8 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
         pytest.skip(
             "this test requires multiple saves, and is meant to exercise Xarray logic."
         )
+
+    def test_dataset_to_zarr_align_chunks_true(self, tmp_store) -> None:  # noqa: F811
+        pytest.skip(
+            "this test requires multiple saves, and is meant to exercise Xarray logic."
+        )

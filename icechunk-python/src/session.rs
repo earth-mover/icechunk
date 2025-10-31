@@ -28,7 +28,7 @@ use crate::{
 pub struct PySession(pub Arc<RwLock<Session>>);
 
 #[pymethods]
-/// Most functions in this class block, so they need to `allow_threads` so other
+/// Most functions in this class block, so they need to `detach` so other
 /// python threads can make progress
 impl PySession {
     #[classmethod]
@@ -38,7 +38,7 @@ impl PySession {
         bytes: Vec<u8>,
     ) -> PyResult<Self> {
         // This is a compute intensive task, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let session =
                 Session::from_bytes(bytes).map_err(PyIcechunkStoreError::SessionError)?;
             Ok(Self(Arc::new(RwLock::new(session))))
@@ -51,7 +51,7 @@ impl PySession {
 
     fn as_bytes(&self, py: Python<'_>) -> PyIcechunkStoreResult<Cow<'_, [u8]>> {
         // This is a compute intensive task, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let bytes =
                 self.0.blocking_read().as_bytes().map_err(PyIcechunkStoreError::from)?;
             Ok(Cow::Owned(bytes))
@@ -61,30 +61,30 @@ impl PySession {
     #[getter]
     pub fn read_only(&self, py: Python<'_>) -> bool {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || self.0.blocking_read().read_only())
+        py.detach(move || self.0.blocking_read().read_only())
     }
 
     #[getter]
     pub fn snapshot_id(&self, py: Python<'_>) -> String {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || self.0.blocking_read().snapshot_id().to_string())
+        py.detach(move || self.0.blocking_read().snapshot_id().to_string())
     }
 
     #[getter]
     pub fn branch(&self, py: Python<'_>) -> Option<String> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || self.0.blocking_read().branch().map(|b| b.to_string()))
+        py.detach(move || self.0.blocking_read().branch().map(|b| b.to_string()))
     }
 
     #[getter]
     pub fn has_uncommitted_changes(&self, py: Python<'_>) -> bool {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || self.0.blocking_read().has_uncommitted_changes())
+        py.detach(move || self.0.blocking_read().has_uncommitted_changes())
     }
 
     pub fn status(&self, py: Python<'_>) -> PyResult<PyDiff> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let session = self.0.blocking_read();
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -97,7 +97,7 @@ impl PySession {
 
     pub fn discard_changes(&self, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             self.0
                 .blocking_write()
                 .discard_changes()
@@ -118,7 +118,7 @@ impl PySession {
         let to = Path::new(to_path.as_str())
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let mut session = self.0.write().await;
                 session
@@ -181,7 +181,7 @@ impl PySession {
             }
         };
 
-        // TODO: allow_threads
+        // TODO: detach
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let mut session = self.0.write().await;
             session
@@ -197,7 +197,7 @@ impl PySession {
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
 
-        // TODO: allow_threads
+        // TODO: detach
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let mut session = self.0.write().await;
             session
@@ -211,7 +211,7 @@ impl PySession {
     #[getter]
     pub fn store(&self, py: Python<'_>) -> PyResult<PyStore> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let session = self.0.blocking_read();
             let conc = session.config().get_partial_values_concurrency();
             let store = Store::from_session_and_config(self.0.clone(), conc);
@@ -224,7 +224,7 @@ impl PySession {
     #[getter]
     pub fn config(&self, py: Python<'_>) -> PyResult<PyRepositoryConfig> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let session = self.0.blocking_read();
             let config = session.config().clone().into();
             Ok(config)
@@ -233,7 +233,7 @@ impl PySession {
 
     pub fn all_virtual_chunk_locations(&self, py: Python<'_>) -> PyResult<Vec<String>> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let session = self.0.blocking_read();
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -294,10 +294,22 @@ impl PySession {
             { for await coords_vec in stream {
                 let vec = coords_vec
                     .into_iter()
-                    .map(|maybe_coord| maybe_coord.map(|coord| Python::with_gil(|py| coord.0.to_object(py))))
+                    .map(|maybe_coord| {
+                        maybe_coord.and_then(|coord| {
+                            Python::attach(|py| {
+                                coord.0.into_pyobject(py)
+                                    .map(|obj| obj.unbind())
+                                    .map_err(PyIcechunkStoreError::PyError)
+                            })
+                        })
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let vec = Python::with_gil(|py| vec.to_object(py));
+                let vec = Python::attach(|py| {
+                    vec.into_pyobject(py)
+                        .map(|obj| obj.unbind())
+                        .map_err(PyIcechunkStoreError::PyError)
+                })?;
                 yield vec
             } }
         };
@@ -308,7 +320,7 @@ impl PySession {
 
     pub fn merge(&self, other: &PySession, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             // TODO: bad clone
             let other = other.0.blocking_read().deref().clone();
 
@@ -351,7 +363,7 @@ impl PySession {
     ) -> PyResult<String> {
         let metadata = metadata.map(|m| m.into());
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
                 let snapshot_id = if let Some(solver) = rebase_with {
@@ -415,7 +427,7 @@ impl PySession {
     ) -> PyResult<String> {
         let metadata = metadata.map(|m| m.into());
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
                 let snapshot_id = session
@@ -456,7 +468,7 @@ impl PySession {
     ) -> PyResult<String> {
         let metadata = metadata.map(|m| m.into());
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
                 let snapshot_id = session
@@ -490,7 +502,7 @@ impl PySession {
 
     pub fn rebase(&self, solver: PyConflictSolver, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let solver = solver.as_ref();
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 self.0

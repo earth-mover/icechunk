@@ -239,6 +239,8 @@ pub enum VirtualReferenceErrorKind {
         "error retrieving virtual chunk, not enough data. Expected: ({expected}), available ({available})"
     )]
     InvalidObjectSize { expected: u64, available: u64 },
+    #[error("azure store configuration must include an account")]
+    AzureConfigurationMustIncludeAccount,
     #[error("unknown error")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }

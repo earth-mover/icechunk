@@ -1,5 +1,39 @@
 # Changelog
 
+## Python Icechunk Library 1.1.11
+
+### Features
+
+- New function `azure_store` and added support for virtual chunks in Azure.
+  Virtual chunks must have URLs starting with `azure://`, `az://` or `abfs://`.
+
+## Python Icechunk Library 1.1.10
+
+### Fixes
+
+- Internal testing and documentation build fixes
+- Compatibility with `Xarray<2025.06.0`.
+
+## Python Icechunk Library 1.1.9
+
+### Features
+
+- Add `authorized_virtual_container_prefixes` to `Repository` to access the prefixes currently whitelisted for virtual chunk access
+
+### Fixes
+
+- Improvements for `anonymous` access to GCS Storage
+
+### Breaking Changes
+
+- This release removes the `windows x86` wheels from the PyPI release.
+
+## Python Icechunk Library 1.1.8
+
+### Features
+
+- Support for `anonymous` access to GCS Storage
+
 ## Python Icechunk Library 1.1.7
 
 ### Features

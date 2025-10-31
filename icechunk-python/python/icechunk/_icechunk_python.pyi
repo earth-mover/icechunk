@@ -1,6 +1,6 @@
 import abc
 import datetime
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
 from enum import Enum
 from typing import Any, TypeAlias
 
@@ -193,16 +193,16 @@ class ObjectStoreConfig:
         def __init__(self, options: S3Options) -> None: ...
 
     class Gcs:
-        def __init__(self, opts: dict[str, str] | None = None) -> None: ...
+        def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
 
     class Azure:
-        def __init__(self, opts: dict[str, str] | None = None) -> None: ...
+        def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
 
     class Tigris:
         def __init__(self, opts: S3Options) -> None: ...
 
     class Http:
-        def __init__(self, opts: dict[str, str] | None = None) -> None: ...
+        def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
 
 AnyObjectStoreConfig = (
     ObjectStoreConfig.InMemory
@@ -1578,6 +1578,8 @@ class PyRepository:
     def config(self) -> RepositoryConfig: ...
     def storage_settings(self) -> StorageSettings: ...
     def storage(self) -> Storage: ...
+    @property
+    def authorized_virtual_container_prefixes(self) -> set[str]: ...
     def reopen(
         self,
         *,
@@ -2086,6 +2088,10 @@ class GcsCredentials:
 
     This can be used to authenticate with a google cloud storage backend.
     """
+    class Anonymous:
+        """Uses anonymous credentials"""
+        def __init__(self) -> None: ...
+
     class FromEnv:
         """Uses credentials from environment variables"""
         def __init__(self) -> None: ...
@@ -2104,7 +2110,10 @@ class GcsCredentials:
         ) -> None: ...
 
 AnyGcsCredential = (
-    GcsCredentials.FromEnv | GcsCredentials.Static | GcsCredentials.Refreshable
+    GcsCredentials.Anonymous
+    | GcsCredentials.FromEnv
+    | GcsCredentials.Static
+    | GcsCredentials.Refreshable
 )
 
 class AzureStaticCredentials:

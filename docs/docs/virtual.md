@@ -12,6 +12,12 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
 
     Currently, Icechunk support virtual references to data stored in `s3` compatible,`gcs`, `http/https`, and  `local` storage backends. Support for [`azure`](https://github.com/earth-mover/icechunk/issues/602) is on the roadmap.
 
+!!! warning "Security considerations with virtual chunks"
+
+    Virtual chunks let Icechunk point to external locations (s3://, http://, file://, etc.), which means a malicious repo could try to trick your code into reading sensitive data from your machine or other sources.
+
+    To protect you, Icechunk is safe by default: it won't read from these locations unless you explicitly allow it. This requires (1) defining trusted virtual chunk containers when writing data, and (2) passing ``authorize_virtual_chunk_access`` when opening a repo, so you stay in control of what external paths get accessed.
+
 ## Creating a virtual dataset with VirtualiZarr
 
 We are going to create a virtual dataset pointing to all of the [OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) data for August 2024. This data is distributed publicly as netCDF files on AWS S3, with one netCDF file containing the Sea Surface Temperature (SST) data for each day of the month. We are going to use `VirtualiZarr` to combine all of these files into a single virtual dataset spanning the entire month, then write that dataset to Icechunk for use in analysis.

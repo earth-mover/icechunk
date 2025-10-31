@@ -555,6 +555,10 @@ impl Repository {
         self.spec_version
     }
 
+    pub fn authorized_virtual_container_prefixes(&self) -> HashSet<String> {
+        self.authorized_virtual_containers.keys().cloned().collect()
+    }
+
     /// Returns the sequence of parents of the current session, in order of latest first.
     /// Output stream includes snapshot_id argument
     #[instrument(skip(self))]
@@ -747,7 +751,8 @@ impl Repository {
     #[instrument(skip(self))]
     async fn list_branches_v2(&self) -> RepositoryResult<BTreeSet<String>> {
         let (ri, _) = self.get_repo_info().await?;
-        Ok(ri.branch_names()?.map(|s| s.to_string()).collect())
+        let it = ri.branch_names()?;
+        Ok(it.map(|s| s.to_string()).collect())
     }
 
     #[instrument(skip(self))]
