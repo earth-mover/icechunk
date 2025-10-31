@@ -29,15 +29,6 @@ cd ../docs
 uv run mkdocs serve
 ```
 
-Or install in editable mode:
-
-```bash
-cd icechunk-python
-uv pip install -e ".[docs]"
-cd ../docs
-mkdocs serve
-```
-
 > [!TIP]
 > You can use the optional `--dirty` flag to only rebuild changed files, although you may need to restart if you make changes to `mkdocs.yaml`.
 

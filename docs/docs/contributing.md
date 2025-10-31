@@ -197,15 +197,6 @@ cd ../docs
 uv run mkdocs serve
 ```
 
-Or install in editable mode:
-
-```bash
-cd icechunk-python
-uv pip install -e ".[docs]"
-cd ../docs
-mkdocs serve
-```
-
 The development server will start at `http://127.0.0.1:8000` with live reload enabled.
 
 **Build static site**:
