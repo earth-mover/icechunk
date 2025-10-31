@@ -49,7 +49,7 @@ When a new major version of Icechunk-Python is published the last minor release 
 
 ### Dependency Policy
 
-Icechunk-Python has only one required dependency [zarr-python](zarr.readthedocs.io). Icechunk's functionality requires Zarr-python version 3 at a minimum. Going forward from version 3.0 Icehunk-python will make a best effort to follow SPEC 0 for what versions of core dependencies we allow. Support for core dependencies for 24 months from their initial release.
+Icechunk-Python has only one required dependency [zarr-python](https://zarr.readthedocs.io). Icechunk's functionality requires Zarr-python version 3 at a minimum. Going forward from version 3.0 Icehunk-python will make a best effort to follow SPEC 0 for what versions of core dependencies we allow. Support for core dependencies for 24 months from their initial release.
 However, some Icechunk have, and will, require implementing fixes or new features upstream in Zarr-Python. This means that there will necessarily be tighter version constraints than the 24 months defined in Spec-0.
 
 ## Icechunk-Rust
