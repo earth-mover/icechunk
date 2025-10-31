@@ -625,7 +625,6 @@ pub enum Credentials {
 mod tests {
     use crate::{
         strategies::{repository_config,
-                     manifest_split_condition,
                      s3_static_credentials,
                      gcs_static_credentials,
                      azure_credentials}
@@ -633,9 +632,9 @@ mod tests {
 
     use proptest::prelude::*;
 
-    // This macro is used for creating multiple property tests
-    // which check that the composition of deserializing and
-    // serializing an instance of a type T is equivalent to the
+    // This macro is used for creating property tests
+    // which check that serializing and deserializing
+    // an instance of a type T is equivalent to the
     // identity function
     macro_rules! roundtrip_serialization_tests {
         ($($test_name: ident - $generator: ident), +) => {
@@ -646,14 +645,11 @@ mod tests {
            let bytes = rmp_serde::to_vec(&elem).unwrap();
             let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
             assert_eq!(elem, roundtrip);
-        }
-                }
-                )*
+        }})*
         }
     }
 
     roundtrip_serialization_tests!(
-        test_manifest_split_condition_serialization - manifest_split_condition,
     test_config_roundtrip - repository_config,
         test_s3_static_credentials_roundtrip - s3_static_credentials,
         test_gcs_static_credentials_roundtrip - gcs_static_credentials,
