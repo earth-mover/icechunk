@@ -623,11 +623,9 @@ pub enum Credentials {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use crate::{
-        strategies::{repository_config,
-                     s3_static_credentials,
-                     gcs_static_credentials,
-                     azure_credentials}
+    use crate::strategies::{
+        azure_credentials, gcs_static_credentials, repository_config,
+        s3_static_credentials,
     };
 
     use proptest::prelude::*;
@@ -650,7 +648,7 @@ mod tests {
     }
 
     roundtrip_serialization_tests!(
-    test_config_roundtrip - repository_config,
+        test_config_roundtrip - repository_config,
         test_s3_static_credentials_roundtrip - s3_static_credentials,
         test_gcs_static_credentials_roundtrip - gcs_static_credentials,
         test_azure_credentials_roundtrip - azure_credentials

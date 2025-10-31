@@ -1,13 +1,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-use std::collections::HashMap;
-use std::num::{NonZeroU16, NonZeroU64};
-use std::ops::{Bound, Range};
-use std::path::PathBuf;
-use chrono::{DateTime, Utc};
-use prop::string::string_regex;
-use proptest::prelude::*;
-use proptest::{collection::vec, option, strategy::Strategy};
-use crate::config::{CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig, ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition, ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3Options, S3StaticCredentials, GcsStaticCredentials, GcsBearerCredential, AzureStaticCredentials, AzureCredentials};
+use crate::config::{
+    AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
+    CompressionConfig, GcsBearerCredential, GcsStaticCredentials, ManifestConfig,
+    ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
+    ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3Options,
+    S3StaticCredentials,
+};
 use crate::format::manifest::ManifestExtents;
 use crate::format::snapshot::{ArrayShape, DimensionName};
 use crate::format::{ChunkIndices, Path};
@@ -17,6 +15,14 @@ use crate::storage::{
 };
 use crate::virtual_chunks::VirtualChunkContainer;
 use crate::{ObjectStoreConfig, Repository, RepositoryConfig};
+use chrono::{DateTime, Utc};
+use prop::string::string_regex;
+use proptest::prelude::*;
+use proptest::{collection::vec, option, strategy::Strategy};
+use std::collections::HashMap;
+use std::num::{NonZeroU16, NonZeroU64};
+use std::ops::{Bound, Range};
+use std::path::PathBuf;
 
 const MAX_NDIM: usize = 4;
 
@@ -412,27 +418,26 @@ pub fn gcs_bearer_credential()
 
 pub fn gcs_static_credentials() -> BoxedStrategy<GcsStaticCredentials> {
     use GcsStaticCredentials::*;
-prop_oneof![
-    any::<PathBuf>().prop_map(ServiceAccount),
-    any::<String>().prop_map(ServiceAccountKey),
-    any::<PathBuf>().prop_map(ApplicationCredentials),
-    gcs_bearer_credential().prop_map(BearerToken)
-].boxed()
+    prop_oneof![
+        any::<PathBuf>().prop_map(ServiceAccount),
+        any::<String>().prop_map(ServiceAccountKey),
+        any::<PathBuf>().prop_map(ApplicationCredentials),
+        gcs_bearer_credential().prop_map(BearerToken)
+    ]
+    .boxed()
 }
 
 pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
     use AzureStaticCredentials::*;
     prop_oneof![
-       any::<String>().prop_map(AccessKey),
-       any::<String>().prop_map(SASToken),
-       any::<String>().prop_map(BearerToken),
-    ].boxed()
+        any::<String>().prop_map(AccessKey),
+        any::<String>().prop_map(SASToken),
+        any::<String>().prop_map(BearerToken),
+    ]
+    .boxed()
 }
 
 pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
     use AzureCredentials::*;
-    prop_oneof![
-       Just(FromEnv),
-        azure_static_credentials().prop_map(Static)
-    ].boxed()
+    prop_oneof![Just(FromEnv), azure_static_credentials().prop_map(Static)].boxed()
 }
