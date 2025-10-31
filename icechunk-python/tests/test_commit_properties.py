@@ -49,5 +49,5 @@ def test_invalid_property_types() -> None:
     zarr.group(store=store, overwrite=True)
     props = {"foo": NoJson()}
 
-    with pytest.raises(TypeError, match="object cannot be converted"):
+    with pytest.raises(TypeError, match="object cannot be cast"):
         session.commit("some commit", props)

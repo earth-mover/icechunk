@@ -15,6 +15,7 @@ from hypothesis.stateful import (
     rule,
     run_state_machine_as_test,
 )
+from packaging.version import Version
 
 import icechunk as ic
 import zarr
@@ -205,6 +206,10 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         array, _ = array_and_chunks
         # TODO: support size-0 arrays GH392
         assume(array.size > 0)
+        # Skip bytes, unicode string, and datetime dtypes with zarr < 3.1.0
+        # These have codec/dtype issues that were fixed in 3.1.0's dtype refactor
+        if Version(zarr.__version__) < Version("3.1.0"):
+            assume(array.dtype.kind not in ("S", "U", "M", "m"))
         super().add_array(data, name, array_and_chunks)
 
     @precondition(lambda self: bool(self.all_groups))

@@ -29,7 +29,10 @@ AnyGcsStaticCredential = (
 )
 
 AnyGcsCredential = (
-    GcsCredentials.FromEnv | GcsCredentials.Static | GcsCredentials.Refreshable
+    GcsCredentials.Anonymous
+    | GcsCredentials.FromEnv
+    | GcsCredentials.Static
+    | GcsCredentials.Refreshable
 )
 
 AnyAzureStaticCredential = (
@@ -236,6 +239,11 @@ def gcs_refreshable_credentials(
     return GcsCredentials.Refreshable(pickle.dumps(get_credentials), current)
 
 
+def gcs_anonymous_credentials() -> GcsCredentials.Anonymous:
+    """Create anonymous credentials for Google Cloud Storage object store."""
+    return GcsCredentials.Anonymous()
+
+
 def gcs_from_env_credentials() -> GcsCredentials.FromEnv:
     """Instruct Google Cloud Storage object store to fetch credentials from the operative system environment."""
     return GcsCredentials.FromEnv()
@@ -248,6 +256,7 @@ def gcs_credentials(
     application_credentials: str | None = None,
     bearer_token: str | None = None,
     from_env: bool | None = None,
+    anonymous: bool | None = None,
     get_credentials: Callable[[], GcsBearerCredential] | None = None,
     scatter_initial_credentials: bool = False,
 ) -> AnyGcsCredential:
@@ -255,6 +264,9 @@ def gcs_credentials(
 
     If all arguments are None, credentials are fetched from the operative system environment.
     """
+    if anonymous is not None and anonymous:
+        return gcs_anonymous_credentials()
+
     if (from_env is None or from_env) and (
         service_account_file is None
         and service_account_key is None

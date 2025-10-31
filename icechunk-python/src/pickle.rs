@@ -16,7 +16,7 @@ macro_rules! impl_pickle {
     ($struct_name:ident) => {
         #[pymethods]
         impl $struct_name {
-            pub fn __setstate__(
+            pub(crate) fn __setstate__(
                 &mut self,
                 state: &pyo3::Bound<'_, pyo3::types::PyBytes>,
             ) -> pyo3::PyResult<()> {
@@ -30,7 +30,7 @@ macro_rules! impl_pickle {
                 Ok(())
             }
 
-            pub fn __getstate__<'py>(
+            pub(crate) fn __getstate__<'py>(
                 &self,
                 py: pyo3::Python<'py>,
             ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyBytes>> {

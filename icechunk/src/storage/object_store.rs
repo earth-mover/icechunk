@@ -700,11 +700,11 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AzureObjectStoreBackend {
-    account: String,
-    container: String,
-    prefix: Option<String>,
-    credentials: Option<AzureCredentials>,
-    config: Option<HashMap<AzureConfigKey, String>>,
+    pub account: String,
+    pub container: String,
+    pub prefix: Option<String>,
+    pub credentials: Option<AzureCredentials>,
+    pub config: Option<HashMap<AzureConfigKey, String>>,
 }
 
 impl fmt::Display for AzureObjectStoreBackend {
