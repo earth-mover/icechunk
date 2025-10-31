@@ -219,6 +219,7 @@ nav:
       - Global Raster Data cube: ingestion/glad-ingest.ipynb
   - Reference:
     - Spec: spec.md
+    - Version Policy: version-policy.md
     - Python API Reference: reference.md
     - Icechunk Rust: icechunk-rust.md
     - Contributing: contributing.md
