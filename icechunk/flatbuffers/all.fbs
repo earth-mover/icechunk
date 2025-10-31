@@ -4,10 +4,11 @@
 //
 // This will generate the file all_generated.rs
 
-include "object_ids.fbs";
+include "common.fbs";
 include "manifest.fbs";
 include "snapshot.fbs";
 include "transaction_log.fbs";
+include "repo.fbs";
 
 // This is the way we have found to make it easy to generate code for all files
 // flatbuffers rust generation seems to have some issues trying to generate

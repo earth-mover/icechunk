@@ -1,6 +1,6 @@
 import contextlib
 import warnings
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator, Callable, Generator, Iterable
 from typing import Any, NoReturn, Self
 
 from icechunk import (
@@ -152,6 +152,12 @@ class Session:
         """
         return self._session.config
 
+    def move(self, from_path: str, to_path: str) -> None:
+        return self._session.move_node(from_path, to_path)
+
+    async def move_async(self, from_path: str, to_path: str) -> None:
+        return await self._session.move_node_async(from_path, to_path)
+
     def all_virtual_chunk_locations(self) -> list[str]:
         """
         Return the location URLs of all virtual chunks.
@@ -162,6 +168,16 @@ class Session:
             The location URLs of all virtual chunks.
         """
         return self._session.all_virtual_chunk_locations()
+
+    def reindex_array(
+        self,
+        array_path: str,
+        shift_chunk: Callable[[Iterable[int]], Iterable[int] | None],
+    ) -> None:
+        return self._session.reindex_array(array_path, shift_chunk)
+
+    def shift_array(self, array_path: str, offset: Iterable[int]) -> None:
+        return self._session.shift_array(array_path, offset)
 
     async def all_virtual_chunk_locations_async(self) -> list[str]:
         """
@@ -317,6 +333,90 @@ class Session:
         return await self._session.commit_async(
             message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
         )
+
+    def amend(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Commit the changes in the session to the repository, by amending/overwriting the previous commit.
+
+        When successful, the writable session is completed and the session is now read-only and based on the new commit. The snapshot ID of the new commit is returned.
+
+        If the session is out of date, this will raise a ConflictError exception depicting the conflict that occurred. The session will need to be rebased before committing.
+
+        This operation doesn't create a new commit in the repo ancestry. It replaces the previous commit.
+
+        The first commit to the repo cannot be amended.
+
+        Parameters
+        ----------
+        message : str
+            The message to write with the commit.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+
+        Returns
+        -------
+        str
+            The snapshot ID of the new commit.
+
+        Raises
+        ------
+        icechunk.ConflictError
+            If the session is out of date and a conflict occurs.
+        """
+        if self._allow_changes:
+            warnings.warn(
+                "Committing a session after forking, and without merging will not work. "
+                "Merge back in the remote changes first using Session.merge().",
+                UserWarning,
+                stacklevel=2,
+            )
+        return self._session.amend(message, metadata)
+
+    async def amend_async(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Commit the changes in the session to the repository, by amending/overwriting the previous commit.
+
+        When successful, the writable session is completed and the session is now read-only and based on the new commit. The snapshot ID of the new commit is returned.
+
+        If the session is out of date, this will raise a ConflictError exception depicting the conflict that occurred. The session will need to be rebased before committing.
+
+        This operation doesn't create a new commit in the repo ancestry. It replaces the previous commit.
+
+        The first commit to the repo cannot be amended.
+
+        Parameters
+        ----------
+        message : str
+            The message to write with the commit.
+        metadata : dict[str, Any] | None, optional
+            Additional metadata to store with the commit snapshot.
+
+        Returns
+        -------
+        str
+            The snapshot ID of the new commit.
+
+        Raises
+        ------
+        icechunk.ConflictError
+            If the session is out of date and a conflict occurs.
+        """
+        if self._allow_changes:
+            warnings.warn(
+                "Committing a session after forking, and without merging will not work. "
+                "Merge back in the remote changes first using Session.merge().",
+                UserWarning,
+                stacklevel=2,
+            )
+        return await self._session.amend_async(message, metadata)
 
     def flush(
         self,

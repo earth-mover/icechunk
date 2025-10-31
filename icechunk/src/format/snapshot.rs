@@ -14,6 +14,7 @@ use super::{
     AttributesId, ChunkIndices, IcechunkFormatError, IcechunkFormatErrorKind,
     IcechunkResult, ManifestId, NodeId, Path, SnapshotId,
     flatbuffers::generated,
+    format_constants::SpecVersionBin,
     manifest::{Manifest, ManifestExtents, ManifestRef},
 };
 
@@ -284,12 +285,14 @@ impl ManifestFileInfo {
 #[derive(PartialEq)]
 pub struct Snapshot {
     buffer: Vec<u8>,
+    spec_version: SpecVersionBin,
 }
 
 impl std::fmt::Debug for Snapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let nodes =
             self.iter().map(|n| n.map(|n| n.path.to_string())).collect::<Vec<_>>();
+        #[allow(deprecated)]
         f.debug_struct("Snapshot")
             .field("id", &self.id())
             .field("parent_id", &self.parent_id())
@@ -302,27 +305,26 @@ impl std::fmt::Debug for Snapshot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SnapshotInfo {
     pub id: SnapshotId,
     pub parent_id: Option<SnapshotId>,
     pub flushed_at: DateTime<chrono::Utc>,
     pub message: String,
     pub metadata: SnapshotProperties,
-    pub manifests: Vec<ManifestFileInfo>,
 }
 
 impl TryFrom<&Snapshot> for SnapshotInfo {
     type Error = IcechunkFormatError;
 
     fn try_from(value: &Snapshot) -> Result<Self, Self::Error> {
+        #[allow(deprecated)]
         Ok(Self {
             id: value.id().clone(),
             parent_id: value.parent_id().clone(),
             flushed_at: value.flushed_at()?,
             message: value.message().to_string(),
             metadata: value.metadata()?.clone(),
-            manifests: value.manifest_files().collect(),
         })
     }
 }
@@ -347,12 +349,15 @@ impl Snapshot {
         0x34, // Decodes as 1CECHNKREP0F1RSTCMT0
     ]);
 
-    pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<Snapshot> {
+    pub fn from_buffer(
+        spec_version: SpecVersionBin,
+        buffer: Vec<u8>,
+    ) -> IcechunkResult<Snapshot> {
         let _ = flatbuffers::root_with_opts::<generated::Snapshot>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;
-        Ok(Snapshot { buffer })
+        Ok(Snapshot { buffer, spec_version })
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -361,7 +366,6 @@ impl Snapshot {
 
     pub fn from_iter<E, I>(
         id: Option<SnapshotId>,
-        parent_id: Option<SnapshotId>,
         message: String,
         properties: Option<SnapshotProperties>,
         mut manifest_files: Vec<ManifestFileInfo>,
@@ -390,7 +394,8 @@ impl Snapshot {
             .iter()
             .map(|(k, v)| {
                 let name = builder.create_shared_string(k.as_str());
-                let serialized = rmp_serde::to_vec(v).map_err(Box::new)?;
+                let serialized = flexbuffers::to_vec(v).map_err(Box::new)?;
+
                 let value = builder.create_vector(serialized.as_slice());
                 Ok::<_, IcechunkFormatError>(generated::MetadataItem::create(
                     &mut builder,
@@ -401,7 +406,9 @@ impl Snapshot {
         let metadata_items = builder.create_vector(metadata_items.as_slice());
 
         let message = builder.create_string(&message);
-        let parent_id = parent_id.map(|oid| generated::ObjectId12::new(&oid.0));
+        //let parent_id = parent_id.map(|oid| generated::ObjectId12::new(&oid.0));
+        // Icechunk 2.0 no longer uses this field
+        let parent_id = None;
         let flushed_at = flushed_at.unwrap_or_else(Utc::now).timestamp_micros() as u64;
         let id = generated::ObjectId12::new(&id.unwrap_or_else(SnapshotId::random).0);
 
@@ -428,7 +435,7 @@ impl Snapshot {
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Ok(Snapshot { buffer })
+        Ok(Snapshot { buffer, spec_version: SpecVersionBin::current() })
     }
 
     pub fn initial() -> IcechunkResult<Self> {
@@ -436,7 +443,6 @@ impl Snapshot {
         let nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::new();
         Self::from_iter(
             Some(Self::INITIAL_SNAPSHOT_ID),
-            None,
             Self::INITIAL_COMMIT_MESSAGE.to_string(),
             Some(properties),
             Default::default(),
@@ -455,6 +461,10 @@ impl Snapshot {
         SnapshotId::new(self.root().id().0)
     }
 
+    #[deprecated(
+        since = "2.0.0",
+        note = "New versions of icechunk don't use this field and initialize it to None"
+    )]
     pub fn parent_id(&self) -> Option<SnapshotId> {
         self.root().parent_id().map(|pid| SnapshotId::new(pid.0))
     }
@@ -465,8 +475,11 @@ impl Snapshot {
             .iter()
             .map(|item| {
                 let key = item.name().to_string();
-                let value =
-                    rmp_serde::from_slice(item.value().bytes()).map_err(Box::new)?;
+                let value = if self.spec_version == SpecVersionBin::V1dot0 {
+                    rmp_serde::from_slice(item.value().bytes()).map_err(Box::new)?
+                } else {
+                    flexbuffers::from_slice(item.value().bytes()).map_err(Box::new)?
+                };
                 Ok((key, value))
             })
             .try_collect()
@@ -497,22 +510,6 @@ impl Snapshot {
 
     pub fn manifest_files(&self) -> impl Iterator<Item = ManifestFileInfo> + '_ {
         self.root().manifest_files().iter().map(|mf| mf.into())
-    }
-
-    /// Cretase a new `Snapshot` with all the same data as `new_child` but `self` as parent
-    pub fn adopt(&self, new_child: &Snapshot) -> IcechunkResult<Self> {
-        // Rust flatbuffers implementation doesn't allow mutation of scalars, so we need to
-        // create a whole new buffer and write to it in full
-
-        Snapshot::from_iter(
-            Some(new_child.id()),
-            Some(self.id()),
-            new_child.message().clone(),
-            Some(new_child.metadata()?.clone()),
-            new_child.manifest_files().collect(),
-            Some(new_child.flushed_at()?),
-            new_child.iter(),
-        )
     }
 
     pub fn get_node(&self, path: &Path) -> IcechunkResult<NodeSnapshot> {
@@ -806,7 +803,6 @@ mod tests {
                 node_data: NodeData::Group,
             },
         ];
-        let initial = Snapshot::initial().unwrap();
         let manifests = vec![
             ManifestFileInfo {
                 id: man_ref1.object_id.clone(),
@@ -821,7 +817,6 @@ mod tests {
         ];
         let st = Snapshot::from_iter(
             None,
-            Some(initial.id().clone()),
             String::default(),
             Default::default(),
             manifests,

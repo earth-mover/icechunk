@@ -30,7 +30,13 @@ use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
 use pyo3::prelude::*;
 use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
-use repository::{PyDiff, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo};
+use repository::{
+    PyBranchCreatedUpdate, PyBranchDeletedUpdate, PyBranchResetUpdate,
+    PyCommitAmendedUpdate, PyConfigChangedUpdate, PyDiff, PyExpirationRanUpdate,
+    PyGCRanUpdate, PyGCSummary, PyManifestFileInfo, PyNewCommitUpdate,
+    PyNewDetachedSnapshotUpdate, PyRepoInitializedUpdate, PyRepoMigratedUpdate,
+    PyRepository, PySnapshotInfo, PyTagCreatedUpdate, PyTagDeletedUpdate, PyUpdateType,
+};
 use session::PySession;
 use store::{PyStore, VirtualChunkSpec};
 
@@ -134,6 +140,17 @@ fn spec_version() -> u8 {
     SpecVersionBin::current() as u8
 }
 
+#[pyfunction]
+#[pyo3(signature = (repo, *, dry_run = true, delete_unused_v1_files = true))]
+fn _upgrade_icechunk_repository(
+    py: Python,
+    repo: &PyRepository,
+    dry_run: bool,
+    delete_unused_v1_files: bool,
+) -> PyResult<()> {
+    repo.migrate_1_to_2(py, dry_run, delete_unused_v1_files)
+}
+
 fn pep440_version() -> String {
     let cargo_version = env!("CARGO_PKG_VERSION");
     cargo_version.replace("-rc.", "rc").replace("-alpha.", "a").replace("-beta.", "b")
@@ -179,11 +196,26 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStorageSettings>()?;
     m.add_class::<PyGCSummary>()?;
     m.add_class::<PyDiff>()?;
+    m.add_class::<PyUpdateType>()?;
+    m.add_class::<PyRepoInitializedUpdate>()?;
+    m.add_class::<PyRepoMigratedUpdate>()?;
+    m.add_class::<PyConfigChangedUpdate>()?;
+    m.add_class::<PyTagCreatedUpdate>()?;
+    m.add_class::<PyTagDeletedUpdate>()?;
+    m.add_class::<PyBranchCreatedUpdate>()?;
+    m.add_class::<PyBranchDeletedUpdate>()?;
+    m.add_class::<PyBranchResetUpdate>()?;
+    m.add_class::<PyNewCommitUpdate>()?;
+    m.add_class::<PyNewDetachedSnapshotUpdate>()?;
+    m.add_class::<PyCommitAmendedUpdate>()?;
+    m.add_class::<PyGCRanUpdate>()?;
+    m.add_class::<PyExpirationRanUpdate>()?;
     m.add_class::<VirtualChunkSpec>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
+    m.add_function(wrap_pyfunction!(_upgrade_icechunk_repository, m)?)?;
     m.add("__version__", pep440_version())?;
 
     // Exceptions

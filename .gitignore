@@ -20,3 +20,6 @@ icechunk-python/uv.lock
 # pixi environments
 .pixi
 *.egg-info
+
+# Jetbrains IDE
+.idea/

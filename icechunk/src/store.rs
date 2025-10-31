@@ -324,13 +324,13 @@ impl Store {
             Key::Chunk { node_path, coords } => {
                 match locked_session {
                     Some(session) => {
-                        let writer = session.get_chunk_writer();
+                        let writer = session.get_chunk_writer()?;
                         let payload = writer(value).await?;
                         session.set_chunk_ref(node_path, coords, Some(payload)).await?
                     }
                     None => {
                         // we only lock the repository to get the writer
-                        let writer = self.session.read().await.get_chunk_writer();
+                        let writer = self.session.read().await.get_chunk_writer()?;
                         // then we can write the bytes without holding the lock
                         let payload = writer(value).await?;
                         // and finally we lock for write and update the reference
@@ -2152,7 +2152,7 @@ mod tests {
         store.set("array/c/0/1/0", data.clone()).await.unwrap();
         assert_eq!(ds.read().await.has_uncommitted_changes(), true);
 
-        ds.write().await.discard_changes();
+        ds.write().await.discard_changes()?;
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
         // Create a new branch and do stuff with it

@@ -272,7 +272,14 @@ async fn write_chunks_to_azure(
 
     for (chunk_id, bytes) in chunks {
         storage
-            .write_chunk(&storage::Settings::default(), chunk_id, bytes)
+            .put_object(
+                &storage::Settings::default(),
+                format!("chunks/{chunk_id}").as_str(),
+                bytes,
+                None,
+                Default::default(),
+                None,
+            )
             .await
             .unwrap();
     }

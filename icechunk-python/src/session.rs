@@ -2,8 +2,16 @@ use std::{borrow::Cow, ops::Deref, sync::Arc};
 
 use async_stream::try_stream;
 use futures::{StreamExt, TryStreamExt};
-use icechunk::{Store, session::Session};
-use pyo3::{prelude::*, types::PyType};
+use icechunk::{
+    Store,
+    format::{ChunkIndices, Path},
+    session::{Session, SessionErrorKind},
+    store::{StoreError, StoreErrorKind},
+};
+use pyo3::{
+    prelude::*,
+    types::{PyFunction, PyType},
+};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
@@ -20,7 +28,7 @@ use crate::{
 pub struct PySession(pub Arc<RwLock<Session>>);
 
 #[pymethods]
-/// Most functions in this class block, so they need to `allow_threads` so other
+/// Most functions in this class block, so they need to `detach` so other
 /// python threads can make progress
 impl PySession {
     #[classmethod]
@@ -87,10 +95,116 @@ impl PySession {
         })
     }
 
-    pub fn discard_changes(&self, py: Python<'_>) {
+    pub fn discard_changes(&self, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
         py.detach(move || {
-            self.0.blocking_write().discard_changes();
+            self.0
+                .blocking_write()
+                .discard_changes()
+                .map_err(PyIcechunkStoreError::SessionError)
+        })?;
+        Ok(())
+    }
+
+    pub fn move_node(
+        &self,
+        py: Python<'_>,
+        from_path: String,
+        to_path: String,
+    ) -> PyResult<()> {
+        let from = Path::new(from_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let to = Path::new(to_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let mut session = self.0.write().await;
+                session
+                    .move_node(from, to)
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)
+            })
+        })?;
+        Ok(())
+    }
+
+    pub fn move_node_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        from_path: String,
+        to_path: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let from = Path::new(from_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let to = Path::new(to_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut session = session.write().await;
+            session
+                .move_node(from, to)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(())
+        })
+    }
+
+    pub fn reindex_array<'py>(
+        &mut self,
+        py: Python<'py>,
+        array_path: String,
+        shift_chunk: Bound<'py, PyFunction>,
+    ) -> PyResult<()> {
+        let array_path = Path::new(array_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let shift_chunk = |idx: &ChunkIndices| {
+            let python_index = idx
+                .0
+                .clone()
+                .into_pyobject(py)
+                .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
+            let new_index = shift_chunk
+                .call1((python_index,))
+                .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
+            if new_index.is_none() {
+                Ok(None)
+            } else {
+                let new_index: Vec<u32> = new_index
+                    .extract()
+                    .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
+                Ok(Some(ChunkIndices(new_index)))
+            }
+        };
+
+        // TODO: detach
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let mut session = self.0.write().await;
+            session
+                .reindex_array(&array_path, shift_chunk)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(())
+        })
+    }
+
+    pub fn shift_array(&mut self, array_path: String, offset: Vec<i64>) -> PyResult<()> {
+        let array_path = Path::new(array_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+
+        // TODO: detach
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let mut session = self.0.write().await;
+            session
+                .shift_array(&array_path, offset.as_slice())
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(())
         })
     }
 
@@ -301,6 +415,46 @@ impl PySession {
                 session.commit(&message, metadata).await
             }
             .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(snapshot_id.to_string())
+        })
+    }
+
+    pub fn amend(
+        &self,
+        py: Python<'_>,
+        message: &str,
+        metadata: Option<PySnapshotProperties>,
+    ) -> PyResult<String> {
+        let metadata = metadata.map(|m| m.into());
+        // This is blocking function, we need to release the Gil
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async {
+                let mut session = self.0.write().await;
+                let snapshot_id = session
+                    .amend(message, metadata)
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?;
+                Ok(snapshot_id.to_string())
+            })
+        })
+    }
+
+    pub fn amend_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        message: &str,
+        metadata: Option<PySnapshotProperties>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        let message = message.to_owned();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let metadata = metadata.map(|m| m.into());
+            let mut session = session.write().await;
+            let snapshot_id = session
+                .amend(&message, metadata)
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(snapshot_id.to_string())
         })
     }

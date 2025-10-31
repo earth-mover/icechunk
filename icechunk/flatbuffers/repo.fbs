@@ -1,0 +1,113 @@
+include "common.fbs";
+
+namespace generated;
+
+table Ref {
+    name: string (required);
+    snapshot_index: uint32;
+}
+
+table SnapshotInfo {
+    id: ObjectId12 (required);
+    // -1 means no parent
+    parent_offset: int32;
+    // micros since epoch
+    flushed_at: uint64;
+    message: string (required);
+    metadata: [MetadataItem];
+}
+
+enum RepoAvailability : ubyte { Online = 0, ReadOnly, Offline }
+
+table RepoStatus {
+    availability: RepoAvailability;
+    set_at: uint64;
+    limited_availability_reason: string;
+}
+
+table RepoInitializedUpdate {
+}
+table RepoMigratedUpdate {
+  from_version: uint8;
+  to_version: uint8;
+}
+table ConfigChangedUpdate {
+}
+table TagCreatedUpdate {
+  name: string (required);
+}
+table TagDeletedUpdate {
+  name: string (required);
+  previous_snap_id: ObjectId12 (required);
+}
+table BranchCreatedUpdate {
+  name: string (required);
+}
+table BranchDeletedUpdate {
+  name: string (required);
+  previous_snap_id: ObjectId12 (required);
+}
+table BranchResetUpdate {
+  name: string (required);
+  previous_snap_id: ObjectId12 (required);
+}
+table NewCommitUpdate {
+  branch: string (required);
+}
+table CommitAmendedUpdate {
+  branch: string (required);
+  previous_snap_id: ObjectId12 (required);
+}
+table NewDetachedSnapshotUpdate {
+  new_snap_id: ObjectId12 (required);
+}
+table GCRanUpdate {
+}
+table ExpirationRanUpdate {
+}
+
+union UpdateType {
+  RepoInitializedUpdate,
+  RepoMigratedUpdate,
+  ConfigChangedUpdate,
+  TagCreatedUpdate,
+  TagDeletedUpdate,
+  BranchCreatedUpdate,
+  BranchDeletedUpdate,
+  BranchResetUpdate,
+  NewCommitUpdate,
+  CommitAmendedUpdate,
+  NewDetachedSnapshotUpdate,
+  GCRanUpdate,
+  ExpirationRanUpdate
+}
+
+table Repo {
+
+  spec_version: uint8;
+
+  // sorted by name
+  tags: [Ref] (required);
+
+  // sorted by name
+  branches: [Ref] (required);
+
+  // sorted
+  deleted_tags: [string] (required);
+
+  // sorted by id
+  snapshots: [SnapshotInfo] (required);
+
+  // micros since epoch
+  last_updated_at: uint64;
+
+  status: RepoStatus (required);
+
+  metadata: [MetadataItem];
+
+  latest_update: UpdateType (required);
+
+  previous_file: string;
+}
+
+root_type Repo;

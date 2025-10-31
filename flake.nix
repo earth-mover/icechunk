@@ -110,6 +110,7 @@
               packages = [
                 python
                 pkgs.uv
+                pkgs.ruff
 
                 fenix.packages.x86_64-linux.stable.toolchain
                 pkgs.cargo-nextest # test runner
@@ -122,6 +123,7 @@
                 pkgs.just # script launcher with a make flavor
                 pkgs.alejandra # nix code formatter
                 pkgs.markdownlint-cli2
+                pkgs.flatbuffers
               ];
 
               env = {
