@@ -620,6 +620,8 @@ pub enum Credentials {
     Azure(AzureCredentials),
 }
 
+
+
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -634,6 +636,7 @@ mod tests {
     };
 
     use proptest::prelude::*;
+
 
     #[icechunk_macros::test]
     fn test_config_serialization() {
@@ -680,23 +683,45 @@ mod tests {
         assert_eq!(container, roundtrip);
     }
 
-    proptest!{
+    // This macro is used for creating multiple property tests
+    // which check that the composition of deserializing and
+    // serializing an instance of a type T is equivalent to the
+    // identity function
+    macro_rules! roundtrip_serialization_tests {
+        ($($test_name: ident - $generator: ident), +) => {
+                            $(
+                proptest!{
         #[icechunk_macros::test]
-        fn test_object_store_config_serialization(config in object_store_config()) {
-            let bytes = rmp_serde::to_vec(&config).unwrap();
+                    fn $test_name(elem in $generator()) {
+           let bytes = rmp_serde::to_vec(&elem).unwrap();
             let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-            assert_eq!(config, roundtrip);
+            assert_eq!(elem, roundtrip);
+        }
+                }
+                )*
         }
     }
 
-    proptest!{
-        #[icechunk_macros::test]
-        fn test_manifest_split_condition_serialization(cond in manifest_split_condition()) {
-            let bytes = rmp_serde::to_vec(&cond).unwrap();
-            let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-            assert_eq!(cond, roundtrip);
-        }
-    }
+    roundtrip_serialization_tests!(test_object_store_config_serialization - object_store_config,
+    test_manifest_split_condition_serialization - manifest_split_condition);
+
+    // proptest!{
+    //     #[icechunk_macros::test]
+    //     fn test_object_store_config_serialization(config in object_store_config()) {
+    //         let bytes = rmp_serde::to_vec(&config).unwrap();
+    //         let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
+    //         assert_eq!(config, roundtrip);
+    //     }
+    // }
+    //
+    // proptest!{
+    //     #[icechunk_macros::test]
+    //     fn test_manifest_split_condition_serialization(cond in manifest_split_condition()) {
+    //         let bytes = rmp_serde::to_vec(&cond).unwrap();
+    //         let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
+    //         assert_eq!(cond, roundtrip);
+    //     }
+    // }
 
     proptest! {
         #![proptest_config(ProptestConfig {
