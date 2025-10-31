@@ -154,6 +154,74 @@ uv run scripts/check_xarray_docs_sync.py --update-known-diffs
 
 **CI Integration**: The script returns exit code 0 if only known differences exist, allowing CI to pass while still displaying diffs for review.
 
+### Building Documentation
+
+The documentation is built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/).
+
+**System dependencies**: Install Cairo graphics library for image processing:
+
+=== "macOS"
+
+    ```bash
+    brew install cairo
+    ```
+
+    If `mkdocs` fails to find Cairo, set the library path:
+
+    ```bash
+    export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
+    ```
+
+    You can add this to your `~/.zshrc` to make it permanent.
+
+=== "Ubuntu/Debian"
+
+    ```bash
+    sudo apt-get install libcairo2-dev
+    ```
+
+=== "Fedora/RHEL"
+
+    ```bash
+    sudo dnf install cairo-devel
+    ```
+
+From the `icechunk-python` directory:
+
+```bash
+# Install icechunk with docs dependencies
+uv sync --extra docs
+
+# Start the MkDocs development server
+cd ../docs
+uv run mkdocs serve
+```
+
+Or install in editable mode:
+
+```bash
+cd icechunk-python
+uv pip install -e ".[docs]"
+cd ../docs
+mkdocs serve
+```
+
+The development server will start at `http://127.0.0.1:8000` with live reload enabled.
+
+**Build static site**:
+
+```bash
+cd docs
+uv run mkdocs build
+```
+
+This builds the site to `docs/.site` directory.
+
+**Tips**:
+
+- Use `mkdocs serve --dirty` to only rebuild changed files (faster for iterative development)
+- You may need to restart if you make changes to `mkdocs.yml`
+
 ### Rust Development Workflow
 
 #### Prerequisites
