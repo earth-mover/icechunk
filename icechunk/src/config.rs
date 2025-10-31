@@ -634,6 +634,10 @@ mod tests {
     // which check that serializing and deserializing
     // an instance of a type T is equivalent to the
     // identity function
+    // Given pairs of test names and arbitraries to be used
+    // for the tests, e.g., (n1, a1), (n2, a2),... (nx, ax)
+    // the tests can be created by doing
+    // roundtrip_serialization_tests!(n1 - a1, n2 - a2, .... nx - ax)
     macro_rules! roundtrip_serialization_tests {
         ($($test_name: ident - $generator: ident), +) => {
                             $(
