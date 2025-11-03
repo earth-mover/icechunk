@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - main
+      - 'support/**'
   schedule:
     # Run weekly on Sundays to check for new advisories
     - cron: '0 0 * * 0'
