@@ -1513,6 +1513,22 @@ class GCRanUpdate(UpdateType):
 class ExpirationRanUpdate(UpdateType):
     pass
 
+class ManifestFileInfo:
+    """Manifest file metadata"""
+
+    @property
+    def id(self) -> str:
+        """The manifest id"""
+        ...
+    @property
+    def size_bytes(self) -> int:
+        """The size in bytes of the"""
+        ...
+    @property
+    def num_chunk_refs(self) -> int:
+        """The number of chunk references contained in this manifest"""
+        ...
+
 class PyRepository:
     @classmethod
     def create(
@@ -1610,6 +1626,8 @@ class PyRepository:
     async def lookup_branch_async(self, branch: str) -> str: ...
     def lookup_snapshot(self, snapshot_id: str) -> SnapshotInfo: ...
     async def lookup_snapshot_async(self, snapshot_id: str) -> SnapshotInfo: ...
+    def manifest_files(self, snapshot_id: str) -> list[ManifestFileInfo]: ...
+    async def manifest_files_async(self, snapshot_id: str) -> list[ManifestFileInfo]: ...
     def reset_branch(
         self, branch: str, to_snapshot_id: str, from_snapshot_id: str | None
     ) -> None: ...
@@ -1868,22 +1886,6 @@ class PyStore:
 class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
     def __aiter__(self) -> PyAsyncStringGenerator: ...
     async def __anext__(self) -> str: ...
-
-class ManifestFileInfo:
-    """Manifest file metadata"""
-
-    @property
-    def id(self) -> str:
-        """The manifest id"""
-        ...
-    @property
-    def size_bytes(self) -> int:
-        """The size in bytes of the"""
-        ...
-    @property
-    def num_chunk_refs(self) -> int:
-        """The number of chunk references contained in this manifest"""
-        ...
 
 class SnapshotInfo:
     """Metadata for a snapshot"""

@@ -7,6 +7,7 @@ from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
     Diff,
     GCSummary,
+    ManifestFileInfo,
     PyRepository,
     RepositoryConfig,
     SnapshotInfo,
@@ -713,6 +714,36 @@ class Repository:
         SnapshotInfo
         """
         return await self._repository.lookup_snapshot_async(snapshot_id)
+
+    def manifest_files(self, snapshot_id: str) -> list[ManifestFileInfo]:
+        """
+        Get the manifest files used by the given snapshot ID
+
+        Parameters
+        ----------
+        snapshot_id : str
+            The id of the snapshot to get information for
+
+        Returns
+        -------
+        list[ManifestFileInfo]
+        """
+        return self._repository.manifest_files(snapshot_id)
+
+    async def manifest_files_async(self, snapshot_id: str) -> list[ManifestFileInfo]:
+        """
+        Get the manifest files used by the given snapshot ID
+
+        Parameters
+        ----------
+        snapshot_id : str
+            The id of the snapshot to get information for
+
+        Returns
+        -------
+        list[ManifestFileInfo]
+        """
+        return await self._repository.manifest_files_async(snapshot_id)
 
     def reset_branch(
         self, branch: str, snapshot_id: str, *, from_snapshot_id: str | None = None
