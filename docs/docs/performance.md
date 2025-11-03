@@ -280,10 +280,10 @@ And commit
 snap = session.commit("Add 5 chunks")
 ```
 
-Use [`repo.lookup_snapshot`](./reference.md#icechunk.Repository.lookup_snapshot) to examine the manifests associated with a Snapshot
+Use [`repo.manifest_files`](./reference.md#icechunk.Repository.manifest_files) to examine the manifests associated with a Snapshot
 
 ```python exec="on" session="perf" source="material-block"
-print(repo.lookup_snapshot(snap).manifests)
+print(repo.manifest_files(snap))
 ```
 
 Let's open the Repository again with a different splitting config --- where 5 chunk references are in a single manifest.
@@ -308,7 +308,7 @@ print(session.status())
 
 ```python  exec="on" session="perf" source="material-block"
 snap2 = session.commit("appended data")
-repo.lookup_snapshot(snap2).manifests
+repo.manifest_files(snap2)
 ```
 
 Look carefully, only one new manifest with the 3 new chunk refs has been written.
@@ -328,7 +328,7 @@ print(session.status())
 
 ```python  exec="on" session="perf" source="material-block"
 snap3 = session.commit("rewrite [3,7)")
-print(repo.lookup_snapshot(snap3).manifests)
+print(repo.manifest_files(snap3))
 ```
 
 This ends up rewriting all refs to two new manifests.
@@ -361,7 +361,7 @@ snap4 = new_repo.rewrite_manifests(
 `rewrite_snapshots` will create a new commit on `branch` with the provided `message`.
 
 ```python exec="on" session="perf" source="material-block"
-print(repo.lookup_snapshot(snap4).manifests)
+print(repo.manifest_files(snap4))
 ```
 
 The splitting configuration is saved in the snapshot metadata.
@@ -397,7 +397,7 @@ repo.create_branch("split-experiment-1", repo.lookup_branch("main"))
 snap = repo.rewrite_manifests(
     f"rewrite_manifests with new config", branch="split-experiment-1"
 )
-print(repo.lookup_snapshot(snap).manifests)
+print(repo.manifest_files(snap))
 ```
 
 Now benchmark reads on `main` vs `split-experiment-1`

@@ -1334,12 +1334,12 @@ impl PyRepository {
         py: Python<'py>,
         snapshot_id: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let repository = self.0.clone();
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
             PyIcechunkStoreError::RepositoryError(
                 RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
             )
         })?;
+        let repository = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py::<_, PySnapshotInfo>(py, async move {
             let repository = repository.read().await;
             let res = repository
@@ -1348,6 +1348,55 @@ impl PyRepository {
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(res.into())
         })
+    }
+
+    pub(crate) fn manifest_files(
+        &self,
+        snapshot_id: &str,
+    ) -> PyResult<Vec<PyManifestFileInfo>> {
+        let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
+            PyIcechunkStoreError::RepositoryError(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+            )
+        })?;
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let res = self
+                .0
+                .read()
+                .await
+                .lookup_manifest_files(&snapshot_id)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?
+                .map_into()
+                .collect();
+            Ok(res)
+        })
+    }
+
+    pub(crate) fn manifest_files_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        snapshot_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
+            PyIcechunkStoreError::RepositoryError(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
+            )
+        })?;
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, Vec<PyManifestFileInfo>>(
+            py,
+            async move {
+                let repository = repository.read().await;
+                let res = repository
+                    .lookup_manifest_files(&snapshot_id)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?
+                    .map_into()
+                    .collect();
+                Ok(res)
+            },
+        )
     }
 
     pub(crate) fn reset_branch(
