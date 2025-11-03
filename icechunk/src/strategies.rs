@@ -168,6 +168,7 @@ prop_compose! {
             num_transaction_changes,
             num_bytes_attributes,
             num_bytes_chunks,
+            backend: crate::cache::CacheBackend::Ephemeral,
         }
     }
 }

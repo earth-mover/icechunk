@@ -93,13 +93,73 @@ impl CompressionConfig {
     }
 }
 
+/// Configuration for the repository's caching behavior.
+///
+/// Icechunk caches various metadata and data to improve performance. This struct
+/// controls the size limits and backend type for the cache.
+///
+/// # Cache Types
+///
+/// Icechunk maintains separate caches for different data types:
+///
+/// - **Snapshot nodes**: Cached based on number of nodes
+/// - **Chunk references**: Cached based on number of references in manifests
+/// - **Transaction changes**: Cached based on number of changes
+/// - **Attributes**: Cached based on total bytes
+/// - **Chunks**: Cached based on total bytes
+///
+/// # Cache Backend
+///
+/// The `backend` field selects which cache implementation to use:
+///
+/// - [`CacheBackend::Ephemeral`](crate::cache::CacheBackend::Ephemeral) (default):
+///   In-memory LRU cache with weight-based eviction
+/// - [`CacheBackend::NoOp`](crate::cache::CacheBackend::NoOp):
+///   Disables caching entirely
+///
+/// # Examples
+///
+/// ```rust
+/// use icechunk::config::CachingConfig;
+/// use icechunk::cache::CacheBackend;
+///
+/// // Create a config with default values
+/// let config = CachingConfig::default();
+///
+/// // Create a custom config
+/// let config = CachingConfig {
+///     num_snapshot_nodes: Some(1_000_000),
+///     num_chunk_refs: Some(20_000_000),
+///     backend: CacheBackend::Ephemeral,
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct CachingConfig {
+    /// Maximum number of snapshot nodes to cache.
+    /// Default: 500,000
     pub num_snapshot_nodes: Option<u64>,
+
+    /// Maximum number of chunk references to cache from manifests.
+    /// Default: 15,000,000
     pub num_chunk_refs: Option<u64>,
+
+    /// Maximum number of transaction changes to cache.
+    /// Default: 0 (disabled)
     pub num_transaction_changes: Option<u64>,
+
+    /// Maximum bytes of attribute data to cache.
+    /// Default: 0 (disabled)
     pub num_bytes_attributes: Option<u64>,
+
+    /// Maximum bytes of chunk data to cache.
+    /// Default: 0 (disabled)
     pub num_bytes_chunks: Option<u64>,
+
+    /// The cache backend implementation to use.
+    /// Default: [`CacheBackend::Ephemeral`](crate::cache::CacheBackend::Ephemeral)
+    #[serde(default)]
+    pub backend: crate::cache::CacheBackend,
 }
 
 impl CachingConfig {
@@ -119,6 +179,10 @@ impl CachingConfig {
         self.num_bytes_chunks.unwrap_or(0)
     }
 
+    pub fn backend(&self) -> crate::cache::CacheBackend {
+        self.backend
+    }
+
     pub fn merge(&self, other: Self) -> Self {
         Self {
             num_snapshot_nodes: other.num_snapshot_nodes.or(self.num_snapshot_nodes),
@@ -130,6 +194,7 @@ impl CachingConfig {
                 .num_bytes_attributes
                 .or(self.num_bytes_attributes),
             num_bytes_chunks: other.num_bytes_chunks.or(self.num_bytes_chunks),
+            backend: other.backend,
         }
     }
 }
