@@ -50,7 +50,7 @@ aws-smithy-types-convert = { version = "0.60.10", features = [
 ] }
 typetag = "0.2.21"
 zstd = "0.13.3"
-tokio-util = { version = "0.7.16", features = ["compat", "io-util"] }
+tokio-util = { version = "0.7.17", features = ["compat", "io-util"] }
 serde_bytes = "0.11.19"
 regex = "1.12.2"
 tracing-error = "0.2.1"
