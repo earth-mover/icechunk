@@ -47,7 +47,7 @@ use crate::{
         transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
     repository::{RepositoryError, RepositoryErrorKind},
-    storage::{self, StorageErrorKind, VersionInfo},
+    storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
 
@@ -1165,65 +1165,42 @@ impl Session {
             do_flush(flush_data, message, properties, false, CommitMethod::NewCommit)
                 .await?;
 
-        // FIXME: all this should be in a loop for retries
-        loop {
-            let (repo_info, repo_info_version) =
-                self.asset_manager.fetch_repo_info().await?;
+        let update_type =
+            UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
 
-            let backup_path = if repo_info_version.is_create() {
-                None
-            } else {
-                Some(self.asset_manager.backup_path_for_repo_info())
-            };
-
-            let update_type = UpdateType::NewDetachedSnapshotUpdate {
-                new_snap_id: new_snap.id().clone(),
-            };
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
                 ..new_snap.as_ref().try_into()?
             };
-            let new_repo_info = Arc::new(repo_info.add_snapshot(
+            Ok(Arc::new(repo_info.add_snapshot(
                 new_snapshot_info,
                 None,
                 &update_type,
-                backup_path.as_deref(),
-            )?);
+                Some(backup_path),
+            )?))
+        };
 
-            match self
-                .asset_manager
-                .update_repo_info(
-                    Arc::clone(&new_repo_info),
-                    &repo_info_version,
-                    backup_path.as_deref(),
-                )
-                .await
-            {
-                Ok(_) => {
-                    info!(
-                        parent_id=%self.snapshot_id(),
-                        new_snapshot_id=%new_snap.id(),
-                        "Flush done"
-                    );
-                    // if the commit was successful, we update the session to be
-                    // a read only session pointed at the new snapshot
-                    self.change_set = ChangeSet::for_edits();
-                    self.snapshot_id = new_snap.id().clone();
-                    // Once committed, the session is now read only, which we control
-                    // by setting the branch_name to None (you can only write to a branch session)
-                    self.branch_name = None;
+        let _ = self
+            .asset_manager
+            // FIXME: hardcoded retries
+            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .await?;
 
-                    return Ok(new_snap.id().clone());
-                }
-                Err(RepositoryError {
-                    kind: RepositoryErrorKind::RepoInfoUpdated,
-                    ..
-                }) => {
-                    debug!("flush retrying repo object update");
-                }
-                Err(err) => return Err(err.into()),
-            }
-        }
+        info!(
+            parent_id=%self.snapshot_id(),
+            new_snapshot_id=%new_snap.id(),
+            "Flush done"
+        );
+        // if the commit was successful, we update the session to be
+        // a read only session pointed at the new snapshot
+        self.change_set = ChangeSet::for_edits();
+        self.snapshot_id = new_snap.id().clone();
+        // Once committed, the session is now read only, which we control
+        // by setting the branch_name to None (you can only write to a branch session)
+        self.branch_name = None;
+
+        Ok(new_snap.id().clone())
     }
 
     #[instrument(skip(self, properties))]
@@ -1288,7 +1265,7 @@ impl Session {
         }
         let change_set = &mut self.change_set;
 
-        let (id, _, _) = do_commit(
+        let id = do_commit(
             Arc::clone(&self.asset_manager),
             branch_name.as_str(),
             &self.snapshot_id,
@@ -2420,7 +2397,7 @@ async fn do_commit(
     splits: &HashMap<NodeId, ManifestSplits>,
     rewrite_manifests: bool,
     commit_method: CommitMethod,
-) -> SessionResult<(SnapshotId, Arc<RepoInfo>, VersionInfo)> {
+) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
     let properties = properties.unwrap_or_default();
     let flush_data =
@@ -2430,27 +2407,25 @@ async fn do_commit(
             .await?;
     let new_snapshot_id = new_snapshot.id();
 
-    let mut attempt = 1;
-    // TODO: give up eventually
-    loop {
-        let (repo_info, repo_info_version) = asset_manager.fetch_repo_info().await?;
+    let mut attempt = 0;
 
+    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        attempt += 1;
         let actual_parent = repo_info.resolve_branch(branch_name)?;
         if &actual_parent != snapshot_id {
             info!(branch_name, %new_snapshot_id, attempt, "Branch tip has changed, rebase needed");
-            return Err(SessionError::from(SessionErrorKind::Conflict {
+            return Err(RepositoryError::from(RepositoryErrorKind::Conflict {
                 expected_parent: Some(snapshot_id.clone()),
                 actual_parent: Some(actual_parent),
             }));
         }
 
         let parent_snapshot = repo_info.find_snapshot(snapshot_id)?;
-
         let parent_id = match (commit_method, parent_snapshot.parent_id) {
             (CommitMethod::NewCommit, _) => snapshot_id.clone(),
             (CommitMethod::Amend, Some(parent_id)) => parent_id,
             (CommitMethod::Amend, None) => {
-                return Err(SessionErrorKind::NoAmendForInitialCommit.into());
+                return Err(RepositoryErrorKind::NoAmendForInitialCommit.into());
             }
         };
 
@@ -2458,12 +2433,6 @@ async fn do_commit(
         let new_snapshot_info = SnapshotInfo {
             parent_id: Some(parent_id.clone()),
             ..new_snapshot.as_ref().try_into()?
-        };
-
-        let backup_path = if repo_info_version.is_create() {
-            None
-        } else {
-            Some(asset_manager.backup_path_for_repo_info())
         };
 
         let update_type = match commit_method {
@@ -2475,43 +2444,42 @@ async fn do_commit(
                 previous_snap_id: parent_snapshot.id.clone(),
             },
         };
-
-        let new_repo_info = Arc::new(repo_info.add_snapshot(
+        Ok(Arc::new(repo_info.add_snapshot(
             new_snapshot_info,
             Some(branch_name),
             &update_type,
-            backup_path.as_deref(),
-        )?);
+            Some(backup_path),
+        )?))
+    };
 
-        debug!(attempt, "Attempting to update repo info object");
+    let res = asset_manager
+        // FIXME: hardcoded retries
+        .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+        .await;
 
-        match asset_manager
-            .update_repo_info(
-                Arc::clone(&new_repo_info),
-                &repo_info_version,
-                backup_path.as_deref(),
-            )
-            .await
-        {
-            Ok(new_version) => {
-                info!(
-                    branch_name,
-                    old_snapshot_id=%parent_id,
-                    new_repo_info_version=?new_version,
-                    %new_snapshot_id,
-                    attempt,
-                    "Commit done"
-                );
-                return Ok((new_snapshot_id, new_repo_info, new_version));
-            }
-            Err(RepositoryError {
-                kind: RepositoryErrorKind::RepoInfoUpdated, ..
-            }) => {
-                debug!(%new_snapshot_id, attempt, "Commit needs to refresh repo info object");
-                attempt += 1;
-            }
-            Err(err) => return Err(err.into()),
+    match res {
+        Ok(new_version) => {
+            info!(
+                branch_name,
+                new_repo_info_version=?new_version,
+                %new_snapshot_id,
+                attempt,
+                "Commit done"
+            );
+            Ok(new_snapshot_id)
         }
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::Conflict { expected_parent, actual_parent },
+            ..
+        }) => Err(SessionError::from(SessionErrorKind::Conflict {
+            expected_parent,
+            actual_parent,
+        })),
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::NoAmendForInitialCommit,
+            ..
+        }) => Err(SessionError::from(SessionErrorKind::NoAmendForInitialCommit)),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -3090,13 +3058,7 @@ mod tests {
             &UpdateType::NewCommitUpdate { branch: "main".to_string() },
             None,
         )?;
-        asset_manager
-            .update_repo_info(
-                Arc::new(repo_info),
-                &storage::VersionInfo::for_creation(),
-                None,
-            )
-            .await?;
+        asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 
         let repo = Repository::open(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;

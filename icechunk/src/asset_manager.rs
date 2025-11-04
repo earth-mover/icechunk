@@ -181,6 +181,21 @@ impl AssetManager {
         )
     }
 
+    pub fn limit_retries_repo_update(
+        attempts: u64,
+        mut update: impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>>,
+    ) -> impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>> {
+        let mut _attempts = attempts;
+        move |a, b| {
+            if _attempts > 0 {
+                _attempts -= 1;
+                update(a, b)
+            } else {
+                Err(RepositoryErrorKind::RepoUpdateAttemptsLimit(attempts).into())
+            }
+        }
+    }
+
     pub fn remove_cached_snapshot(&self, snapshot_id: &SnapshotId) {
         self.snapshot_cache.remove(snapshot_id);
     }
@@ -435,21 +450,55 @@ impl AssetManager {
     }
 
     #[instrument(skip(self, info))]
-    pub async fn update_repo_info(
+    pub async fn create_repo_info(
         &self,
         info: Arc<RepoInfo>,
-        version: &VersionInfo,
-        backup_path: Option<&str>,
     ) -> RepositoryResult<VersionInfo> {
         write_repo_info(
             info,
-            version,
+            &storage::VersionInfo::for_creation(),
             self.compression_level,
-            backup_path,
+            None,
             self.storage.as_ref(),
             &self.storage_settings,
         )
         .await
+    }
+
+    #[instrument(skip(self, update))]
+    pub async fn update_repo_info(
+        &self,
+        mut update: impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>>,
+    ) -> RepositoryResult<VersionInfo> {
+        loop {
+            let (repo_info, repo_version) = self.fetch_repo_info().await?;
+            let backup_path = self.backup_path_for_repo_info();
+            let new_repo = update(repo_info, backup_path.as_str())?;
+            match write_repo_info(
+                Arc::clone(&new_repo),
+                &repo_version,
+                self.compression_level,
+                Some(backup_path.as_str()),
+                self.storage.as_ref(),
+                &self.storage_settings,
+            )
+            .await
+            {
+                res @ Ok(_) => {
+                    return res;
+                }
+                Err(RepositoryError {
+                    kind: RepositoryErrorKind::RepoInfoUpdated,
+                    ..
+                }) => {
+                    // try again
+                    debug!("Repo info object was updated concurrently, retrying...");
+                }
+                err @ Err(_) => {
+                    return err;
+                }
+            }
+        }
     }
 
     #[instrument(skip(self, bytes))]

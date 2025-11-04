@@ -86,6 +86,7 @@ table Snapshot {
   // the id of the parent snapshot, can be null for a root snapshot
   parent_id: ObjectId12;
 
+  // sorted by ascending order of NodeSnapshot.path
   nodes: [NodeSnapshot] (required);
 
   // time at which this snapshot was generated

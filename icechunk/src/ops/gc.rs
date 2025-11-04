@@ -22,7 +22,7 @@ use crate::{
     ops::pointed_snapshots,
     refs::{Ref, RefError},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{DeleteObjectsResult, ListInfo, VersionInfo},
+    storage::{DeleteObjectsResult, ListInfo},
     stream_utils::{StreamLimiter, try_unique_stream},
 };
 
@@ -330,7 +330,7 @@ pub async fn garbage_collect(
         return Ok(GCSummary::default());
     }
 
-    let (repo_info, repo_info_version) = asset_manager.fetch_repo_info().await?;
+    let (repo_info, _) = asset_manager.fetch_repo_info().await?;
 
     tracing::info!("Finding GC roots");
     let (keep_chunks, keep_manifests, mut keep_snapshots) =
@@ -366,13 +366,8 @@ pub async fn garbage_collect(
     // work: we want to dolete snapshots before deleting chunks, etc
     if config.deletes_snapshots() {
         if !config.dry_run {
-            delete_snapshots_from_repo_info(
-                asset_manager.as_ref(),
-                &keep_snapshots,
-                repo_info,
-                &repo_info_version,
-            )
-            .await?;
+            delete_snapshots_from_repo_info(asset_manager.as_ref(), &keep_snapshots)
+                .await?;
         }
         let res = gc_snapshots(asset_manager.as_ref(), config, &keep_snapshots).await?;
         summary.snapshots_deleted = res.deleted_objects;
@@ -402,33 +397,34 @@ pub async fn garbage_collect(
 async fn delete_snapshots_from_repo_info(
     asset_manager: &AssetManager,
     keep_snapshots: &HashSet<SnapshotId>,
-    repo_info: Arc<RepoInfo>,
-    repo_info_version: &VersionInfo,
 ) -> GCResult<()> {
-    let kept_snaps: Vec<_> = repo_info
-        .all_snapshots()?
-        .filter_ok(|si| keep_snapshots.contains(&si.id))
-        .try_collect()?;
-    let backup_path = if repo_info_version.is_create() {
-        None
-    } else {
-        Some(asset_manager.backup_path_for_repo_info())
+    // FIXME: IMPORTANT
+    // Notice this loses any new snapshots that may have been created while GC was running
+    // Other problem is new branches / tags may be pointing to no longer existing snaps
+    // should we lock the repo for writes?
+    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let kept_snaps: Vec<_> = repo_info
+            .all_snapshots()?
+            .filter_ok(|si| keep_snapshots.contains(&si.id))
+            .try_collect()?;
+
+        let new_repo_info = RepoInfo::new(
+            repo_info.tags()?,
+            repo_info.branches()?,
+            repo_info.deleted_tags()?,
+            kept_snaps,
+            &UpdateType::GCRanUpdate,
+            Some(backup_path),
+        )?;
+
+        Ok(Arc::new(new_repo_info))
     };
-    let new_repo_info = RepoInfo::new(
-        repo_info.tags()?,
-        repo_info.branches()?,
-        repo_info.deleted_tags()?,
-        kept_snaps,
-        &UpdateType::GCRanUpdate,
-        backup_path.as_deref(),
-    )?;
+
     let _ = asset_manager
-        .update_repo_info(
-            Arc::new(new_repo_info),
-            repo_info_version,
-            backup_path.as_deref(),
-        )
+        // FIXME: hardcoded retries
+        .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
         .await?;
+
     Ok(())
 }
 
@@ -607,7 +603,7 @@ pub async fn expire(
         ));
     }
     info!("Expiration started");
-    let (repo_info, repo_info_version) = asset_manager.fetch_repo_info().await?;
+    let (repo_info, _) = asset_manager.fetch_repo_info().await?;
     let tags: Vec<(Ref, SnapshotId)> = repo_info
         .tags()?
         .map(|(name, snap)| Ok::<_, GCError>((Ref::Tag(name.to_string()), snap)))
@@ -751,41 +747,40 @@ pub async fn expire(
         "Releasing objects"
     );
 
-    let tags = repo_info
-        .tags()?
-        .filter(|(name, _)| !deleted_tags.contains(&Ref::Tag(name.to_string())));
+    // FIXME: IMPORTANT
+    // Notice this loses any new snapshots that may have been created while GC was running
+    // Other problem is new branches / tags may be pointing to no longer existing snaps
+    // should we lock the repo for writes?
+    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let tags = repo_info
+            .tags()?
+            .filter(|(name, _)| !deleted_tags.contains(&Ref::Tag(name.to_string())));
 
-    let branches = repo_info
-        .branches()?
-        .filter(|(name, _)| !deleted_branches.contains(&Ref::Branch(name.to_string())));
+        let branches = repo_info.branches()?.filter(|(name, _)| {
+            !deleted_branches.contains(&Ref::Branch(name.to_string()))
+        });
 
-    let deleted_tag_names =
-        repo_info.deleted_tags()?.chain(deleted_tags.iter().filter_map(|r| match r {
-            Ref::Tag(name) => Some(name.as_str()),
-            Ref::Branch(_) => None,
-        }));
+        let deleted_tag_names = repo_info.deleted_tags()?.chain(
+            deleted_tags.iter().filter_map(|r| match r {
+                Ref::Tag(name) => Some(name.as_str()),
+                Ref::Branch(_) => None,
+            }),
+        );
+        let new_repo_info = RepoInfo::new(
+            tags,
+            branches,
+            deleted_tag_names,
+            retained.clone(),
+            &UpdateType::ExpirationRanUpdate,
+            Some(backup_path),
+        )?;
 
-    let backup_path = if repo_info_version.is_create() {
-        None
-    } else {
-        Some(asset_manager.backup_path_for_repo_info())
+        Ok(Arc::new(new_repo_info))
     };
-    debug!("Generating new repo info");
-    let new_repo_info = RepoInfo::new(
-        tags,
-        branches,
-        deleted_tag_names,
-        retained,
-        &UpdateType::ExpirationRanUpdate,
-        backup_path.as_deref(),
-    )?;
 
-    asset_manager
-        .update_repo_info(
-            Arc::new(new_repo_info),
-            &repo_info_version,
-            backup_path.as_deref(),
-        )
+    let _ = asset_manager
+        // FIXME: hardcoded retries
+        .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
         .await?;
 
     deleted_tags.extend(deleted_branches);

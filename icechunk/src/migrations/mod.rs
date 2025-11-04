@@ -17,7 +17,7 @@ use crate::{
     },
     refs::{Ref, RefError, RefErrorKind, RefResult, list_deleted_tags, list_refs},
     repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
-    storage::{self, StorageErrorKind},
+    storage::StorageErrorKind,
 };
 
 #[derive(Debug, Error)]
@@ -117,10 +117,7 @@ async fn do_migrate(
     delete_unused_v1_files: bool,
 ) -> MigrationResult<()> {
     info!("Writing new repository info file");
-    let new_version_info = repo
-        .asset_manager()
-        .update_repo_info(repo_info, &storage::VersionInfo::for_creation(), None)
-        .await?;
+    let new_version_info = repo.asset_manager().create_repo_info(repo_info).await?;
 
     info!(version=?new_version_info, "Written repository info file");
 

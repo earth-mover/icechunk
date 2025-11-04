@@ -125,6 +125,14 @@ pub enum RepositoryErrorKind {
     CannotDeleteMain,
     #[error("the storage used by this Icechunk repository is read-only: {0}")]
     ReadonlyStorage(String),
+    #[error(
+        "the first commit in the repository cannot be an amend, create a new commit instead"
+    )]
+    NoAmendForInitialCommit,
+    #[error(
+        "repository cannot be updated after {0} attempts, too many concurrent changes"
+    )]
+    RepoUpdateAttemptsLimit(u64),
     #[error("unexpected error: {0}")]
     Other(String),
 }
@@ -220,13 +228,7 @@ impl Repository {
 
             let snap_info = new_snapshot.as_ref().try_into()?;
             let repo_info = Arc::new(RepoInfo::initial(snap_info));
-            let _ = asset_manager_c
-                .update_repo_info(
-                    Arc::clone(&repo_info),
-                    &storage::VersionInfo::for_creation(),
-                    None,
-                )
-                .await?;
+            let _ = asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
             Ok::<_, RepositoryError>(())
         }
         .in_current_span();
@@ -706,36 +708,19 @@ impl Repository {
             .into());
         }
 
-        let (repo_info, version) = self.get_repo_info().await?;
-        raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
-        let backup_path = if version.is_create() {
-            None
-        } else {
-            Some(self.asset_manager.backup_path_for_repo_info())
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+            raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
+            Ok(Arc::new(repo_info.add_branch(
+                branch_name,
+                snapshot_id,
+                Some(backup_path),
+            )?))
         };
-        let new_repo_info = match repo_info.add_branch(
-            branch_name,
-            snapshot_id,
-            backup_path.as_deref(),
-        ) {
-            Ok(new) => Ok(new),
-            Err(IcechunkFormatError {
-                kind:
-                    IcechunkFormatErrorKind::BranchAlreadyExists {
-                        snapshot_id: actual_parent,
-                        ..
-                    },
-                ..
-            }) => Err(RepositoryError::from(RepositoryErrorKind::Conflict {
-                expected_parent: None,
-                actual_parent: Some(actual_parent),
-            })),
-            Err(err) => Err(err.into()),
-        }?;
 
         let _ = self
             .asset_manager
-            .update_repo_info(Arc::new(new_repo_info), &version, backup_path.as_deref())
+            // FIXME: hardcoded retries
+            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
             .await?;
         Ok(())
     }
@@ -853,38 +838,38 @@ impl Repository {
             )
             .into());
         }
-        let (ri, version) = self.get_repo_info().await?;
-        let backup_path = if version.is_create() {
-            None
-        } else {
-            Some(self.asset_manager.backup_path_for_repo_info())
+
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+            if let Some(from_snapshot_id) = from_snapshot_id
+                && &repo_info.resolve_branch(branch)? != from_snapshot_id
+            {
+                return Err(RepositoryErrorKind::Conflict {
+                    expected_parent: Some(from_snapshot_id.clone()),
+                    actual_parent: Some(from_snapshot_id.clone()),
+                }
+                .into());
+            }
+
+            let new_repo = repo_info
+                .update_branch(branch, to_snapshot_id, Some(backup_path))
+                .map_err(|err| match err {
+                    IcechunkFormatError {
+                        kind: IcechunkFormatErrorKind::BranchNotFound { .. },
+                        ..
+                    } => RepositoryError::from(RefError::from(
+                        RefErrorKind::RefNotFound(branch.to_string()),
+                    )),
+                    err => RepositoryError::from(err),
+                });
+            Ok(Arc::new(new_repo?))
         };
 
-        if let Some(from_snapshot_id) = from_snapshot_id
-            && &ri.resolve_branch(branch)? != from_snapshot_id
-        {
-            return Err(RepositoryErrorKind::Conflict {
-                expected_parent: Some(from_snapshot_id.clone()),
-                actual_parent: Some(from_snapshot_id.clone()),
-            }
-            .into());
-        }
-        match ri.update_branch(branch, to_snapshot_id, backup_path.as_deref()) {
-            Ok(new_ri) => {
-                let _ = self
-                    .asset_manager
-                    .update_repo_info(Arc::new(new_ri), &version, backup_path.as_deref())
-                    .await?;
-                Ok(())
-            }
-            Err(IcechunkFormatError {
-                kind: IcechunkFormatErrorKind::BranchNotFound { .. },
-                ..
-            }) => {
-                Err(RefError::from(RefErrorKind::RefNotFound(branch.to_string())).into())
-            }
-            Err(err) => Err(err.into()),
-        }
+        let _ = self
+            .asset_manager
+            // FIXME: hardcoded retries
+            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .await?;
+        Ok(())
     }
 
     /// Delete a branch from the repository.
@@ -907,33 +892,27 @@ impl Repository {
             .into());
         }
         if branch != Ref::DEFAULT_BRANCH {
-            let (ri, version) = self.get_repo_info().await?;
-            let backup_path = if version.is_create() {
-                None
-            } else {
-                Some(self.asset_manager.backup_path_for_repo_info())
+            let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+                let new_repo = repo_info
+                    .delete_branch(branch, Some(backup_path))
+                    .map_err(|err| match err {
+                        IcechunkFormatError {
+                            kind: IcechunkFormatErrorKind::BranchNotFound { .. },
+                            ..
+                        } => RepositoryError::from(RefError::from(
+                            RefErrorKind::RefNotFound(branch.to_string()),
+                        )),
+                        err => RepositoryError::from(err),
+                    });
+                Ok(Arc::new(new_repo?))
             };
-            match ri.delete_branch(branch, backup_path.as_deref()) {
-                Ok(new_ri) => {
-                    let _ = self
-                        .asset_manager
-                        .update_repo_info(
-                            Arc::new(new_ri),
-                            &version,
-                            backup_path.as_deref(),
-                        )
-                        .await?;
-                    Ok(())
-                }
-                Err(IcechunkFormatError {
-                    kind: IcechunkFormatErrorKind::BranchNotFound { .. },
-                    ..
-                }) => {
-                    Err(RefError::from(RefErrorKind::RefNotFound(branch.to_string()))
-                        .into())
-                }
-                Err(err) => Err(err.into()),
-            }
+
+            let _ = self
+                .asset_manager
+                // FIXME: hardcoded retries
+                .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+                .await?;
+            Ok(())
         } else {
             Err(RepositoryErrorKind::CannotDeleteMain.into())
         }
@@ -958,26 +937,27 @@ impl Repository {
             )
             .into());
         }
-        let (ri, version) = self.get_repo_info().await?;
-        let backup_path = if version.is_create() {
-            None
-        } else {
-            Some(self.asset_manager.backup_path_for_repo_info())
+
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+            let new_repo =
+                repo_info.delete_tag(tag, Some(backup_path)).map_err(|err| match err {
+                    IcechunkFormatError {
+                        kind: IcechunkFormatErrorKind::TagNotFound { .. },
+                        ..
+                    } => RepositoryError::from(RefError::from(
+                        RefErrorKind::RefNotFound(tag.to_string()),
+                    )),
+                    err => RepositoryError::from(err),
+                });
+            Ok(Arc::new(new_repo?))
         };
-        match ri.delete_tag(tag, backup_path.as_deref()) {
-            Ok(new_ri) => {
-                let _ = self
-                    .asset_manager
-                    .update_repo_info(Arc::new(new_ri), &version, backup_path.as_deref())
-                    .await?;
-                Ok(())
-            }
-            Err(IcechunkFormatError {
-                kind: IcechunkFormatErrorKind::TagNotFound { .. },
-                ..
-            }) => Err(RefError::from(RefErrorKind::RefNotFound(tag.to_string())).into()),
-            Err(err) => Err(err.into()),
-        }
+
+        let _ = self
+            .asset_manager
+            // FIXME: hardcoded retries
+            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .await?;
+        Ok(())
     }
 
     /// Create a new tag in the repository at the given snapshot id
@@ -1001,30 +981,29 @@ impl Repository {
             )
             .into());
         }
-        let (ri, version) = self.get_repo_info().await?;
-        raise_if_invalid_snapshot_id_v2(ri.as_ref(), snapshot_id)?;
 
-        let backup_path = if version.is_create() {
-            None
-        } else {
-            Some(self.asset_manager.backup_path_for_repo_info())
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+            raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
+            let new_repo = repo_info
+                .add_tag(tag_name, snapshot_id, Some(backup_path))
+                .map_err(|err| match err {
+                    IcechunkFormatError {
+                        kind: IcechunkFormatErrorKind::TagAlreadyExists { .. },
+                        ..
+                    } => RepositoryError::from(RefError::from(
+                        RefErrorKind::TagAlreadyExists(tag_name.to_string()),
+                    )),
+                    err => RepositoryError::from(err),
+                });
+            Ok(Arc::new(new_repo?))
         };
-        match ri.add_tag(tag_name, snapshot_id, backup_path.as_deref()) {
-            Ok(new_ri) => {
-                let _ = self
-                    .asset_manager
-                    .update_repo_info(Arc::new(new_ri), &version, backup_path.as_deref())
-                    .await?;
-                Ok(())
-            }
-            Err(IcechunkFormatError {
-                kind: IcechunkFormatErrorKind::TagAlreadyExists { .. },
-                ..
-            }) => Err(RepositoryError::from(RefError::from(
-                RefErrorKind::TagAlreadyExists(tag_name.to_string()),
-            ))),
-            Err(err) => Err(err.into()),
-        }
+
+        let _ = self
+            .asset_manager
+            // FIXME: hardcoded retries
+            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .await?;
+        Ok(())
     }
 
     /// List all tags in the repository.
