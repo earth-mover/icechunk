@@ -235,7 +235,7 @@ Ensure you have navigated to the root directory of the cloned repo (i.e. not the
 
 #### Building
 
- and build the Rust workspace:
+Build the Rust workspace:
 
 ```bash
 # Build all packages
