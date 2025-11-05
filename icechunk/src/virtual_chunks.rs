@@ -79,10 +79,11 @@ impl VirtualChunkContainer {
                     );
                 }
             }
-            ("gcs", ObjectStoreConfig::Gcs(_)) => {
+            ("gcs" | "gs", ObjectStoreConfig::Gcs(_)) => {
                 if !url.has_host() {
-                    return Err("Url prefix for gcs:// containers must include a host"
-                        .to_string());
+                    return Err(
+                        "Url prefix for GCS containers must include a host".to_string()
+                    );
                 }
             }
             ("az" | "azure" | "abfs", ObjectStoreConfig::Azure(..)) => {
