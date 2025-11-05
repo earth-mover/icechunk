@@ -148,11 +148,17 @@ async fn create_local_repository(
             ObjectStoreConfig::Gcs(Default::default()),
         )
         .unwrap(),
+        VirtualChunkContainer::new(
+            "gs://testbucket/".to_string(),
+            ObjectStoreConfig::Gcs(Default::default()),
+        )
+        .unwrap(),
     ];
 
     let mut creds: HashMap<_, Option<Credentials>> = [
         ("s3://testbucket".to_string(), None),
         ("gcs://testbucket".to_string(), None),
+        ("gs://testbucket".to_string(), None),
         (
             "s3://earthmover-sample-data".to_string(),
             Some(Credentials::S3(S3Credentials::Anonymous)),
