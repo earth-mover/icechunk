@@ -24,8 +24,7 @@ on:
         options:
           - main
           - support/v1.x
-          - both
-        default: main
+        default: support/v1.x
   schedule:
     # run every day at 4am
     - cron: '0 4 * * *'
@@ -89,14 +88,14 @@ jobs:
 
       # Checkout support/v1.x branch (skip if only building main)
       - name: Checkout support/v1.x
-        if: ${{ github.event_name == 'schedule' || inputs.branch == 'both' || inputs.branch == 'support/v1.x' }}
+        if: ${{ github.event_name == 'schedule' || inputs.branch == 'support/v1.x' }}
         uses: actions/checkout@v5
         with:
           ref: support/v1.x
           fetch-depth: 0
 
       - name: Generate version for support/v1.x
-        if: ${{ github.event_name == 'schedule' || inputs.branch == 'both' || inputs.branch == 'support/v1.x' }}
+        if: ${{ github.event_name == 'schedule' || inputs.branch == 'support/v1.x' }}
         id: version-v1
         run: |
           # Version generation logic for support/v1.x (v1.x)
@@ -124,10 +123,9 @@ jobs:
       matrix:
         # Dynamic branch selection:
         # - schedule: Build both main and support/v1.x for nightly releases
-        # - manual with branch='both': Build both branches
-        # - manual with branch='main' or 'support/v1.x': Build only that branch
+        # - manual: Build only the selected branch (main or support/v1.x)
         # Note: fromJSON converts JSON string to array since GH Actions doesn't support array literals in expressions
-        branch: ${{ (github.event_name == 'schedule' || inputs.branch == 'both') && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
+        branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
           - runner: ubuntu-latest
             target: x86_64
@@ -184,7 +182,7 @@ jobs:
     needs: version
     strategy:
       matrix:
-        branch: ${{ (github.event_name == 'schedule' || inputs.branch == 'both') && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
+        branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
           - runner: ubuntu-latest
             target: x86_64
@@ -226,7 +224,7 @@ jobs:
     needs: version
     strategy:
       matrix:
-        branch: ${{ (github.event_name == 'schedule' || inputs.branch == 'both') && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
+        branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
           - runner: windows-latest
             target: x64
@@ -263,7 +261,7 @@ jobs:
     needs: version
     strategy:
       matrix:
-        branch: ${{ (github.event_name == 'schedule' || inputs.branch == 'both') && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
+        branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
           - runner: macos-13
             target: x86_64
@@ -300,7 +298,7 @@ jobs:
     needs: version
     strategy:
       matrix:
-        branch: ${{ (github.event_name == 'schedule' || inputs.branch == 'both') && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
+        branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
     steps:
       - uses: actions/checkout@v5
         with:
