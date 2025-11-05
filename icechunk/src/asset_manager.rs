@@ -470,10 +470,12 @@ impl AssetManager {
         &self,
         mut update: impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>>,
     ) -> RepositoryResult<VersionInfo> {
+        let mut attempts: u64 = 1;
         loop {
             let (repo_info, repo_version) = self.fetch_repo_info().await?;
             let backup_path = self.backup_path_for_repo_info();
             let new_repo = update(repo_info, backup_path.as_str())?;
+            trace!(attempts, "Atempting to update repo object");
             match write_repo_info(
                 Arc::clone(&new_repo),
                 &repo_version,
@@ -485,6 +487,7 @@ impl AssetManager {
             .await
             {
                 res @ Ok(_) => {
+                    debug!(attempts, "Repo info object updated successfully");
                     return res;
                 }
                 Err(RepositoryError {
@@ -493,6 +496,7 @@ impl AssetManager {
                 }) => {
                     // try again
                     debug!("Repo info object was updated concurrently, retrying...");
+                    attempts += 1;
                 }
                 err @ Err(_) => {
                     return err;
