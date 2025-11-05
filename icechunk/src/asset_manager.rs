@@ -677,7 +677,7 @@ fn binary_file_header(
 }
 
 fn check_header(
-    read: &mut (dyn Read),
+    read: &mut dyn Read,
     file_type: FileTypeBin,
 ) -> RepositoryResult<(SpecVersionBin, CompressionAlgorithmBin)> {
     let mut buf = [0; 12];

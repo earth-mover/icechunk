@@ -205,7 +205,7 @@ impl ManifestSplits {
 pub fn uniform_manifest_split_edges(num_chunks: u32, split_size: &u32) -> Vec<u32> {
     (0u32..=num_chunks)
         .step_by(*split_size as usize)
-        .chain((num_chunks % split_size != 0).then_some(num_chunks))
+        .chain((!num_chunks.is_multiple_of(*split_size)).then_some(num_chunks))
         .collect()
 }
 #[derive(Debug, Error)]
