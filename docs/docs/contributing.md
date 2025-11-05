@@ -43,6 +43,7 @@ Create / activate a virtual environment:
 
     ```bash
     uv sync
+    source .venv/bin/activate
     ```
 
 Install `maturin`:
@@ -217,6 +218,8 @@ This builds the site to `docs/.site` directory.
 
 #### Prerequisites
 
+You need to have already created and activated a virtual environment ([see above](#python-development-workflow)), because the full rust build will also compile the python bindings.
+
 Install the `just` command runner (used for build tasks and pre-commit hooks):
 
 ```bash
@@ -227,6 +230,8 @@ Or using other package managers:
 
 - **macOS**: `brew install just`
 - **Ubuntu**: `snap install --edge --classic just`
+
+Ensure you have navigated to the root directory of the cloned repo (i.e. not the `icechunk-python` subdirectory).
 
 #### Building
 
@@ -257,6 +262,12 @@ cargo test test_name
 ```
 
 #### Code Quality
+
+To run all code quality checks you will also need `cargo-deny`:
+
+```bash
+cargo install cargo-deny
+```
 
 We use a tiered pre-commit system for fast development:
 
