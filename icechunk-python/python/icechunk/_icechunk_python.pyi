@@ -2276,6 +2276,7 @@ class Storage:
         *,
         config: dict[str, str] | None = None,
     ) -> Storage: ...
+    @classmethod
     def new_http(
         cls,
         base_url: str,
