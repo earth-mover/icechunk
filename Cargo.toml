@@ -12,7 +12,7 @@ unimplemented = "warn"
 dbg_macro = "warn"
 
 [workspace.metadata.release]
-allow-branch = ["main", "release-*"]
+allow-branch = ["main", "release-*", "support/v*"]
 sign-commit = true
 sign-tag = true
 push = false
