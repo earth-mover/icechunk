@@ -8,6 +8,7 @@
 1. Update the `Cargo.lock` file, by running `cargo check` from the top-level icechunk directory.
 1. Document changes in `Changelog.md`.
 1. Commit all changes and make a PR.
+1. Once CI passes on the PR merge it.
 
 ## (Optional) Issuing a icechunk rust library release
 
