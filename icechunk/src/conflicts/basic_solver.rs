@@ -80,6 +80,7 @@ impl BasicConflictSolver {
                     | ZarrMetadataUpdateOfDeletedGroup(_)
                     | ChunksUpdatedInDeletedArray { .. }
                     | ChunksUpdatedInUpdatedArray { .. }
+                    | MoveOperationCannotBeRebased
             ) || matches!(conflict,
                 ChunkDoubleUpdate{..} if self.on_chunk_conflict == VersionSelection::Fail
             ) || matches!(conflict,
@@ -107,7 +108,7 @@ impl BasicConflictSolver {
                         VersionSelection::UseTheirs => current_changes
                             .drop_chunk_changes(&node_id, |coord| {
                                 chunk_coordinates.contains(coord)
-                            }),
+                            })?,
                         // we can panic here because we have returned from the function if there
                         // were any unsolvable conflicts
                         #[allow(clippy::panic)]

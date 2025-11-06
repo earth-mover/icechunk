@@ -2,7 +2,11 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use futures::{FutureExt, Stream, StreamExt, TryStreamExt, future::Either, stream};
+use futures::{
+    FutureExt, Stream, StreamExt, TryStreamExt,
+    future::Either,
+    stream::{self},
+};
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
@@ -35,13 +39,13 @@ use crate::{
             VirtualReferenceError, VirtualReferenceErrorKind,
             uniform_manifest_split_edges,
         },
+        repo_info::{RepoInfo, UpdateType},
         snapshot::{
             ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
-            NodeType, Snapshot, SnapshotProperties,
+            NodeType, Snapshot, SnapshotInfo, SnapshotProperties,
         },
         transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
-    refs::{RefError, RefErrorKind, fetch_branch_tip, update_branch},
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
@@ -57,12 +61,20 @@ pub enum SessionErrorKind {
     #[error(transparent)]
     FormatError(IcechunkFormatErrorKind),
     #[error(transparent)]
-    Ref(RefErrorKind),
-    #[error(transparent)]
     VirtualReferenceError(VirtualReferenceErrorKind),
 
     #[error("Read only sessions cannot modify the repository")]
     ReadOnlySession,
+    #[error(
+        "This session was created to rearrange the hierarchy, other write operations cannot be executed. Commit or abandon the sessions and create a regular writable session"
+    )]
+    RearrangeSessionOnly,
+    #[error(
+        "To move nodes in the hierarchy you need to create a rearrange session. Commit or abandon this session and create a new rearrange session"
+    )]
+    NonRearrangeSession,
+    #[error("move cannot overwrite existing node at `{0}`")]
+    MoveWontOverwrite(String),
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
     #[error("no ancestor node was found for `{prefix}`")]
@@ -117,8 +129,14 @@ pub enum SessionErrorKind {
     },
     #[error("`to` snapshot ancestry doesn't include `from`")]
     BadSnapshotChainForDiff,
+    #[error(
+        "the first commit in the repository cannot be an amend, create a new commit instead"
+    )]
+    NoAmendForInitialCommit,
     #[error("failed to create manifest from chunk stream")]
     ManifestCreationError(#[from] Box<SessionError>),
+    #[error("unknown error: {0}")]
+    Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
 pub type SessionError = ICError<SessionErrorKind>;
@@ -143,12 +161,6 @@ impl From<StorageError> for SessionError {
 impl From<RepositoryError> for SessionError {
     fn from(value: RepositoryError) -> Self {
         Self::with_context(SessionErrorKind::RepositoryError(value.kind), value.context)
-    }
-}
-
-impl From<RefError> for SessionError {
-    fn from(value: RefError) -> Self {
-        Self::with_context(SessionErrorKind::Ref(value.kind), value.context)
     }
 }
 
@@ -206,6 +218,8 @@ impl ManifestSplits {
     }
 }
 
+pub type ReindexOperationResult = Result<Option<ChunkIndices>, SessionError>;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     config: RepositoryConfig,
@@ -238,7 +252,7 @@ impl Session {
             virtual_resolver,
             branch_name: None,
             snapshot_id,
-            change_set: ChangeSet::default(),
+            change_set: ChangeSet::for_edits(),
             default_commit_metadata: SnapshotProperties::default(),
             // Splits are populated for a node during
             // `add_array`, `update_array`, and `set_chunk_ref`
@@ -265,7 +279,32 @@ impl Session {
             virtual_resolver,
             branch_name: Some(branch_name),
             snapshot_id,
-            change_set: Default::default(),
+            change_set: ChangeSet::for_edits(),
+            default_commit_metadata,
+            splits: Default::default(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_rearrange_session(
+        config: RepositoryConfig,
+        storage_settings: storage::Settings,
+        storage: Arc<dyn Storage + Send + Sync>,
+        asset_manager: Arc<AssetManager>,
+        virtual_resolver: Arc<VirtualChunkResolver>,
+        branch_name: String,
+        snapshot_id: SnapshotId,
+        default_commit_metadata: SnapshotProperties,
+    ) -> Self {
+        Self {
+            config,
+            storage_settings: Arc::new(storage_settings),
+            storage,
+            asset_manager,
+            virtual_resolver,
+            branch_name: Some(branch_name),
+            snapshot_id,
+            change_set: ChangeSet::for_rearranging(),
             default_commit_metadata,
             splits: Default::default(),
         }
@@ -294,11 +333,7 @@ impl Session {
     }
 
     pub fn has_uncommitted_changes(&self) -> bool {
-        !self.change_set.is_empty()
-    }
-
-    pub fn changes(&self) -> &ChangeSet {
-        &self.change_set
+        !self.change_set().is_empty()
     }
 
     pub fn config(&self) -> &RepositoryConfig {
@@ -315,7 +350,7 @@ impl Session {
     /// Compute an overview of the current session changes
     pub async fn status(&self) -> SessionResult<Diff> {
         // it doesn't really matter what Id we give to the tx log, it's not going to be persisted
-        let tx_log = TransactionLog::new(&SnapshotId::random(), &self.change_set);
+        let tx_log = TransactionLog::new(&SnapshotId::random(), self.change_set());
         let from_session = Self::create_readonly_session(
             self.config().clone(),
             self.storage_settings.as_ref().clone(),
@@ -341,7 +376,7 @@ impl Session {
         match self.get_node(&path).await {
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 let id = NodeId::random();
-                self.change_set.add_group(path.clone(), id, definition);
+                self.change_set_mut()?.add_group(path.clone(), id, definition)?;
                 Ok(())
             }
             Ok(node) => Err(SessionErrorKind::AlreadyExists {
@@ -376,13 +411,14 @@ impl Session {
                     .await?
                     .filter_ok(|node| node.path.starts_with(&parent.path))
                     .try_collect()?;
+                let change_set = self.change_set_mut()?;
                 for node in nodes_iter {
                     match node.node_type() {
                         NodeType::Group => {
-                            self.change_set.delete_group(node.path, &node.id)
+                            change_set.delete_group(node.path, &node.id)?
                         }
                         NodeType::Array => {
-                            self.change_set.delete_array(node.path, &node.id)
+                            change_set.delete_array(node.path, &node.id)?
                         }
                     }
                 }
@@ -408,11 +444,11 @@ impl Session {
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {
                 let id = NodeId::random();
                 self.cache_splits(&id, &path, &shape, &dimension_names);
-                self.change_set.add_array(
+                self.change_set_mut()?.add_array(
                     path,
                     id,
                     ArrayData { shape, dimension_names, user_data },
-                );
+                )?;
                 Ok(())
             }
             Ok(node) => Err(SessionErrorKind::AlreadyExists {
@@ -435,17 +471,33 @@ impl Session {
         dimension_names: Option<Vec<DimensionName>>,
         user_data: Bytes,
     ) -> SessionResult<()> {
-        self.get_array(path).await.map(|node| {
-            // needed to handle a resize for example.
-            self.cache_splits(&node.id, path, &shape, &dimension_names);
-            self.change_set.update_array(
-                &node.id,
-                path,
-                ArrayData { shape, dimension_names, user_data },
+        match self.get_array(path).await {
+            Ok(node) => {
+                // needed to handle a resize for example.
+                self.cache_splits(&node.id, path, &shape, &dimension_names);
+                {
+                    // we need to play this trick because we need to borrow from self twice
+                    // once to get the mutable change set, and other to compute
+                    // and pass splits
+                    // This solution first call the function to trigger any
+                    // errors, and then it takes the mutable ref again
+                    // without referencing self, only the field
+                    let _ = self.change_set_mut()?;
+                }
+                let change_set = &mut self.change_set;
                 #[allow(clippy::expect_used)]
-                self.splits.get(&node.id).expect("getting splits should not fail."),
-            )
-        })
+                let splits =
+                    self.splits.get(&node.id).expect("getting splits should not fail.");
+                change_set.update_array(
+                    &node.id,
+                    path,
+                    ArrayData { shape, dimension_names, user_data },
+                    splits,
+                )?;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     // Updates an group Zarr metadata
@@ -457,9 +509,9 @@ impl Session {
         path: &Path,
         definition: Bytes,
     ) -> SessionResult<()> {
-        self.get_group(path)
-            .await
-            .map(|node| self.change_set.update_group(&node.id, path, definition))
+        self.get_group(path).await.and_then(|node| {
+            self.change_set_mut()?.update_group(&node.id, path, definition)
+        })
     }
 
     /// Delete an array in the hierarchy
@@ -469,12 +521,85 @@ impl Session {
     pub async fn delete_array(&mut self, path: Path) -> SessionResult<()> {
         match self.get_array(&path).await {
             Ok(node) => {
-                self.change_set.delete_array(node.path, &node.id);
+                self.change_set_mut()?.delete_array(node.path, &node.id)?;
             }
             Err(SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. }) => {}
             Err(err) => Err(err)?,
         }
         Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn move_node(&mut self, from: Path, to: Path) -> SessionResult<()> {
+        // does the source node exist?
+        let _ = self.get_node(&from).await?;
+        // are we overwriting the destination node?
+        if (self.get_node(&to).await).is_ok() {
+            return Err(SessionErrorKind::MoveWontOverwrite(to.to_string()).into());
+        }
+
+        self.change_set_mut()?.move_node(from, to)?;
+        Ok(())
+    }
+
+    #[instrument(skip(self, calculate_new_index))]
+    pub async fn reindex_array<F>(
+        &mut self,
+        array_path: &Path,
+        calculate_new_index: F,
+    ) -> SessionResult<()>
+    where
+        F: Fn(&ChunkIndices) -> ReindexOperationResult,
+    {
+        let node = self.get_array(array_path).await?;
+        #[allow(clippy::panic)]
+        let (shape, splits) = if let NodeData::Array { shape, dimension_names, .. } =
+            node.node_data
+        {
+            let splits =
+                self.get_splits(&node.id, &node.path, &shape, &dimension_names).clone();
+            (shape, splits)
+        } else {
+            // we know it's an array because get_array succeeded
+            panic!("bug in reindex")
+        };
+
+        let mut original_chunks = self.chunk_coordinates(array_path).await?.boxed();
+        let mut change_set = ChangeSet::for_edits();
+        // TODO: concurrency
+        while let Some(old_chunk_index) = original_chunks.try_next().await? {
+            if let Some(new_chunk_index) = calculate_new_index(&old_chunk_index)? {
+                let new_payload =
+                    self.get_chunk_ref(array_path, &old_chunk_index).await?;
+                if shape.valid_chunk_coord(&new_chunk_index) {
+                    change_set.set_chunk_ref(
+                        node.id.clone(),
+                        new_chunk_index,
+                        new_payload,
+                        &splits,
+                    )?;
+                } else {
+                    return Err(SessionErrorKind::InvalidIndex {
+                        coords: new_chunk_index,
+                        path: node.path.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+        drop(original_chunks);
+        self.change_set_mut()?.merge(change_set)?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn shift_array(
+        &mut self,
+        array_path: &Path,
+        offset: &[i64], // FIXME: overflow
+    ) -> SessionResult<()> {
+        self.reindex_array(array_path, shift_by(offset)).await
     }
 
     #[instrument(skip(self, coords))]
@@ -507,6 +632,30 @@ impl Session {
     pub fn lookup_splits(&self, node_id: &NodeId) -> Option<&ManifestSplits> {
         self.splits.get(node_id)
     }
+
+    fn change_set(&self) -> &ChangeSet {
+        &self.change_set
+    }
+
+    fn change_set_mut(&mut self) -> SessionResult<&mut ChangeSet> {
+        if self.read_only() {
+            Err(SessionErrorKind::ReadOnlySession.into())
+        } else {
+            Ok(&mut self.change_set)
+        }
+    }
+
+    // fn move_tracker(&self) -> &MoveTracker {
+    //     self.move_tracker.as_ref().unwrap_or(&*EMPTY_MOVE_TRACKER)
+    // }
+
+    // fn move_tracker_mut(&mut self) -> SessionResult<&mut MoveTracker> {
+    //     if self.read_only() {
+    //         Err(SessionErrorKind::ReadOnlySession.into())
+    //     } else {
+    //         self.move_tracker.as_mut().ok_or(SessionErrorKind::NonRearrangeSession.into())
+    //     }
+    // }
 
     /// This method is directly called in add_array & update_array
     /// where we know we must update the splits HashMap
@@ -555,7 +704,7 @@ impl Session {
                 let splits = self
                     .get_splits(&node.id, &node.path, &shape, &dimension_names)
                     .clone();
-                self.change_set.set_chunk_ref(node.id, coord, data, &splits);
+                self.change_set_mut()?.set_chunk_ref(node.id, coord, data, &splits)?;
                 Ok(())
             } else {
                 Err(SessionErrorKind::InvalidIndex {
@@ -592,7 +741,7 @@ impl Session {
 
     #[instrument(skip(self))]
     pub async fn get_node(&self, path: &Path) -> SessionResult<NodeSnapshot> {
-        get_node(&self.asset_manager, &self.change_set, self.snapshot_id(), path).await
+        get_node(&self.asset_manager, self.change_set(), self.snapshot_id(), path).await
     }
 
     pub async fn get_array(&self, path: &Path) -> SessionResult<NodeSnapshot> {
@@ -626,7 +775,7 @@ impl Session {
     ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a + use<'a> {
         node_chunk_iterator(
             &self.asset_manager,
-            &self.change_set,
+            self.change_set(),
             &self.snapshot_id,
             path,
             ManifestExtents::ALL,
@@ -658,7 +807,7 @@ impl Session {
                 // check the chunks modified in this session first
                 // TODO: I hate rust forces me to clone to search in a hashmap. How to do better?
                 let session_chunk =
-                    self.change_set.get_chunk_ref(&node.id, coords).cloned();
+                    self.change_set().get_chunk_ref(&node.id, coords).cloned();
 
                 // If session_chunk is not None we have to return it, because is the update the
                 // user made in the current session
@@ -769,17 +918,20 @@ impl Session {
     /// ```
     ///
     /// As shown, the result of the returned function must be awaited to finish the upload.
+    #[allow(clippy::type_complexity)] // impl alias are unstable
     #[instrument(skip(self))]
     pub fn get_chunk_writer(
         &self,
-    ) -> impl FnOnce(
-        Bytes,
-    )
-        -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
-    + use<> {
+    ) -> SessionResult<
+        impl FnOnce(
+            Bytes,
+        )
+            -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
+        + use<>,
+    > {
         let threshold = self.config().inline_chunk_threshold_bytes() as usize;
         let asset_manager = Arc::clone(&self.asset_manager);
-        move |data: Bytes| {
+        let fut = move |data: Bytes| {
             async move {
                 let payload = if data.len() > threshold {
                     new_materialized_chunk(asset_manager.as_ref(), data).await?
@@ -789,7 +941,8 @@ impl Session {
                 Ok(payload)
             }
             .boxed()
-        }
+        };
+        Ok(fut)
     }
 
     #[instrument(skip(self))]
@@ -857,7 +1010,7 @@ impl Session {
         updated_nodes(
             parent_group,
             &self.asset_manager,
-            &self.change_set,
+            self.change_set(),
             &self.snapshot_id,
         )
         .await
@@ -867,7 +1020,7 @@ impl Session {
     pub async fn all_chunks(
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + '_> {
-        all_chunks(&self.asset_manager, &self.change_set, self.snapshot_id()).await
+        all_chunks(&self.asset_manager, self.change_set(), self.snapshot_id()).await
     }
 
     #[instrument(skip(self))]
@@ -894,7 +1047,7 @@ impl Session {
         let node = self.get_array(array_path).await?;
         let updated_chunks = updated_node_chunks_iterator(
             self.asset_manager.as_ref(),
-            &self.change_set,
+            self.change_set(),
             &self.snapshot_id,
             node.clone(),
             ManifestExtents::ALL,
@@ -904,7 +1057,7 @@ impl Session {
 
         let res = try_stream! {
             let new_chunks = stream::iter(
-                self.change_set
+                self.change_set()
                     .new_array_chunk_iterator(&node.id, array_path, ManifestExtents::ALL)
                     .map(|chunk_info| Ok::<ChunkIndices, SessionError>(chunk_info.coord)),
             );
@@ -933,10 +1086,11 @@ impl Session {
         Ok(stream)
     }
 
-    /// Discard all uncommitted changes and return them as a `ChangeSet`
+    /// Discard all uncommitted changes
     #[instrument(skip(self))]
-    pub fn discard_changes(&mut self) -> ChangeSet {
-        std::mem::take(&mut self.change_set)
+    pub fn discard_changes(&mut self) -> SessionResult<()> {
+        self.change_set_mut()?.discard_changes();
+        Ok(())
     }
 
     /// Merge a set of `ChangeSet`s into the repository without committing them
@@ -963,7 +1117,7 @@ impl Session {
         // So a simple `extend` is fine, if the same node appears in two sessions,
         // it must have the same splits and overwriting is fine.
         self.splits.extend(other_splits);
-        self.change_set.merge(change_set);
+        self.change_set.merge(change_set)?;
         Ok(())
     }
 
@@ -973,7 +1127,16 @@ impl Session {
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
-        self._commit(message, properties, false).await
+        self._commit(message, properties, false, CommitMethod::NewCommit).await
+    }
+
+    #[instrument(skip(self, properties))]
+    pub async fn amend(
+        &mut self,
+        message: &str,
+        properties: Option<SnapshotProperties>,
+    ) -> SessionResult<SnapshotId> {
+        self._commit(message, properties, false, CommitMethod::Amend).await
     }
 
     pub async fn flush(
@@ -998,17 +1161,46 @@ impl Session {
             self.snapshot_id(),
             &self.splits,
         );
-        let id = do_flush(flush_data, message, properties, false).await?;
+        let new_snap =
+            do_flush(flush_data, message, properties, false, CommitMethod::NewCommit)
+                .await?;
 
+        let update_type =
+            UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
+
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+            let new_snapshot_info = SnapshotInfo {
+                parent_id: Some(self.snapshot_id().clone()),
+                ..new_snap.as_ref().try_into()?
+            };
+            Ok(Arc::new(repo_info.add_snapshot(
+                new_snapshot_info,
+                None,
+                &update_type,
+                Some(backup_path),
+            )?))
+        };
+
+        let _ = self
+            .asset_manager
+            // FIXME: hardcoded retries
+            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .await?;
+
+        info!(
+            parent_id=%self.snapshot_id(),
+            new_snapshot_id=%new_snap.id(),
+            "Flush done"
+        );
         // if the commit was successful, we update the session to be
         // a read only session pointed at the new snapshot
-        self.change_set = ChangeSet::default();
-        self.snapshot_id = id.clone();
+        self.change_set = ChangeSet::for_edits();
+        self.snapshot_id = new_snap.id().clone();
         // Once committed, the session is now read only, which we control
         // by setting the branch_name to None (you can only write to a branch session)
         self.branch_name = None;
 
-        Ok(id)
+        Ok(new_snap.id().clone())
     }
 
     #[instrument(skip(self, properties))]
@@ -1016,6 +1208,7 @@ impl Session {
         &mut self,
         message: &str,
         properties: Option<SnapshotProperties>,
+        commit_method: CommitMethod,
     ) -> SessionResult<SnapshotId> {
         let nodes = self.list_nodes(&Path::root()).await?.collect::<Vec<_>>();
         // We need to populate the `splits` before calling `commit`.
@@ -1036,7 +1229,7 @@ impl Session {
             serde_json::to_value(self.config.manifest().splitting())?;
         let mut properties = properties.unwrap_or_default();
         properties.insert("splitting_config".to_string(), splitting_config_serialized);
-        self._commit(message, Some(properties), true).await
+        self._commit(message, Some(properties), true, commit_method).await
     }
 
     #[instrument(skip(self, properties))]
@@ -1045,10 +1238,13 @@ impl Session {
         message: &str,
         properties: Option<SnapshotProperties>,
         rewrite_manifests: bool,
+        commit_method: CommitMethod,
     ) -> SessionResult<SnapshotId> {
         let Some(branch_name) = &self.branch_name else {
             return Err(SessionErrorKind::ReadOnlySession.into());
         };
+
+        let branch_name = branch_name.clone();
 
         let default_metadata = self.default_commit_metadata.clone();
         let properties = properties
@@ -1058,60 +1254,33 @@ impl Session {
                 merged
             })
             .unwrap_or(default_metadata);
+        {
+            // we need to play this trick because we need to borrow from self twice
+            // once to get the mutable change set, and other to compute
+            // and pass splits
+            // This solution first call the function to trigger any
+            // errors, and then it takes the mutable ref again
+            // without referencing self, only the field
+            let _ = self.change_set_mut()?;
+        }
+        let change_set = &mut self.change_set;
 
-        let current = fetch_branch_tip(
-            self.storage.as_ref(),
-            self.storage_settings.as_ref(),
-            branch_name,
+        let id = do_commit(
+            Arc::clone(&self.asset_manager),
+            branch_name.as_str(),
+            &self.snapshot_id,
+            change_set,
+            message,
+            Some(properties),
+            &self.splits,
+            rewrite_manifests,
+            commit_method,
         )
-        .await;
-
-        let id = match current {
-            Err(RefError { kind: RefErrorKind::RefNotFound(_), .. }) => {
-                do_commit(
-                    self.storage.as_ref(),
-                    Arc::clone(&self.asset_manager),
-                    self.storage_settings.as_ref(),
-                    branch_name,
-                    &self.snapshot_id,
-                    &self.change_set,
-                    message,
-                    Some(properties),
-                    &self.splits,
-                    rewrite_manifests,
-                )
-                .await
-            }
-            Err(err) => Err(err.into()),
-            Ok(ref_data) => {
-                // we can detect there will be a conflict before generating the new snapshot
-                if ref_data.snapshot != self.snapshot_id {
-                    Err(SessionErrorKind::Conflict {
-                        expected_parent: Some(self.snapshot_id.clone()),
-                        actual_parent: Some(ref_data.snapshot.clone()),
-                    }
-                    .into())
-                } else {
-                    do_commit(
-                        self.storage.as_ref(),
-                        Arc::clone(&self.asset_manager),
-                        self.storage_settings.as_ref(),
-                        branch_name,
-                        &self.snapshot_id,
-                        &self.change_set,
-                        message,
-                        Some(properties),
-                        &self.splits,
-                        rewrite_manifests,
-                    )
-                    .await
-                }
-            }
-        }?;
+        .await?;
 
         // if the commit was successful, we update the session to be
         // a read only session pointed at the new snapshot
-        self.change_set = ChangeSet::default();
+        self.change_set = ChangeSet::for_edits();
         self.snapshot_id = id.clone();
         // Once committed, the session is now read only, which we control
         // by setting the branch_name to None (you can only write to a branch session)
@@ -1225,76 +1394,87 @@ impl Session {
         };
 
         debug!("Rebase started");
-        let ref_data = fetch_branch_tip(
-            self.storage.as_ref(),
-            self.storage_settings.as_ref(),
-            branch_name,
-        )
-        .await?;
 
-        if ref_data.snapshot == self.snapshot_id {
-            // nothing to do, commit should work without rebasing
-            warn!(
-                branch = &self.branch_name,
-                "No rebase is needed, parent snapshot is at the top of the branch. Aborting rebase."
-            );
-            Ok(())
-        } else {
-            let current_snapshot =
-                self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
-            let ancestry = Arc::clone(&self.asset_manager)
-                .snapshot_info_ancestry(&current_snapshot.id())
-                .await?
-                .map_ok(|meta| meta.id);
-            let new_commits =
-                stream::once(ready(Ok(ref_data.snapshot.clone())))
-                    .chain(ancestry.try_take_while(|snap_id| {
-                        ready(Ok(snap_id != &self.snapshot_id))
-                    }))
+        let (latest_repo_info, _) = self.asset_manager.fetch_repo_info().await?;
+
+        match latest_repo_info.resolve_branch(branch_name) {
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::BranchNotFound { .. },
+                ..
+            }) => {
+                // FIXME: write test for this
+                // nothing to do, branch deleted
+                warn!(
+                    branch = &self.branch_name,
+                    "No rebase is needed, the branch was deleted. Aborting rebase."
+                );
+                Ok(())
+            }
+            Err(err) => Err(err.into()),
+            Ok(current_snapshot_id) if current_snapshot_id == self.snapshot_id => {
+                // nothing to do, commit should work without rebasing
+                warn!(
+                    branch = &self.branch_name,
+                    "No rebase is needed, parent snapshot is at the top of the branch. Aborting rebase."
+                );
+                Ok(())
+            }
+            Ok(current_snapshot_id) => {
+                let ancestry = stream::iter(
+                    latest_repo_info
+                        .ancestry(&current_snapshot_id)?
+                        .map_ok(|snap| snap.id),
+                );
+                let new_commits = ancestry
+                    .try_take_while(|snap_id| ready(Ok(snap_id != &self.snapshot_id)))
                     .try_collect::<Vec<_>>()
                     .await?;
-            trace!("Found {} commits to rebase", new_commits.len());
+                trace!("Found {} commits to rebase over", new_commits.len());
 
-            // TODO: this clone is expensive
-            // we currently need it to be able to process commits one by one without modifying the
-            // changeset in case of failure
-            // let mut changeset = self.change_set.clone();
+                // TODO: this clone is expensive
+                // we currently need it to be able to process commits one by one without modifying the
+                // changeset in case of failure
+                // let mut changeset = self.change_set.clone();
 
-            // we need to reverse the iterator to process them in order of oldest first
-            for snap_id in new_commits.into_iter().rev() {
-                debug!("Rebasing snapshot {}", &snap_id);
-                let tx_log = self.asset_manager.fetch_transaction_log(&snap_id).await?;
+                // we need to reverse the iterator to process them in order of oldest first
+                for snap_id in new_commits.into_iter().rev() {
+                    debug!("Rebasing snapshot {}", &snap_id);
+                    let tx_log =
+                        self.asset_manager.fetch_transaction_log(&snap_id).await?;
 
-                let session = Self::create_readonly_session(
-                    self.config.clone(),
-                    self.storage_settings.as_ref().clone(),
-                    Arc::clone(&self.storage),
-                    Arc::clone(&self.asset_manager),
-                    Arc::clone(&self.virtual_resolver),
-                    ref_data.snapshot.clone(),
-                );
+                    let session = Self::create_readonly_session(
+                        self.config.clone(),
+                        self.storage_settings.as_ref().clone(),
+                        Arc::clone(&self.storage),
+                        Arc::clone(&self.asset_manager),
+                        Arc::clone(&self.virtual_resolver),
+                        current_snapshot_id.clone(),
+                    );
 
-                let change_set = std::mem::take(&mut self.change_set);
-                // TODO: this should probably execute in a worker thread
-                match solver.solve(&tx_log, &session, change_set, self).await? {
-                    ConflictResolution::Patched(patched_changeset) => {
-                        trace!("Snapshot rebased");
-                        self.change_set = patched_changeset;
-                        self.snapshot_id = snap_id;
-                    }
-                    ConflictResolution::Unsolvable { reason, unmodified } => {
-                        warn!("Snapshot cannot be rebased. Aborting rebase.");
-                        self.change_set = unmodified;
-                        return Err(SessionErrorKind::RebaseFailed {
-                            snapshot: snap_id,
-                            conflicts: reason,
+                    let mut fresh = self.change_set().fresh();
+                    std::mem::swap(self.change_set_mut()?, &mut fresh);
+                    let change_set = fresh;
+                    // TODO: this should probably execute in a worker thread
+                    match solver.solve(&tx_log, &session, change_set, self).await? {
+                        ConflictResolution::Patched(patched_changeset) => {
+                            trace!("Snapshot rebased");
+                            self.change_set = patched_changeset;
+                            self.snapshot_id = snap_id;
                         }
-                        .into());
+                        ConflictResolution::Unsolvable { reason, unmodified } => {
+                            warn!("Snapshot cannot be rebased. Aborting rebase.");
+                            self.change_set = unmodified;
+                            return Err(SessionErrorKind::RebaseFailed {
+                                snapshot: snap_id,
+                                conflicts: reason,
+                            }
+                            .into());
+                        }
                     }
                 }
+                debug!("Rebase done");
+                Ok(())
             }
-            debug!("Rebase done");
-            Ok(())
         }
     }
 }
@@ -1562,7 +1742,7 @@ async fn get_node(
         None => {
             let node =
                 get_existing_node(asset_manager, change_set, snapshot_id, path).await?;
-            if change_set.is_deleted(&node.path, &node.id) {
+            if change_set.is_deleted(path, &node.id) {
                 Err(SessionErrorKind::NodeNotFound {
                     path: path.clone(),
                     message: "getting node".to_string(),
@@ -1584,42 +1764,64 @@ async fn get_existing_node(
     // An existing node is one that is present in a Snapshot file on storage
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
 
-    let node = snapshot.get_node(path).map_err(|err| match err {
-        // A missing node here is not really a format error, so we need to
-        // generate the correct error for repositories
-        IcechunkFormatError {
-            kind: IcechunkFormatErrorKind::NodeNotFound { path },
-            ..
-        } => SessionErrorKind::NodeNotFound {
-            path,
+    match change_set.moved_from(path) {
+        None => Err(SessionErrorKind::NodeNotFound {
+            path: path.clone(),
             message: "existing node not found".to_string(),
         }
-        .into(),
-        err => SessionError::from(err),
-    })?;
-
-    match node.node_data {
-        NodeData::Array { ref manifests, .. } => {
-            if let Some(new_data) = change_set.get_updated_array(&node.id) {
-                let node_data = NodeData::Array {
-                    shape: new_data.shape.clone(),
-                    dimension_names: new_data.dimension_names.clone(),
-                    manifests: manifests.clone(),
-                };
-                Ok(NodeSnapshot {
-                    user_data: new_data.user_data.clone(),
-                    node_data,
-                    ..node
-                })
-            } else {
-                Ok(node)
-            }
-        }
-        NodeData::Group => {
-            if let Some(updated_definition) = change_set.get_updated_group(&node.id) {
-                Ok(NodeSnapshot { user_data: updated_definition.clone(), ..node })
-            } else {
-                Ok(node)
+        .into()),
+        Some(renamed_path) => {
+            match snapshot.get_node(renamed_path.as_ref()) {
+                Ok(node) => {
+                    let node = match node.node_data {
+                        NodeData::Array { ref manifests, .. } => {
+                            if let Some(new_data) = change_set.get_updated_array(&node.id)
+                            {
+                                let node_data = NodeData::Array {
+                                    shape: new_data.shape.clone(),
+                                    dimension_names: new_data.dimension_names.clone(),
+                                    manifests: manifests.clone(),
+                                };
+                                NodeSnapshot {
+                                    user_data: new_data.user_data.clone(),
+                                    node_data,
+                                    ..node
+                                }
+                            } else {
+                                node
+                            }
+                        }
+                        NodeData::Group => {
+                            if let Some(updated_definition) =
+                                change_set.get_updated_group(&node.id)
+                            {
+                                NodeSnapshot {
+                                    user_data: updated_definition.clone(),
+                                    ..node
+                                }
+                            } else {
+                                node
+                            }
+                        }
+                    };
+                    let node = if &node.path != path {
+                        NodeSnapshot { path: path.clone(), ..node }
+                    } else {
+                        node
+                    };
+                    Ok(node)
+                }
+                // A missing node here is not really a format error, so we need to
+                // generate the correct error for repositories
+                Err(IcechunkFormatError {
+                    kind: IcechunkFormatErrorKind::NodeNotFound { .. },
+                    ..
+                }) => Err(SessionErrorKind::NodeNotFound {
+                    path: path.clone(),
+                    message: "existing node not found".to_string(),
+                }
+                .into()),
+                Err(err) => Err(SessionError::from(err)),
             }
         }
     }
@@ -1636,18 +1838,6 @@ async fn all_chunks<'a>(
     let new_array_chunks =
         futures::stream::iter(change_set.new_arrays_chunk_iterator().map(Ok));
     Ok(existing_array_chunks.chain(new_array_chunks))
-}
-
-pub async fn raise_if_invalid_snapshot_id(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
-    snapshot_id: &SnapshotId,
-) -> SessionResult<()> {
-    storage
-        .fetch_snapshot(storage_settings, snapshot_id)
-        .await
-        .map_err(|_| SessionErrorKind::SnapshotNotFound { id: snapshot_id.clone() })?;
-    Ok(())
 }
 
 // Converts the requested ByteRange to a valid ByteRange appropriate
@@ -1680,6 +1870,27 @@ pub fn construct_valid_byte_range(
             let new_start = new_end - n;
             new_start..new_end
         }
+    }
+}
+
+pub fn shift_by(offset: &[i64]) -> impl Fn(&ChunkIndices) -> ReindexOperationResult {
+    |index: &ChunkIndices| {
+        let res: Option<Vec<u32>> = index
+            .0
+            .iter()
+            .zip(offset.iter())
+            .map(|(index, offset)| {
+                let new_index = *index as i64 + offset;
+                if new_index < 0 {
+                    return Ok(None);
+                }
+                let new_index: u32 = new_index
+                    .try_into()
+                    .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
+                Ok::<_, SessionError>(Some(new_index))
+            })
+            .try_collect()?;
+        Ok(res.map(ChunkIndices))
     }
 }
 
@@ -1980,12 +2191,19 @@ impl ManifestSplittingConfig {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum CommitMethod {
+    NewCommit,
+    Amend,
+}
+
 async fn do_flush(
     mut flush_data: FlushProcess<'_>,
     message: &str,
     properties: SnapshotProperties,
     rewrite_manifests: bool,
-) -> SessionResult<SnapshotId> {
+    commit_method: CommitMethod,
+) -> SessionResult<Arc<Snapshot>> {
     if !rewrite_manifests && flush_data.change_set.is_empty() {
         return Err(SessionErrorKind::NoChangesToCommit.into());
     }
@@ -2093,7 +2311,6 @@ async fn do_flush(
 
     let new_snapshot = Snapshot::from_iter(
         None,
-        Some(old_snapshot.id().clone()),
         message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
@@ -2129,12 +2346,21 @@ async fn do_flush(
 
     trace!(transaction_log_id = %new_snapshot.id(), "Creating transaction log");
     let new_snapshot_id = new_snapshot.id();
+
     // FIXME: this should execute in a non-blocking context
-    let tx_log = TransactionLog::new(&new_snapshot_id, flush_data.change_set);
+    let this_tx_log = TransactionLog::new(&new_snapshot_id, flush_data.change_set);
+    let new_tx_log = if commit_method == CommitMethod::NewCommit {
+        this_tx_log
+    } else {
+        let previous_log =
+            flush_data.asset_manager.fetch_transaction_log(&old_snapshot.id()).await?;
+        // FIXME: this should execute in a non-blocking context
+        TransactionLog::merge(&new_snapshot_id, [previous_log.as_ref(), &this_tx_log])
+    };
 
     flush_data
         .asset_manager
-        .write_transaction_log(new_snapshot_id.clone(), Arc::new(tx_log))
+        .write_transaction_log(new_snapshot_id.clone(), Arc::new(new_tx_log))
         .await?;
 
     let snapshot_timestamp = snapshot_timestamp
@@ -2157,14 +2383,12 @@ async fn do_flush(
         .into());
     }
 
-    Ok(new_snapshot_id.clone())
+    Ok(new_snapshot)
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn do_commit(
-    storage: &(dyn Storage + Send + Sync),
     asset_manager: Arc<AssetManager>,
-    storage_settings: &storage::Settings,
     branch_name: &str,
     snapshot_id: &SnapshotId,
     change_set: &ChangeSet,
@@ -2172,38 +2396,93 @@ async fn do_commit(
     properties: Option<SnapshotProperties>,
     splits: &HashMap<NodeId, ManifestSplits>,
     rewrite_manifests: bool,
+    commit_method: CommitMethod,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
-    let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
-    let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id, splits);
+    let flush_data =
+        FlushProcess::new(Arc::clone(&asset_manager), change_set, snapshot_id, splits);
     let new_snapshot =
-        do_flush(flush_data, message, properties, rewrite_manifests).await?;
+        do_flush(flush_data, message, properties, rewrite_manifests, commit_method)
+            .await?;
+    let new_snapshot_id = new_snapshot.id();
 
-    debug!(branch_name, new_snapshot_id=%new_snapshot, "Updating branch");
-    let id = match update_branch(
-        storage,
-        storage_settings,
-        branch_name,
-        new_snapshot.clone(),
-        Some(&parent_snapshot),
-    )
-    .await
-    {
-        Ok(_) => Ok(new_snapshot.clone()),
-        Err(RefError {
-            kind: RefErrorKind::Conflict { expected_parent, actual_parent },
+    let mut attempt = 0;
+
+    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        attempt += 1;
+        let actual_parent = repo_info.resolve_branch(branch_name)?;
+        if &actual_parent != snapshot_id {
+            info!(branch_name, %new_snapshot_id, attempt, "Branch tip has changed, rebase needed");
+            return Err(RepositoryError::from(RepositoryErrorKind::Conflict {
+                expected_parent: Some(snapshot_id.clone()),
+                actual_parent: Some(actual_parent),
+            }));
+        }
+
+        let parent_snapshot = repo_info.find_snapshot(snapshot_id)?;
+        let parent_id = match (commit_method, parent_snapshot.parent_id) {
+            (CommitMethod::NewCommit, _) => snapshot_id.clone(),
+            (CommitMethod::Amend, Some(parent_id)) => parent_id,
+            (CommitMethod::Amend, None) => {
+                return Err(RepositoryErrorKind::NoAmendForInitialCommit.into());
+            }
+        };
+
+        debug!(branch_name, %new_snapshot_id, %parent_id, attempt, "Generating new repo info object");
+        let new_snapshot_info = SnapshotInfo {
+            parent_id: Some(parent_id.clone()),
+            ..new_snapshot.as_ref().try_into()?
+        };
+
+        let update_type = match commit_method {
+            CommitMethod::NewCommit => {
+                UpdateType::NewCommitUpdate { branch: branch_name.to_string() }
+            }
+            CommitMethod::Amend => UpdateType::CommitAmendedUpdate {
+                branch: branch_name.to_string(),
+                previous_snap_id: parent_snapshot.id.clone(),
+            },
+        };
+        Ok(Arc::new(repo_info.add_snapshot(
+            new_snapshot_info,
+            Some(branch_name),
+            &update_type,
+            Some(backup_path),
+        )?))
+    };
+
+    let res = asset_manager
+        // FIXME: hardcoded retries
+        .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+        .await;
+
+    match res {
+        Ok(new_version) => {
+            info!(
+                branch_name,
+                new_repo_info_version=?new_version,
+                %new_snapshot_id,
+                attempt,
+                "Commit done"
+            );
+            Ok(new_snapshot_id)
+        }
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::Conflict { expected_parent, actual_parent },
             ..
         }) => Err(SessionError::from(SessionErrorKind::Conflict {
             expected_parent,
             actual_parent,
         })),
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::NoAmendForInitialCommit,
+            ..
+        }) => Err(SessionError::from(SessionErrorKind::NoAmendForInitialCommit)),
         Err(err) => Err(err.into()),
-    }?;
-
-    info!(branch_name, old_snapshot_id=%snapshot_id, new_snapshot_id=%new_snapshot, "Commit done");
-    Ok(id)
+    }
 }
+
 async fn fetch_manifest(
     manifest_id: &ManifestId,
     snapshot_id: &SnapshotId,
@@ -2291,8 +2570,10 @@ mod tests {
             basic_solver::{BasicConflictSolver, VersionSelection},
             detector::ConflictDetector,
         },
-        format::manifest::{ManifestExtents, ManifestSplits},
-        refs::{Ref, fetch_tag},
+        format::{
+            manifest::{ManifestExtents, ManifestSplits},
+            repo_info::RepoInfo,
+        },
         repository::VersionInfo,
         storage::new_in_memory_storage,
         strategies::{
@@ -2302,7 +2583,7 @@ mod tests {
 
     use super::*;
     use icechunk_macros::tokio_test;
-    use itertools::Itertools;
+    use itertools::{Itertools, assert_equal};
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
@@ -2519,10 +2800,11 @@ mod tests {
         let mut repo = create_memory_store_repository().await;
         let mut ds = repo.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::new()).await?;
-        let snapshot = ds.commit("commit", None).await?;
+        let snapshot = ds.commit("commit 1", None).await?;
 
         // Verify that the first commit has no metadata
-        let ancestry = repo.snapshot_ancestry(&snapshot).await?;
+        let v = VersionInfo::SnapshotId(snapshot.clone());
+        let ancestry = repo.ancestry(&v).await?;
         let snapshot_infos = ancestry.try_collect::<Vec<_>>().await?;
         assert!(snapshot_infos[0].metadata.is_empty());
 
@@ -2534,9 +2816,10 @@ mod tests {
 
         let mut ds = repo.writable_session("main").await?;
         ds.add_group("/group".try_into().unwrap(), Bytes::new()).await?;
-        let snapshot = ds.commit("commit", None).await?;
+        let snapshot = ds.commit("commit 2", None).await?;
 
-        let snapshot_info = repo.snapshot_ancestry(&snapshot).await?;
+        let v = VersionInfo::SnapshotId(snapshot.clone());
+        let snapshot_info = repo.ancestry(&v).await?;
         let snapshot_infos = snapshot_info.try_collect::<Vec<_>>().await?;
         assert_eq!(snapshot_infos[0].metadata, default_metadata);
 
@@ -2548,7 +2831,8 @@ mod tests {
         ds.add_group("/group2".try_into().unwrap(), Bytes::new()).await?;
         let snapshot = ds.commit("commit", Some(metadata.clone())).await?;
 
-        let snapshot_info = repo.snapshot_ancestry(&snapshot).await?;
+        let v = VersionInfo::SnapshotId(snapshot.clone());
+        let snapshot_info = repo.ancestry(&v).await?;
         let snapshot_infos = snapshot_info.try_collect::<Vec<_>>().await?;
         let mut expected_result = SnapshotProperties::default();
         expected_result.insert("author".to_string(), "Jane Doe".to_string().into());
@@ -2605,7 +2889,7 @@ mod tests {
 
         let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
         for idx in [0, 2] {
-            let payload = session.get_chunk_writer()(bytes.clone()).await?;
+            let payload = session.get_chunk_writer()?(bytes.clone()).await?;
             session
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
                 .await?;
@@ -2647,7 +2931,7 @@ mod tests {
         );
 
         // set another chunk in this split
-        let payload = session.get_chunk_writer()(bytes.clone()).await?;
+        let payload = session.get_chunk_writer()?(bytes.clone()).await?;
         session
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![3]), Some(payload))
             .await?;
@@ -2677,7 +2961,8 @@ mod tests {
 
     #[tokio_test]
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> =
+            crate::new_in_memory_storage().await?;
         let storage_settings = storage.default_settings();
         let asset_manager = AssetManager::new_no_cache(
             Arc::clone(&storage),
@@ -2745,7 +3030,6 @@ mod tests {
         let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
             None,
-            Some(initial.id().clone()),
             "message".to_string(),
             None,
             manifests,
@@ -2753,20 +3037,28 @@ mod tests {
             nodes.iter().cloned().map(Ok::<NodeSnapshot, Infallible>),
         )?);
         asset_manager.write_snapshot(Arc::clone(&snapshot)).await?;
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "main",
-            snapshot.id().clone(),
-            None,
-        )
-        .await?;
+        // FIXME:
+        // update_branch(
+        //     storage.as_ref(),
+        //     &storage_settings,
+        //     "main",
+        //     snapshot.id().clone(),
+        //     None,
+        // )
+        // .await?;
         Repository::store_config(
-            storage.as_ref(),
+            storage.clone(),
             &RepositoryConfig::default(),
             &storage::VersionInfo::for_creation(),
         )
         .await?;
+        let repo_info = RepoInfo::initial((&initial).try_into()?).add_snapshot(
+            snapshot.as_ref().try_into()?,
+            Some("main"),
+            &UpdateType::NewCommitUpdate { branch: "main".to_string() },
+            None,
+        )?;
+        asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 
         let repo = Repository::open(None, storage, HashMap::new()).await?;
         let mut ds = repo.writable_session("main").await?;
@@ -2847,7 +3139,7 @@ mod tests {
                     node_data == NodeData::Array { shape:shape3, dimension_names: dimension_names3, manifests: vec![] }
         ));
 
-        let payload = ds.get_chunk_writer()(Bytes::copy_from_slice(b"foo")).await?;
+        let payload = ds.get_chunk_writer()?(Bytes::copy_from_slice(b"foo")).await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
 
@@ -2879,7 +3171,7 @@ mod tests {
 
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"foo".repeat(512).as_slice());
-        let payload = ds.get_chunk_writer()(data.clone()).await?;
+        let payload = ds.get_chunk_writer()?(data.clone()).await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
 
@@ -2911,11 +3203,11 @@ mod tests {
 
         // set old array chunk and check them
         let data = Bytes::copy_from_slice(b"old".repeat(512).as_slice());
-        let payload = ds.get_chunk_writer()(data.clone()).await?;
+        let payload = ds.get_chunk_writer()?(data.clone()).await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![0]), Some(payload))
             .await?;
         let data = Bytes::copy_from_slice(b"new".repeat(512).as_slice());
-        let payload = ds.get_chunk_writer()(data.clone()).await?;
+        let payload = ds.get_chunk_writer()?(data.clone()).await?;
         ds.set_chunk_ref(new_array_path.clone(), ChunkIndices(vec![1]), Some(payload))
             .await?;
 
@@ -2947,7 +3239,12 @@ mod tests {
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
         let storage = Arc::clone(&logging_c);
 
-        let repository = Repository::create(None, storage, HashMap::new()).await?;
+        let config = RepositoryConfig {
+            inline_chunk_threshold_bytes: Some(0),
+            ..Default::default()
+        };
+        let repository =
+            Repository::create(Some(config), storage, HashMap::new()).await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -3028,8 +3325,7 @@ mod tests {
         .await?;
 
         assert!(ds.has_uncommitted_changes());
-        let changes = ds.discard_changes();
-        assert!(!changes.is_empty());
+        ds.discard_changes()?;
         assert!(!ds.has_uncommitted_changes());
 
         // we set a chunk in a new array
@@ -3179,11 +3475,12 @@ mod tests {
                     actual_dims == new_dimension_names
         ));
 
-        // since we wrote every asset we should only have one fetch for the initial snapshot
-        // TODO: this could be better, we should need none
-        let ops = logging.fetch_operations();
-        assert_eq!(ops.len(), 1);
-        assert_eq!(ops[0].0, "fetch_snapshot");
+        let ops =
+            Vec::from_iter(logging.fetch_operations().into_iter().filter(|(op, key)| {
+                op == "get_object_range"
+                    && (key.starts_with("snapshots") || key.starts_with("manifests"))
+            }));
+        assert_eq!(ops.len(), 0);
 
         //test the previous version is still alive
         let ds = repository
@@ -3251,6 +3548,24 @@ mod tests {
         );
         assert_eq!(&diff.updated_arrays, &[new_array_path.clone()].into());
         assert_eq!(&diff.updated_groups, &[].into());
+
+        repository.save_config().await?;
+
+        let overwritten = repository
+            .asset_manager()
+            .list_overwritten_objects()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        // 6 commits
+        assert_eq!(overwritten.iter().filter(|s| s.starts_with("repo")).count(), 6);
+
+        // 1 config save
+        assert_eq!(
+            overwritten.iter().filter(|s| s.starts_with("config.yaml")).count(),
+            1
+        );
         Ok(())
     }
 
@@ -3634,8 +3949,6 @@ mod tests {
     #[tokio_test(flavor = "multi_thread")]
     async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
-        let storage = Arc::clone(repo.storage());
-        let storage_settings = storage.default_settings();
         let mut ds = repo.writable_session("main").await?;
 
         let def = Bytes::copy_from_slice(b"");
@@ -3643,15 +3956,12 @@ mod tests {
         // add a new array and retrieve its node
         ds.add_group(Path::root(), def.clone()).await?;
         let new_snapshot_id = ds.commit("first commit", None).await?;
-        assert_eq!(
-            new_snapshot_id,
-            fetch_branch_tip(storage.as_ref(), &storage_settings, "main").await?.snapshot
-        );
+        assert_eq!(new_snapshot_id, repo.lookup_branch("main").await?);
         assert_eq!(&new_snapshot_id, ds.snapshot_id());
 
         repo.create_tag("v1", &new_snapshot_id).await?;
-        let ref_data = fetch_tag(storage.as_ref(), &storage_settings, "v1").await?;
-        assert_eq!(new_snapshot_id, ref_data.snapshot);
+        let s = repo.lookup_tag("v1").await?;
+        assert_eq!(new_snapshot_id, s);
 
         assert!(matches!(
                 ds.get_node(&Path::root()).await.ok(),
@@ -3685,10 +3995,7 @@ mod tests {
         )
         .await?;
         let new_snapshot_id = ds.commit("second commit", None).await?;
-        let ref_data =
-            fetch_branch_tip(storage.as_ref(), &storage_settings, Ref::DEFAULT_BRANCH)
-                .await?;
-        assert_eq!(new_snapshot_id, ref_data.snapshot);
+        assert_eq!(new_snapshot_id, repo.lookup_branch("main").await?);
 
         let parents = repo
             .ancestry(&VersionInfo::SnapshotId(new_snapshot_id))
@@ -3702,6 +4009,94 @@ mod tests {
         itertools::assert_equal(
             parents.iter().sorted_by_key(|m| m.flushed_at).rev(),
             parents.iter(),
+        );
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_amend() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session.commit("make root", None).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        let before_amend1 = session.commit("will be amended", None).await?;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
+        let before_amend2 = session.amend("first amend", None).await?;
+
+        let main_version = VersionInfo::BranchTipRef("main".to_string());
+        let anc: Vec<_> = repo
+            .ancestry(&main_version)
+            .await?
+            .map_ok(|si| si.message)
+            .try_collect()
+            .await?;
+
+        // the amended commit is not in the history
+        assert_eq!(anc, vec!["first amend", "make root", "Repository initialized"]);
+
+        let session = repo.readonly_session(&main_version).await?;
+        assert!(session.get_group(&Path::root()).await.is_ok());
+        assert!(session.get_group(&"/a".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/b".try_into().unwrap()).await.is_ok());
+        assert_eq!(session.list_nodes(&Path::root()).await?.count(), 3);
+
+        let last =
+            repo.resolve_version(&VersionInfo::BranchTipRef("main".to_string())).await?;
+
+        repo.create_tag("tag", &last).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session
+            .add_group("/error".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session.amend("second amend", None).await?;
+
+        let anc_from_tag: Vec<_> = repo
+            .ancestry(&VersionInfo::TagRef("tag".to_string()))
+            .await?
+            .map_ok(|si| si.message)
+            .try_collect()
+            .await?;
+        assert_eq!(
+            anc_from_tag,
+            vec!["first amend", "make root", "Repository initialized"]
+        );
+
+        let anc_from_main: Vec<_> = repo
+            .ancestry(&main_version)
+            .await?
+            .map_ok(|si| si.message)
+            .try_collect()
+            .await?;
+        assert_eq!(
+            anc_from_main,
+            vec!["second amend", "make root", "Repository initialized"]
+        );
+        let updates =
+            repo.ops_log().await?.map_ok(|(_, up)| up).try_collect::<Vec<_>>().await?;
+
+        use UpdateType::*;
+        assert_eq!(
+            updates,
+            vec![
+                CommitAmendedUpdate {
+                    branch: "main".to_string(),
+                    previous_snap_id: before_amend2
+                },
+                TagCreatedUpdate { name: "tag".to_string() },
+                CommitAmendedUpdate {
+                    branch: "main".to_string(),
+                    previous_snap_id: before_amend1
+                },
+                NewCommitUpdate { branch: "main".to_string() },
+                NewCommitUpdate { branch: "main".to_string() },
+                RepoInitializedUpdate,
+            ]
         );
 
         Ok(())
@@ -3773,6 +4168,95 @@ mod tests {
     }
 
     #[tokio_test]
+    async fn test_basic_move() -> Result<(), Box<dyn Error>> {
+        let in_mem_storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let mut session = repo.writable_session("main").await?;
+
+        let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        session.add_group(Path::new("/foo/old").unwrap(), Bytes::new()).await?;
+        let apath: Path = "/foo/old/array".try_into()?;
+        session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
+        session.commit("first commit", None).await?;
+
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node(Path::new("/foo/old").unwrap(), Path::new("/foo/new").unwrap())
+            .await?;
+
+        assert_eq!(
+            session.get_node(&Path::new("/").unwrap()).await?.path.to_string(),
+            "/"
+        );
+
+        assert_eq!(
+            session
+                .get_node(&Path::new("/foo/new/array").unwrap())
+                .await?
+                .path
+                .to_string(),
+            "/foo/new/array"
+        );
+        assert!(session.get_node(&Path::new("/foo/old/array").unwrap()).await.is_err());
+
+        assert_equal(
+            session.list_nodes(&Path::root()).await?.map(|n| n.unwrap().path),
+            [
+                Path::new("/").unwrap(),
+                Path::new("/foo/new").unwrap(),
+                Path::new("/foo/new/array").unwrap(),
+            ],
+        );
+
+        session.commit("moved", None).await?;
+
+        let session =
+            repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
+
+        assert_eq!(
+            session
+                .get_node(&Path::new("/foo/new/array").unwrap())
+                .await?
+                .path
+                .to_string(),
+            "/foo/new/array"
+        );
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_move_errors() -> Result<(), Box<dyn Error>> {
+        let in_mem_storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let mut session = repo.writable_session("main").await?;
+
+        let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/foo/old/array".try_into()?;
+        session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
+        session.commit("first commit", None).await?;
+
+        let mut session = repo.rearrange_session("main").await?;
+        assert!(matches!(
+                session
+                    .move_node(Path::new("/foo/old/array").unwrap(), Path::new("/foo/old/array").unwrap())
+                    .await,
+                Err(SessionError{kind: SessionErrorKind::MoveWontOverwrite(s), ..}) if s == "/foo/old/array"
+        ));
+
+        assert!(matches!(
+                session
+                    .move_node(Path::new("/foo/old/unknown").unwrap(), Path::new("/foo/bar").unwrap())
+                    .await,
+                Err(SessionError{kind: SessionErrorKind::NodeNotFound{path, ..}, ..}) if path == Path::new("/foo/old/unknown").unwrap()
+        ));
+        Ok(())
+    }
+
+    #[tokio_test]
     async fn test_setting_w_invalid_coords() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
@@ -3834,6 +4318,51 @@ mod tests {
     }
 
     #[tokio_test]
+    async fn test_array_shift() -> Result<(), Box<dyn Error>> {
+        let in_mem_storage = new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let mut session = repo.writable_session("main").await?;
+        let shape = ArrayShape::new(vec![(20, 2)]).unwrap();
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let apath: Path = "/array".try_into()?;
+        session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
+
+        for chunk_index in 0..10 {
+            session
+                .set_chunk_ref(
+                    apath.clone(),
+                    ChunkIndices(vec![chunk_index]),
+                    Some(ChunkPayload::Inline(chunk_index.to_string().into())),
+                )
+                .await?;
+        }
+
+        session.commit("first commit", None).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        session.reindex_array(&apath, shift_by(&[-1])).await?;
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?,
+            Some(ChunkPayload::Inline("1".into()))
+        );
+        for chunk_index in 0..=8 {
+            let new_payload =
+                session.get_chunk_ref(&apath, &ChunkIndices(vec![chunk_index])).await?;
+            assert_eq!(
+                new_payload,
+                Some(ChunkPayload::Inline((chunk_index + 1).to_string().into()))
+            )
+        }
+
+        assert_eq!(
+            session.get_chunk_ref(&apath, &ChunkIndices(vec![9])).await?,
+            Some(ChunkPayload::Inline("9".into()))
+        );
+        Ok(())
+    }
+
+    #[tokio_test]
     async fn test_flush() -> Result<(), Box<dyn Error>> {
         let repository = create_memory_store_repository().await;
         let mut session = repository.writable_session("main").await?;
@@ -3859,7 +4388,7 @@ mod tests {
         .await?;
         assert_eq!(chunk, Some(Bytes::from_static(br#"hello"#)));
         assert!(session.branch().is_none());
-        assert!(session.changes().is_empty());
+        assert!(session.change_set().is_empty());
 
         repository
             .reset_branch("main", &snap_id, Some(&Snapshot::INITIAL_SNAPSHOT_ID))
@@ -4198,7 +4727,7 @@ mod tests {
         )
         .await?;
 
-        let conflicting_snap = ds1.commit("write two chunks with repo 1", None).await?;
+        let _conflicting_snap = ds1.commit("write two chunks with repo 1", None).await?;
 
         // let's try to create a new commit, that conflicts with the previous one but writes to
         // different chunks
@@ -4240,22 +4769,7 @@ mod tests {
             panic!("Bad test, it should conflict")
         }
 
-        // reset the branch to what repo1 wrote
-        let current_snap = fetch_branch_tip(
-            repo.storage().as_ref(),
-            &repo.storage().default_settings(),
-            "main",
-        )
-        .await?
-        .snapshot;
-        update_branch(
-            repo.storage().as_ref(),
-            &repo.storage().default_settings(),
-            "main",
-            conflicting_snap.clone(),
-            Some(&current_snap),
-        )
-        .await?;
+        let _ = repo.lookup_branch("main").await?;
         Ok(())
     }
 
@@ -4560,7 +5074,7 @@ mod tests {
         // the result should be that it can never commit, failing after the indicated number of
         // attempts
         let conflicting = |attempt| async move {
-            attempts_ref.fetch_add(1, Ordering::SeqCst); //*attempts_ref = *attempts_ref + 1;;
+            attempts_ref.fetch_add(1, Ordering::SeqCst);
             assert_eq!(attempt, attempts_ref.load(Ordering::SeqCst));
 
             let repo_c = Arc::clone(repo_ref);

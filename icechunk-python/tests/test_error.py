@@ -18,11 +18,13 @@ def test_error_message_when_snapshot_deleted(tmpdir: Path) -> None:
     rmtree(tmpdir / "snapshots")
 
     repo = ic.Repository.open(storage=storage)
-    # we check error includes the spans for ancestry and fetch_snapshot
+    session = repo.writable_session(branch="main")
+    # we check error includes the spans for fetch_snapshot and missing object
     with pytest.raises(
-        ic.IcechunkError, match=re.compile("fetch_snapshot.*ancestry", re.DOTALL)
+        ic.IcechunkError,
+        match=re.compile("object not found.*1CECHNKREP0F1RSTCMT0.*", re.DOTALL),
     ):
-        repo.ancestry(branch="main")
+        zarr.group(store=session.store, overwrite=True)
 
 
 def test_error_message_when_manifest_file_altered(tmpdir: Path) -> None:

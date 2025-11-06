@@ -23,6 +23,7 @@ pub(crate) enum PyConflictType {
     ChunksUpdatedInUpdatedArray = 8,
     DeleteOfUpdatedArray = 9,
     DeleteOfUpdatedGroup = 10,
+    MoveOperationCannotBeRebased = 11,
 }
 
 impl Display for PyConflictType {
@@ -48,6 +49,9 @@ impl Display for PyConflictType {
             }
             PyConflictType::DeleteOfUpdatedArray => "Delete of updated array",
             PyConflictType::DeleteOfUpdatedGroup => "Delete of updated group",
+            PyConflictType::MoveOperationCannotBeRebased => {
+                "Move operation cannot be rebased"
+            }
         };
         write!(f, "{variant_str}")
     }
@@ -147,6 +151,11 @@ impl From<&Conflict> for PyConflict {
             Conflict::DeleteOfUpdatedGroup { path, node_id: _ } => PyConflict {
                 conflict_type: PyConflictType::DeleteOfUpdatedGroup,
                 path: path.to_string(),
+                conflicted_chunks: None,
+            },
+            Conflict::MoveOperationCannotBeRebased => PyConflict {
+                conflict_type: PyConflictType::MoveOperationCannotBeRebased,
+                path: String::new(),
                 conflicted_chunks: None,
             },
         }

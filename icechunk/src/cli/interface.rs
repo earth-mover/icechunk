@@ -466,14 +466,11 @@ mod tests {
 
         repo_create(&init_cmd, &config).await.unwrap();
 
-        let refs = path.join("refs");
+        let repo = path.join("repo");
         let snapshots = path.join("snapshots");
 
-        assert!(refs.is_dir());
+        assert!(repo.is_file());
         assert!(snapshots.is_dir());
-
-        let mut refs_contents = read_dir(refs).unwrap();
-        assert!(refs_contents.next().is_some());
 
         let mut snapshots_contents = read_dir(snapshots).unwrap();
         assert!(snapshots_contents.next().is_some());

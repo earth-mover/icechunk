@@ -1,17 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-use std::collections::HashMap;
-use std::num::{NonZeroU16, NonZeroU64};
-use std::ops::{Bound, Range};
-use std::path::PathBuf;
-
-use prop::string::string_regex;
-use proptest::prelude::*;
-use proptest::{collection::vec, option, strategy::Strategy};
-
 use crate::config::{
-    CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig,
+    AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
+    CompressionConfig, GcsBearerCredential, GcsStaticCredentials, ManifestConfig,
     ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
     ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3Options,
+    S3StaticCredentials,
 };
 use crate::format::manifest::ManifestExtents;
 use crate::format::snapshot::{ArrayShape, DimensionName};
@@ -22,6 +15,14 @@ use crate::storage::{
 };
 use crate::virtual_chunks::VirtualChunkContainer;
 use crate::{ObjectStoreConfig, Repository, RepositoryConfig};
+use chrono::{DateTime, Utc};
+use prop::string::string_regex;
+use proptest::prelude::*;
+use proptest::{collection::vec, option, strategy::Strategy};
+use std::collections::HashMap;
+use std::num::{NonZeroU16, NonZeroU64};
+use std::ops::{Bound, Range};
+use std::path::PathBuf;
 
 const MAX_NDIM: usize = 4;
 
@@ -120,18 +121,32 @@ prop_compose! {
     }
 }
 
+fn transfer_protocol() -> BoxedStrategy<String> {
+    prop_oneof!["https", "http"].boxed()
+}
+
+prop_compose! {
+    pub fn url() (protocol in transfer_protocol(),
+    remaining_url in "[a-zA-Z0-9\\-_/]*") -> String {
+        format!("{protocol}://{remaining_url}")
+    }
+}
+
 prop_compose! {
     pub fn s3_options()
     (region in option::of(string_regex("[a-zA-Z0-9\\-_]*").unwrap()),
-     endpoint_url in option::of(string_regex("[a-zA-Z0-9\\-_/]*").unwrap().prop_map(|s| format!("https://{s}"))),
+     endpoint_url in option::of(url()),
+       is_anonymous in any::<bool>(),
+        should_path_style_be_forced in any::<bool>(),
      network_stream_timeout_seconds in option::of(0..120u32)
-    ) -> S3Options {
+    ) ->S3Options {
+        let cpy = endpoint_url.clone();
         S3Options{
             region,
             endpoint_url,
-            anonymous: false,
-            allow_http: false,
-            force_path_style: false,
+            anonymous: is_anonymous,
+            allow_http: cpy.is_none_or(|link| !link.starts_with("https")),
+            force_path_style: should_path_style_be_forced,
             network_stream_timeout_seconds
         }
     }
@@ -371,7 +386,7 @@ prop_compose! {
         virtual_chunk_containers in option::of(virtual_chunk_containers()),
         manifest in option::of(manifest_config()),
         storage in option::of(storage_settings()),
-
+        previous_file in option::of(any::<PathBuf>().prop_map(|path| path.to_string_lossy().to_string())),
         )
     -> RepositoryConfig {
         RepositoryConfig{
@@ -383,6 +398,56 @@ prop_compose! {
             manifest,
             virtual_chunk_containers,
             storage,
+            previous_file,
         }
     }
+}
+
+prop_compose! {
+    pub fn expiration_date() (seconds in any::<i64>()) -> Option<DateTime<Utc>> {
+        DateTime::from_timestamp_secs(seconds)
+    }
+}
+
+prop_compose! {
+    pub fn s3_static_credentials()
+    (access_key_id in any::<String>(),
+        secret_access_key in any::<String>(),
+    expires_after in expiration_date(),
+    session_token in option::of(any::<String>())) -> S3StaticCredentials {
+        S3StaticCredentials{access_key_id, secret_access_key, session_token, expires_after}
+    }
+}
+
+prop_compose! {
+pub fn gcs_bearer_credential()
+    (bearer in any::<String>(),expires_after in  expiration_date()) -> GcsBearerCredential {
+        GcsBearerCredential{bearer,expires_after}
+    }
+}
+
+pub fn gcs_static_credentials() -> BoxedStrategy<GcsStaticCredentials> {
+    use GcsStaticCredentials::*;
+    prop_oneof![
+        any::<PathBuf>().prop_map(ServiceAccount),
+        any::<String>().prop_map(ServiceAccountKey),
+        any::<PathBuf>().prop_map(ApplicationCredentials),
+        gcs_bearer_credential().prop_map(BearerToken)
+    ]
+    .boxed()
+}
+
+pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
+    use AzureStaticCredentials::*;
+    prop_oneof![
+        any::<String>().prop_map(AccessKey),
+        any::<String>().prop_map(SASToken),
+        any::<String>().prop_map(BearerToken),
+    ]
+    .boxed()
+}
+
+pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
+    use AzureCredentials::*;
+    prop_oneof![Just(FromEnv), azure_static_credentials().prop_map(Static)].boxed()
 }

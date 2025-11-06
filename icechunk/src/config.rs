@@ -72,7 +72,9 @@ pub enum CompressionAlgorithm {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct CompressionConfig {
+    #[serde(default)]
     pub algorithm: Option<CompressionAlgorithm>,
+    #[serde(default)]
     pub level: Option<u8>,
 }
 
@@ -95,10 +97,19 @@ impl CompressionConfig {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct CachingConfig {
+    #[serde(default)]
     pub num_snapshot_nodes: Option<u64>,
+
+    #[serde(default)]
     pub num_chunk_refs: Option<u64>,
+
+    #[serde(default)]
     pub num_transaction_changes: Option<u64>,
+
+    #[serde(default)]
     pub num_bytes_attributes: Option<u64>,
+
+    #[serde(default)]
     pub num_bytes_chunks: Option<u64>,
 }
 
@@ -311,7 +322,9 @@ static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ManifestConfig {
+    #[serde(default)]
     pub preload: Option<ManifestPreloadConfig>,
+    #[serde(default)]
     pub splitting: Option<ManifestSplittingConfig>,
 }
 
@@ -354,25 +367,38 @@ impl ManifestConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepositoryConfig {
     /// Chunks smaller than this will be stored inline in the manifest
+    #[serde(default)]
     pub inline_chunk_threshold_bytes: Option<u16>,
 
     /// Concurrency used by the get_partial_values operation to fetch different keys in parallel
+    #[serde(default)]
     pub get_partial_values_concurrency: Option<u16>,
 
+    #[serde(default)]
     pub compression: Option<CompressionConfig>,
+
+    #[serde(default)]
     pub max_concurrent_requests: Option<u16>,
+
+    #[serde(default)]
     pub caching: Option<CachingConfig>,
 
     // If not set it will use the Storage implementation default
+    #[serde(default)]
     pub storage: Option<storage::Settings>,
 
     // Compatibility note:
     // The key is this hashmap used to be the ContainerName, which
     // we have eliminated. We maintain the types for compatibility
     // with persisted configurations
+    #[serde(default)]
     pub virtual_chunk_containers: Option<HashMap<String, VirtualChunkContainer>>,
 
+    #[serde(default)]
     pub manifest: Option<ManifestConfig>,
+
+    #[serde(default)]
+    pub previous_file: Option<String>,
 }
 
 static DEFAULT_COMPRESSION: OnceLock<CompressionConfig> = OnceLock::new();
@@ -465,6 +491,12 @@ impl RepositoryConfig {
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            previous_file: match (&self.previous_file, other.previous_file) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(_), Some(theirs)) => Some(theirs),
             },
         }
     }
@@ -593,83 +625,38 @@ pub enum Credentials {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use crate::{
-        ObjectStoreConfig, RepositoryConfig, config::S3Options,
-        strategies::repository_config, virtual_chunks::VirtualChunkContainer,
+    use crate::strategies::{
+        azure_credentials, gcs_static_credentials, repository_config,
+        s3_static_credentials,
     };
 
     use proptest::prelude::*;
 
-    #[icechunk_macros::test]
-    fn test_config_serialization() {
-        let mut config = RepositoryConfig::default();
-        let bytes = rmp_serde::to_vec(&config).unwrap();
-        let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-        assert_eq!(config, roundtrip);
-
-        config.set_virtual_chunk_container(
-            VirtualChunkContainer::new(
-                "s3://foo/bar/".to_string(),
-                ObjectStoreConfig::S3(S3Options {
-                    region: Some("us-east-1".to_string()),
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                }),
-            )
-            .unwrap(),
-        );
-        let bytes = rmp_serde::to_vec(&config).unwrap();
-        let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-        assert_eq!(config, roundtrip);
-    }
-
-    #[icechunk_macros::test]
-    fn test_virtual_container_serialization() {
-        let container = VirtualChunkContainer::new(
-            "s3://foo/bar/".to_string(),
-            ObjectStoreConfig::S3(S3Options {
-                region: Some("us-east-1".to_string()),
-                endpoint_url: None,
-                anonymous: false,
-                allow_http: false,
-                force_path_style: false,
-                network_stream_timeout_seconds: None,
-            }),
-        )
-        .unwrap();
-        let bytes = rmp_serde::to_vec(&container).unwrap();
-        let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-        assert_eq!(container, roundtrip);
-    }
-
-    #[icechunk_macros::test]
-    fn test_object_store_config_serialization() {
-        let config = ObjectStoreConfig::S3(S3Options {
-            region: Some("us-east-1".to_string()),
-            endpoint_url: None,
-            anonymous: false,
-            allow_http: false,
-            force_path_style: false,
-            network_stream_timeout_seconds: None,
-        });
-        let bytes = rmp_serde::to_vec(&config).unwrap();
-        let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-        assert_eq!(config, roundtrip);
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig {
-            cases: 50, .. ProptestConfig::default()
-        })]
-
+    // This macro is used for creating property tests
+    // which check that serializing and deserializing
+    // an instance of a type T is equivalent to the
+    // identity function
+    // Given pairs of test names and arbitraries to be used
+    // for the tests, e.g., (n1, a1), (n2, a2),... (nx, ax)
+    // the tests can be created by doing
+    // roundtrip_serialization_tests!(n1 - a1, n2 - a2, .... nx - ax)
+    macro_rules! roundtrip_serialization_tests {
+        ($($test_name: ident - $generator: ident), +) => {
+                            $(
+                proptest!{
         #[icechunk_macros::test]
-        fn test_config_roundtrip(config in repository_config() ) {
-            let bytes = rmp_serde::to_vec(&config).unwrap();
+                    fn $test_name(elem in $generator()) {
+           let bytes = rmp_serde::to_vec(&elem).unwrap();
             let roundtrip = rmp_serde::from_slice(&bytes).unwrap();
-            assert_eq!(config, roundtrip);
+            assert_eq!(elem, roundtrip);
+        }})*
         }
     }
+
+    roundtrip_serialization_tests!(
+        test_config_roundtrip - repository_config,
+        test_s3_static_credentials_roundtrip - s3_static_credentials,
+        test_gcs_static_credentials_roundtrip - gcs_static_credentials,
+        test_azure_credentials_roundtrip - azure_credentials
+    );
 }

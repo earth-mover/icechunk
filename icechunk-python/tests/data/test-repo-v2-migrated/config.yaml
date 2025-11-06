@@ -1,0 +1,36 @@
+inline_chunk_threshold_bytes: 12
+get_partial_values_concurrency: null
+compression: null
+caching: null
+storage: null
+virtual_chunk_containers:
+  tigris:
+    name: tigris
+    url_prefix: tigris
+    store: !tigris
+      region: null
+      endpoint_url: https://fly.storage.tigris.dev
+      anonymous: false
+      allow_http: false
+  az:
+    name: az
+    url_prefix: az
+    store: !azure {}
+  file:
+    name: file
+    url_prefix: file
+    store: !local_file_system ''
+  gcs:
+    name: gcs
+    url_prefix: gcs
+    store: !gcs {}
+  s3:
+    name: s3
+    url_prefix: s3://testbucket
+    store: !s3_compatible
+      region: us-east-1
+      endpoint_url: http://localhost:9000
+      anonymous: false
+      allow_http: true
+      force_path_style: true
+manifest: null

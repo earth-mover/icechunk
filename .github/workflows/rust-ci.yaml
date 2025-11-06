@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - 'support/**'
   schedule:
     # three times a day to run the integration tests that take a long time
     - cron:  '33 3,10,15 * * *'

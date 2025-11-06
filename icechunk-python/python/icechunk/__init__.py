@@ -6,9 +6,14 @@ from icechunk._icechunk_python import (
     AzureCredentials,
     AzureStaticCredentials,
     BasicConflictSolver,
+    BranchCreatedUpdate,
+    BranchDeletedUpdate,
+    BranchResetUpdate,
     CachingConfig,
+    CommitAmendedUpdate,
     CompressionAlgorithm,
     CompressionConfig,
+    ConfigChangedUpdate,
     Conflict,
     ConflictDetector,
     ConflictError,
@@ -16,6 +21,8 @@ from icechunk._icechunk_python import (
     ConflictType,
     Credentials,
     Diff,
+    ExpirationRanUpdate,
+    GCRanUpdate,
     GcsBearerCredential,
     GcsCredentials,
     GcsStaticCredentials,
@@ -28,8 +35,12 @@ from icechunk._icechunk_python import (
     ManifestSplitCondition,
     ManifestSplitDimCondition,
     ManifestSplittingConfig,
+    NewCommitUpdate,
+    NewDetachedSnapshotUpdate,
     ObjectStoreConfig,
     RebaseFailedError,
+    RepoInitializedUpdate,
+    RepoMigratedUpdate,
     RepositoryConfig,
     S3Credentials,
     S3Options,
@@ -39,10 +50,14 @@ from icechunk._icechunk_python import (
     StorageConcurrencySettings,
     StorageRetriesSettings,
     StorageSettings,
+    TagCreatedUpdate,
+    TagDeletedUpdate,
+    UpdateType,
     VersionSelection,
     VirtualChunkContainer,
     VirtualChunkSpec,
     __version__,
+    _upgrade_icechunk_repository,
     initialize_logs,
     set_logs_filter,
     spec_version,
@@ -97,9 +112,14 @@ __all__ = [
     "AzureCredentials",
     "AzureStaticCredentials",
     "BasicConflictSolver",
+    "BranchCreatedUpdate",
+    "BranchDeletedUpdate",
+    "BranchResetUpdate",
     "CachingConfig",
+    "CommitAmendedUpdate",
     "CompressionAlgorithm",
     "CompressionConfig",
+    "ConfigChangedUpdate",
     "Conflict",
     "ConflictDetector",
     "ConflictError",
@@ -107,7 +127,9 @@ __all__ = [
     "ConflictType",
     "Credentials",
     "Diff",
+    "ExpirationRanUpdate",
     "ForkSession",
+    "GCRanUpdate",
     "GCSummary",
     "GcsBearerCredential",
     "GcsCredentials",
@@ -121,8 +143,12 @@ __all__ = [
     "ManifestSplitCondition",
     "ManifestSplitDimCondition",
     "ManifestSplittingConfig",
+    "NewCommitUpdate",
+    "NewDetachedSnapshotUpdate",
     "ObjectStoreConfig",
     "RebaseFailedError",
+    "RepoInitializedUpdate",
+    "RepoMigratedUpdate",
     "Repository",
     "RepositoryConfig",
     "S3Credentials",
@@ -134,10 +160,14 @@ __all__ = [
     "StorageConcurrencySettings",
     "StorageRetriesSettings",
     "StorageSettings",
+    "TagCreatedUpdate",
+    "TagDeletedUpdate",
+    "UpdateType",
     "VersionSelection",
     "VirtualChunkContainer",
     "VirtualChunkSpec",
     "__version__",
+    "_upgrade_icechunk_repository",
     "azure_credentials",
     "azure_from_env_credentials",
     "azure_static_credentials",
@@ -209,6 +239,27 @@ def to_dict(config: ManifestSplittingConfig) -> SplitSizesDict:
         split_condition: dict(dim_conditions)
         for split_condition, dim_conditions in config.split_sizes
     }
+
+
+def upgrade_icechunk_repository(
+    repo: Repository, *, dry_run: bool = True, delete_unused_v1_files: bool = True
+) -> None:
+    """
+    Migrate a repository to the latest version of Icechunk.
+
+    This is an administrative operation, and must be executed in isolation from
+    other readers and writers. Other processes running concurrently on the same
+    repo may see undefined behavior.
+
+    At this time, this function supports only migration from Icechunk spec version 1
+    to Icechunk spec version 2. This means Icechunk versions 1.x to 2.x.
+
+    The operation is usually fast, but it can take several minutes if there is a very
+    large version history (thousands of snapshots).
+    """
+    _upgrade_icechunk_repository(
+        repo._repository, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
+    )
 
 
 ManifestSplittingConfig.from_dict = from_dict  # type: ignore[method-assign]

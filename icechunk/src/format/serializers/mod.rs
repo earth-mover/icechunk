@@ -43,8 +43,9 @@
 use std::io::{Read, Write};
 
 use super::{
-    IcechunkFormatError, format_constants::SpecVersionBin, manifest::Manifest,
-    snapshot::Snapshot, transaction_log::TransactionLog,
+    IcechunkFormatError, IcechunkFormatErrorKind, format_constants::SpecVersionBin,
+    manifest::Manifest, repo_info::RepoInfo, snapshot::Snapshot,
+    transaction_log::TransactionLog,
 };
 
 pub fn serialize_snapshot(
@@ -53,7 +54,9 @@ pub fn serialize_snapshot(
     write: &mut impl Write,
 ) -> Result<(), std::io::Error> {
     match version {
-        SpecVersionBin::V0dot1 => write.write_all(snapshot.bytes()),
+        SpecVersionBin::V1dot0 | SpecVersionBin::V2dot0 => {
+            write.write_all(snapshot.bytes())
+        }
     }
 }
 
@@ -63,7 +66,9 @@ pub fn serialize_manifest(
     write: &mut impl Write,
 ) -> Result<(), std::io::Error> {
     match version {
-        SpecVersionBin::V0dot1 => write.write_all(manifest.bytes()),
+        SpecVersionBin::V1dot0 | SpecVersionBin::V2dot0 => {
+            write.write_all(manifest.bytes())
+        }
     }
 }
 
@@ -73,7 +78,23 @@ pub fn serialize_transaction_log(
     write: &mut impl Write,
 ) -> Result<(), std::io::Error> {
     match version {
-        SpecVersionBin::V0dot1 => write.write_all(transaction_log.bytes()),
+        SpecVersionBin::V1dot0 | SpecVersionBin::V2dot0 => {
+            write.write_all(transaction_log.bytes())
+        }
+    }
+}
+
+pub fn serialize_repo_info(
+    info: &RepoInfo,
+    version: SpecVersionBin,
+    write: &mut impl Write,
+) -> Result<(), std::io::Error> {
+    match version {
+        SpecVersionBin::V2dot0 => write.write_all(info.bytes()),
+        SpecVersionBin::V1dot0 => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Trying to write to an old Icechunk format version. Aborting.",
+        )),
     }
 }
 
@@ -82,12 +103,12 @@ pub fn deserialize_snapshot(
     mut read: Box<dyn Read>,
 ) -> Result<Snapshot, IcechunkFormatError> {
     match version {
-        SpecVersionBin::V0dot1 => {
+        SpecVersionBin::V1dot0 | SpecVersionBin::V2dot0 => {
             // TODO: what's a good capacity?
             let mut buffer = Vec::with_capacity(8_192);
             read.read_to_end(&mut buffer)?;
             buffer.shrink_to_fit();
-            Snapshot::from_buffer(buffer)
+            Snapshot::from_buffer(version, buffer)
         }
     }
 }
@@ -97,7 +118,7 @@ pub fn deserialize_manifest(
     mut read: Box<dyn Read>,
 ) -> Result<Manifest, IcechunkFormatError> {
     match version {
-        SpecVersionBin::V0dot1 => {
+        SpecVersionBin::V1dot0 | SpecVersionBin::V2dot0 => {
             // TODO: what's a good capacity?
             let mut buffer = Vec::with_capacity(1024 * 1024);
             read.read_to_end(&mut buffer)?;
@@ -112,12 +133,28 @@ pub fn deserialize_transaction_log(
     mut read: Box<dyn Read>,
 ) -> Result<TransactionLog, IcechunkFormatError> {
     match version {
-        SpecVersionBin::V0dot1 => {
+        SpecVersionBin::V1dot0 | SpecVersionBin::V2dot0 => {
             // TODO: what's a good capacity?
             let mut buffer = Vec::with_capacity(1024 * 1024);
             read.read_to_end(&mut buffer)?;
             buffer.shrink_to_fit();
             TransactionLog::from_buffer(buffer)
         }
+    }
+}
+
+pub fn deserialize_repo_info(
+    version: SpecVersionBin,
+    mut read: Box<dyn Read>,
+) -> Result<RepoInfo, IcechunkFormatError> {
+    match version {
+        SpecVersionBin::V2dot0 => {
+            // TODO: what's a good capacity?
+            let mut buffer = Vec::with_capacity(1024 * 1024);
+            read.read_to_end(&mut buffer)?;
+            buffer.shrink_to_fit();
+            RepoInfo::from_buffer(buffer)
+        }
+        SpecVersionBin::V1dot0 => Err(IcechunkFormatErrorKind::InvalidSpecVersion.into()),
     }
 }

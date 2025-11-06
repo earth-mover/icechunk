@@ -145,7 +145,7 @@ def test_timetravel(using_flush: bool) -> None:
         "Repository initialized",
     ]
     assert parents[-1].id == "1CECHNKREP0F1RSTCMT0"
-    assert [len(snap.manifests) for snap in parents] == [1, 1, 1, 0]
+    assert [len(repo.manifest_files(snap.id)) for snap in parents] == [1, 1, 1, 0]
     assert sorted(parents, key=lambda p: p.written_at) == list(reversed(parents))
     assert len(set([snap.id for snap in parents])) == 4
     assert list(repo.ancestry(tag="v1.0")) == parents
@@ -227,6 +227,7 @@ Arrays deleted:
     assert tag_snapshot_id == feature_snapshot_id
 
     actual = next(iter(repo.ancestry(tag="v1.0")))
+    assert actual.id == repo.lookup_snapshot(actual.id).id
     assert actual == repo.lookup_snapshot(actual.id)
 
 
@@ -465,7 +466,7 @@ async def test_timetravel_async(using_flush: bool) -> None:
         "Repository initialized",
     ]
     assert parents[-1].id == "1CECHNKREP0F1RSTCMT0"
-    assert [len(snap.manifests) for snap in parents] == [1, 1, 1, 0]
+    assert [len(repo.manifest_files(snap.id)) for snap in parents] == [1, 1, 1, 0]
     assert sorted(parents, key=lambda p: p.written_at) == list(reversed(parents))
     assert len(set([snap.id for snap in parents])) == 4
     assert [parent async for parent in repo.async_ancestry(tag="v1.0")] == parents
@@ -537,6 +538,31 @@ Arrays deleted:
 
     actual = next(iter([parent async for parent in repo.async_ancestry(tag="v1.0")]))
     assert actual == await repo.lookup_snapshot_async(actual.id)
+
+    ops = [type(op) for op in repo.ops_log()]
+    flush_or_commit = (
+        [ic.NewCommitUpdate]
+        if not using_flush
+        else [ic.BranchResetUpdate, ic.NewDetachedSnapshotUpdate]
+    )
+    expected = (
+        [ic.BranchCreatedUpdate, ic.TagCreatedUpdate, ic.BranchDeletedUpdate]
+        + flush_or_commit
+        + [
+            ic.BranchCreatedUpdate,
+        ]
+        + flush_or_commit
+        + flush_or_commit
+        + [
+            ic.RepoInitializedUpdate,
+        ]
+    )
+
+    print("actual")
+    print(ops)
+    print("expected")
+    print(expected)
+    assert ops == expected
 
 
 async def test_branch_reset_async() -> None:
@@ -679,16 +705,8 @@ async def test_branch_expiration_async() -> None:
     assert "branch" not in await repo.list_branches_async()
 
     for snap in (a, b):
-        await repo.lookup_snapshot_async(snap)
-
-    # FIXME: this fails to delete snapshot `b` with microseconds=1
-    await repo.garbage_collect_async(
-        (await repo.lookup_snapshot_async(b)).written_at + timedelta(seconds=1)
-    )
-    # make sure snapshot cannot be opened anymore
-    for snap in (a, b):
         with pytest.raises(ic.IcechunkError):
-            await repo.readonly_session_async(snapshot_id=snap)
+            await repo.lookup_snapshot_async(snap)
 
     # should succeed
     await repo.lookup_snapshot_async(c)
@@ -747,14 +765,8 @@ def test_branch_expiration() -> None:
     assert "branch" not in repo.list_branches()
 
     for snap in (a, b):
-        repo.lookup_snapshot(snap)
-
-    # FIXME: this fails to delete snapshot `b` with microseconds=1
-    repo.garbage_collect(repo.lookup_snapshot(b).written_at + timedelta(seconds=1))
-    # make sure snapshot cannot be opened anymore
-    for snap in (a, b):
         with pytest.raises(ic.IcechunkError):
-            repo.readonly_session(snapshot_id=snap)
+            repo.lookup_snapshot(snap)
 
     # should succeed
     repo.lookup_snapshot(c)
@@ -863,7 +875,7 @@ async def test_rewrite_manifests_async() -> None:
 
     # Verify ancestry after rewrite
     new_ancestry = [snap async for snap in repo.async_ancestry(branch="main")]
-    assert len(new_ancestry) == len(initial_ancestry) + 1
+    assert len(new_ancestry) == len(initial_ancestry) + 0  # we are doing an amend
     assert new_ancestry[0].message == "rewritten manifests"
 
     # Verify data is still accessible after manifest rewrite
@@ -874,3 +886,75 @@ async def test_rewrite_manifests_async() -> None:
     # Check that data is preserved
     assert array[0, 0] == 42  # from first commit
     assert array[99, 49] == 99  # from second commit
+
+
+def test_amend() -> None:
+    config = ic.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 1
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        config=config,
+    )
+
+    session = repo.writable_session("main")
+    store = session.store
+
+    group = zarr.group(store=store, overwrite=True)
+    air_temp = group.create_array(
+        "air_temp", shape=(1000, 1000), chunks=(100, 100), dtype="i4"
+    )
+
+    air_temp[0, 0] = 42
+    _first_snapshot_id = session.commit("we will amend this")
+
+    session = repo.writable_session("main")
+    store = session.store
+    group = zarr.open_group(store=store)
+    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+
+    air_temp[0, 0] = 54
+    air_temp[500, 500] = 42
+    group = zarr.group(path="group", store=store, overwrite=True)
+    air_temp = group.create_array(
+        "foo", shape=(1000, 1000), chunks=(100, 100), dtype="i4"
+    )
+    new_snapshot_id = session.amend("the only commit")
+
+    session = repo.readonly_session(snapshot_id=new_snapshot_id)
+    store = session.store
+    group = zarr.open_group(store=store, mode="r")
+    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    assert air_temp[0, 0] == 54
+    assert air_temp[500, 500] == 42
+
+    parents = list(repo.ancestry(snapshot_id=new_snapshot_id))
+    assert [snap.message for snap in parents] == [
+        "the only commit",
+        "Repository initialized",
+    ]
+    diff = repo.diff(to_branch="main", from_snapshot_id=parents[-1].id)
+    assert diff.new_groups == {"/", "/group"}
+    assert diff.new_arrays == {"/air_temp", "/group/foo"}
+    assert list(diff.updated_chunks.keys()) == ["/air_temp"]
+    assert sorted(diff.updated_chunks["/air_temp"]) == sorted([[0, 0], [5, 5]])
+    assert diff.deleted_groups == set()
+    assert diff.deleted_arrays == set()
+    assert diff.updated_arrays == set()
+    assert diff.updated_groups == set()
+    assert (
+        repr(diff)
+        == """\
+Groups created:
+    /
+    /group
+
+Arrays created:
+    /air_temp
+    /group/foo
+
+Chunks updated:
+    /air_temp:
+        [0, 0]
+        [5, 5]
+"""
+    )

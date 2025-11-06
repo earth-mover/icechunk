@@ -108,18 +108,34 @@ async def test_expire_and_gc(use_async: bool) -> None:
     # empty array + 20 old versions
     assert len(expired_snapshots) == 21
 
-    space_before = 0
-    for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}")["Contents"]:
-        space_before += obj["Size"]
+    def space_used():
+        space = 0
+        for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/snapshots")[
+            "Contents"
+        ]:
+            space += obj["Size"]
+        for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/chunks")[
+            "Contents"
+        ]:
+            space += obj["Size"]
+        for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/manifests")[
+            "Contents"
+        ]:
+            space += obj["Size"]
+        for obj in client.list_objects(
+            Bucket="testbucket", Prefix=f"{prefix}/transactions"
+        )["Contents"]:
+            space += obj["Size"]
+        return space
+
+    space_before = space_used()
 
     # let's run GC using dry_run = True
     if use_async:
         gc_result = await repo.garbage_collect_async(old, dry_run=True)
     else:
         gc_result = repo.garbage_collect(old, dry_run=True)
-    space_after = 0
-    for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}")["Contents"]:
-        space_after += obj["Size"]
+    space_after = space_used()
 
     assert space_before == space_after
     # there were 21 chunks, and we need 3 alive (for indexes 0..20 and 999)
@@ -139,9 +155,7 @@ async def test_expire_and_gc(use_async: bool) -> None:
     else:
         gc_result = repo.garbage_collect(old)
 
-    space_after = 0
-    for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}")["Contents"]:
-        space_after += obj["Size"]
+    space_after = space_used()
 
     assert space_before - gc_result.bytes_deleted == space_after
     # there were 21 chunks, and we need 3 alive (for indexes 0..20 and 999)

@@ -7,10 +7,12 @@ from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
     Diff,
     GCSummary,
+    ManifestFileInfo,
     PyRepository,
     RepositoryConfig,
     SnapshotInfo,
     Storage,
+    UpdateType,
 )
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
@@ -575,6 +577,26 @@ class Repository:
             branch=branch, tag=tag, snapshot_id=snapshot_id
         )
 
+    def ops_log(self) -> Iterator[UpdateType]:
+        """
+        Get a summary of changes to the repository
+        """
+
+        # the returned object is both an Async and Sync iterator
+        res = cast(
+            Iterator[UpdateType],
+            self._repository.async_ops_log(),
+        )
+        return res
+
+    def ops_log_async(self) -> AsyncIterator[UpdateType]:
+        """
+        Get a summary of changes to the repository
+        """
+
+        # the returned object is both an Async and Sync iterator
+        return self._repository.async_ops_log()
+
     def create_branch(self, branch: str, snapshot_id: str) -> None:
         """
         Create a new branch at the given snapshot.
@@ -692,6 +714,36 @@ class Repository:
         SnapshotInfo
         """
         return await self._repository.lookup_snapshot_async(snapshot_id)
+
+    def manifest_files(self, snapshot_id: str) -> list[ManifestFileInfo]:
+        """
+        Get the manifest files used by the given snapshot ID
+
+        Parameters
+        ----------
+        snapshot_id : str
+            The id of the snapshot to get information for
+
+        Returns
+        -------
+        list[ManifestFileInfo]
+        """
+        return self._repository.manifest_files(snapshot_id)
+
+    async def manifest_files_async(self, snapshot_id: str) -> list[ManifestFileInfo]:
+        """
+        Get the manifest files used by the given snapshot ID
+
+        Parameters
+        ----------
+        snapshot_id : str
+            The id of the snapshot to get information for
+
+        Returns
+        -------
+        list[ManifestFileInfo]
+        """
+        return await self._repository.manifest_files_async(snapshot_id)
 
     def reset_branch(
         self, branch: str, snapshot_id: str, *, from_snapshot_id: str | None = None
@@ -1081,6 +1133,54 @@ class Repository:
         """
         return Session(await self._repository.writable_session_async(branch))
 
+    def rearrange_session(self, branch: str) -> Session:
+        """
+        Create a session to move/rename nodes in the Zarr hierarchy.
+
+        Like the read-only session, this can be thought of as a checkout of the repository at the
+        tip of the branch. However, this session is writable and can be used to make changes to the
+        repository. When ready, the changes can be committed to the branch, after which the session will
+        become a read-only session on the new snapshot.
+
+        This session only allows to make changes through `Session.move`. If you want to modify data, and
+        not only move nodes, use `Session.writable_session` instead.
+
+        Parameters
+        ----------
+        branch : str
+            The branch to create the session on.
+
+        Returns
+        -------
+        Session
+            The writable session on the branch.
+        """
+        return Session(self._repository.rearrange_session(branch))
+
+    async def rearrange_session_async(self, branch: str) -> Session:
+        """
+        Create a session to move/rename nodes in the Zarr hierarchy.
+
+        Like the read-only session, this can be thought of as a checkout of the repository at the
+        tip of the branch. However, this session is writable and can be used to make changes to the
+        repository. When ready, the changes can be committed to the branch, after which the session will
+        become a read-only session on the new snapshot.
+
+        This session only allows to make changes through `Session.move`. If you want to modify data, and
+        not only move nodes, use `Session.writable_session` instead.
+
+        Parameters
+        ----------
+        branch : str
+            The branch to create the session on.
+
+        Returns
+        -------
+        Session
+            The writable session on the branch.
+        """
+        return Session(await self._repository.rearrange_session_async(branch))
+
     @contextmanager
     def transaction(
         self,
@@ -1446,3 +1546,6 @@ class Repository:
         self, snapshot_id: str, *, pretty: bool = True
     ) -> str:
         return await self._repository.inspect_snapshot_async(snapshot_id, pretty=pretty)
+
+    def spec_version(self) -> int:
+        return self._repository.spec_version()
