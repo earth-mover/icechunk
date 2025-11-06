@@ -44,6 +44,9 @@ jobs:
   version:
     name: Generate dynamic version
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
     outputs:
       version-main: ${{ steps.version-main.outputs.version }}
       version-v1: ${{ steps.version-v1.outputs.version }}
