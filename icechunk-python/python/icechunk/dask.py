@@ -47,9 +47,10 @@ def merge_sessions_array_kwargs(
 
 
 def _assert_correct_dask_version() -> None:
-    if Version(dask.__version__) < Version("2024.11.0"):
+    dask_version = dask.__version__  # type: ignore[attr-defined]
+    if Version(dask_version) < Version("2024.11.0"):
         raise ValueError(
-            f"Writing to icechunk requires dask>=2024.11.0 but you have {dask.__version__}. Please upgrade."
+            f"Writing to icechunk requires dask>=2024.11.0 but you have {dask_version}. Please upgrade."
         )
 
 
