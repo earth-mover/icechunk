@@ -1,14 +1,5 @@
 # Changelog
 
-## Python Icechunk Library 1.1.X+1
-
-### Features
-
-### Fixes
-
-### Breaking Changes
-
-### Performance
 
 ## Python Icechunk Library 1.1.12
 
