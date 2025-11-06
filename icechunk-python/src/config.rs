@@ -1589,6 +1589,12 @@ impl PyRepositoryConfig {
         Ok(c.get_virtual_chunk_container(name).map(|c| c.clone().into()))
     }
 
+    pub fn merge(&self, other: &PyRepositoryConfig) -> PyResult<PyRepositoryConfig> {
+        let this: RepositoryConfig = self.try_into().map_err(PyValueError::new_err)?;
+        let other: RepositoryConfig = other.try_into().map_err(PyValueError::new_err)?;
+        Ok(this.merge(other).into())
+    }
+
     pub fn __repr__(&self) -> String {
         #[allow(clippy::expect_used)]
         Python::attach(|py| {
