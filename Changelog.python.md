@@ -4,21 +4,21 @@
 
 ### Features
 
-- Added `RepositoryConfig.merge` method.
-
-### Fixes
-
-- Virtual chunk containers now accept URLs starting with `gs://`, as well as ones starting with `gcs://`.
-
-## Python Icechunk Library 1.1.12
-
-### Features
-
 ### Fixes
 
 ### Breaking Changes
 
 ### Performance
+
+## Python Icechunk Library 1.1.12
+
+### Features
+
+- Added `RepositoryConfig.merge` method.
+
+### Fixes
+
+- Virtual chunk containers now accept URLs starting with `gs://`, as well as ones starting with `gcs://`.
 
 ## Python Icechunk Library 1.1.11
 
