@@ -288,8 +288,10 @@ impl Repository {
             }
             Err(err) => Err(err),
         }?;
+        trace!(%version, "Repository version found");
 
         if let Some((default_config, config_version)) = config_res? {
+            trace!("Repository configuration found");
             // Merge the given config with the defaults
             let config =
                 config.map(|c| default_config.merge(c)).unwrap_or(default_config);
@@ -314,6 +316,7 @@ impl Repository {
                 authorize_virtual_chunk_access,
             )
         } else {
+            trace!("Repository configuration not found, using default as base");
             let config = config.unwrap_or_default();
             let storage_settings =
                 config.storage().cloned().unwrap_or_else(|| storage.default_settings());

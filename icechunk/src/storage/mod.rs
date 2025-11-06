@@ -1,4 +1,4 @@
-use ::object_store::{azure::AzureConfigKey, gcp::GoogleConfigKey};
+use ::object_store::{ClientConfigKey, azure::AzureConfigKey, gcp::GoogleConfigKey};
 use aws_sdk_s3::{
     config::http::HttpResponse,
     error::SdkError,
@@ -30,11 +30,13 @@ use std::{
     ops::Range,
     path::Path,
     pin::Pin,
+    str::FromStr as _,
     sync::{Arc, Mutex, OnceLock},
 };
 use tokio::io::AsyncBufRead;
 use tokio_util::io::StreamReader;
 use tracing::{instrument, warn};
+use url::Url;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -90,6 +92,12 @@ pub enum StorageErrorKind {
     IOError(#[from] std::io::Error),
     #[error("storage configuration error: {0}")]
     R2ConfigurationError(String),
+    #[error("error parsing URL: {url:?}")]
+    CannotParseUrl {
+        #[source]
+        cause: url::ParseError,
+        url: String,
+    },
     #[error("storage error: {0}")]
     Other(String),
 }
@@ -778,6 +786,24 @@ pub async fn new_local_filesystem_storage(
     path: &Path,
 ) -> StorageResult<Arc<dyn Storage>> {
     let st = ObjectStorage::new_local_filesystem(path).await?;
+    Ok(Arc::new(st))
+}
+
+pub fn new_http_storage(
+    base_url: &str,
+    config: Option<HashMap<String, String>>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let base_url = Url::parse(base_url).map_err(|e| {
+        StorageErrorKind::CannotParseUrl { cause: e, url: base_url.to_string() }
+    })?;
+    let config = config
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|(k, v)| {
+            ClientConfigKey::from_str(k).ok().map(|key| (key, v.clone()))
+        })
+        .collect();
+    let st = ObjectStorage::new_http(base_url, Some(config))?;
     Ok(Arc::new(st))
 }
 

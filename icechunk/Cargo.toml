@@ -79,6 +79,7 @@ test-log = { version = "0.2.18", default-features = false, features = [
   "color",
   "unstable",
 ] }
+warp = { version = "0.4.2", features = ["server"] }
 
 [lints]
 workspace = true
