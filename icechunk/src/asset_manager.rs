@@ -475,7 +475,7 @@ impl AssetManager {
             let (repo_info, repo_version) = self.fetch_repo_info().await?;
             let backup_path = self.backup_path_for_repo_info();
             let new_repo = update(repo_info, backup_path.as_str())?;
-            trace!(attempts, "Atempting to update repo object");
+            trace!(attempts, "Attempting to update repo object");
             match write_repo_info(
                 Arc::clone(&new_repo),
                 &repo_version,
