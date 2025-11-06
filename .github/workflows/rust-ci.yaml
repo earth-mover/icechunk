@@ -4,14 +4,14 @@
 name: Rust CI
 on:
   pull_request:
-    types: [opened, reopened, synchronize, labeled]
+    types: [opened, reopened, synchronize]
   push:
     branches:
       - main
       - 'support/**'
   schedule:
     # three times a day to run the integration tests that take a long time
-    - cron:  '33 3,10,15 * * *'
+    - cron: "33 3,10,15 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -24,20 +24,16 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
   RUSTUP_MAX_RETRIES: 10
-  RUST_CHANNEL: '1.89.0'
+  RUST_CHANNEL: "1.89.0"
 
 jobs:
-  rust:
-    name: Rust CI
+  rust-safe:
+    name: Rust CI (Safe Tests)
     timeout-minutes: 20
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: ./
-    #permissions:
-      #contents: read
-      #actions: read
-      #pull-requests: read
 
     strategy:
       fail-fast: false
@@ -48,7 +44,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -88,28 +84,11 @@ jobs:
           # workspaces: "rust -> target"
           key: ${{ env.RUST_CHANNEL }}
 
-      - name: Run tests with Docker services
+      - name: Run safe tests
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        env:
-          RUST_LOG: trace
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-
-          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
-          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
-          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-
         run: |
           just compile-tests "--locked"
-          just test
+          just test  # Runs all tests except #[ignore] ones (safe: unit tests + MinIO/Azurite)
 
       - name: Run doc tests
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
@@ -126,23 +105,57 @@ jobs:
         run: |
           cargo test --lib
 
-      - name: Run integration tests against object stores
-        if: github.event_name == 'cron'
+  rust-external-services:
+    name: Rust CI (External Services)
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    # Skip external service tests for external PRs (they can't access secrets anyway)
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    defaults:
+      run:
+        working-directory: ./
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Just
+        run: sudo snap install --edge --classic just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.RUST_CHANNEL }}
+
+      - name: Run external service tests
         env:
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-
-          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_BUCKET: ${{ vars.S3_BUCKET }}
+          AWS_REGION: ${{ vars.S3_REGION }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
-          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
+          TIGRIS_BUCKET: ${{ vars.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ vars.TIGRIS_REGION }}
           TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-
         run: |
-          cargo test --all --all-targets -- --ignored
+          if [[ "${{ github.event_name }}" == "cron" ]]; then
+            echo "Running comprehensive integration tests for cron job"
+            cargo test --package icechunk -- --ignored
+          else
+            echo "Running targeted external service tests"
+            cargo test --package icechunk "_in_aws" -- --ignored
+            cargo test --package icechunk "_in_r2" -- --ignored
+            cargo test --package icechunk "_in_tigris" -- --ignored
+          fi
