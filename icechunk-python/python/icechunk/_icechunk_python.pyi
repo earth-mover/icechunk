@@ -1360,6 +1360,25 @@ class RepositoryConfig:
         Clear all virtual chunk containers from the repository.
         """
         ...
+    def merge(self, other: RepositoryConfig) -> RepositoryConfig:
+        """
+        Merge another RepositoryConfig with this one.
+
+        When merging, values from the other config take precedence. For nested configs
+        (compression, caching, manifest, storage), the merge is applied recursively.
+        For virtual_chunk_containers, entries from the other config extend this one.
+
+        Parameters
+        ----------
+        other: RepositoryConfig
+            The configuration to merge with this one.
+
+        Returns
+        -------
+        RepositoryConfig
+            A new merged configuration.
+        """
+        ...
 
 class Diff:
     """The result of comparing two snapshots"""
