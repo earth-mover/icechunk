@@ -339,7 +339,7 @@ pub async fn test_expire_and_garbage_collect_in_tigris()
 pub async fn do_test_expire_and_garbage_collect(
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let storage_settings = storage.default_settings();
+    let storage_settings = storage.default_settings().await?;
     let mut repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
@@ -446,7 +446,7 @@ pub async fn do_test_expire_and_garbage_collect(
 pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let storage_settings = storage.default_settings();
+    let storage_settings = storage.default_settings().await?;
     let mut repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;

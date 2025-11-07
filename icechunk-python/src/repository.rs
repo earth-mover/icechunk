@@ -974,12 +974,19 @@ impl PyRepository {
             let config = config
                 .map(|c| c.try_into().map_err(PyValueError::new_err))
                 .transpose()?;
-            Ok(Self(Arc::new(RwLock::new(
-                self.0
-                    .blocking_read()
-                    .reopen(config, authorize_virtual_chunk_access.map(map_credentials))
-                    .map_err(PyIcechunkStoreError::RepositoryError)?,
-            ))))
+            let repo =
+                pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                    self.0
+                        .read()
+                        .await
+                        .reopen(
+                            config,
+                            authorize_virtual_chunk_access.map(map_credentials),
+                        )
+                        .await
+                        .map_err(PyIcechunkStoreError::RepositoryError)
+                })?;
+            Ok(Self(Arc::new(RwLock::new(repo))))
         })
     }
 
@@ -1002,6 +1009,7 @@ impl PyRepository {
                 .read()
                 .await
                 .reopen(config, authorize_virtual_chunk_access)
+                .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(Self(Arc::new(RwLock::new(repository))))
         })

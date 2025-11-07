@@ -2963,7 +2963,7 @@ mod tests {
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> =
             crate::new_in_memory_storage().await?;
-        let storage_settings = storage.default_settings();
+        let storage_settings = storage.default_settings().await?;
         let asset_manager = AssetManager::new_no_cache(
             Arc::clone(&storage),
             storage_settings.clone(),

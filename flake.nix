@@ -124,13 +124,15 @@
                 pkgs.alejandra # nix code formatter
                 pkgs.markdownlint-cli2
                 pkgs.flatbuffers
+
+                # necessary for reqwest
+                pkgs.openssl
+                pkgs.pkg-config
               ];
 
               env = {
                 # Prevent uv from managing Python downloads
                 UV_PYTHON_DOWNLOADS = "never";
-                # Force uv to use nixpkgs Python interpreter
-                UV_PYTHON = python.interpreter;
 
                 RUSTFLAGS = "-W unreachable-pub -W bare-trait-objects";
               }
@@ -207,11 +209,9 @@
               # Don't create venv using uv
               UV_NO_SYNC = "1";
 
-              # Force uv to use nixpkgs Python interpreter
-              UV_PYTHON = python.interpreter;
-
               # Prevent uv from downloading managed Python's
               UV_PYTHON_DOWNLOADS = "never";
+
             };
 
             shellHook = ''

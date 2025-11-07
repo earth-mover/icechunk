@@ -191,7 +191,7 @@ impl Repository {
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
     ) -> RepositoryResult<Self> {
         debug!("Creating Repository");
-        if !storage.can_write() {
+        if !storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot create repository".to_string(),
             )
@@ -205,8 +205,10 @@ impl Repository {
         // Merge the given config with the defaults
         let config =
             config.map(|c| RepositoryConfig::default().merge(c)).unwrap_or_default();
-        let storage_settings =
-            config.storage().cloned().unwrap_or_else(|| storage.default_settings());
+        let storage_settings = match config.storage() {
+            Some(s) => s.clone(),
+            None => storage.default_settings().await?,
+        };
 
         let asset_manager = Arc::new(AssetManager::new_with_config(
             Arc::clone(&storage),
@@ -258,6 +260,7 @@ impl Repository {
             config,
             config_version,
             storage,
+            storage_settings,
             asset_manager,
             authorize_virtual_chunk_access,
         )
@@ -296,8 +299,10 @@ impl Repository {
             let config =
                 config.map(|c| default_config.merge(c)).unwrap_or(default_config);
 
-            let storage_settings =
-                config.storage().cloned().unwrap_or_else(|| storage.default_settings());
+            let storage_settings = match config.storage() {
+                Some(s) => s.clone(),
+                None => storage.default_settings().await?,
+            };
 
             let asset_manager = Arc::new(AssetManager::new_with_config(
                 Arc::clone(&storage),
@@ -312,14 +317,17 @@ impl Repository {
                 config,
                 config_version,
                 storage,
+                storage_settings,
                 asset_manager,
                 authorize_virtual_chunk_access,
             )
         } else {
             trace!("Repository configuration not found, using default as base");
             let config = config.unwrap_or_default();
-            let storage_settings =
-                config.storage().cloned().unwrap_or_else(|| storage.default_settings());
+            let storage_settings = match config.storage() {
+                Some(s) => s.clone(),
+                None => storage.default_settings().await?,
+            };
 
             let asset_manager = Arc::new(AssetManager::new_with_config(
                 Arc::clone(&storage),
@@ -333,6 +341,7 @@ impl Repository {
                 config,
                 storage::VersionInfo::for_creation(),
                 storage,
+                storage_settings,
                 asset_manager,
                 authorize_virtual_chunk_access,
             )
@@ -356,13 +365,12 @@ impl Repository {
         config: RepositoryConfig,
         config_version: storage::VersionInfo,
         storage: Arc<dyn Storage + Send + Sync>,
+        storage_settings: storage::Settings,
         asset_manager: Arc<AssetManager>,
         authorized_virtual_containers: HashMap<String, Option<Credentials>>,
     ) -> RepositoryResult<Self> {
         let containers = config.virtual_chunk_containers().cloned();
         validate_credentials(&config, &authorized_virtual_containers)?;
-        let storage_settings =
-            config.storage().cloned().unwrap_or_else(|| storage.default_settings());
         let virtual_resolver = Arc::new(VirtualChunkResolver::new(
             containers,
             authorized_virtual_containers.clone(),
@@ -396,7 +404,7 @@ impl Repository {
         let is_v1 = async move {
             match fetch_branch_tip(
                 storage_c.as_ref(),
-                &storage_c.default_settings(),
+                &storage_c.default_settings().await?,
                 Ref::DEFAULT_BRANCH,
             )
             .await
@@ -411,7 +419,7 @@ impl Repository {
         let after_v1 = async move {
             let temp_asset_manager = Arc::new(AssetManager::new_no_cache(
                 Arc::clone(&storage),
-                storage.default_settings(),
+                storage.default_settings().await?,
                 1, // we are only reading, compression doesn't matter
                 DEFAULT_MAX_CONCURRENT_REQUESTS,
             ));
@@ -442,7 +450,7 @@ impl Repository {
 
     /// Reopen the repository changing its config and or virtual chunk credentials
     #[instrument(skip_all)]
-    pub fn reopen(
+    pub async fn reopen(
         &self,
         config: Option<RepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<Credentials>>>,
@@ -452,11 +460,17 @@ impl Repository {
             .map(|c| self.config().merge(c))
             .unwrap_or_else(|| self.config().clone());
 
+        let storage_settings = match config.storage() {
+            Some(s) => s.clone(),
+            None => self.storage.default_settings().await?,
+        };
+
         Self::new(
             self.spec_version,
             config,
             self.config_version.clone(),
             Arc::clone(&self.storage),
+            storage_settings,
             Arc::clone(&self.asset_manager),
             authorize_virtual_chunk_access
                 .unwrap_or_else(|| self.authorized_virtual_containers.clone()),
@@ -477,7 +491,7 @@ impl Repository {
     pub async fn fetch_config(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<Option<(RepositoryConfig, storage::VersionInfo)>> {
-        let settings = storage.default_settings();
+        let settings = storage.default_settings().await?;
         let am = AssetManager::new_no_cache(
             storage,
             settings,
@@ -513,13 +527,13 @@ impl Repository {
         config: &RepositoryConfig,
         previous_version: &storage::VersionInfo,
     ) -> RepositoryResult<storage::VersionInfo> {
-        if !storage.can_write() {
+        if !storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot save configuration".to_string(),
             )
             .into());
         }
-        let settings = storage.default_settings();
+        let settings = storage.default_settings().await?;
         let am = AssetManager::new_no_cache(
             storage,
             settings,
@@ -696,7 +710,7 @@ impl Repository {
         branch_name: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
-        if !self.storage.can_write() {
+        if !self.storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot create branch".to_string(),
             )
@@ -827,7 +841,7 @@ impl Repository {
         to_snapshot_id: &SnapshotId,
         from_snapshot_id: Option<&SnapshotId>,
     ) -> RepositoryResult<()> {
-        if !self.storage.can_write() {
+        if !self.storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot create branch".to_string(),
             )
@@ -880,7 +894,7 @@ impl Repository {
     /// chunks or snapshots associated with the branch.
     #[instrument(skip(self))]
     pub async fn delete_branch(&self, branch: &str) -> RepositoryResult<()> {
-        if !self.storage.can_write() {
+        if !self.storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot delete branch".to_string(),
             )
@@ -926,7 +940,7 @@ impl Repository {
     /// chunks or snapshots associated with the tag.
     #[instrument(skip(self))]
     pub async fn delete_tag(&self, tag: &str) -> RepositoryResult<()> {
-        if !self.storage.can_write() {
+        if !self.storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot delete tag".to_string(),
             )
@@ -970,7 +984,7 @@ impl Repository {
         tag_name: &str,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
-        if !self.storage.can_write() {
+        if !self.storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot create tag".to_string(),
             )
@@ -1266,7 +1280,7 @@ impl Repository {
 
     #[instrument(skip(self))]
     pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
-        if !self.storage.can_write() {
+        if !self.storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot create writable_session".to_string(),
             )
@@ -1292,7 +1306,7 @@ impl Repository {
 
     #[instrument(skip(self))]
     pub async fn rearrange_session(&self, branch: &str) -> RepositoryResult<Session> {
-        if !self.storage.can_write() {
+        if !self.storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot create writable_session".to_string(),
             )
@@ -1607,7 +1621,7 @@ mod tests {
             }),
             ..RepositoryConfig::default()
         };
-        let repo = repo.reopen(Some(config.clone()), None)?;
+        let repo = repo.reopen(Some(config.clone()), None).await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 20);
         assert_eq!(repo.config().caching().num_chunk_refs(), 100);
 
@@ -1712,7 +1726,7 @@ mod tests {
         ));
     }
 
-    fn reopen_repo_with_new_splitting_config(
+    async fn reopen_repo_with_new_splitting_config(
         repo: &Repository,
         split_sizes: Option<Vec<(ManifestSplitCondition, Vec<ManifestSplitDim>)>>,
     ) -> Repository {
@@ -1728,7 +1742,7 @@ mod tests {
             manifest: Some(man_config),
             ..RepositoryConfig::default()
         };
-        repo.reopen(Some(config), None).unwrap()
+        repo.reopen(Some(config), None).await.unwrap()
     }
 
     async fn create_repo_with_split_manifest_config(
@@ -2003,7 +2017,7 @@ mod tests {
 
         // make sure data is correct
         let validate_data = async || {
-            let new_repo = reopen_repo_with_new_splitting_config(&repository, None);
+            let new_repo = reopen_repo_with_new_splitting_config(&repository, None).await;
             let session = new_repo
                 .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
                 .await
@@ -2038,7 +2052,7 @@ mod tests {
         )];
 
         let new_repo =
-            reopen_repo_with_new_splitting_config(&repository, Some(split_sizes));
+            reopen_repo_with_new_splitting_config(&repository, Some(split_sizes)).await;
 
         let snap = rewrite_manifests(
             &new_repo,
@@ -2069,7 +2083,7 @@ mod tests {
         )];
 
         let new_repo =
-            reopen_repo_with_new_splitting_config(&repository, Some(split_sizes));
+            reopen_repo_with_new_splitting_config(&repository, Some(split_sizes)).await;
 
         let snap = rewrite_manifests(
             &new_repo,
@@ -2407,7 +2421,7 @@ mod tests {
             Some(logging_c),
         )
         .await?;
-        let repo_clone = repository.reopen(None, None)?;
+        let repo_clone = repository.reopen(None, None).await?;
 
         let mut total_manifests = 0;
         assert_manifest_count(repo_clone.asset_manager(), total_manifests).await;
@@ -2496,7 +2510,7 @@ mod tests {
         )];
 
         let repository =
-            reopen_repo_with_new_splitting_config(&repository, Some(split_sizes));
+            reopen_repo_with_new_splitting_config(&repository, Some(split_sizes)).await;
         verify_all_data(&repository).await;
         let mut session = repository.writable_session("main").await?;
         let index = vec![13, 0, 0, 0];
@@ -2663,7 +2677,8 @@ mod tests {
             let other_repo = reopen_repo_with_new_splitting_config(
                 &repository,
                 Some(incompatible_split_sizes),
-            );
+            )
+            .await;
 
             assert_ne!(other_repo.config(), repository.config());
 
@@ -2688,7 +2703,8 @@ mod tests {
 
         // now with the same split sizes
         let other_repo =
-            reopen_repo_with_new_splitting_config(&repository, Some(orig_split_sizes));
+            reopen_repo_with_new_splitting_config(&repository, Some(orig_split_sizes))
+                .await;
         let mut session2 = other_repo.writable_session("main").await?;
         session2
             .set_chunk_ref(
@@ -2832,7 +2848,8 @@ mod tests {
         let other_repo = reopen_repo_with_new_splitting_config(
             &repository,
             Some(incompatible_split_sizes),
-        );
+        )
+        .await;
 
         assert_ne!(other_repo.config(), repository.config());
 

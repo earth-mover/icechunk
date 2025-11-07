@@ -46,6 +46,7 @@ use thiserror::Error;
 pub mod logging;
 
 pub mod object_store;
+pub mod redirect;
 pub mod s3;
 
 pub use object_store::ObjectStorage;
@@ -54,6 +55,7 @@ use crate::{
     config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options},
     error::ICError,
     private,
+    storage::redirect::RedirectStorage,
 };
 
 #[derive(Debug, Error)]
@@ -98,6 +100,8 @@ pub enum StorageErrorKind {
         cause: url::ParseError,
         url: String,
     },
+    #[error("Redirect Storage error: {0}")]
+    BadRedirect(String),
     #[error("storage error: {0}")]
     Other(String),
 }
@@ -409,11 +413,11 @@ impl DeleteObjectsResult {
 #[async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
-    fn default_settings(&self) -> Settings {
-        Default::default()
+    async fn default_settings(&self) -> StorageResult<Settings> {
+        Ok(Default::default())
     }
 
-    fn can_write(&self) -> bool;
+    async fn can_write(&self) -> StorageResult<bool>;
 
     async fn get_object(
         &self,
@@ -807,6 +811,13 @@ pub fn new_http_storage(
     Ok(Arc::new(st))
 }
 
+pub fn new_redirect_storage(base_url: &str) -> StorageResult<Arc<dyn Storage>> {
+    let base_url = Url::parse(base_url).map_err(|e| {
+        StorageErrorKind::CannotParseUrl { cause: e, url: base_url.to_string() }
+    })?;
+    Ok(Arc::new(RedirectStorage::new(base_url)))
+}
+
 pub async fn new_s3_object_store_storage(
     config: S3Options,
     bucket: String,
@@ -842,7 +853,7 @@ pub async fn new_azure_blob_storage(
     Ok(Arc::new(storage))
 }
 
-pub async fn new_gcs_storage(
+pub fn new_gcs_storage(
     bucket: String,
     prefix: Option<String>,
     credentials: Option<GcsCredentials>,
@@ -855,8 +866,7 @@ pub async fn new_gcs_storage(
             key.parse::<GoogleConfigKey>().map(|k| (k, value)).ok()
         })
         .collect();
-    let storage =
-        ObjectStorage::new_gcs(bucket, prefix, credentials, Some(config)).await?;
+    let storage = ObjectStorage::new_gcs(bucket, prefix, credentials, Some(config))?;
     Ok(Arc::new(storage))
 }
 
@@ -903,7 +913,6 @@ mod tests {
             ))),
             None,
         )
-        .await
         .unwrap();
         let bytes = rmp_serde::to_vec(&storage).unwrap();
         let dese: Result<Arc<dyn Storage>, _> = rmp_serde::from_slice(&bytes);
