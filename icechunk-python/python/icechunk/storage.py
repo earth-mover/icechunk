@@ -40,6 +40,19 @@ def local_filesystem_storage(path: str) -> Storage:
     return Storage.new_local_filesystem(path)
 
 
+def http_storage(base_url: str, opts: dict[str, str] | None = None) -> Storage:
+    """Create a read-only Storage instance that reads data from an HTTP(s) server
+
+    Parameters
+    ----------
+    base_url: str
+        The URL path to the root of the repository
+    opts: dict[str, str] | None
+        A dictionary of options for the HTTP object store. See https://docs.rs/object_store/latest/object_store/client/enum.ClientConfigKey.html#variants for a list of possible keys in snake case format.
+    """
+    return Storage.new_http(base_url, opts)
+
+
 def http_store(
     opts: dict[str, str] | None = None,
 ) -> ObjectStoreConfig.Http:

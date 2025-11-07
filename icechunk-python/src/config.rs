@@ -1825,6 +1825,23 @@ impl PyStorage {
         })
     }
 
+    #[classmethod]
+    pub(crate) fn new_http(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        base_url: &str,
+        config: Option<HashMap<String, String>>,
+    ) -> PyResult<Self> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = icechunk::storage::new_http_storage(base_url, config)
+                    .map_err(PyIcechunkStoreError::StorageError)?;
+
+                Ok(PyStorage(storage))
+            })
+        })
+    }
+
     pub(crate) fn __repr__(&self) -> String {
         format!("{}", self.0)
     }

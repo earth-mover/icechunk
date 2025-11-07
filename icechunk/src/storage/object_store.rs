@@ -38,6 +38,7 @@ use std::{
 };
 use tokio::sync::{OnceCell, RwLock};
 use tracing::instrument;
+use url::Url;
 
 use super::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, ListInfo,
@@ -122,6 +123,15 @@ impl ObjectStorage {
             Arc::new(GcsObjectStoreBackend { bucket, prefix, credentials, config });
         let storage = ObjectStorage { backend, client: OnceCell::new() };
 
+        Ok(storage)
+    }
+
+    pub fn new_http(
+        url: Url,
+        config: Option<HashMap<ClientConfigKey, String>>,
+    ) -> Result<ObjectStorage, StorageError> {
+        let backend = Arc::new(HttpObjectStoreBackend { url: url.to_string(), config });
+        let storage = ObjectStorage { backend, client: OnceCell::new() };
         Ok(storage)
     }
 
@@ -558,13 +568,19 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = HttpBuilder::new().with_url(&self.url);
 
+        let empty = HashMap::new();
+        let config = self.config.as_ref().unwrap_or(&empty);
+
         // Add options
-        let builder = self
-            .config
-            .as_ref()
-            .unwrap_or(&HashMap::new())
+        let mut builder = config
             .iter()
             .fold(builder, |builder, (key, value)| builder.with_config(*key, value));
+
+        if !config.contains_key(&ClientConfigKey::AllowHttp)
+            && self.url.starts_with("http:")
+        {
+            builder = builder.with_config(ClientConfigKey::AllowHttp, "true")
+        }
 
         let builder = builder.with_retry(RetryConfig {
             backoff: BackoffConfig {

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, env, future::Future, pin::Pin, sync::Arc};
 
 use bytes::Bytes;
+use chrono::Utc;
 use futures::{StreamExt, TryStreamExt, stream};
 use icechunk::{
     ObjectStorage, Repository, RepositoryConfig, Storage,
@@ -16,15 +17,19 @@ use icechunk::{
     refs::RefErrorKind,
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
-        self, ETag, Generation, StorageErrorKind, StorageResult, VersionInfo,
-        new_in_memory_storage, new_s3_storage, s3::mk_client,
+        self, ConcurrencySettings, ETag, Generation, StorageErrorKind, StorageResult,
+        VersionInfo, new_http_storage, new_in_memory_storage, new_s3_storage,
+        s3::mk_client,
     },
 };
 use icechunk_macros::tokio_test;
 use object_store::azure::AzureConfigKey;
 use pretty_assertions::{assert_eq, assert_ne};
 use tempfile::tempdir;
-use tokio::io::{AsyncRead, AsyncReadExt as _};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt as _},
+    sync::oneshot,
+};
 use zstd::zstd_safe::WriteBuf;
 
 mod common;
@@ -827,5 +832,67 @@ pub async fn test_write_object_larger_than_multipart_threshold()
         Ok(())
     })
     .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::unwrap_used)]
+/// Start an HTTP server serving static files from icechunk-python/tests/data/test-repo-v2
+/// Create an HTTP storage that hits that server, and call some methods on it
+pub async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
+    let repo_path =
+        std::env::current_dir()?.join("../icechunk-python/tests/data/test-repo-v2");
+    let route = warp::fs::dir(repo_path.clone());
+    let (stop, wait) = oneshot::channel();
+    let server = warp::serve(route).bind(([127, 0, 0, 1], 8000)).await.graceful(async {
+        wait.await.ok();
+    });
+
+    let join = tokio::task::spawn(server.run());
+
+    let storage1 = new_http_storage("http://localhost:8000", None)?;
+    let storage2 = new_http_storage("http://localhost:8000/", None)?;
+    for storage in [storage1, storage2] {
+        assert!(!storage.can_write());
+
+        let settings = storage.default_settings();
+        let mut data = Vec::with_capacity(1_024);
+
+        let mut read = storage.get_object(&settings, "repo", None).await?.0;
+        read.read_to_end(&mut data).await?;
+        let expected = std::fs::metadata(repo_path.join("repo"))?.len();
+        assert_eq!(expected, data.len() as u64);
+
+        let mut data = Vec::with_capacity(1_024);
+        let conc_settings = storage::Settings {
+            concurrency: Some(ConcurrencySettings {
+                max_concurrent_requests_for_object: Some(100.try_into()?),
+                ideal_concurrent_request_size: Some(10.try_into()?),
+            }),
+            ..settings.clone()
+        };
+        let mut read =
+            storage.get_object(&conc_settings, "repo", Some(&(0..100))).await?.0;
+        read.read_to_end(&mut data).await?;
+        assert_eq!(100, data.len() as u64);
+
+        let mut data = Vec::with_capacity(1_024);
+        let mut read = storage
+            .get_object(&conc_settings, "snapshots/1CECHNKREP0F1RSTCMT0", None)
+            .await?
+            .0;
+        read.read_to_end(&mut data).await?;
+        let expected =
+            std::fs::metadata(repo_path.join("snapshots/1CECHNKREP0F1RSTCMT0"))?.len();
+        assert_eq!(expected, data.len() as u64);
+
+        let lm = storage.get_object_last_modified("config.yaml", &settings).await?;
+        assert!(lm < Utc::now());
+    }
+
+    // stop the server
+    stop.send(()).unwrap();
+    join.await?;
+
     Ok(())
 }
