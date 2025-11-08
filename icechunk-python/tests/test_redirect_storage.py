@@ -6,7 +6,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import icechunk as ic
 import xarray as xr
 
-# Set your target redirect URL and the port the server will run on
 TARGET_URL = "s3://icechunk-public-data/v1/era5_weatherbench2?region=us-east-1"
 
 
@@ -18,10 +17,11 @@ def find_free_port():
 
 
 class RedirectHandler(BaseHTTPRequestHandler):
-    """Handles GET requests by sending 302 redirect."""
+    """Handles GET requests by sending 302 redirects"""
 
     def do_GET(self):
         req_num = int(self.path[1:] or 0)
+        # redirect to ourselves a few times until we finally redirect to s3://
         location = TARGET_URL if req_num >= 6 else f"/{req_num + 1}"
         self.send_response(302)
         self.send_header("Location", location)
