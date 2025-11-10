@@ -22,6 +22,9 @@ pub struct RepoInfo {
     buffer: Vec<u8>,
 }
 
+// FIXME: make configurable
+const UPDATES_PER_FILE: usize = 100;
+
 impl std::fmt::Debug for RepoInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let tags = self.tags().map(Vec::from_iter).unwrap_or_default();
@@ -76,14 +79,26 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     ignore_missing_null_terminator: true,
 };
 
+#[derive(Debug, Clone)]
+pub struct UpdateInfo<I> {
+    pub update_type: UpdateType,
+    pub update_time: DateTime<Utc>,
+    pub previous_updates: I,
+}
+
+type UpdateTuple<'a> = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>;
+
 impl RepoInfo {
-    pub fn new<'a>(
+    pub fn new<
+        'a,
+        I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
+    >(
         tags: impl IntoIterator<Item = (&'a str, SnapshotId)>,
         branches: impl IntoIterator<Item = (&'a str, SnapshotId)>,
         deleted_tags: impl IntoIterator<Item = &'a str>,
         snapshots: impl IntoIterator<Item = SnapshotInfo>,
-        update_type: &UpdateType,
-        previous_file: Option<&str>,
+        update: UpdateInfo<I>,
+        backup_path: Option<&'a str>,
     ) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = snapshots.into_iter().collect();
         snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
@@ -91,25 +106,19 @@ impl RepoInfo {
         let branches = resolve_ref_iter(&snapshots, branches)?;
         let mut deleted_tags: Vec<_> = deleted_tags.into_iter().collect();
         deleted_tags.sort();
-        Self::from_parts(
-            tags,
-            branches,
-            deleted_tags,
-            snapshots,
-            None,
-            update_type,
-            previous_file,
-        )
+        Self::from_parts(tags, branches, deleted_tags, snapshots, update, backup_path)
     }
 
-    fn from_parts<'a>(
+    fn from_parts<
+        'a,
+        I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
+    >(
         sorted_tags: impl IntoIterator<Item = (&'a str, u32)>,
         sorted_branches: impl IntoIterator<Item = (&'a str, u32)>,
         sorted_deleted_tags: impl IntoIterator<Item = &'a str>,
         sorted_snapshots: impl IntoIterator<Item = SnapshotInfo>,
-        updated_at: Option<DateTime<Utc>>,
-        update_type: &UpdateType,
-        previous_file: Option<&str>,
+        update: UpdateInfo<I>,
+        backup_path: Option<&'a str>,
     ) -> IcechunkResult<Self> {
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
         let tags = sorted_tags
@@ -220,9 +229,9 @@ impl RepoInfo {
         // TODO: repo metadata
         let metadata =
             builder.create_vector(&[] as &[WIPOffset<generated::MetadataItem>]);
-        let previous_file = previous_file.map(|s| builder.create_string(s));
-        let (latest_update_type, latest_update) =
-            update_type_to_fb(&mut builder, update_type)?;
+
+        let (latest_updates, repo_before_updates) =
+            Self::mk_latest_updates(&mut builder, update, backup_path)?;
 
         // TODO: provide accessors for last_updated_at, status, metadata, etc.
         let repo_args = generated::RepoArgs {
@@ -231,13 +240,10 @@ impl RepoInfo {
             deleted_tags: Some(deleted_tags),
             snapshots: Some(snapshots),
             spec_version: SpecVersionBin::current() as u8,
-            last_updated_at: updated_at.unwrap_or_else(Utc::now).timestamp_micros()
-                as u64,
             status: Some(status),
             metadata: Some(metadata),
-            previous_file,
-            latest_update_type,
-            latest_update,
+            latest_updates: Some(latest_updates),
+            repo_before_updates,
         };
         let repo = generated::Repo::create(&mut builder, &repo_args);
         builder.finish(repo, Some("Ichk"));
@@ -245,6 +251,91 @@ impl RepoInfo {
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
         Ok(Self { buffer })
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn mk_latest_updates<
+        'bldr,
+        'a,
+        I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
+    >(
+        builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
+        update: UpdateInfo<I>,
+        backup_path: Option<&'a str>,
+    ) -> IcechunkResult<(
+        WIPOffset<
+            flatbuffers::Vector<
+                'bldr,
+                flatbuffers::ForwardsUOffset<generated::Update<'bldr>>,
+            >,
+        >,
+        Option<WIPOffset<&'bldr str>>,
+    )> {
+        // replace the backup path in the last update, that must be None, by the new backup path
+        let mut previous_updates = update.previous_updates.into_iter();
+        let last_update = previous_updates.next().map(|maybe_data| {
+            maybe_data.map(|(ut, dt, path)| {
+                assert!(
+                    path.is_none(),
+                    "Invalid latest update iterator, last element has backup path"
+                );
+                (ut, dt, backup_path)
+            })
+        });
+        // assert backup path is only present when there are previous updates
+        assert!(
+            last_update.is_none() && backup_path.is_none()
+                || last_update.is_some() && backup_path.is_some(),
+            "A backup path must be provided iif there are previous updates"
+        );
+
+        let new_updates: Box<dyn Iterator<Item = _>> =
+            if let Some(last_update) = last_update {
+                Box::new(
+                    [Ok((update.update_type, update.update_time, None)), last_update]
+                        .into_iter(),
+                )
+            } else {
+                Box::new([Ok((update.update_type, update.update_time, None))].into_iter())
+            };
+
+        let all_updates = new_updates.into_iter().chain(previous_updates);
+        let mut repo_before_updates = None;
+
+        let updates: Vec<_> = all_updates
+            .take(UPDATES_PER_FILE + 1)
+            .enumerate()
+            .map(|(idx, maybe_data)| maybe_data.map(|(d1, d2, d3)| (idx, d1, d2, d3)))
+            .map(|maybe_data| {
+                let (idx, u_type, u_time, file) = maybe_data?;
+                if idx == UPDATES_PER_FILE {
+                    repo_before_updates = file;
+                }
+                let (update_type_type, update_type) =
+                    update_type_to_fb(builder, &u_type)?;
+                let file = file.map(|file| builder.create_string(file));
+                let res = generated::Update::create(
+                    builder,
+                    &generated::UpdateArgs {
+                        update_type_type,
+                        update_type: Some(update_type),
+                        updated_at: u_time.timestamp_micros() as u64,
+                        backup_path: file,
+                    },
+                );
+                Ok::<_, IcechunkFormatError>(res)
+            })
+            .try_collect()?;
+
+        debug_assert!(
+            updates.len() <= UPDATES_PER_FILE + 1,
+            "Too many latest updates in repo file"
+        );
+
+        let size = (UPDATES_PER_FILE - 1).min(updates.len() - 1);
+        let updates = builder.create_vector(&updates[0..=size]);
+        let repo_before_updates = repo_before_updates.map(|s| builder.create_string(s));
+        Ok((updates, repo_before_updates))
     }
 
     pub fn initial(snapshot: SnapshotInfo) -> Self {
@@ -256,8 +347,11 @@ impl RepoInfo {
             [("main", 0)],
             [],
             [snapshot],
-            Some(last_updated_at),
-            &UpdateType::RepoInitializedUpdate,
+            UpdateInfo {
+                update_type: UpdateType::RepoInitializedUpdate,
+                update_time: last_updated_at,
+                previous_updates: [],
+            },
             None,
         )
         .expect("Cannot generate initial snapshot")
@@ -286,8 +380,8 @@ impl RepoInfo {
         &self,
         snap: SnapshotInfo,
         branch: Option<&str>,
-        update_type: &UpdateType,
-        previous_file: Option<&str>,
+        update_type: UpdateType,
+        previous_file: &str,
     ) -> IcechunkResult<Self> {
         let flushed_at = snap.flushed_at;
         let mut snapshots: Vec<_> = self.all_snapshots()?.try_collect()?;
@@ -320,9 +414,12 @@ impl RepoInfo {
             branches,
             self.deleted_tags()?,
             snapshots,
-            Some(flushed_at),
-            update_type,
-            previous_file,
+            UpdateInfo {
+                update_type,
+                update_time: flushed_at,
+                previous_updates: self.latest_updates()?,
+            },
+            Some(previous_file),
         )?;
         Ok(res)
     }
@@ -331,7 +428,7 @@ impl RepoInfo {
         &self,
         name: &str,
         snap: &SnapshotId,
-        previous_file: Option<&str>,
+        previous_file: &str,
     ) -> IcechunkResult<Self> {
         if let Ok(snapshot_id) = self.resolve_branch(name) {
             return Err(IcechunkFormatErrorKind::BranchAlreadyExists {
@@ -352,9 +449,14 @@ impl RepoInfo {
                     branches,
                     self.deleted_tags()?,
                     snaps,
-                    None,
-                    &UpdateType::BranchCreatedUpdate { name: name.to_string() },
-                    previous_file,
+                    UpdateInfo {
+                        update_type: UpdateType::BranchCreatedUpdate {
+                            name: name.to_string(),
+                        },
+                        update_time: Utc::now(),
+                        previous_updates: self.latest_updates()?,
+                    },
+                    Some(previous_file),
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -364,11 +466,7 @@ impl RepoInfo {
         }
     }
 
-    pub fn delete_branch(
-        &self,
-        name: &str,
-        previous_file: Option<&str>,
-    ) -> IcechunkResult<Self> {
+    pub fn delete_branch(&self, name: &str, previous_file: &str) -> IcechunkResult<Self> {
         match self.resolve_branch(name) {
             Ok(previous_snap_id) => {
                 let mut branches: Vec<_> = self.all_branches()?.collect();
@@ -380,12 +478,15 @@ impl RepoInfo {
                     branches,
                     self.deleted_tags()?,
                     snaps,
-                    None,
-                    &UpdateType::BranchDeletedUpdate {
-                        name: name.to_string(),
-                        previous_snap_id,
+                    UpdateInfo {
+                        update_type: UpdateType::BranchDeletedUpdate {
+                            name: name.to_string(),
+                            previous_snap_id,
+                        },
+                        update_time: Utc::now(),
+                        previous_updates: self.latest_updates()?,
                     },
-                    previous_file,
+                    Some(previous_file),
                 )
             }
             Err(IcechunkFormatError {
@@ -403,7 +504,7 @@ impl RepoInfo {
         &self,
         name: &str,
         new_snap: &SnapshotId,
-        previous_file: Option<&str>,
+        previous_file: &str,
     ) -> IcechunkResult<Self> {
         let previous_snap_id = self.resolve_branch(name)?;
         match self.resolve_snapshot_index(new_snap)? {
@@ -417,12 +518,15 @@ impl RepoInfo {
                     branches,
                     self.deleted_tags()?,
                     snaps,
-                    None,
-                    &UpdateType::BranchResetUpdate {
-                        name: name.to_string(),
-                        previous_snap_id,
+                    UpdateInfo {
+                        update_type: UpdateType::BranchResetUpdate {
+                            name: name.to_string(),
+                            previous_snap_id,
+                        },
+                        update_time: Utc::now(),
+                        previous_updates: self.latest_updates()?,
                     },
-                    previous_file,
+                    Some(previous_file),
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -436,7 +540,7 @@ impl RepoInfo {
         &self,
         name: &str,
         snap: &SnapshotId,
-        previous_file: Option<&str>,
+        previous_file: &str,
     ) -> IcechunkResult<Self> {
         if self.resolve_tag(name).is_ok() || self.tag_was_deleted(name)? {
             // TODO: better error on tag already deleted
@@ -457,9 +561,14 @@ impl RepoInfo {
                     self.all_branches()?,
                     self.deleted_tags()?,
                     snaps,
-                    None,
-                    &UpdateType::TagCreatedUpdate { name: name.to_string() },
-                    previous_file,
+                    UpdateInfo {
+                        update_type: UpdateType::TagCreatedUpdate {
+                            name: name.to_string(),
+                        },
+                        update_time: Utc::now(),
+                        previous_updates: self.latest_updates()?,
+                    },
+                    Some(previous_file),
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -469,11 +578,7 @@ impl RepoInfo {
         }
     }
 
-    pub fn delete_tag(
-        &self,
-        name: &str,
-        previous_file: Option<&str>,
-    ) -> IcechunkResult<Self> {
+    pub fn delete_tag(&self, name: &str, previous_file: &str) -> IcechunkResult<Self> {
         match self.resolve_tag(name) {
             Ok(previous_snap_id) => {
                 let mut tags: Vec<_> = self.all_tags()?.collect();
@@ -489,12 +594,15 @@ impl RepoInfo {
                     self.all_branches()?,
                     deleted_tags,
                     snaps,
-                    None,
-                    &UpdateType::TagDeletedUpdate {
-                        name: name.to_string(),
-                        previous_snap_id,
+                    UpdateInfo {
+                        update_type: UpdateType::TagDeletedUpdate {
+                            name: name.to_string(),
+                            previous_snap_id,
+                        },
+                        update_time: Utc::now(),
+                        previous_updates: self.latest_updates()?,
                     },
-                    previous_file,
+                    Some(previous_file),
                 )
             }
             Err(IcechunkFormatError {
@@ -589,20 +697,34 @@ impl RepoInfo {
             .err_into()
     }
 
-    pub fn last_updated_at(&self) -> IcechunkResult<DateTime<Utc>> {
-        let ts = self.root()?.last_updated_at();
-        timestamp_to_timestamp(ts)
+    pub fn latest_updates(
+        &self,
+    ) -> IcechunkResult<impl Iterator<Item = UpdateTuple<'_>>> {
+        let res = self.root()?.latest_updates().iter().map(|up| self.update_to_tuple(up));
+        Ok(res)
     }
 
-    pub fn latest_update(&self) -> IcechunkResult<UpdateType> {
-        let root = self.root()?;
+    fn update_to_tuple<'a>(
+        &'a self,
+        update: generated::Update<'a>,
+    ) -> IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)> {
+        let ty = self.mk_update_type(&update)?;
+        let ts = timestamp_to_timestamp(update.updated_at())?;
+        let bp = update.backup_path();
+        Ok((ty, ts, bp))
+    }
+
+    fn mk_update_type(
+        &self,
+        update: &generated::Update<'_>,
+    ) -> IcechunkResult<UpdateType> {
         #[allow(clippy::unwrap_used)]
-        match root.latest_update_type() {
+        match update.update_type_type() {
             generated::UpdateType::RepoInitializedUpdate => {
                 Ok(UpdateType::RepoInitializedUpdate)
             }
             generated::UpdateType::RepoMigratedUpdate => {
-                let up = root.latest_update_as_repo_migrated_update().unwrap();
+                let up = update.update_type_as_repo_migrated_update().unwrap();
                 Ok(UpdateType::RepoMigratedUpdate {
                     from_version: up.from_version().try_into().map_err(|_| {
                         IcechunkFormatError::from(
@@ -620,11 +742,11 @@ impl RepoInfo {
                 Ok(UpdateType::ConfigChangedUpdate)
             }
             generated::UpdateType::TagCreatedUpdate => {
-                let up = root.latest_update_as_tag_created_update().unwrap();
+                let up = update.update_type_as_tag_created_update().unwrap();
                 Ok(UpdateType::TagCreatedUpdate { name: up.name().to_string() })
             }
             generated::UpdateType::TagDeletedUpdate => {
-                let up = root.latest_update_as_tag_deleted_update().unwrap();
+                let up = update.update_type_as_tag_deleted_update().unwrap();
                 let previous_snap_id = SnapshotId::new(up.previous_snap_id().0);
                 Ok(UpdateType::TagDeletedUpdate {
                     name: up.name().to_string(),
@@ -632,11 +754,11 @@ impl RepoInfo {
                 })
             }
             generated::UpdateType::BranchCreatedUpdate => {
-                let up = root.latest_update_as_branch_created_update().unwrap();
+                let up = update.update_type_as_branch_created_update().unwrap();
                 Ok(UpdateType::BranchCreatedUpdate { name: up.name().to_string() })
             }
             generated::UpdateType::BranchDeletedUpdate => {
-                let up = root.latest_update_as_branch_deleted_update().unwrap();
+                let up = update.update_type_as_branch_deleted_update().unwrap();
                 let previous_snap_id = SnapshotId::new(up.previous_snap_id().0);
                 Ok(UpdateType::BranchDeletedUpdate {
                     name: up.name().to_string(),
@@ -644,7 +766,7 @@ impl RepoInfo {
                 })
             }
             generated::UpdateType::BranchResetUpdate => {
-                let up = root.latest_update_as_branch_reset_update().unwrap();
+                let up = update.update_type_as_branch_reset_update().unwrap();
                 let previous_snap_id = SnapshotId::new(up.previous_snap_id().0);
                 Ok(UpdateType::BranchResetUpdate {
                     name: up.name().to_string(),
@@ -652,11 +774,11 @@ impl RepoInfo {
                 })
             }
             generated::UpdateType::NewCommitUpdate => {
-                let up = root.latest_update_as_new_commit_update().unwrap();
+                let up = update.update_type_as_new_commit_update().unwrap();
                 Ok(UpdateType::NewCommitUpdate { branch: up.branch().to_string() })
             }
             generated::UpdateType::CommitAmendedUpdate => {
-                let up = root.latest_update_as_commit_amended_update().unwrap();
+                let up = update.update_type_as_commit_amended_update().unwrap();
                 let previous_snap_id = SnapshotId::new(up.previous_snap_id().0);
                 Ok(UpdateType::CommitAmendedUpdate {
                     branch: up.branch().to_string(),
@@ -664,7 +786,7 @@ impl RepoInfo {
                 })
             }
             generated::UpdateType::NewDetachedSnapshotUpdate => {
-                let up = root.latest_update_as_new_detached_snapshot_update().unwrap();
+                let up = update.update_type_as_new_detached_snapshot_update().unwrap();
                 let new_snap_id = SnapshotId::new(up.new_snap_id().0);
                 Ok(UpdateType::NewDetachedSnapshotUpdate { new_snap_id })
             }
@@ -725,8 +847,8 @@ impl RepoInfo {
         }
     }
 
-    pub fn previous_file(&self) -> IcechunkResult<Option<&str>> {
-        Ok(self.root()?.previous_file())
+    pub fn repo_before_updates(&self) -> IcechunkResult<Option<&str>> {
+        Ok(self.root()?.repo_before_updates())
     }
 
     fn resolve_snapshot_index(&self, id: &SnapshotId) -> IcechunkResult<Option<usize>> {
@@ -808,53 +930,45 @@ fn update_type_to_fb<'bldr>(
     update: &UpdateType,
 ) -> IcechunkResult<(
     generated::UpdateType,
-    Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
+    flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>,
 )> {
     match update {
         UpdateType::RepoInitializedUpdate => Ok((
             generated::UpdateType::RepoInitializedUpdate,
-            Some(
-                generated::RepoInitializedUpdate::create(
-                    builder,
-                    &generated::RepoInitializedUpdateArgs {},
-                )
-                .as_union_value(),
-            ),
+            generated::RepoInitializedUpdate::create(
+                builder,
+                &generated::RepoInitializedUpdateArgs {},
+            )
+            .as_union_value(),
         )),
         UpdateType::RepoMigratedUpdate { from_version, to_version } => Ok((
             generated::UpdateType::RepoMigratedUpdate,
-            Some(
-                generated::RepoMigratedUpdate::create(
-                    builder,
-                    &generated::RepoMigratedUpdateArgs {
-                        from_version: *from_version as u8,
-                        to_version: *to_version as u8,
-                    },
-                )
-                .as_union_value(),
-            ),
+            generated::RepoMigratedUpdate::create(
+                builder,
+                &generated::RepoMigratedUpdateArgs {
+                    from_version: *from_version as u8,
+                    to_version: *to_version as u8,
+                },
+            )
+            .as_union_value(),
         )),
         UpdateType::ConfigChangedUpdate => Ok((
             generated::UpdateType::ConfigChangedUpdate,
-            Some(
-                generated::ConfigChangedUpdate::create(
-                    builder,
-                    &generated::ConfigChangedUpdateArgs {},
-                )
-                .as_union_value(),
-            ),
+            generated::ConfigChangedUpdate::create(
+                builder,
+                &generated::ConfigChangedUpdateArgs {},
+            )
+            .as_union_value(),
         )),
         UpdateType::TagCreatedUpdate { name } => {
             let name = Some(builder.create_string(name));
             Ok((
                 generated::UpdateType::TagCreatedUpdate,
-                Some(
-                    generated::TagCreatedUpdate::create(
-                        builder,
-                        &generated::TagCreatedUpdateArgs { name },
-                    )
-                    .as_union_value(),
-                ),
+                generated::TagCreatedUpdate::create(
+                    builder,
+                    &generated::TagCreatedUpdateArgs { name },
+                )
+                .as_union_value(),
             ))
         }
         UpdateType::TagDeletedUpdate { name, previous_snap_id } => {
@@ -863,26 +977,22 @@ fn update_type_to_fb<'bldr>(
             let previous_snap_id = Some(&object_id12);
             Ok((
                 generated::UpdateType::TagDeletedUpdate,
-                Some(
-                    generated::TagDeletedUpdate::create(
-                        builder,
-                        &generated::TagDeletedUpdateArgs { name, previous_snap_id },
-                    )
-                    .as_union_value(),
-                ),
+                generated::TagDeletedUpdate::create(
+                    builder,
+                    &generated::TagDeletedUpdateArgs { name, previous_snap_id },
+                )
+                .as_union_value(),
             ))
         }
         UpdateType::BranchCreatedUpdate { name } => {
             let name = Some(builder.create_string(name));
             Ok((
                 generated::UpdateType::BranchCreatedUpdate,
-                Some(
-                    generated::BranchCreatedUpdate::create(
-                        builder,
-                        &generated::BranchCreatedUpdateArgs { name },
-                    )
-                    .as_union_value(),
-                ),
+                generated::BranchCreatedUpdate::create(
+                    builder,
+                    &generated::BranchCreatedUpdateArgs { name },
+                )
+                .as_union_value(),
             ))
         }
         UpdateType::BranchDeletedUpdate { name, previous_snap_id } => {
@@ -891,13 +1001,11 @@ fn update_type_to_fb<'bldr>(
             let previous_snap_id = Some(&object_id12);
             Ok((
                 generated::UpdateType::BranchDeletedUpdate,
-                Some(
-                    generated::BranchDeletedUpdate::create(
-                        builder,
-                        &generated::BranchDeletedUpdateArgs { name, previous_snap_id },
-                    )
-                    .as_union_value(),
-                ),
+                generated::BranchDeletedUpdate::create(
+                    builder,
+                    &generated::BranchDeletedUpdateArgs { name, previous_snap_id },
+                )
+                .as_union_value(),
             ))
         }
         UpdateType::BranchResetUpdate { name, previous_snap_id } => {
@@ -906,26 +1014,22 @@ fn update_type_to_fb<'bldr>(
             let previous_snap_id = Some(&object_id12);
             Ok((
                 generated::UpdateType::BranchResetUpdate,
-                Some(
-                    generated::BranchResetUpdate::create(
-                        builder,
-                        &generated::BranchResetUpdateArgs { name, previous_snap_id },
-                    )
-                    .as_union_value(),
-                ),
+                generated::BranchResetUpdate::create(
+                    builder,
+                    &generated::BranchResetUpdateArgs { name, previous_snap_id },
+                )
+                .as_union_value(),
             ))
         }
         UpdateType::NewCommitUpdate { branch } => {
             let branch = Some(builder.create_string(branch));
             Ok((
                 generated::UpdateType::NewCommitUpdate,
-                Some(
-                    generated::NewCommitUpdate::create(
-                        builder,
-                        &generated::NewCommitUpdateArgs { branch },
-                    )
-                    .as_union_value(),
-                ),
+                generated::NewCommitUpdate::create(
+                    builder,
+                    &generated::NewCommitUpdateArgs { branch },
+                )
+                .as_union_value(),
             ))
         }
         UpdateType::CommitAmendedUpdate { branch, previous_snap_id } => {
@@ -934,13 +1038,11 @@ fn update_type_to_fb<'bldr>(
             let previous_snap_id = Some(&object_id12);
             Ok((
                 generated::UpdateType::CommitAmendedUpdate,
-                Some(
-                    generated::CommitAmendedUpdate::create(
-                        builder,
-                        &generated::CommitAmendedUpdateArgs { branch, previous_snap_id },
-                    )
-                    .as_union_value(),
-                ),
+                generated::CommitAmendedUpdate::create(
+                    builder,
+                    &generated::CommitAmendedUpdateArgs { branch, previous_snap_id },
+                )
+                .as_union_value(),
             ))
         }
         UpdateType::NewDetachedSnapshotUpdate { new_snap_id } => {
@@ -948,31 +1050,25 @@ fn update_type_to_fb<'bldr>(
             let new_snap_id = Some(&object_id12);
             Ok((
                 generated::UpdateType::NewDetachedSnapshotUpdate,
-                Some(
-                    generated::NewDetachedSnapshotUpdate::create(
-                        builder,
-                        &generated::NewDetachedSnapshotUpdateArgs { new_snap_id },
-                    )
-                    .as_union_value(),
-                ),
+                generated::NewDetachedSnapshotUpdate::create(
+                    builder,
+                    &generated::NewDetachedSnapshotUpdateArgs { new_snap_id },
+                )
+                .as_union_value(),
             ))
         }
         UpdateType::GCRanUpdate => Ok((
             generated::UpdateType::GCRanUpdate,
-            Some(
-                generated::GCRanUpdate::create(builder, &generated::GCRanUpdateArgs {})
-                    .as_union_value(),
-            ),
+            generated::GCRanUpdate::create(builder, &generated::GCRanUpdateArgs {})
+                .as_union_value(),
         )),
         UpdateType::ExpirationRanUpdate => Ok((
             generated::UpdateType::ExpirationRanUpdate,
-            Some(
-                generated::ExpirationRanUpdate::create(
-                    builder,
-                    &generated::ExpirationRanUpdateArgs {},
-                )
-                .as_union_value(),
-            ),
+            generated::ExpirationRanUpdate::create(
+                builder,
+                &generated::ExpirationRanUpdateArgs {},
+            )
+            .as_union_value(),
         )),
     }
 }
@@ -1008,11 +1104,11 @@ mod tests {
         let repo = repo.add_snapshot(
             snap2.clone(),
             Some("main"),
-            &UpdateType::NewCommitUpdate { branch: "main".to_string() },
-            Some("foo/bar"),
+            UpdateType::NewCommitUpdate { branch: "main".to_string() },
+            "foo/bar",
         )?;
         assert_eq!(&repo.resolve_branch("main")?, &snap2.id);
-        assert_eq!(repo.previous_file()?, Some("foo/bar"));
+        assert_eq!(repo.repo_before_updates()?, None);
 
         let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
         assert_eq!(all, HashSet::from_iter([snap1.clone(), snap2.clone()]));
@@ -1035,8 +1131,8 @@ mod tests {
         let repo = repo.add_snapshot(
             snap3.clone(),
             Some("main"),
-            &UpdateType::NewCommitUpdate { branch: "main".to_string() },
-            None,
+            UpdateType::NewCommitUpdate { branch: "main".to_string() },
+            "foo",
         )?;
         assert_eq!(&repo.resolve_branch("main")?, &snap3.id);
         let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
@@ -1068,10 +1164,10 @@ mod tests {
             metadata: Default::default(),
         };
         let repo = RepoInfo::initial(snap1.clone());
-        let repo = repo.add_branch("foo", &id1, None)?;
-        let repo = repo.add_branch("bar", &id1, None)?;
+        let repo = repo.add_branch("foo", &id1, "foo")?;
+        let repo = repo.add_branch("bar", &id1, "bar")?;
         assert!(matches!(
-            repo.add_branch("bad-snap", &SnapshotId::random(), None),
+            repo.add_branch("bad-snap", &SnapshotId::random(), "bad"),
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::SnapshotIdNotFound { .. },
                 ..
@@ -1079,7 +1175,7 @@ mod tests {
         ));
         // cannot add existing
         assert!(matches!(
-            repo.add_branch("bar", &id1, Some("/foo/bar")),
+            repo.add_branch("bar", &id1, "/foo/bar"),
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::BranchAlreadyExists { .. },
                 ..
@@ -1101,29 +1197,29 @@ mod tests {
         let repo = repo.add_snapshot(
             snap2,
             Some("main"),
-            &UpdateType::NewCommitUpdate { branch: "main".to_string() },
-            None,
+            UpdateType::NewCommitUpdate { branch: "main".to_string() },
+            "foo",
         )?;
-        let repo = repo.add_branch("baz", &id2, Some("/foo/bar"))?;
+        let repo = repo.add_branch("baz", &id2, "/foo/bar")?;
         assert_eq!(repo.resolve_branch("main")?, id2.clone());
         assert_eq!(repo.resolve_branch("foo")?, id1.clone());
         assert_eq!(repo.resolve_branch("bar")?, id1.clone());
         assert_eq!(repo.resolve_branch("baz")?, id2.clone());
 
-        let repo = repo.delete_branch("bar", None)?;
+        let repo = repo.delete_branch("bar", "bar")?;
         assert!(repo.resolve_branch("bar").is_err());
         assert_eq!(
             repo.all_branches()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["main", "foo", "baz"].into()
         );
 
-        assert!(repo.delete_branch("bad-branch", None).is_err());
+        assert!(repo.delete_branch("bad-branch", "bad").is_err());
 
         // tags
-        let repo = repo.add_tag("tag1", &id1, None)?;
-        let repo = repo.add_tag("tag2", &id2, None)?;
-        assert!(repo.add_tag("bad-snap", &SnapshotId::random(), None).is_err());
-        assert!(repo.add_tag("tag1", &id1, None).is_err());
+        let repo = repo.add_tag("tag1", &id1, "tag1")?;
+        let repo = repo.add_tag("tag2", &id2, "tag2")?;
+        assert!(repo.add_tag("bad-snap", &SnapshotId::random(), "bad").is_err());
+        assert!(repo.add_tag("tag1", &id1, "tag1-again").is_err());
         assert_eq!(repo.resolve_tag("tag1")?, id1.clone());
         assert_eq!(repo.resolve_tag("tag2")?, id2.clone());
         assert_eq!(
@@ -1132,20 +1228,113 @@ mod tests {
         );
 
         // delete tags
-        let repo = repo.add_tag("tag3", &id1, None)?;
-        let repo = repo.delete_tag("tag3", None)?;
+        let repo = repo.add_tag("tag3", &id1, "tag3")?;
+        let repo = repo.delete_tag("tag3", "delete-tag3")?;
         assert_eq!(
             repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["tag1", "tag2"].into()
         );
         // cannot add deleted
-        assert!(repo.add_tag("tag3", &id1, None).is_err());
+        assert!(repo.add_tag("tag3", &id1, "tag3-again").is_err());
         // cannot delete deleted
-        assert!(repo.delete_tag("tag3", None).is_err());
+        assert!(repo.delete_tag("tag3", "delete-tag3-again").is_err());
         assert_eq!(
             repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["tag1", "tag2"].into()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_repo_info_updates() -> Result<(), Box<dyn std::error::Error>> {
+        let id1 = SnapshotId::random();
+        let snap1 = SnapshotInfo {
+            id: id1.clone(),
+            parent_id: None,
+            // needs to be micro second rounded
+            flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
+            message: "snap 1".to_string(),
+            metadata: Default::default(),
+        };
+
+        // check updates for a new repo
+        let mut repo = RepoInfo::initial(snap1);
+        assert_eq!(repo.latest_updates()?.count(), 1);
+        let (last_update, _, file) = repo.latest_updates()?.next().unwrap()?;
+        assert!(file.is_none());
+        assert_eq!(last_update, UpdateType::RepoInitializedUpdate);
+        assert!(repo.repo_before_updates()?.is_none());
+
+        // check updates after UPDATES_PER_FILE changes
+        // fill the first page of updates by adding branches
+        for i in 1..=(UPDATES_PER_FILE - 1) {
+            repo = repo.add_branch(
+                i.to_string().as_str(),
+                &id1,
+                (i - 1).to_string().as_str(),
+            )?
+        }
+
+        assert_eq!(repo.latest_updates()?.count(), UPDATES_PER_FILE);
+        let updates = repo.latest_updates()?;
+
+        // check all other updates
+        for (idx, update) in updates.enumerate() {
+            let (update, _, file) = update?;
+            if idx == UPDATES_PER_FILE - 1 {
+                assert_eq!(update, UpdateType::RepoInitializedUpdate);
+                assert_eq!(file, Some("0"));
+            } else {
+                assert_eq!(
+                    update,
+                    UpdateType::BranchCreatedUpdate {
+                        name: (UPDATES_PER_FILE - 1 - idx).to_string()
+                    }
+                );
+                if idx == 0 {
+                    assert!(file.is_none())
+                } else {
+                    assert_eq!(
+                        file,
+                        Some((UPDATES_PER_FILE - 1 - idx).to_string().as_str())
+                    );
+                }
+            }
+        }
+        assert!(repo.repo_before_updates()?.is_none());
+
+        // Now, if we add aanother change, it won't fit in the first "page" of repo updates
+        repo = repo.add_tag("tag", &id1, "first-branches")?;
+        // the file only contains the first "page" worth of updates
+        assert_eq!(repo.latest_updates()?.count(), UPDATES_PER_FILE);
+        // next file is the oldest change
+        assert_eq!(repo.repo_before_updates()?, Some("0"));
+        let mut updates = repo.latest_updates()?;
+        // last change is the tag creation
+        let (last_update, _, file) = updates.next().unwrap()?;
+        assert_eq!(last_update, UpdateType::TagCreatedUpdate { name: "tag".to_string() });
+        assert!(file.is_none());
+
+        // next change is a branch creation backed up to first-branches
+        let (last_update, _, file) = updates.next().unwrap()?;
+        assert_eq!(
+            last_update,
+            UpdateType::BranchCreatedUpdate { name: "99".to_string() }
+        );
+        assert_eq!(file, Some("first-branches"));
+
+        // all other changes are branch creation (repo creation falled to the next page)
+        for (idx, update) in updates.enumerate() {
+            let (update, _, file) = update?;
+            assert_eq!(file, Some((UPDATES_PER_FILE - 2 - idx).to_string().as_str()));
+            assert_eq!(
+                update,
+                UpdateType::BranchCreatedUpdate {
+                    name: (UPDATES_PER_FILE - 2 - idx).to_string()
+                }
+            );
+        }
+
         Ok(())
     }
 }

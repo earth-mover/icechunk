@@ -437,6 +437,9 @@ impl_pickle!(PyGCSummary);
 pub(crate) struct PyUpdateType {
     #[pyo3(get)]
     updated_at: DateTime<Utc>,
+
+    #[pyo3(get)]
+    backup_path: Option<String>,
 }
 
 #[pyclass(name = "RepoInitializedUpdate", eq, extends=PyUpdateType)]
@@ -627,14 +630,19 @@ impl PyExpirationRanUpdate {
     }
 }
 
-fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py<PyAny>> {
+fn mk_update_type(
+    update: &UpdateType,
+    updated_at: DateTime<Utc>,
+    backup_path: Option<String>,
+) -> PyResult<Py<PyAny>> {
     Python::attach(|py| {
         let res = match update {
-            UpdateType::RepoInitializedUpdate => {
-                Bound::new(py, (PyRepoInitializedUpdate, PyUpdateType { updated_at }))?
-                    .into_any()
-                    .unbind()
-            }
+            UpdateType::RepoInitializedUpdate => Bound::new(
+                py,
+                (PyRepoInitializedUpdate, PyUpdateType { updated_at, backup_path }),
+            )?
+            .into_any()
+            .unbind(),
             UpdateType::RepoMigratedUpdate { from_version, to_version } => Bound::new(
                 py,
                 (
@@ -642,19 +650,23 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                         from_version: *from_version as u8,
                         to_version: *to_version as u8,
                     },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
             .unbind(),
-            UpdateType::ConfigChangedUpdate => {
-                Bound::new(py, (PyConfigChangedUpdate, PyUpdateType { updated_at }))?
-                    .into_any()
-                    .unbind()
-            }
+            UpdateType::ConfigChangedUpdate => Bound::new(
+                py,
+                (PyConfigChangedUpdate, PyUpdateType { updated_at, backup_path }),
+            )?
+            .into_any()
+            .unbind(),
             UpdateType::TagCreatedUpdate { name } => Bound::new(
                 py,
-                (PyTagCreatedUpdate { name: name.clone() }, PyUpdateType { updated_at }),
+                (
+                    PyTagCreatedUpdate { name: name.clone() },
+                    PyUpdateType { updated_at, backup_path },
+                ),
             )?
             .into_any()
             .unbind(),
@@ -665,7 +677,7 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                         name: name.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
@@ -674,7 +686,7 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                 py,
                 (
                     PyBranchCreatedUpdate { name: name.clone() },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
@@ -686,7 +698,7 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                         name: name.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
@@ -698,7 +710,7 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                         name: name.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
@@ -707,7 +719,7 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                 py,
                 (
                     PyNewCommitUpdate { branch: branch.clone() },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
@@ -719,7 +731,7 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                         branch: branch.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
@@ -728,21 +740,22 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                 py,
                 (
                     PyNewDetachedSnapshotUpdate { new_snap_id: new_snap_id.to_string() },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
             .unbind(),
             UpdateType::GCRanUpdate => {
-                Bound::new(py, (PyGCRanUpdate, PyUpdateType { updated_at }))?
+                Bound::new(py, (PyGCRanUpdate, PyUpdateType { updated_at, backup_path }))?
                     .into_any()
                     .unbind()
             }
-            UpdateType::ExpirationRanUpdate => {
-                Bound::new(py, (PyExpirationRanUpdate, PyUpdateType { updated_at }))?
-                    .into_any()
-                    .unbind()
-            }
+            UpdateType::ExpirationRanUpdate => Bound::new(
+                py,
+                (PyExpirationRanUpdate, PyUpdateType { updated_at, backup_path }),
+            )?
+            .into_any()
+            .unbind(),
         };
         Ok(res)
     })
@@ -1182,8 +1195,9 @@ impl PyRepository {
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?
                 .map_err(PyIcechunkStoreError::RepositoryError)
-                .and_then(|(ts, update)| async move {
-                    mk_update_type(&update, ts).map_err(PyIcechunkStoreError::from)
+                .and_then(|(ts, update, repo_path)| async move {
+                    mk_update_type(&update, ts, repo_path)
+                        .map_err(PyIcechunkStoreError::from)
                 });
 
             let prepared_list = Arc::new(Mutex::new(ops.err_into().boxed()));

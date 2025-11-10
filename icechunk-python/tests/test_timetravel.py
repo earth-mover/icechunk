@@ -558,10 +558,6 @@ Arrays deleted:
         ]
     )
 
-    print("actual")
-    print(ops)
-    print("expected")
-    print(expected)
     assert ops == expected
 
 
@@ -958,3 +954,30 @@ Chunks updated:
         [5, 5]
 """
     )
+
+
+async def test_long_ops_log() -> None:
+    NUM_BRANCHES = 120
+    repo = await ic.Repository.create_async(
+        storage=ic.in_memory_storage(),
+    )
+    snap = await repo.lookup_branch_async("main")
+    for i in range(1, NUM_BRANCHES + 1):
+        await repo.create_branch_async(str(i), snap)
+    updates = [update async for update in repo.ops_log_async()]
+    assert len(updates) == NUM_BRANCHES + 1
+
+    t = type(updates[0])
+    assert t == ic.BranchCreatedUpdate
+    assert updates[0].backup_path is None
+
+    t = type(updates[-1])
+    assert t == ic.RepoInitializedUpdate
+    assert updates[-1].backup_path is not None
+
+    for i in range(1, NUM_BRANCHES):
+        assert updates[i].backup_path is not None
+        t = type(updates[i])
+        assert t == ic.BranchCreatedUpdate
+
+    # TODO: add check for next updates page path

@@ -1473,6 +1473,8 @@ class GCSummary:
 class UpdateType:
     @property
     def updated_at(self) -> datetime.datetime: ...
+    @property
+    def backup_path(self) -> str | None: ...
 
 class RepoInitializedUpdate(UpdateType):
     pass

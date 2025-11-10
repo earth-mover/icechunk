@@ -5558,6 +5558,506 @@ pub mod generated {
             ds.finish()
         }
     }
+    pub enum UpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct Update<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for Update<'a> {
+        type Inner = Update<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: flatbuffers::Table::new(buf, loc) }
+        }
+    }
+
+    impl<'a> Update<'a> {
+        pub const VT_UPDATE_TYPE_TYPE: flatbuffers::VOffsetT = 4;
+        pub const VT_UPDATE_TYPE: flatbuffers::VOffsetT = 6;
+        pub const VT_UPDATED_AT: flatbuffers::VOffsetT = 8;
+        pub const VT_BACKUP_PATH: flatbuffers::VOffsetT = 10;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            Update { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args UpdateArgs<'args>,
+        ) -> flatbuffers::WIPOffset<Update<'bldr>> {
+            let mut builder = UpdateBuilder::new(_fbb);
+            builder.add_updated_at(args.updated_at);
+            if let Some(x) = args.backup_path {
+                builder.add_backup_path(x);
+            }
+            if let Some(x) = args.update_type {
+                builder.add_update_type(x);
+            }
+            builder.add_update_type_type(args.update_type_type);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn update_type_type(&self) -> UpdateType {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<UpdateType>(
+                        Update::VT_UPDATE_TYPE_TYPE,
+                        Some(UpdateType::NONE),
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn update_type(&self) -> flatbuffers::Table<'a> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(
+                        Update::VT_UPDATE_TYPE,
+                        None,
+                    )
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn updated_at(&self) -> u64 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<u64>(Update::VT_UPDATED_AT, Some(0)).unwrap() }
+        }
+        #[inline]
+        pub fn backup_path(&self) -> Option<&'a str> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(
+                    Update::VT_BACKUP_PATH,
+                    None,
+                )
+            }
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_repo_initialized_update(
+            &self,
+        ) -> Option<RepoInitializedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::RepoInitializedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { RepoInitializedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_repo_migrated_update(
+            &self,
+        ) -> Option<RepoMigratedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::RepoMigratedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { RepoMigratedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_config_changed_update(
+            &self,
+        ) -> Option<ConfigChangedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::ConfigChangedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { ConfigChangedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_tag_created_update(&self) -> Option<TagCreatedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::TagCreatedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { TagCreatedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_tag_deleted_update(&self) -> Option<TagDeletedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::TagDeletedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { TagDeletedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_branch_created_update(
+            &self,
+        ) -> Option<BranchCreatedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::BranchCreatedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { BranchCreatedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_branch_deleted_update(
+            &self,
+        ) -> Option<BranchDeletedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::BranchDeletedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { BranchDeletedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_branch_reset_update(
+            &self,
+        ) -> Option<BranchResetUpdate<'a>> {
+            if self.update_type_type() == UpdateType::BranchResetUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { BranchResetUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_new_commit_update(&self) -> Option<NewCommitUpdate<'a>> {
+            if self.update_type_type() == UpdateType::NewCommitUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { NewCommitUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_commit_amended_update(
+            &self,
+        ) -> Option<CommitAmendedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::CommitAmendedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { CommitAmendedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_new_detached_snapshot_update(
+            &self,
+        ) -> Option<NewDetachedSnapshotUpdate<'a>> {
+            if self.update_type_type() == UpdateType::NewDetachedSnapshotUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { NewDetachedSnapshotUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_gcran_update(&self) -> Option<GCRanUpdate<'a>> {
+            if self.update_type_type() == UpdateType::GCRanUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { GCRanUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_expiration_ran_update(
+            &self,
+        ) -> Option<ExpirationRanUpdate<'a>> {
+            if self.update_type_type() == UpdateType::ExpirationRanUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { ExpirationRanUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for Update<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+     .visit_union::<UpdateType, _>("update_type_type", Self::VT_UPDATE_TYPE_TYPE, "update_type", Self::VT_UPDATE_TYPE, true, |key, v, pos| {
+        match key {
+          UpdateType::RepoInitializedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RepoInitializedUpdate>>("UpdateType::RepoInitializedUpdate", pos),
+          UpdateType::RepoMigratedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RepoMigratedUpdate>>("UpdateType::RepoMigratedUpdate", pos),
+          UpdateType::ConfigChangedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ConfigChangedUpdate>>("UpdateType::ConfigChangedUpdate", pos),
+          UpdateType::TagCreatedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<TagCreatedUpdate>>("UpdateType::TagCreatedUpdate", pos),
+          UpdateType::TagDeletedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<TagDeletedUpdate>>("UpdateType::TagDeletedUpdate", pos),
+          UpdateType::BranchCreatedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<BranchCreatedUpdate>>("UpdateType::BranchCreatedUpdate", pos),
+          UpdateType::BranchDeletedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<BranchDeletedUpdate>>("UpdateType::BranchDeletedUpdate", pos),
+          UpdateType::BranchResetUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<BranchResetUpdate>>("UpdateType::BranchResetUpdate", pos),
+          UpdateType::NewCommitUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<NewCommitUpdate>>("UpdateType::NewCommitUpdate", pos),
+          UpdateType::CommitAmendedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<CommitAmendedUpdate>>("UpdateType::CommitAmendedUpdate", pos),
+          UpdateType::NewDetachedSnapshotUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<NewDetachedSnapshotUpdate>>("UpdateType::NewDetachedSnapshotUpdate", pos),
+          UpdateType::GCRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<GCRanUpdate>>("UpdateType::GCRanUpdate", pos),
+          UpdateType::ExpirationRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ExpirationRanUpdate>>("UpdateType::ExpirationRanUpdate", pos),
+          _ => Ok(()),
+        }
+     })?
+     .visit_field::<u64>("updated_at", Self::VT_UPDATED_AT, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("backup_path", Self::VT_BACKUP_PATH, false)?
+     .finish();
+            Ok(())
+        }
+    }
+    pub struct UpdateArgs<'a> {
+        pub update_type_type: UpdateType,
+        pub update_type: Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
+        pub updated_at: u64,
+        pub backup_path: Option<flatbuffers::WIPOffset<&'a str>>,
+    }
+    impl<'a> Default for UpdateArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            UpdateArgs {
+                update_type_type: UpdateType::NONE,
+                update_type: None, // required field
+                updated_at: 0,
+                backup_path: None,
+            }
+        }
+    }
+
+    pub struct UpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> UpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn add_update_type_type(&mut self, update_type_type: UpdateType) {
+            self.fbb_.push_slot::<UpdateType>(
+                Update::VT_UPDATE_TYPE_TYPE,
+                update_type_type,
+                UpdateType::NONE,
+            );
+        }
+        #[inline]
+        pub fn add_update_type(
+            &mut self,
+            update_type: flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Update::VT_UPDATE_TYPE,
+                update_type,
+            );
+        }
+        #[inline]
+        pub fn add_updated_at(&mut self, updated_at: u64) {
+            self.fbb_.push_slot::<u64>(Update::VT_UPDATED_AT, updated_at, 0);
+        }
+        #[inline]
+        pub fn add_backup_path(&mut self, backup_path: flatbuffers::WIPOffset<&'b str>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Update::VT_BACKUP_PATH,
+                backup_path,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> UpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            UpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<Update<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            self.fbb_.required(o, Update::VT_UPDATE_TYPE, "update_type");
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for Update<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("Update");
+            ds.field("update_type_type", &self.update_type_type());
+            match self.update_type_type() {
+                UpdateType::RepoInitializedUpdate => {
+                    if let Some(x) = self.update_type_as_repo_initialized_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::RepoMigratedUpdate => {
+                    if let Some(x) = self.update_type_as_repo_migrated_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::ConfigChangedUpdate => {
+                    if let Some(x) = self.update_type_as_config_changed_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::TagCreatedUpdate => {
+                    if let Some(x) = self.update_type_as_tag_created_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::TagDeletedUpdate => {
+                    if let Some(x) = self.update_type_as_tag_deleted_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::BranchCreatedUpdate => {
+                    if let Some(x) = self.update_type_as_branch_created_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::BranchDeletedUpdate => {
+                    if let Some(x) = self.update_type_as_branch_deleted_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::BranchResetUpdate => {
+                    if let Some(x) = self.update_type_as_branch_reset_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::NewCommitUpdate => {
+                    if let Some(x) = self.update_type_as_new_commit_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::CommitAmendedUpdate => {
+                    if let Some(x) = self.update_type_as_commit_amended_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::NewDetachedSnapshotUpdate => {
+                    if let Some(x) = self.update_type_as_new_detached_snapshot_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::GCRanUpdate => {
+                    if let Some(x) = self.update_type_as_gcran_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::ExpirationRanUpdate => {
+                    if let Some(x) = self.update_type_as_expiration_ran_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                _ => {
+                    let x: Option<()> = None;
+                    ds.field("update_type", &x)
+                }
+            };
+            ds.field("updated_at", &self.updated_at());
+            ds.field("backup_path", &self.backup_path());
+            ds.finish()
+        }
+    }
     pub enum RepoOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -5579,12 +6079,10 @@ pub mod generated {
         pub const VT_BRANCHES: flatbuffers::VOffsetT = 8;
         pub const VT_DELETED_TAGS: flatbuffers::VOffsetT = 10;
         pub const VT_SNAPSHOTS: flatbuffers::VOffsetT = 12;
-        pub const VT_LAST_UPDATED_AT: flatbuffers::VOffsetT = 14;
-        pub const VT_STATUS: flatbuffers::VOffsetT = 16;
-        pub const VT_METADATA: flatbuffers::VOffsetT = 18;
-        pub const VT_LATEST_UPDATE_TYPE: flatbuffers::VOffsetT = 20;
-        pub const VT_LATEST_UPDATE: flatbuffers::VOffsetT = 22;
-        pub const VT_PREVIOUS_FILE: flatbuffers::VOffsetT = 24;
+        pub const VT_STATUS: flatbuffers::VOffsetT = 14;
+        pub const VT_METADATA: flatbuffers::VOffsetT = 16;
+        pub const VT_LATEST_UPDATES: flatbuffers::VOffsetT = 18;
+        pub const VT_REPO_BEFORE_UPDATES: flatbuffers::VOffsetT = 20;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -5601,12 +6099,11 @@ pub mod generated {
             args: &'args RepoArgs<'args>,
         ) -> flatbuffers::WIPOffset<Repo<'bldr>> {
             let mut builder = RepoBuilder::new(_fbb);
-            builder.add_last_updated_at(args.last_updated_at);
-            if let Some(x) = args.previous_file {
-                builder.add_previous_file(x);
+            if let Some(x) = args.repo_before_updates {
+                builder.add_repo_before_updates(x);
             }
-            if let Some(x) = args.latest_update {
-                builder.add_latest_update(x);
+            if let Some(x) = args.latest_updates {
+                builder.add_latest_updates(x);
             }
             if let Some(x) = args.metadata {
                 builder.add_metadata(x);
@@ -5626,7 +6123,6 @@ pub mod generated {
             if let Some(x) = args.tags {
                 builder.add_tags(x);
             }
-            builder.add_latest_update_type(args.latest_update_type);
             builder.add_spec_version(args.spec_version);
             builder.finish()
         }
@@ -5703,13 +6199,6 @@ pub mod generated {
             }
         }
         #[inline]
-        pub fn last_updated_at(&self) -> u64 {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe { self._tab.get::<u64>(Repo::VT_LAST_UPDATED_AT, Some(0)).unwrap() }
-        }
-        #[inline]
         pub fn status(&self) -> RepoStatus<'a> {
             // Safety:
             // Created from valid Table for this object
@@ -5738,246 +6227,30 @@ pub mod generated {
             }
         }
         #[inline]
-        pub fn latest_update_type(&self) -> UpdateType {
+        pub fn latest_updates(
+            &self,
+        ) -> flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Update<'a>>> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
             unsafe {
                 self._tab
-                    .get::<UpdateType>(
-                        Repo::VT_LATEST_UPDATE_TYPE,
-                        Some(UpdateType::NONE),
-                    )
+                    .get::<flatbuffers::ForwardsUOffset<
+                        flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Update>>,
+                    >>(Repo::VT_LATEST_UPDATES, None)
                     .unwrap()
             }
         }
         #[inline]
-        pub fn latest_update(&self) -> flatbuffers::Table<'a> {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab
-                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Table<'a>>>(
-                        Repo::VT_LATEST_UPDATE,
-                        None,
-                    )
-                    .unwrap()
-            }
-        }
-        #[inline]
-        pub fn previous_file(&self) -> Option<&'a str> {
+        pub fn repo_before_updates(&self) -> Option<&'a str> {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
             unsafe {
                 self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(
-                    Repo::VT_PREVIOUS_FILE,
+                    Repo::VT_REPO_BEFORE_UPDATES,
                     None,
                 )
-            }
-        }
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_repo_initialized_update(
-            &self,
-        ) -> Option<RepoInitializedUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::RepoInitializedUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { RepoInitializedUpdate::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_repo_migrated_update(
-            &self,
-        ) -> Option<RepoMigratedUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::RepoMigratedUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { RepoMigratedUpdate::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_config_changed_update(
-            &self,
-        ) -> Option<ConfigChangedUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::ConfigChangedUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { ConfigChangedUpdate::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_tag_created_update(
-            &self,
-        ) -> Option<TagCreatedUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::TagCreatedUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { TagCreatedUpdate::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_tag_deleted_update(
-            &self,
-        ) -> Option<TagDeletedUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::TagDeletedUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { TagDeletedUpdate::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_branch_created_update(
-            &self,
-        ) -> Option<BranchCreatedUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::BranchCreatedUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { BranchCreatedUpdate::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_branch_deleted_update(
-            &self,
-        ) -> Option<BranchDeletedUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::BranchDeletedUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { BranchDeletedUpdate::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_branch_reset_update(
-            &self,
-        ) -> Option<BranchResetUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::BranchResetUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { BranchResetUpdate::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_new_commit_update(&self) -> Option<NewCommitUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::NewCommitUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { NewCommitUpdate::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_commit_amended_update(
-            &self,
-        ) -> Option<CommitAmendedUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::CommitAmendedUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { CommitAmendedUpdate::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_new_detached_snapshot_update(
-            &self,
-        ) -> Option<NewDetachedSnapshotUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::NewDetachedSnapshotUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { NewDetachedSnapshotUpdate::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_gcran_update(&self) -> Option<GCRanUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::GCRanUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { GCRanUpdate::init_from_table(u) })
-            } else {
-                None
-            }
-        }
-
-        #[inline]
-        #[allow(non_snake_case)]
-        pub fn latest_update_as_expiration_ran_update(
-            &self,
-        ) -> Option<ExpirationRanUpdate<'a>> {
-            if self.latest_update_type() == UpdateType::ExpirationRanUpdate {
-                let u = self.latest_update();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid union in this slot
-                Some(unsafe { ExpirationRanUpdate::init_from_table(u) })
-            } else {
-                None
             }
         }
     }
@@ -5990,34 +6263,36 @@ pub mod generated {
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
-     .visit_field::<u8>("spec_version", Self::VT_SPEC_VERSION, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>>>("tags", Self::VT_TAGS, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>>>("branches", Self::VT_BRANCHES, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<&'_ str>>>>("deleted_tags", Self::VT_DELETED_TAGS, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SnapshotInfo>>>>("snapshots", Self::VT_SNAPSHOTS, true)?
-     .visit_field::<u64>("last_updated_at", Self::VT_LAST_UPDATED_AT, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<RepoStatus>>("status", Self::VT_STATUS, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MetadataItem>>>>("metadata", Self::VT_METADATA, false)?
-     .visit_union::<UpdateType, _>("latest_update_type", Self::VT_LATEST_UPDATE_TYPE, "latest_update", Self::VT_LATEST_UPDATE, true, |key, v, pos| {
-        match key {
-          UpdateType::RepoInitializedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RepoInitializedUpdate>>("UpdateType::RepoInitializedUpdate", pos),
-          UpdateType::RepoMigratedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RepoMigratedUpdate>>("UpdateType::RepoMigratedUpdate", pos),
-          UpdateType::ConfigChangedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ConfigChangedUpdate>>("UpdateType::ConfigChangedUpdate", pos),
-          UpdateType::TagCreatedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<TagCreatedUpdate>>("UpdateType::TagCreatedUpdate", pos),
-          UpdateType::TagDeletedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<TagDeletedUpdate>>("UpdateType::TagDeletedUpdate", pos),
-          UpdateType::BranchCreatedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<BranchCreatedUpdate>>("UpdateType::BranchCreatedUpdate", pos),
-          UpdateType::BranchDeletedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<BranchDeletedUpdate>>("UpdateType::BranchDeletedUpdate", pos),
-          UpdateType::BranchResetUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<BranchResetUpdate>>("UpdateType::BranchResetUpdate", pos),
-          UpdateType::NewCommitUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<NewCommitUpdate>>("UpdateType::NewCommitUpdate", pos),
-          UpdateType::CommitAmendedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<CommitAmendedUpdate>>("UpdateType::CommitAmendedUpdate", pos),
-          UpdateType::NewDetachedSnapshotUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<NewDetachedSnapshotUpdate>>("UpdateType::NewDetachedSnapshotUpdate", pos),
-          UpdateType::GCRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<GCRanUpdate>>("UpdateType::GCRanUpdate", pos),
-          UpdateType::ExpirationRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ExpirationRanUpdate>>("UpdateType::ExpirationRanUpdate", pos),
-          _ => Ok(()),
-        }
-     })?
-     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("previous_file", Self::VT_PREVIOUS_FILE, false)?
-     .finish();
+                .visit_field::<u8>("spec_version", Self::VT_SPEC_VERSION, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>,
+                >>("tags", Self::VT_TAGS, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>,
+                >>("branches", Self::VT_BRANCHES, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<&'_ str>>,
+                >>("deleted_tags", Self::VT_DELETED_TAGS, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SnapshotInfo>>,
+                >>("snapshots", Self::VT_SNAPSHOTS, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<RepoStatus>>(
+                    "status",
+                    Self::VT_STATUS,
+                    true,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MetadataItem>>,
+                >>("metadata", Self::VT_METADATA, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Update>>,
+                >>("latest_updates", Self::VT_LATEST_UPDATES, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "repo_before_updates",
+                    Self::VT_REPO_BEFORE_UPDATES,
+                    false,
+                )?
+                .finish();
             Ok(())
         }
     }
@@ -6043,16 +6318,18 @@ pub mod generated {
                 flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SnapshotInfo<'a>>>,
             >,
         >,
-        pub last_updated_at: u64,
         pub status: Option<flatbuffers::WIPOffset<RepoStatus<'a>>>,
         pub metadata: Option<
             flatbuffers::WIPOffset<
                 flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MetadataItem<'a>>>,
             >,
         >,
-        pub latest_update_type: UpdateType,
-        pub latest_update: Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
-        pub previous_file: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub latest_updates: Option<
+            flatbuffers::WIPOffset<
+                flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Update<'a>>>,
+            >,
+        >,
+        pub repo_before_updates: Option<flatbuffers::WIPOffset<&'a str>>,
     }
     impl<'a> Default for RepoArgs<'a> {
         #[inline]
@@ -6063,12 +6340,10 @@ pub mod generated {
                 branches: None,     // required field
                 deleted_tags: None, // required field
                 snapshots: None,    // required field
-                last_updated_at: 0,
-                status: None, // required field
+                status: None,       // required field
                 metadata: None,
-                latest_update_type: UpdateType::NONE,
-                latest_update: None, // required field
-                previous_file: None,
+                latest_updates: None, // required field
+                repo_before_updates: None,
             }
         }
     }
@@ -6128,10 +6403,6 @@ pub mod generated {
             );
         }
         #[inline]
-        pub fn add_last_updated_at(&mut self, last_updated_at: u64) {
-            self.fbb_.push_slot::<u64>(Repo::VT_LAST_UPDATED_AT, last_updated_at, 0);
-        }
-        #[inline]
         pub fn add_status(&mut self, status: flatbuffers::WIPOffset<RepoStatus<'b>>) {
             self.fbb_.push_slot_always::<flatbuffers::WIPOffset<RepoStatus>>(
                 Repo::VT_STATUS,
@@ -6151,31 +6422,25 @@ pub mod generated {
             );
         }
         #[inline]
-        pub fn add_latest_update_type(&mut self, latest_update_type: UpdateType) {
-            self.fbb_.push_slot::<UpdateType>(
-                Repo::VT_LATEST_UPDATE_TYPE,
-                latest_update_type,
-                UpdateType::NONE,
+        pub fn add_latest_updates(
+            &mut self,
+            latest_updates: flatbuffers::WIPOffset<
+                flatbuffers::Vector<'b, flatbuffers::ForwardsUOffset<Update<'b>>>,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Repo::VT_LATEST_UPDATES,
+                latest_updates,
             );
         }
         #[inline]
-        pub fn add_latest_update(
+        pub fn add_repo_before_updates(
             &mut self,
-            latest_update: flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>,
+            repo_before_updates: flatbuffers::WIPOffset<&'b str>,
         ) {
             self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
-                Repo::VT_LATEST_UPDATE,
-                latest_update,
-            );
-        }
-        #[inline]
-        pub fn add_previous_file(
-            &mut self,
-            previous_file: flatbuffers::WIPOffset<&'b str>,
-        ) {
-            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
-                Repo::VT_PREVIOUS_FILE,
-                previous_file,
+                Repo::VT_REPO_BEFORE_UPDATES,
+                repo_before_updates,
             );
         }
         #[inline]
@@ -6193,7 +6458,7 @@ pub mod generated {
             self.fbb_.required(o, Repo::VT_DELETED_TAGS, "deleted_tags");
             self.fbb_.required(o, Repo::VT_SNAPSHOTS, "snapshots");
             self.fbb_.required(o, Repo::VT_STATUS, "status");
-            self.fbb_.required(o, Repo::VT_LATEST_UPDATE, "latest_update");
+            self.fbb_.required(o, Repo::VT_LATEST_UPDATES, "latest_updates");
             flatbuffers::WIPOffset::new(o.value())
         }
     }
@@ -6206,109 +6471,10 @@ pub mod generated {
             ds.field("branches", &self.branches());
             ds.field("deleted_tags", &self.deleted_tags());
             ds.field("snapshots", &self.snapshots());
-            ds.field("last_updated_at", &self.last_updated_at());
             ds.field("status", &self.status());
             ds.field("metadata", &self.metadata());
-            ds.field("latest_update_type", &self.latest_update_type());
-            match self.latest_update_type() {
-                UpdateType::RepoInitializedUpdate => {
-                    if let Some(x) = self.latest_update_as_repo_initialized_update() {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                UpdateType::RepoMigratedUpdate => {
-                    if let Some(x) = self.latest_update_as_repo_migrated_update() {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                UpdateType::ConfigChangedUpdate => {
-                    if let Some(x) = self.latest_update_as_config_changed_update() {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                UpdateType::TagCreatedUpdate => {
-                    if let Some(x) = self.latest_update_as_tag_created_update() {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                UpdateType::TagDeletedUpdate => {
-                    if let Some(x) = self.latest_update_as_tag_deleted_update() {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                UpdateType::BranchCreatedUpdate => {
-                    if let Some(x) = self.latest_update_as_branch_created_update() {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                UpdateType::BranchDeletedUpdate => {
-                    if let Some(x) = self.latest_update_as_branch_deleted_update() {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                UpdateType::BranchResetUpdate => {
-                    if let Some(x) = self.latest_update_as_branch_reset_update() {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                UpdateType::NewCommitUpdate => {
-                    if let Some(x) = self.latest_update_as_new_commit_update() {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                UpdateType::CommitAmendedUpdate => {
-                    if let Some(x) = self.latest_update_as_commit_amended_update() {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                UpdateType::NewDetachedSnapshotUpdate => {
-                    if let Some(x) = self.latest_update_as_new_detached_snapshot_update()
-                    {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                UpdateType::GCRanUpdate => {
-                    if let Some(x) = self.latest_update_as_gcran_update() {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                UpdateType::ExpirationRanUpdate => {
-                    if let Some(x) = self.latest_update_as_expiration_ran_update() {
-                        ds.field("latest_update", &x)
-                    } else {
-                        ds.field("latest_update", &"InvalidFlatbuffer: Union discriminant does not match value.")
-                    }
-                }
-                _ => {
-                    let x: Option<()> = None;
-                    ds.field("latest_update", &x)
-                }
-            };
-            ds.field("previous_file", &self.previous_file());
+            ds.field("latest_updates", &self.latest_updates());
+            ds.field("repo_before_updates", &self.repo_before_updates());
             ds.finish()
         }
     }
