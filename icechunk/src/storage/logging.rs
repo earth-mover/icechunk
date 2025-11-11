@@ -52,12 +52,12 @@ impl private::Sealed for LoggingStorage {}
 #[typetag::serde]
 #[allow(clippy::expect_used)] // this implementation is intended for tests only
 impl Storage for LoggingStorage {
-    fn default_settings(&self) -> Settings {
-        self.backend.default_settings()
+    async fn default_settings(&self) -> StorageResult<Settings> {
+        self.backend.default_settings().await
     }
 
-    fn can_write(&self) -> bool {
-        self.backend.can_write()
+    async fn can_write(&self) -> StorageResult<bool> {
+        self.backend.can_write().await
     }
 
     async fn put_object(

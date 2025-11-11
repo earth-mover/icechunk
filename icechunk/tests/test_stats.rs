@@ -66,7 +66,7 @@ pub async fn test_repo_chunks_storage_in_r2() -> Result<(), Box<dyn std::error::
 pub async fn do_test_repo_chunks_storage(
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let storage_settings = storage.default_settings();
+    let storage_settings = storage.default_settings().await?;
     let asset_manager = Arc::new(AssetManager::new_no_cache(
         storage.clone(),
         storage_settings.clone(),

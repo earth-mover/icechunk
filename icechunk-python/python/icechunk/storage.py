@@ -66,6 +66,11 @@ def http_store(
     return ObjectStoreConfig.Http(opts)
 
 
+def redirect_storage(base_url: str) -> Storage:
+    # FIXME: document
+    return Storage.new_redirect(base_url)
+
+
 def local_filesystem_store(
     path: str,
 ) -> ObjectStoreConfig.LocalFileSystem:
