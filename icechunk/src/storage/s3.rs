@@ -521,8 +521,8 @@ impl private::Sealed for S3Storage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for S3Storage {
-    fn can_write(&self) -> bool {
-        self.can_write
+    async fn can_write(&self) -> StorageResult<bool> {
+        Ok(self.can_write)
     }
 
     async fn put_object(

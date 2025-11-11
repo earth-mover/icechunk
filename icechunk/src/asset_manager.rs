@@ -682,8 +682,8 @@ impl AssetManager {
             .await?)
     }
 
-    pub fn can_write_to_storage(&self) -> bool {
-        self.storage.can_write()
+    pub async fn can_write_to_storage(&self) -> RepositoryResult<bool> {
+        Ok(self.storage.can_write().await?)
     }
 
     pub async fn list_overwritten_objects(

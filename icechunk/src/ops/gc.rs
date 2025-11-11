@@ -317,7 +317,7 @@ pub async fn garbage_collect(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
 ) -> GCResult<GCSummary> {
-    if !asset_manager.can_write_to_storage() {
+    if !asset_manager.can_write_to_storage().await? {
         return Err(GCError::Repository(
             RepositoryErrorKind::ReadonlyStorage("Cannot garbage collect".to_string())
                 .into(),
@@ -597,7 +597,7 @@ pub async fn expire(
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
 ) -> GCResult<ExpireResult> {
-    if !asset_manager.can_write_to_storage() {
+    if !asset_manager.can_write_to_storage().await? {
         return Err(GCError::Repository(
             RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into(),
         ));

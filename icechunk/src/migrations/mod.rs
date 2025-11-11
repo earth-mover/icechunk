@@ -93,7 +93,7 @@ impl From<StorageError> for MigrationError {
     }
 }
 
-fn validate_start(repo: &Repository) -> MigrationResult<()> {
+async fn validate_start(repo: &Repository) -> MigrationResult<()> {
     if repo.spec_version() != SpecVersionBin::V1dot0 {
         error!("Target repository must be a 1.X Icechunk repository");
         return Err(MigrationErrorKind::InvalidRepositoryMigration {
@@ -103,7 +103,7 @@ fn validate_start(repo: &Repository) -> MigrationResult<()> {
         }
         .into());
     }
-    if !repo.storage().can_write() {
+    if !repo.storage().can_write().await? {
         error!("Storage instance must be writable");
         return Err(MigrationErrorKind::ReadonlyRepo.into());
     }
@@ -190,7 +190,7 @@ pub async fn migrate_1_to_2(
     delete_unused_v1_files: bool,
 ) -> MigrationResult<()> {
     let start_time = Instant::now();
-    validate_start(repo)?;
+    validate_start(repo).await?;
 
     info!("Starting migration");
     info!("Collecting refs");

@@ -494,9 +494,9 @@ async fn test_repository_with_minio_virtual_refs() -> Result<(), Box<dyn Error>>
             max_concurrent_requests_for_object: Some(100.try_into()?),
             ideal_concurrent_request_size: Some(1.try_into()?),
         }),
-        ..repo.storage().default_settings()
+        ..repo.storage().default_settings().await?
     });
-    let repo = repo.reopen(Some(config), None)?;
+    let repo = repo.reopen(Some(config), None).await?;
     assert_eq!(
         repo.config()
             .storage

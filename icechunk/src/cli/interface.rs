@@ -180,7 +180,6 @@ async fn get_storage(
                 Some(credentials.clone()),
                 Some(object_store_config.clone()),
             )
-            .await
             .context("Failed to create GCS storage")?;
             Ok(storage)
         }

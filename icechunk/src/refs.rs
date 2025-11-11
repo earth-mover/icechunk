@@ -526,7 +526,7 @@ mod tests {
     #[tokio_test]
     async fn test_refs() -> Result<(), Box<dyn std::error::Error>> {
         let ((_,res1),(_,res2,_)) = with_test_storages::<Result<(), Box<dyn std::error::Error>>, _, _>(|storage|  async move {
-            let storage_settings =storage.default_settings();
+            let storage_settings =storage.default_settings().await?;
             let s1 = SnapshotId::random();
             let s2 = SnapshotId::random();
 
@@ -642,7 +642,7 @@ mod tests {
             _,
             _,
         >(|storage| async move {
-            let storage_settings = storage.default_settings();
+            let storage_settings = storage.default_settings().await?;
             let s1 = SnapshotId::random();
             let s2 = SnapshotId::random();
             create_tag(storage.as_ref(), &storage_settings, "tag1", s1).await?;
