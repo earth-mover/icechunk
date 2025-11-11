@@ -3,128 +3,177 @@ title: Overview
 ---
 # Icechunk
 
-Icechunk is an open-source (Apache 2.0), transactional storage engine for tensor / ND-array data designed for use on cloud object storage.
-Icechunk works together with **[Zarr](https://zarr.dev/)**, augmenting the Zarr core data model with features
-that enhance performance, collaboration, and safety in a cloud-computing context.
+Icechunk is an open-source [transactional](concepts.md#transactions) [storage engine](concepts.md#what-is-icechunk) for [Zarr](https://zarr.dev/). Icechunk enables using Zarr as a true database for array data.
 
-## Icechunk Overview
+[Get started with the Quickstart →](quickstart.md)
 
-Let's break down what "transactional storage engine for Zarr" actually means:
+## Why Icechunk?
 
-- **[Zarr](https://zarr.dev/)** is an open source specification for the storage of multidimensional array (a.k.a. tensor) data.
-  Zarr defines the metadata for describing arrays (shape, dtype, etc.) and the way these arrays are chunked, compressed, and converted to raw bytes for storage. Zarr can store its data in any key-value store.
-  There are many different implementations of Zarr in different languages. _Right now, Icechunk only supports
-  [Zarr Python](https://zarr.readthedocs.io/en/stable/)._
-  If you're interested in implementing Icechunk support, please [open an issue](https://github.com/earth-mover/icechunk/issues) so we can help you.
-- **Storage engine** - Icechunk exposes a key-value interface to Zarr and manages all of the actual I/O for getting, setting, and updating both metadata and chunk data in cloud object storage.
-  Zarr libraries don't have to know exactly how icechunk works under the hood in order to use it.
-- **Transactional** - The key improvement that Icechunk brings on top of regular Zarr is to provide consistent serializable isolation between transactions.
-  This means that Icechunk data are safe to read and write in parallel from multiple uncoordinated processes.
-  This allows Zarr to be used more like a database.
+Zarr is a [cloud-optimized](https://earthmover.io/blog/fundamentals-what-is-cloud-optimized-scientific-data/) format for multidimensional arrays that is a significant advance over legacy formats like NetCDF, GRIB, and TIFF. However, Zarr has three critical limitations:
 
-The core entity in Icechunk is a repository or **repo**.
-A repo is defined as a Zarr hierarchy containing one or more Arrays and Groups, and a repo functions as
-self-contained _Zarr Store_.
-The most common scenario is for an Icechunk repo to contain a single Zarr group with multiple arrays, each corresponding to different physical variables but sharing common spatiotemporal coordinates.
-However, formally a repo can be any valid Zarr hierarchy, from a single Array to a deeply nested structure of Groups and Arrays.
-Users of Icechunk should aim to scope their repos only to related arrays and groups that require consistent transactional updates.
+1. **[Safety](#safety)**: You can accidentally delete or corrupt your data in an unrecoverable way
+2. **[Consistency](#consistency)**: Concurrent readers and writers can see partial, inconsistent data
+3. **[Reproducibility](#reproducibility)**: Data modifications happen silently with no version tracking
 
-Icechunk supports the following core requirements:
+These limitations mean Zarr cannot be reliably used as a database—a critical capability for modern data-intensive workflows like weather forecasting, climate modeling, and geospatial analysis where multiple teams need to safely read and update shared datasets.
 
-1. **Object storage** - the format is designed around the consistency features and performance characteristics available in modern cloud object storage. No external database or catalog is required to maintain a repo.
-(It also works with file storage.)
-1. **Serializable isolation** - Reads are isolated from concurrent writes and always use a committed snapshot of a repo. Writes are committed atomically and are never partially visible. No locks are required for reading.
-1. **Time travel** - Previous snapshots of a repo remain accessible while and after new snapshots are written.
-1. **Data version control** - Repos support both _tags_ (immutable references to snapshots) and _branches_ (mutable references to snapshots).
-1. **Chunk shardings** - Chunk storage is decoupled from specific file names. Multiple chunks can be packed into a single object (sharding).
-1. **Chunk references** - Zarr-compatible chunks within other file formats (e.g. HDF5, NetCDF) can be referenced.
-1. **Schema evolution** - Arrays and Groups can be added, renamed, and removed from the hierarchy with minimal overhead.
+Icechunk provides git-like [snapshots](concepts.md#snapshots) combined with [ACID transactions](concepts.md#acid-transactions). This provides:
 
-## Key Concepts
+- **[Safety](#safety)**: Recover from corrupted or accidentally deleted data using version history
+- **[Consistency](#consistency)**: Ensure readers always see complete, valid snapshots—never partial writes
+- **[Reproducibility](#reproducibility)**: Reference any version of your data permanently via commits or tags
 
-### Groups, Arrays, and Chunks
+Every write operation creates an immutable snapshot, while [branches and tags](concepts.md#branches-and-tags) provide familiar version control semantics. This architecture transforms Zarr from a file format into a **true transactional database for multidimensional arrays**.
 
-Icechunk is designed around the Zarr data model, widely used in scientific computing, data science, and AI / ML.
-(The Zarr high-level data model is effectively the same as HDF5.)
-The core data structure in this data model is the **array**.
-Arrays have two fundamental properties:
+```python
+# Write and commit atomically - readers never see partial updates
+with repo.transaction("main", message="Add new forecast") as store:
+    group = zarr.open_group(store)
+    group["temperature"][:] = new_temp_data
+    group["pressure"][:] = new_pressure_data
+    # Both arrays updated together or not at all
 
-- **shape** - a tuple of integers which specify the dimensions of each axis of the array. A 10 x 10 square array would have shape (10, 10)
-- **data type** - a specification of what type of data is found in each element, e.g. integer, float, etc. Different data types have different precision (e.g. 16-bit integer, 64-bit float, etc.)
+# Time travel to any previous version
+historical_session = repo.readonly_session(snapshot_id="abc123")
 
-In Zarr / Icechunk, arrays are split into **chunks**,
-A chunk is the minimum unit of data that must be read / written from storage, and thus choices about chunking have strong implications for performance.
-Zarr leaves this completely up to the user.
-Chunk shape should be chosen based on the anticipated data access pattern for each array
-An Icechunk array is not bounded by an individual file and is effectively unlimited in size.
-
-For further organization of data, Icechunk supports **groups** within a single repo.
-Group are like folders which contain multiple arrays and or other groups.
-Groups enable data to be organized into hierarchical trees.
-A common usage pattern is to store multiple arrays in a group representing a NetCDF-style dataset.
-
-Arbitrary JSON-style key-value metadata can be attached to both arrays and groups.
-
-### Snapshots
-
-Every update to an Icechunk store creates a new **snapshot** with a unique ID.
-Icechunk users must organize their updates into groups of related operations called **transactions**.
-For example, appending a new time slice to multiple arrays should be done as a single transaction, comprising the following steps
-
-1. Update the array metadata to resize the array to accommodate the new elements.
-2. Write new chunks for each array in the group.
-
-While the transaction is in progress, none of these changes will be visible to other users of the store.
-Once the transaction is committed, a new snapshot is generated.
-Readers can only see and use committed snapshots.
-
-### Branches and Tags
-
-Additionally, snapshots occur in a specific linear (i.e. serializable) order within a  **branch**.
-A branch is a mutable reference to a snapshot: a pointer that maps the branch name to a snapshot ID.
-The default branch is `main`.
-Every commit to the main branch updates this reference.
-Icechunk's design protects against the race condition in which two uncoordinated sessions attempt to update the branch at the same time; only one can succeed.
-
-Icechunk also defines **tags**--_immutable_ references to a snapshot.
-Tags are appropriate for publishing specific releases of a repository or for any application which requires a persistent, immutable identifier to the store state.
-
-### Chunk References
-
-Chunk references are "pointers" to chunks that exist in other files--HDF5, NetCDF, GRIB, etc.
-Icechunk can store these references alongside native Zarr chunks as "virtual datasets".
-You can then update these virtual datasets incrementally (overwrite chunks, change metadata, etc.) without touching the underlying files.
-
-## How Does It Work?
-
-!!! note
-    For more detailed explanation, have a look at the [Icechunk spec](./spec.md)
-
-Zarr itself works by storing both metadata and chunk data into a abstract store according to a specified system of "keys".
-For example, a 2D Zarr array called `myarray`, within a group called `mygroup`, would generate the following keys:
-
-```
-mygroup/zarr.json
-mygroup/myarray/zarr.json
-mygroup/myarray/c/0/0
-mygroup/myarray/c/0/1
+# Reproducible analysis with permanent references
+repo.create_tag("v1.0-release", snapshot_id="abc123")  # Immutable reference
+session = repo.readonly_session(tag="v1.0-release")
 ```
 
-In standard regular Zarr stores, these key map directly to filenames in a filesystem or object keys in an object storage system.
-When writing data, a Zarr implementation will create these keys and populate them with data. When modifying existing arrays or groups, a Zarr implementation will potentially overwrite existing keys with new data.
+Learn more about [Icechunk's core concepts](concepts.md).
 
-This is generally not a problem, as long there is only one person or process coordinating access to the data.
-However, when multiple uncoordinated readers and writers attempt to access the same Zarr data at the same time, [various consistency problems](https://docs.earthmover.io/concepts/version-control-system#consistency-problems-with-zarr) problems emerge.
-These consistency problems can occur in both file storage and object storage; they are particularly severe in a cloud setting where Zarr is being used as an active store for data that are frequently changed while also being read.
+### Safety
 
-With Icechunk, we keep the same core Zarr data model, but add a layer of indirection between the Zarr keys and the on-disk storage.
-The Icechunk library translates between the Zarr keys and the actual on-disk data given the particular context of the user's state.
-Icechunk defines a series of interconnected metadata and data files that together enable efficient isolated reading and writing of metadata and chunks.
-Once written, these files are immutable.
-Icechunk keeps track of every single chunk explicitly in a "chunk manifest".
+No matter how careful you are, it is always possible to unintentionally write to the wrong chunk or update an existing chunk with corrupted data.
 
-```mermaid
-flowchart TD
-    zarr-python[Zarr Library] <-- key / value--> icechunk[Icechunk Library]
-    icechunk <-- data / metadata files --> storage[(Object Storage)]
-```
+=== "❌ Zarr (Unrecoverable)"
+
+    ```python
+    import zarr
+
+    # Open existing group
+    root = zarr.open_group("my_data", mode="a")
+
+    # Accidentally overwrite critical data
+    root["temperature"][:] = corrupted_data
+
+    # Data is permanently lost! 💥
+    # No way to recover the original values
+    ```
+
+=== "✅ Icechunk (Recoverable)"
+
+    ```python
+    import icechunk, zarr
+    repo = icechunk.Repository.open(storage)
+
+    with repo.transaction("main", message="Update temp") as store:
+        root = zarr.open_group(store)
+        root["temperature"][:] = corrupted_data
+
+    # Oh no! The data was corrupted. But we can recover:
+    previous_snapshot = list(repo.ancestry("main"))[1].id
+    repo.reset_branch("main", previous_snapshot)
+    # Data restored! ✅
+    ```
+
+With **Icechunk**, you cannot permanently destroy or corrupt your data. If you commit bad data, you can always revert using version history.
+
+### Consistency
+
+When working with the output of a computational model, such as a weather forecast model, variables must be internally consistent. For example, if the pressure variable has one more time step than the air temperature variable, then analysis pipelines will break.
+
+This situation can occur with the output of a weather model using Zarr. When the process is writing multiple variables, each with its own array, they will never be written at exactly the same time. So any reader that accesses during this process will get inconsistent data.
+
+This is a serious problem as weather model writes are large enough that there can be disparities in timing. Furthermore, readers will try to read the data as soon as it comes out for latency-critical applications such as emergency weather monitoring and trading off of weather forecasts.
+
+=== "❌ Zarr (Inconsistent Reads)"
+
+    ```python
+    # Writer process
+    forecast["temperature"][:, new_time] = temp_data  # Written
+    forecast["pressure"][:, new_time] = press_data    # Written
+    # ... still writing ...
+
+    # Reader process running at the same time
+    temp = forecast["temperature"][:, new_time]   # ✓ Gets new data
+    pressure = forecast["pressure"][:, new_time]  # ✓ Gets new data
+    humidity = forecast["humidity"][:, new_time]  # ✗ Gets old data!
+
+    # Analysis breaks: variables are from different time snapshots
+    ```
+
+=== "✅ Icechunk (Always Consistent)"
+
+    ```python
+    # Writer process
+    with repo.transaction("main", message="Add forecast") as store:
+        forecast = zarr.open_group(store)
+        forecast["temperature"][:, new_time] = temp_data
+        forecast["pressure"][:, new_time] = press_data
+        forecast["humidity"][:, new_time] = humid_data
+    # All variables updated atomically
+
+    # Reader process (concurrent with writer)
+    session = repo.readonly_session("main")
+    forecast = zarr.open_group(session.store)
+    # Always sees a complete, consistent snapshot
+    # Either all old values OR all new values, never mixed
+    ```
+
+There are other consistency issues with Zarr that you can read about in more detail in the [Multi-Player Mode](https://earthmover.io/blog/multi-player-mode-why-teams-that-use-zarr-need-icechunk) blog post.
+
+In contrast, **Icechunk** is, by design, always consistent. It implements ACID transactions, which ensures you will never run into these issues.
+
+### Reproducibility
+
+Weather forecast datasets not only regularly add new timepoints, but also backfill and fix errors in prior timepoints. **Zarr** has no mechanism for tracking when the data was last updated. This creates a potential reproducibility crisis for any analysis based on the data. For example, an insurance company must be able to precisely reproduce historical pricing. If they rely on a public zarr dataset, then they have no guarantees that the data is the same as they used, unless they copy the entire (possibly petabyte-large) data and store it in perpetuity.
+
+=== "❌ Zarr (No Version Tracking)"
+
+    ```python
+    # January: Run analysis for paper
+    forecast = zarr.open_group("s3://public-weather/forecast")
+    results_jan = analyze(forecast["temperature"][:])
+    # Published results based on this data
+
+    # March: Try to reproduce results
+    forecast = zarr.open_group("s3://public-weather/forecast")
+    results_mar = analyze(forecast["temperature"][:])
+    # Data was updated! Results don't match!
+    # No way to know what changed or get back to January's data
+    ```
+
+=== "✅ Icechunk (Permanent References)"
+
+    ```python
+    # January: Run analysis using specific tagged version
+    repo = icechunk.Repository.open(
+        icechunk.s3_storage(bucket="public-weather", prefix="forecast")
+    )
+    session = repo.readonly_session(tag="2025-01-15")
+    forecast = zarr.open_group(session.store)
+    results_jan = analyze(forecast["temperature"][:])
+    # Record in paper: "Analysis used tag 2025-01-15"
+
+    # March: Reproduce results using same tagged version
+    session = repo.readonly_session(tag="2025-01-15")
+    forecast = zarr.open_group(session.store)
+    results_mar = analyze(forecast["temperature"][:])
+    # Exact same data, guaranteed reproducible results! ✓
+    ```
+
+**Icechunk** requires a commit for every change to the data. This allows referencing an immutable version of the data by its commit, or a tag. Thereby making any analysis, even based on a dataset you don't control, permanently reproducible.
+
+### Storage Space
+
+But will this version history balloon storage costs? **No** it will not. Icechunk is storage-optimal as it only stores the chunks that were modified with each new commit. If maintaining the full history is too much, you can expire old commits and branches via Icechunk's built-in [garbage collection](https://earthmover.io/blog/everything-you-need-to-know-about-icechunk-garbage-collection).
+
+## Next Steps
+
+Ready to use Icechunk?
+
+- **[Quickstart](quickstart.md)** - Get up and running with Icechunk in 5 minutes
+- **[Core Concepts](concepts.md)** - Understand transactions, snapshots, branches, and tags
+- **[Configuration](configuration.md)** - Set up storage backends and tune performance
