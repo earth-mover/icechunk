@@ -113,7 +113,7 @@ impl ObjectStorage {
         Ok(storage)
     }
 
-    pub async fn new_gcs(
+    pub fn new_gcs(
         bucket: String,
         prefix: Option<String>,
         credentials: Option<GcsCredentials>,
@@ -230,13 +230,13 @@ impl private::Sealed for ObjectStorage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for ObjectStorage {
-    fn can_write(&self) -> bool {
-        self.backend.can_write()
+    async fn can_write(&self) -> StorageResult<bool> {
+        Ok(self.backend.can_write())
     }
 
     #[instrument(skip_all)]
-    fn default_settings(&self) -> Settings {
-        self.backend.default_settings()
+    async fn default_settings(&self) -> StorageResult<Settings> {
+        Ok(self.backend.default_settings())
     }
 
     async fn put_object(

@@ -10,16 +10,16 @@ use icechunk::{
         DEFAULT_MAX_CONCURRENT_REQUESTS, S3Credentials, S3Options, S3StaticCredentials,
     },
     format::{
-        CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, SNAPSHOTS_FILE_PATH, SnapshotId,
-        TRANSACTION_LOGS_FILE_PATH, snapshot::Snapshot,
+        CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, Path, SNAPSHOTS_FILE_PATH,
+        SnapshotId, TRANSACTION_LOGS_FILE_PATH, snapshot::Snapshot,
     },
     new_local_filesystem_storage,
-    refs::RefErrorKind,
+    refs::{RefData, RefErrorKind},
     repository::{RepositoryError, RepositoryErrorKind},
     storage::{
         self, ConcurrencySettings, ETag, Generation, StorageErrorKind, StorageResult,
-        VersionInfo, new_http_storage, new_in_memory_storage, new_s3_storage,
-        s3::mk_client,
+        VersionInfo, new_http_storage, new_in_memory_storage, new_redirect_storage,
+        new_s3_storage, s3::mk_client,
     },
 };
 use icechunk_macros::tokio_test;
@@ -30,6 +30,7 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt as _},
     sync::oneshot,
 };
+use warp::Filter;
 use zstd::zstd_safe::WriteBuf;
 
 mod common;
@@ -201,7 +202,7 @@ async fn async_read_to_bytes(
 #[tokio_test]
 pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
+        let storage_settings = storage.default_settings().await?;
         let id = SnapshotId::random();
         let mut bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
         bytes[42] = 42;
@@ -306,7 +307,7 @@ pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>
 #[tokio_test]
 pub async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let settings = storage.default_settings();
+        let settings = storage.default_settings().await?;
         storage
             .put_object(
                 &settings,
@@ -406,7 +407,7 @@ pub async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio_test]
 pub async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let settings = storage.default_settings();
+        let settings = storage.default_settings().await?;
         storage
             .put_object(
                 &settings,
@@ -525,7 +526,7 @@ pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::
 #[allow(clippy::panic)]
 pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
+        let storage_settings = storage.default_settings().await?;
 
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
@@ -562,7 +563,7 @@ pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::E
     with_storage(|_, storage| async move {
         let am = Arc::new(AssetManager::new_no_cache(
             Arc::clone(&storage),
-            storage.default_settings(),
+            storage.default_settings().await?,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));
@@ -599,7 +600,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing()
     // FIXME: this test fails in MinIO but seems to work on S3
     #[allow(clippy::unwrap_used)]
     let storage = new_in_memory_storage().await.unwrap();
-    let storage_settings = storage.default_settings();
+    let storage_settings = storage.default_settings().await?;
     let am = Arc::new(AssetManager::new_no_cache(
         storage,
         storage_settings,
@@ -629,7 +630,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing()
 pub async fn test_write_config_fails_on_bad_version_when_existing()
 -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|storage_type, storage| async move {
-        let storage_settings = storage.default_settings();
+        let storage_settings = storage.default_settings().await?;
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
             storage_settings,
@@ -686,7 +687,7 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
         let storage_settings = storage::Settings {
             unsafe_use_conditional_update: Some(false),
             unsafe_use_conditional_create: Some(false),
-            ..storage.default_settings()
+            ..storage.default_settings().await?
         };
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
@@ -802,7 +803,7 @@ pub async fn test_write_object_larger_than_multipart_threshold()
     with_storage(|_, storage| async move {
         let custom_settings = storage::Settings {
             minimum_size_for_multipart_upload: Some(100),
-            ..storage.default_settings()
+            ..storage.default_settings().await?
         };
 
         let id = ChunkId::random();
@@ -844,18 +845,20 @@ pub async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
         std::env::current_dir()?.join("../icechunk-python/tests/data/test-repo-v2");
     let route = warp::fs::dir(repo_path.clone());
     let (stop, wait) = oneshot::channel();
-    let server = warp::serve(route).bind(([127, 0, 0, 1], 8000)).await.graceful(async {
+    let port = port_check::free_local_ipv4_port_in_range(8000..65000).unwrap();
+    let server = warp::serve(route).bind(([127, 0, 0, 1], port)).await.graceful(async {
         wait.await.ok();
     });
 
     let join = tokio::task::spawn(server.run());
 
-    let storage1 = new_http_storage("http://localhost:8000", None)?;
-    let storage2 = new_http_storage("http://localhost:8000/", None)?;
+    let url = format!("http://localhost:{port}");
+    let storage1 = new_http_storage(url.as_str(), None)?;
+    let storage2 = new_http_storage(url.as_str(), None)?;
     for storage in [storage1, storage2] {
-        assert!(!storage.can_write());
+        assert!(!storage.can_write().await?);
 
-        let settings = storage.default_settings();
+        let settings = storage.default_settings().await?;
         let mut data = Vec::with_capacity(1_024);
 
         let mut read = storage.get_object(&settings, "repo", None).await?.0;
@@ -893,6 +896,55 @@ pub async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
     // stop the server
     stop.send(()).unwrap();
     join.await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::unwrap_used)]
+/// Start a server that after a few redirects returns a redirect to a S3 public repo
+/// Build a redirect storage and verify the S3 repo is accessible
+pub async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
+    let port = port_check::free_local_ipv4_port_in_range(9000..65000).unwrap();
+    let route = warp::path::end()
+        .map(|| warp::redirect::found(warp::http::Uri::from_static("1")))
+        .or(warp::path("1")
+            .map(|| warp::redirect::permanent(warp::http::Uri::from_static("/2"))))
+        .or(warp::path("2")
+            .map(|| warp::redirect::redirect(warp::http::Uri::from_static("/3"))))
+        .or(warp::path("3").map(|| {
+            warp::redirect::temporary(warp::http::Uri::from_static(
+                "s3://icechunk-public-data/v1/era5_weatherbench2?region=us-east-1",
+            ))
+        }));
+
+    let (stop, wait) = oneshot::channel();
+    let server = warp::serve(route).bind(([127, 0, 0, 1], port)).await.graceful(async {
+        wait.await.ok();
+    });
+
+    let join = tokio::task::spawn(server.run());
+    let url = format!("http://localhost:{port}");
+    let storage = new_redirect_storage(url.as_str())?;
+    let mut data = Vec::with_capacity(1_024);
+    let settings = storage.default_settings().await?;
+    let mut read =
+        storage.get_object(&settings, "refs/branch.main/ref.json", None).await?.0;
+
+    // stop the server, because it shouldn't be needed after the first interaction
+    stop.send(()).unwrap();
+    join.await?;
+
+    read.read_to_end(&mut data).await?;
+    let _: RefData = serde_json::from_slice(&data)?;
+
+    let repo = Repository::open(None, storage, Default::default()).await?;
+    let session = repo
+        .readonly_session(&icechunk::repository::VersionInfo::BranchTipRef(
+            "main".to_string(),
+        ))
+        .await?;
+    assert!(session.list_nodes(&Path::root()).await?.count() >= 8);
 
     Ok(())
 }

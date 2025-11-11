@@ -1782,18 +1782,15 @@ impl PyStorage {
         config: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
         py.detach(move || {
-            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let storage = icechunk::storage::new_gcs_storage(
-                    bucket,
-                    prefix,
-                    credentials.map(|cred| cred.into()),
-                    config,
-                )
-                .await
-                .map_err(PyIcechunkStoreError::StorageError)?;
+            let storage = icechunk::storage::new_gcs_storage(
+                bucket,
+                prefix,
+                credentials.map(|cred| cred.into()),
+                config,
+            )
+            .map_err(PyIcechunkStoreError::StorageError)?;
 
-                Ok(PyStorage(storage))
-            })
+            Ok(PyStorage(storage))
         })
     }
 
@@ -1842,11 +1839,33 @@ impl PyStorage {
         })
     }
 
+    #[classmethod]
+    pub(crate) fn new_redirect(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        base_url: &str,
+    ) -> PyResult<Self> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let storage = icechunk::storage::new_redirect_storage(base_url)
+                    .map_err(PyIcechunkStoreError::StorageError)?;
+
+                Ok(PyStorage(storage))
+            })
+        })
+    }
+
     pub(crate) fn __repr__(&self) -> String {
         format!("{}", self.0)
     }
 
-    pub(crate) fn default_settings(&self) -> PyStorageSettings {
-        self.0.default_settings().into()
+    pub(crate) fn default_settings(&self) -> PyResult<PyStorageSettings> {
+        let res = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            self.0
+                .default_settings()
+                .await
+                .map_err(|e| PyValueError::new_err(e.to_string()))
+        })?;
+        Ok(res.into())
     }
 }
