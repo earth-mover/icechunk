@@ -266,7 +266,7 @@ jobs:
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
-          - runner: macos-13
+          - runner: macos-15-intel
             target: x86_64
           - runner: macos-14
             target: aarch64
