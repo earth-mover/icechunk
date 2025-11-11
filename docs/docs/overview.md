@@ -23,7 +23,7 @@ Icechunk provides git-like [snapshots](concepts.md#snapshots) combined with [ACI
 - **[Consistency](#consistency)**: Ensure readers always see complete, valid snapshots—never partial writes
 - **[Reproducibility](#reproducibility)**: Reference any version of your data permanently via commits or tags
 
-Every write operation creates an immutable snapshot, while [branches and tags](concepts.md#branches-and-tags) provide familiar version control semantics. This architecture transforms Zarr from a file format into a **true transactional database for multidimensional arrays**.
+Every write operation creates an immutable snapshot, while [branches and tags](concepts.md#branches-and-tags) provide familiar version control semantics.
 
 ```python
 # Write and commit atomically - readers never see partial updates
