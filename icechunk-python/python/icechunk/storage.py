@@ -74,6 +74,7 @@ def s3_store(
     s3_compatible: bool = False,
     force_path_style: bool = False,
     network_stream_timeout_seconds: int = 60,
+    requester_pays: bool = False,
 ) -> ObjectStoreConfig.S3Compatible | ObjectStoreConfig.S3:
     """Build an ObjectStoreConfig instance for S3 or S3 compatible object stores."""
 
@@ -83,6 +84,7 @@ def s3_store(
         allow_http=allow_http,
         force_path_style=force_path_style,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+        requester_pays=requester_pays,
     )
     return (
         ObjectStoreConfig.S3Compatible(options)
@@ -108,6 +110,7 @@ def s3_storage(
     scatter_initial_credentials: bool = False,
     force_path_style: bool = False,
     network_stream_timeout_seconds: int = 60,
+    requester_pays: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -148,6 +151,8 @@ def s3_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled.
+    requester_pays: bool
+        Enable requester pays for S3 buckets
     """
 
     credentials = s3_credentials(
@@ -166,6 +171,7 @@ def s3_storage(
         allow_http=allow_http,
         force_path_style=force_path_style,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+        requester_pays=requester_pays,
     )
     return Storage.new_s3(
         config=options,
@@ -189,6 +195,7 @@ def s3_object_store_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     force_path_style: bool = False,
+    requester_pays: bool = False,
 ) -> Storage:
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -204,6 +211,7 @@ def s3_object_store_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         force_path_style=force_path_style,
+        requester_pays=requester_pays,
     )
     return Storage.new_s3_object_store(
         config=options,
@@ -230,6 +238,7 @@ def tigris_storage(
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
+    requester_pays: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -272,6 +281,8 @@ def tigris_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled.
+    requester_pays: bool
+        Enable requester pays for S3 buckets
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -288,6 +299,7 @@ def tigris_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+        requester_pays=requester_pays,
     )
     return Storage.new_tigris(
         config=options,
@@ -315,6 +327,7 @@ def r2_storage(
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
+    requester_pays: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -357,6 +370,8 @@ def r2_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled.
+    requester_pays: bool
+        Enable requester pays for S3 buckets
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -373,6 +388,7 @@ def r2_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+        requester_pays=requester_pays,
     )
     return Storage.new_r2(
         config=options,

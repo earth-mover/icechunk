@@ -20,6 +20,7 @@ pub(crate) fn make_minio_integration_storage(
             anonymous: false,
             force_path_style: true,
             network_stream_timeout_seconds: None,
+            requester_pays: false,
         },
         "testbucket".to_string(),
         Some(prefix),
@@ -53,6 +54,7 @@ pub(crate) fn make_tigris_integration_storage(
             allow_http: false,
             force_path_style: false,
             network_stream_timeout_seconds: None,
+            requester_pays: false,
         },
         bucket,
         Some(prefix),
@@ -81,6 +83,7 @@ pub(crate) fn make_r2_integration_storage(
             allow_http: false,
             force_path_style: false,
             network_stream_timeout_seconds: None,
+            requester_pays: false,
         },
         Some(bucket),
         Some(prefix),
@@ -118,6 +121,7 @@ pub(crate) fn get_aws_integration_options()
         allow_http: false,
         force_path_style: false,
         network_stream_timeout_seconds: None,
+        requester_pays: false,
     };
     Ok(res)
 }
