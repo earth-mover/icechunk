@@ -113,15 +113,6 @@ To learn more about how Icechunk manages object store prefixes, read our
 [blog post](https://earthmover.io/blog/exploring-icechunk-scalability)
 on Icechunk scalability.
 
-!!! warning
-
-    Currently, Icechunk implementation of retry logic during resharding is not
-    [working properly](https://github.com/earth-mover/icechunk/issues/954) on GCS.
-    We have a [pull request open](https://github.com/apache/arrow-rs-object-store/pull/410) to
-    one of Icechunk's dependencies that will solve this.
-    In the meantime, if you get 429 errors from your Google bucket, please lower concurrency and try
-    again. Increase concurrency slowly until errors disappear.
-
 ## Splitting manifests
 
 !!! info
