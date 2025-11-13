@@ -286,7 +286,7 @@ impl RepoInfo {
         assert!(
             last_update.is_none() && backup_path.is_none()
                 || last_update.is_some() && backup_path.is_some(),
-            "A backup path must be provided iif there are previous updates"
+            "A backup path must be provided if and only if there are previous updates"
         );
 
         let new_updates: Box<dyn Iterator<Item = _>> =
@@ -1303,7 +1303,7 @@ mod tests {
         }
         assert!(repo.repo_before_updates()?.is_none());
 
-        // Now, if we add aanother change, it won't fit in the first "page" of repo updates
+        // Now, if we add another change, it won't fit in the first "page" of repo updates
         repo = repo.add_tag("tag", &id1, "first-branches")?;
         // the file only contains the first "page" worth of updates
         assert_eq!(repo.latest_updates()?.count(), UPDATES_PER_FILE);
@@ -1323,7 +1323,7 @@ mod tests {
         );
         assert_eq!(file, Some("first-branches"));
 
-        // all other changes are branch creation (repo creation falled to the next page)
+        // all other changes are branch creation (repo creation is in the next page)
         for (idx, update) in updates.enumerate() {
             let (update, _, file) = update?;
             assert_eq!(file, Some((UPDATES_PER_FILE - 2 - idx).to_string().as_str()));
