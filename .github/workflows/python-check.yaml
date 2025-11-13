@@ -38,8 +38,7 @@ jobs:
           working-directory: icechunk-python
           args: --release --out dist --find-interpreter
           sccache: true
-        env:
-          CARGO_TERM_QUIET: true
+          manylinux: auto
 
       - name: Upload wheels
         uses: actions/upload-artifact@v5
