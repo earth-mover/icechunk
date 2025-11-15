@@ -1176,8 +1176,8 @@ impl Session {
             Ok(Arc::new(repo_info.add_snapshot(
                 new_snapshot_info,
                 None,
-                &update_type,
-                Some(backup_path),
+                update_type.clone(),
+                backup_path,
             )?))
         };
 
@@ -2447,8 +2447,8 @@ async fn do_commit(
         Ok(Arc::new(repo_info.add_snapshot(
             new_snapshot_info,
             Some(branch_name),
-            &update_type,
-            Some(backup_path),
+            update_type,
+            backup_path,
         )?))
     };
 
@@ -3055,8 +3055,8 @@ mod tests {
         let repo_info = RepoInfo::initial((&initial).try_into()?).add_snapshot(
             snapshot.as_ref().try_into()?,
             Some("main"),
-            &UpdateType::NewCommitUpdate { branch: "main".to_string() },
-            None,
+            UpdateType::NewCommitUpdate { branch: "main".to_string() },
+            "backup_path",
         )?;
         asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 
@@ -4078,7 +4078,7 @@ mod tests {
             vec!["second amend", "make root", "Repository initialized"]
         );
         let updates =
-            repo.ops_log().await?.map_ok(|(_, up)| up).try_collect::<Vec<_>>().await?;
+            repo.ops_log().await?.map_ok(|(_, up, _)| up).try_collect::<Vec<_>>().await?;
 
         use UpdateType::*;
         assert_eq!(

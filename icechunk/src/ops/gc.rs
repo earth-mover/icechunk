@@ -16,7 +16,7 @@ use crate::{
     format::{
         ChunkId, FileTypeTag, IcechunkFormatError, ManifestId, ObjectId, SnapshotId,
         manifest::{ChunkPayload, Manifest},
-        repo_info::{RepoInfo, UpdateType},
+        repo_info::{RepoInfo, UpdateInfo, UpdateType},
         snapshot::{ManifestFileInfo, Snapshot, SnapshotInfo},
     },
     ops::pointed_snapshots,
@@ -413,7 +413,11 @@ async fn delete_snapshots_from_repo_info(
             repo_info.branches()?,
             repo_info.deleted_tags()?,
             kept_snaps,
-            &UpdateType::GCRanUpdate,
+            UpdateInfo {
+                update_type: UpdateType::GCRanUpdate,
+                update_time: Utc::now(),
+                previous_updates: repo_info.latest_updates()?,
+            },
             Some(backup_path),
         )?;
 
@@ -771,7 +775,11 @@ pub async fn expire(
             branches,
             deleted_tag_names,
             retained.clone(),
-            &UpdateType::ExpirationRanUpdate,
+            UpdateInfo {
+                update_type: UpdateType::ExpirationRanUpdate,
+                update_time: Utc::now(),
+                previous_updates: repo_info.latest_updates()?,
+            },
             Some(backup_path),
         )?;
 

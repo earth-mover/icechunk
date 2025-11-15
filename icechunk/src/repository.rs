@@ -668,19 +668,28 @@ impl Repository {
     pub async fn ops_log(
         &self,
     ) -> RepositoryResult<
-        impl Stream<Item = RepositoryResult<(DateTime<Utc>, UpdateType)>> + Send + use<>,
+        impl Stream<Item = RepositoryResult<(DateTime<Utc>, UpdateType, Option<String>)>>
+        + Send
+        + use<>,
     > {
         let (repo_info, _) = self.get_repo_info().await?;
         let mut repo_info = Some(repo_info);
+        // When we change to a new repo file, it will have the first backup_file = None, because
+        // all files have this. We need to use the previous element in the sequence to know the
+        // actual path where the file was found
+        let mut this_file_path = None;
         let asset_manager = Arc::clone(self.asset_manager());
         let stream = try_stream! {
             while let Some(this) = repo_info {
-                let last_updated = this.last_updated_at()?;
-                let update = this.latest_update()?;
+                // stream out the batch of updates in this repo file
+                for maybe_data in this.latest_updates()? {
+                    let (a, b, c) = maybe_data?;
+                    yield (b, a, c.or(this_file_path.as_deref()).map(|c| c.to_string()));
+                }
 
-                yield (last_updated, update);
-
-                if let Some(previous) = this.previous_file()? {
+                // if there are more repo files we need to stream those updates too
+                if let Some(previous) = this.repo_before_updates()? {
+                    this_file_path = Some(previous.to_string());
                     match asset_manager.fetch_repo_info_backup(previous).await {
                         Ok((new_one, _)) =>  {
                             repo_info = Some(new_one);
@@ -727,11 +736,7 @@ impl Repository {
 
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
-            Ok(Arc::new(repo_info.add_branch(
-                branch_name,
-                snapshot_id,
-                Some(backup_path),
-            )?))
+            Ok(Arc::new(repo_info.add_branch(branch_name, snapshot_id, backup_path)?))
         };
 
         let _ = self
@@ -868,7 +873,7 @@ impl Repository {
             }
 
             let new_repo = repo_info
-                .update_branch(branch, to_snapshot_id, Some(backup_path))
+                .update_branch(branch, to_snapshot_id, backup_path)
                 .map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::BranchNotFound { .. },
@@ -910,9 +915,8 @@ impl Repository {
         }
         if branch != Ref::DEFAULT_BRANCH {
             let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
-                let new_repo = repo_info
-                    .delete_branch(branch, Some(backup_path))
-                    .map_err(|err| match err {
+                let new_repo = repo_info.delete_branch(branch, backup_path).map_err(
+                    |err| match err {
                         IcechunkFormatError {
                             kind: IcechunkFormatErrorKind::BranchNotFound { .. },
                             ..
@@ -920,7 +924,8 @@ impl Repository {
                             RefErrorKind::RefNotFound(branch.to_string()),
                         )),
                         err => RepositoryError::from(err),
-                    });
+                    },
+                );
                 Ok(Arc::new(new_repo?))
             };
 
@@ -957,7 +962,7 @@ impl Repository {
 
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             let new_repo =
-                repo_info.delete_tag(tag, Some(backup_path)).map_err(|err| match err {
+                repo_info.delete_tag(tag, backup_path).map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::TagNotFound { .. },
                         ..
@@ -1001,16 +1006,17 @@ impl Repository {
 
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
-            let new_repo = repo_info
-                .add_tag(tag_name, snapshot_id, Some(backup_path))
-                .map_err(|err| match err {
-                    IcechunkFormatError {
-                        kind: IcechunkFormatErrorKind::TagAlreadyExists { .. },
-                        ..
-                    } => RepositoryError::from(RefError::from(
-                        RefErrorKind::TagAlreadyExists(tag_name.to_string()),
-                    )),
-                    err => RepositoryError::from(err),
+            let new_repo =
+                repo_info.add_tag(tag_name, snapshot_id, backup_path).map_err(|err| {
+                    match err {
+                        IcechunkFormatError {
+                            kind: IcechunkFormatErrorKind::TagAlreadyExists { .. },
+                            ..
+                        } => RepositoryError::from(RefError::from(
+                            RefErrorKind::TagAlreadyExists(tag_name.to_string()),
+                        )),
+                        err => RepositoryError::from(err),
+                    }
                 });
             Ok(Arc::new(new_repo?))
         };
