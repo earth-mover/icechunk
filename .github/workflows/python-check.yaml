@@ -36,10 +36,9 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           working-directory: icechunk-python
-          args: --release --out dist --find-interpreter
+          args: --release --out dist -i python${{ env.PYTHON_VERSION }}
           sccache: true
-        env:
-          CARGO_TERM_QUIET: true
+          manylinux: auto
 
       - name: Upload wheels
         uses: actions/upload-artifact@v5
@@ -98,7 +97,8 @@ jobs:
           uv venv
           source .venv/bin/activate
           python --version
-          WHEEL=$(ls dist/*-cp311-*.whl)
+          PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
+          WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
           uv pip install "${WHEEL}[test]"
           # Install specific versions based on matrix
           if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
@@ -184,7 +184,8 @@ jobs:
           uv venv
           source .venv/bin/activate
           python --version
-          WHEEL=$(ls dist/*-cp311-*.whl)
+          PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
+          WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
           uv pip install "${WHEEL}[test]"
           uv pip install pytest-mypy-plugins
           # Install specific xarray version based on matrix
