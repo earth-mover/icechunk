@@ -2571,6 +2571,7 @@ mod tests {
             detector::ConflictDetector,
         },
         format::{
+            format_constants::SpecVersionBin,
             manifest::{ManifestExtents, ManifestSplits},
             repo_info::RepoInfo,
         },
@@ -2593,7 +2594,7 @@ mod tests {
     async fn create_memory_store_repository() -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new()).await.unwrap()
+        Repository::create(None, storage, HashMap::new(), None).await.unwrap()
     }
 
     #[proptest(async = "tokio")]
@@ -2868,6 +2869,7 @@ mod tests {
             }),
             storage,
             HashMap::new(),
+            None,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -2967,6 +2969,7 @@ mod tests {
         let asset_manager = AssetManager::new_no_cache(
             Arc::clone(&storage),
             storage_settings.clone(),
+            SpecVersionBin::current(),
             1,
             100,
         );
@@ -3244,7 +3247,7 @@ mod tests {
             ..Default::default()
         };
         let repository =
-            Repository::create(Some(config), storage, HashMap::new()).await?;
+            Repository::create(Some(config), storage, HashMap::new(), None).await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -3671,7 +3674,7 @@ mod tests {
     #[tokio_test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::create(None, storage, HashMap::new()).await?;
+        let repo = Repository::create(None, storage, HashMap::new(), None).await?;
         let mut ds = repo.writable_session("main").await?;
         let def = Bytes::copy_from_slice(b"");
 
@@ -3741,7 +3744,8 @@ mod tests {
     async fn test_manifests_shrink() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = Arc::new(ObjectStorage::new_in_memory().await?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
 
         // there should be no manifests yet
         assert!(
@@ -4171,7 +4175,8 @@ mod tests {
     async fn test_basic_move() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4230,7 +4235,8 @@ mod tests {
     async fn test_move_errors() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4260,7 +4266,8 @@ mod tests {
     async fn test_setting_w_invalid_coords() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
         let mut ds = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4321,7 +4328,8 @@ mod tests {
     async fn test_array_shift() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
         let mut session = repo.writable_session("main").await?;
         let shape = ArrayShape::new(vec![(20, 2)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;

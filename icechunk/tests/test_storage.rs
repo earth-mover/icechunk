@@ -11,7 +11,8 @@ use icechunk::{
     },
     format::{
         CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, Path, SNAPSHOTS_FILE_PATH,
-        SnapshotId, TRANSACTION_LOGS_FILE_PATH, snapshot::Snapshot,
+        SnapshotId, TRANSACTION_LOGS_FILE_PATH, format_constants::SpecVersionBin,
+        snapshot::Snapshot,
     },
     new_local_filesystem_storage,
     refs::{RefData, RefErrorKind},
@@ -257,7 +258,7 @@ pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> 
 #[tokio_test]
 pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let repo = Repository::create(None, storage, Default::default()).await?;
+        let repo = Repository::create(None, storage, Default::default(), None).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("mytag").await?;
         assert_eq!(Snapshot::INITIAL_SNAPSHOT_ID, back);
@@ -270,7 +271,7 @@ pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio_test]
 pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let repo = Repository::create(None, storage, Default::default()).await?;
+        let repo = Repository::create(None, storage, Default::default(), None).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("non-existing-tag").await;
         assert!(
@@ -289,7 +290,7 @@ pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Err
 #[tokio_test]
 pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let repo = Repository::create(None, storage, Default::default()).await?;
+        let repo = Repository::create(None, storage, Default::default(), None).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let res  = repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await;
         assert!(
@@ -508,7 +509,7 @@ pub async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio_test]
 pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(|_, storage| async move {
-        let repo = Repository::create(None, storage, Default::default()).await?;
+        let repo = Repository::create(None, storage, Default::default(), None).await?;
         let back = repo.lookup_branch("non-existing-branch").await;
         assert!(
             matches!(
@@ -531,6 +532,7 @@ pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Erro
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
             storage_settings,
+            SpecVersionBin::current(),
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));
@@ -564,6 +566,7 @@ pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::E
         let am = Arc::new(AssetManager::new_no_cache(
             Arc::clone(&storage),
             storage.default_settings().await?,
+            SpecVersionBin::current(),
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));
@@ -604,6 +607,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing()
     let am = Arc::new(AssetManager::new_no_cache(
         storage,
         storage_settings,
+        SpecVersionBin::current(),
         1, // we are only reading, compression doesn't matter
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
@@ -634,6 +638,7 @@ pub async fn test_write_config_fails_on_bad_version_when_existing()
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
             storage_settings,
+            SpecVersionBin::current(),
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));
@@ -692,6 +697,7 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
             storage_settings,
+            SpecVersionBin::current(),
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));

@@ -27,7 +27,8 @@ let mut ds = Repository::create(Arc::clone(&storage));
     );
 
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+    let repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
     let mut ds = repo.writable_session("main").await?;
 
     println!();

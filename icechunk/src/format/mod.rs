@@ -361,9 +361,10 @@ pub mod format_constants {
     }
 
     #[repr(u8)]
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub enum SpecVersionBin {
         V1dot0 = 1u8,
+        #[default]
         V2dot0 = 2u8,
     }
 
@@ -381,7 +382,7 @@ pub mod format_constants {
 
     impl SpecVersionBin {
         pub fn current() -> Self {
-            Self::V2dot0
+            Default::default()
         }
     }
 

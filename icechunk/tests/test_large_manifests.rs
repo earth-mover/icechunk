@@ -34,7 +34,7 @@ async fn test_write_large_number_of_refs() -> Result<(), Box<dyn std::error::Err
         }),
         ..Default::default()
     };
-    let repo = Repository::create(Some(config), storage, HashMap::new()).await?;
+    let repo = Repository::create(Some(config), storage, HashMap::new(), None).await?;
     let session = Arc::new(RwLock::new(repo.writable_session("main").await?));
     let store = Store::from_session(Arc::clone(&session)).await;
 

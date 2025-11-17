@@ -33,6 +33,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        spec_version: int | None = None,
     ) -> Self:
         """
         Create a new Icechunk repository.
@@ -55,6 +56,9 @@ class Repository:
             environment, or anonymous credentials will be used if the container allows it.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
+        spec_version : int, optional
+            Use this version of the spec for the new repository. If not passed, the latest version
+            of the spec that was available before the library version release will be used.
 
         Returns
         -------
@@ -66,6 +70,7 @@ class Repository:
                 storage,
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+                spec_version=spec_version,
             )
         )
 
@@ -75,6 +80,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        spec_version: int | None = None,
     ) -> Self:
         """
         Create a new Icechunk repository asynchronously.
@@ -97,6 +103,9 @@ class Repository:
             environment, or anonymous credentials will be used if the container allows it.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
+        spec_version : int, optional
+            Use this version of the spec for the new repository. If not passed, the latest version
+            of the spec that was available before the library version release will be used.
 
         Returns
         -------
@@ -108,6 +117,7 @@ class Repository:
                 storage,
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+                spec_version=spec_version,
             )
         )
 
@@ -205,6 +215,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        create_version: int | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist.
@@ -230,6 +241,11 @@ class Repository:
             environment, or anonymous credentials will be used if the container allows it.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
+        create_version : int, optional
+            Use this version of the spec for the new repository, if it needs to be created.
+            If not passed, the latest version of the spec that was available before the
+            library version release will be used.
+
 
         Returns
         -------
@@ -241,6 +257,7 @@ class Repository:
                 storage,
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+                create_version=create_version,
             )
         )
 
@@ -250,6 +267,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        create_version: int | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist (async version).
@@ -275,6 +293,10 @@ class Repository:
             environment, or anonymous credentials will be used if the container allows it.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
+        create_version : int, optional
+            Use this version of the spec for the new repository, if it needs to be created.
+            If not passed, the latest version of the spec that was available before the
+            library version release will be used.
 
         Returns
         -------
@@ -286,6 +308,7 @@ class Repository:
                 storage,
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+                create_version=create_version,
             )
         )
 

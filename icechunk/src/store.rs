@@ -1263,7 +1263,7 @@ mod tests {
     async fn create_memory_store_repository() -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new()).await.unwrap()
+        Repository::create(None, storage, HashMap::new(), None).await.unwrap()
     }
 
     async fn all_keys(store: &Store) -> Result<Vec<String>, Box<dyn std::error::Error>> {
@@ -2401,7 +2401,7 @@ mod tests {
                 .expect("could not create storage"),
         );
 
-        let repo = Repository::create(None, storage, HashMap::new()).await.unwrap();
+        let repo = Repository::create(None, storage, HashMap::new(), None).await.unwrap();
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await.unwrap()));
         let store = Store::from_session(Arc::clone(&ds)).await;
         store

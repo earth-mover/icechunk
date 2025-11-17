@@ -6,6 +6,7 @@ use crate::config::{
     ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3Options,
     S3StaticCredentials,
 };
+use crate::format::format_constants::SpecVersionBin;
 use crate::format::manifest::ManifestExtents;
 use crate::format::snapshot::{ArrayShape, DimensionName};
 use crate::format::{ChunkIndices, Path};
@@ -33,35 +34,36 @@ pub fn node_paths() -> impl Strategy<Value = Path> {
     })
 }
 
+pub fn spec_version() -> BoxedStrategy<SpecVersionBin> {
+    prop_oneof![Just(SpecVersionBin::V2dot0), Just(SpecVersionBin::V1dot0)].boxed()
+}
+
 prop_compose! {
-    pub fn empty_repositories()(_id in any::<u32>()) -> Repository {
+    pub fn empty_repositories()(version in spec_version()) -> Repository {
+        // FIXME: add storages strategy
+        let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+
+        runtime.block_on(async {
+            let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
+            Repository::create(None, storage, HashMap::new(), Some(version))
+                .await
+                .expect("Failed to initialize repository")
+        })
+    }
+}
+
+prop_compose! {
+    pub fn empty_writable_session()(version in spec_version()) -> Session {
     // _id is used as a hack to avoid using prop_oneof![Just(repository)]
     // Using Just requires Repository impl Clone, which we do not want
 
     // FIXME: add storages strategy
-    let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-
-    runtime.block_on(async {
-        let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
-        Repository::create(None, storage, HashMap::new())
-            .await
-            .expect("Failed to initialize repository")
-    })
-}
-}
-
-prop_compose! {
-    pub fn empty_writable_session()(_id in any::<u32>()) -> Session {
-    // _id is used as a hack to avoid using prop_oneof![Just(repository)]
-    // Using Just requires Repository impl Clone, which we do not want
-
-    // FIXME: add storages strategy
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
         let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
-        let repository = Repository::create(None, storage, HashMap::new())
+        let repository = Repository::create(None, storage, HashMap::new(), Some(version))
             .await
             .expect("Failed to initialize repository");
         repository.writable_session("main").await.expect("Failed to create session")
