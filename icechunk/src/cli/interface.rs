@@ -210,7 +210,7 @@ async fn repo_create(init_cmd: &CreateCommand, config: &CliConfig) -> Result<()>
 
     let config = Some(repo.get_config().clone());
 
-    Repository::create(config, Arc::clone(&storage), HashMap::new())
+    Repository::create(config, Arc::clone(&storage), HashMap::new(), None)
         .await
         .context(format!("Failed to create repository {:?}", init_cmd.repo))?;
 

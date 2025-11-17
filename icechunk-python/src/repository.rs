@@ -14,6 +14,7 @@ use icechunk::{
     config::Credentials,
     format::{
         SnapshotId,
+        format_constants::SpecVersionBin,
         repo_info::UpdateType,
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
         transaction_log::Diff,
@@ -788,13 +789,14 @@ impl PyRepository {
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None))]
     fn create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+        spec_version: Option<u8>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -803,10 +805,17 @@ impl PyRepository {
                     let config = config
                         .map(|c| c.try_into().map_err(PyValueError::new_err))
                         .transpose()?;
+                    let version = match spec_version {
+                        Some(n) => Some(
+                            SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?,
+                        ),
+                        None => None,
+                    };
                     Repository::create(
                         config,
                         storage.0,
                         map_credentials(authorize_virtual_chunk_access),
+                        version,
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
@@ -817,23 +826,34 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None))]
     fn create_async<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+        spec_version: Option<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
         let authorize_virtual_chunk_access =
             map_credentials(authorize_virtual_chunk_access);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let repository =
-                Repository::create(config, storage.0, authorize_virtual_chunk_access)
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+            let version = match spec_version {
+                Some(n) => {
+                    Some(SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?)
+                }
+                None => None,
+            };
+            let repository = Repository::create(
+                config,
+                storage.0,
+                authorize_virtual_chunk_access,
+                version,
+            )
+            .await
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
 
             Ok(Self(Arc::new(RwLock::new(repository))))
         })
@@ -891,13 +911,14 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None))]
     fn open_or_create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+        create_version: Option<u8>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -906,11 +927,18 @@ impl PyRepository {
                     let config = config
                         .map(|c| c.try_into().map_err(PyValueError::new_err))
                         .transpose()?;
+                    let version = match create_version {
+                        Some(n) => Some(
+                            SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?,
+                        ),
+                        None => None,
+                    };
                     Ok::<_, PyErr>(
                         Repository::open_or_create(
                             config,
                             storage.0,
                             map_credentials(authorize_virtual_chunk_access),
+                            version,
                         )
                         .await
                         .map_err(PyIcechunkStoreError::RepositoryError)?,
@@ -922,23 +950,31 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None))]
     fn open_or_create_async<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+        create_version: Option<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
         let authorize_virtual_chunk_access =
             map_credentials(authorize_virtual_chunk_access);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let version = match create_version {
+                Some(n) => {
+                    Some(SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?)
+                }
+                None => None,
+            };
             let repository = Repository::open_or_create(
                 config,
                 storage.0,
                 authorize_virtual_chunk_access,
+                version,
             )
             .await
             .map_err(PyIcechunkStoreError::RepositoryError)?;

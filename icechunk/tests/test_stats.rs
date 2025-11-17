@@ -13,6 +13,7 @@ use icechunk::{
     config::DEFAULT_MAX_CONCURRENT_REQUESTS,
     format::{
         ChunkIndices, Path,
+        format_constants::SpecVersionBin,
         manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef},
         snapshot::ArrayShape,
     },
@@ -70,6 +71,7 @@ pub async fn do_test_repo_chunks_storage(
     let asset_manager = Arc::new(AssetManager::new_no_cache(
         storage.clone(),
         storage_settings.clone(),
+        SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
@@ -81,6 +83,7 @@ pub async fn do_test_repo_chunks_storage(
         }),
         Arc::clone(&storage),
         Default::default(),
+        None,
     )
     .await?;
 

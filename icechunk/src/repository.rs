@@ -189,6 +189,7 @@ impl Repository {
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
+        spec_version: Option<SpecVersionBin>,
     ) -> RepositoryResult<Self> {
         debug!("Creating Repository");
         if !storage.can_write().await? {
@@ -213,6 +214,7 @@ impl Repository {
         let asset_manager = Arc::new(AssetManager::new_with_config(
             Arc::clone(&storage),
             storage_settings.clone(),
+            spec_version.unwrap_or_default(),
             config.caching(),
             config.compression().level(),
             config.max_concurrent_requests(),
@@ -284,14 +286,14 @@ impl Repository {
         let (config_res, spec_version_res) = try_join!(fetch_config, find_spec_version)?;
 
         // fail if repo doesn't exist
-        let version = match spec_version_res {
+        let spec_version = match spec_version_res {
             Ok(Some(v)) => Ok(v),
             Ok(None) => {
                 Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
             }
             Err(err) => Err(err),
         }?;
-        trace!(%version, "Repository version found");
+        trace!(%spec_version, "Repository version found");
 
         if let Some((default_config, config_version)) = config_res? {
             trace!("Repository configuration found");
@@ -307,13 +309,14 @@ impl Repository {
             let asset_manager = Arc::new(AssetManager::new_with_config(
                 Arc::clone(&storage),
                 storage_settings.clone(),
+                spec_version,
                 config.caching(),
                 config.compression().level(),
                 config.max_concurrent_requests(),
             ));
 
             Self::new(
-                version,
+                spec_version,
                 config,
                 config_version,
                 storage,
@@ -332,12 +335,13 @@ impl Repository {
             let asset_manager = Arc::new(AssetManager::new_with_config(
                 Arc::clone(&storage),
                 storage_settings.clone(),
+                spec_version,
                 config.caching(),
                 config.compression().level(),
                 config.max_concurrent_requests(),
             ));
             Self::new(
-                version,
+                spec_version,
                 config,
                 storage::VersionInfo::for_creation(),
                 storage,
@@ -352,11 +356,13 @@ impl Repository {
         config: Option<RepositoryConfig>,
         storage: Arc<dyn Storage + Send + Sync>,
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
+        create_version: Option<SpecVersionBin>,
     ) -> RepositoryResult<Self> {
         if Self::exists(Arc::clone(&storage)).await? {
             Self::open(config, storage, authorize_virtual_chunk_access).await
         } else {
-            Self::create(config, storage, authorize_virtual_chunk_access).await
+            Self::create(config, storage, authorize_virtual_chunk_access, create_version)
+                .await
         }
     }
 
@@ -420,6 +426,7 @@ impl Repository {
             let temp_asset_manager = Arc::new(AssetManager::new_no_cache(
                 Arc::clone(&storage),
                 storage.default_settings().await?,
+                SpecVersionBin::current(),
                 1, // we are only reading, compression doesn't matter
                 DEFAULT_MAX_CONCURRENT_REQUESTS,
             ));
@@ -495,6 +502,7 @@ impl Repository {
         let am = AssetManager::new_no_cache(
             storage,
             settings,
+            SpecVersionBin::current(),
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
@@ -537,6 +545,7 @@ impl Repository {
         let am = AssetManager::new_no_cache(
             storage,
             settings,
+            SpecVersionBin::current(),
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
@@ -603,17 +612,8 @@ impl Repository {
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<Arc<Snapshot>>> + use<>>
     {
         let am = Arc::clone(&self.asset_manager);
-        let mut this = am.fetch_snapshot(snapshot_id).await?;
-        let stream = try_stream! {
-            yield Arc::clone(&this);
-            #[allow(deprecated)]
-            while let Some(parent) = this.parent_id() {
-                let snap = am.fetch_snapshot(&parent).await?;
-                yield Arc::clone(&snap);
-                this = snap;
-            }
-        };
-        Ok(stream)
+        #[allow(deprecated)]
+        am.snapshot_ancestry_v1(snapshot_id).await
     }
 
     #[instrument(skip(self))]
@@ -1561,7 +1561,8 @@ mod tests {
     async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
-        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
 
         // initializing a repo does not create the config file
         assert!(Repository::fetch_config(Arc::clone(&storage)).await?.is_none());
@@ -1614,8 +1615,9 @@ mod tests {
             }),
             ..RepositoryConfig::default()
         };
-        let repo = Repository::create(Some(config), Arc::clone(&storage), HashMap::new())
-            .await?;
+        let repo =
+            Repository::create(Some(config), Arc::clone(&storage), HashMap::new(), None)
+                .await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 20);
         assert_eq!(repo.config().caching().num_chunk_refs(), 21);
 
@@ -1643,7 +1645,8 @@ mod tests {
     async fn test_manage_refs() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
-        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
 
         let initial_branches = repo.list_branches().await?;
         assert_eq!(initial_branches, BTreeSet::from(["main".into()]));
@@ -1774,7 +1777,7 @@ mod tests {
             ..RepositoryConfig::default()
         };
         let repository =
-            Repository::create(Some(config), storage, HashMap::new()).await?;
+            Repository::create(Some(config), storage, HashMap::new(), None).await?;
 
         let mut session = repository.writable_session("main").await?;
 
@@ -1798,6 +1801,7 @@ mod tests {
             }),
             Arc::clone(&storage),
             HashMap::new(),
+            None,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -2925,7 +2929,7 @@ mod tests {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage = Arc::clone(&backend);
 
-        let repository = Repository::create(None, storage, HashMap::new()).await?;
+        let repository = Repository::create(None, storage, HashMap::new(), None).await?;
 
         let mut session = repository.writable_session("main").await?;
 
@@ -3101,9 +3105,11 @@ mod tests {
                 .await
                 .expect("Creating local storage failed");
 
-        Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
         assert!(
-            Repository::create(None, Arc::clone(&storage), HashMap::new()).await.is_err()
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None)
+                .await
+                .is_err()
         );
 
         let inner_path: PathBuf =
@@ -3116,7 +3122,9 @@ mod tests {
                 .expect("Creating local storage failed");
 
         assert!(
-            Repository::create(None, Arc::clone(&storage), HashMap::new()).await.is_err()
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None)
+                .await
+                .is_err()
         );
 
         Ok(())
