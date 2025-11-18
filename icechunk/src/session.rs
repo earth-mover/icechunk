@@ -33,6 +33,7 @@ use crate::{
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
+        format_constants::SpecVersionBin,
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
             ManifestSplits, Overlap, VirtualChunkLocation, VirtualChunkRef,
@@ -46,7 +47,8 @@ use crate::{
         },
         transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
-    repository::{RepositoryError, RepositoryErrorKind},
+    refs::{RefError, RefErrorKind, update_branch},
+    repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
@@ -531,6 +533,8 @@ impl Session {
 
     #[instrument(skip(self))]
     pub async fn move_node(&mut self, from: Path, to: Path) -> SessionResult<()> {
+        // Icechunk 1 has no way to represent move in its on-disk format
+        self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
         // does the source node exist?
         let _ = self.get_node(&from).await?;
         // are we overwriting the destination node?
@@ -551,6 +555,9 @@ impl Session {
     where
         F: Fn(&ChunkIndices) -> ReindexOperationResult,
     {
+        // Itechunk 1 doesn't allow reindex, upgrade to IC2
+        self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+
         let node = self.get_array(array_path).await?;
         #[allow(clippy::panic)]
         let (shape, splits) = if let NodeData::Array { shape, dimension_names, .. } =
@@ -644,18 +651,6 @@ impl Session {
             Ok(&mut self.change_set)
         }
     }
-
-    // fn move_tracker(&self) -> &MoveTracker {
-    //     self.move_tracker.as_ref().unwrap_or(&*EMPTY_MOVE_TRACKER)
-    // }
-
-    // fn move_tracker_mut(&mut self) -> SessionResult<&mut MoveTracker> {
-    //     if self.read_only() {
-    //         Err(SessionErrorKind::ReadOnlySession.into())
-    //     } else {
-    //         self.move_tracker.as_mut().ok_or(SessionErrorKind::NonRearrangeSession.into())
-    //     }
-    // }
 
     /// This method is directly called in add_array & update_array
     /// where we know we must update the splits HashMap
@@ -1136,6 +1131,9 @@ impl Session {
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
+        // Icechunk 1 doesn't support amend
+        self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+
         self._commit(message, properties, false, CommitMethod::Amend).await
     }
 
@@ -1243,6 +1241,12 @@ impl Session {
         let Some(branch_name) = &self.branch_name else {
             return Err(SessionErrorKind::ReadOnlySession.into());
         };
+
+        // amend is only allowed in spec v2, this should be checked at this point so we only assert
+        assert!(
+            self.asset_manager.spec_version() >= SpecVersionBin::V2dot0
+                || commit_method == CommitMethod::NewCommit
+        );
 
         let branch_name = branch_name.clone();
 
@@ -2309,8 +2313,16 @@ async fn do_flush(
     all_nodes
         .sort_by(|a, b| a.path.to_string().as_str().cmp(b.path.to_string().as_str()));
 
+    // Icechunk 2 no longer stores the parent snapshot id in the snapshot
+    let parent_id = if flush_data.asset_manager.spec_version() == SpecVersionBin::V1dot0 {
+        Some(flush_data.parent_id.clone())
+    } else {
+        None
+    };
+
     let new_snapshot = Snapshot::from_iter(
         None,
+        parent_id,
         message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
@@ -2407,22 +2419,108 @@ async fn do_commit(
             .await?;
     let new_snapshot_id = new_snapshot.id();
 
-    let mut attempt = 0;
+    let res = match asset_manager.spec_version() {
+        SpecVersionBin::V1dot0 =>
+        {
+            #[allow(deprecated)]
+            do_commit_v1(
+                asset_manager.storage().as_ref(),
+                asset_manager.storage_settings(),
+                branch_name,
+                snapshot_id,
+                new_snapshot_id.clone(),
+            )
+            .await
+        }
+        SpecVersionBin::V2dot0 => {
+            do_commit_v2(
+                asset_manager,
+                branch_name,
+                snapshot_id,
+                new_snapshot,
+                commit_method,
+            )
+            .await
+        }
+    };
 
+    match res {
+        Ok(new_version) => {
+            info!(
+                branch_name,
+                new_commit_object_version=?new_version,
+                %new_snapshot_id,
+                "Commit done"
+            );
+            Ok(new_snapshot_id)
+        }
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::Conflict { expected_parent, actual_parent },
+            ..
+        }) => Err(SessionError::from(SessionErrorKind::Conflict {
+            expected_parent,
+            actual_parent,
+        })),
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::NoAmendForInitialCommit,
+            ..
+        }) => Err(SessionError::from(SessionErrorKind::NoAmendForInitialCommit)),
+        Err(err) => Err(err.into()),
+    }
+}
+
+async fn do_commit_v1(
+    storage: &dyn Storage,
+    storage_settings: &storage::Settings,
+    branch_name: &str,
+    parent_snapshot_id: &SnapshotId,
+    new_snapshot_id: SnapshotId,
+) -> RepositoryResult<storage::VersionInfo> {
+    debug!(branch_name, new_snapshot_id=%new_snapshot_id, "Updating branch");
+    match update_branch(
+        storage,
+        storage_settings,
+        branch_name,
+        new_snapshot_id,
+        Some(parent_snapshot_id),
+    )
+    .await
+    {
+        Ok(version) => Ok(version),
+        Err(RefError {
+            kind: RefErrorKind::Conflict { expected_parent, actual_parent },
+            ..
+        }) => Err(RepositoryError::from(RepositoryErrorKind::Conflict {
+            expected_parent,
+            actual_parent,
+        })),
+        Err(err) => Err(err.into()),
+    }
+}
+
+async fn do_commit_v2(
+    asset_manager: Arc<AssetManager>,
+    branch_name: &str,
+    parent_snapshot_id: &SnapshotId,
+    new_snapshot: Arc<Snapshot>,
+    commit_method: CommitMethod,
+) -> RepositoryResult<storage::VersionInfo> {
+    let mut attempt = 0;
+    let new_snapshot_id = new_snapshot.id();
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
         attempt += 1;
         let actual_parent = repo_info.resolve_branch(branch_name)?;
-        if &actual_parent != snapshot_id {
+        if &actual_parent != parent_snapshot_id {
             info!(branch_name, %new_snapshot_id, attempt, "Branch tip has changed, rebase needed");
             return Err(RepositoryError::from(RepositoryErrorKind::Conflict {
-                expected_parent: Some(snapshot_id.clone()),
+                expected_parent: Some(parent_snapshot_id.clone()),
                 actual_parent: Some(actual_parent),
             }));
         }
 
-        let parent_snapshot = repo_info.find_snapshot(snapshot_id)?;
+        let parent_snapshot = repo_info.find_snapshot(parent_snapshot_id)?;
         let parent_id = match (commit_method, parent_snapshot.parent_id) {
-            (CommitMethod::NewCommit, _) => snapshot_id.clone(),
+            (CommitMethod::NewCommit, _) => parent_snapshot_id.clone(),
             (CommitMethod::Amend, Some(parent_id)) => parent_id,
             (CommitMethod::Amend, None) => {
                 return Err(RepositoryErrorKind::NoAmendForInitialCommit.into());
@@ -2455,32 +2553,8 @@ async fn do_commit(
     let res = asset_manager
         // FIXME: hardcoded retries
         .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
-        .await;
-
-    match res {
-        Ok(new_version) => {
-            info!(
-                branch_name,
-                new_repo_info_version=?new_version,
-                %new_snapshot_id,
-                attempt,
-                "Commit done"
-            );
-            Ok(new_snapshot_id)
-        }
-        Err(RepositoryError {
-            kind: RepositoryErrorKind::Conflict { expected_parent, actual_parent },
-            ..
-        }) => Err(SessionError::from(SessionErrorKind::Conflict {
-            expected_parent,
-            actual_parent,
-        })),
-        Err(RepositoryError {
-            kind: RepositoryErrorKind::NoAmendForInitialCommit,
-            ..
-        }) => Err(SessionError::from(SessionErrorKind::NoAmendForInitialCommit)),
-        Err(err) => Err(err.into()),
-    }
+        .await?;
+    Ok(res)
 }
 
 async fn fetch_manifest(
@@ -3032,6 +3106,7 @@ mod tests {
         let initial = Snapshot::initial().unwrap();
         let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
+            None,
             None,
             "message".to_string(),
             None,

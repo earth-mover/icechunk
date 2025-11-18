@@ -133,6 +133,10 @@ pub enum RepositoryErrorKind {
         "repository cannot be updated after {0} attempts, too many concurrent changes"
     )]
     RepoUpdateAttemptsLimit(u64),
+    #[error(
+        "repository version error, this operation requires a repository that is at least version {minimum_spec_version}, please upgrade your on-disk format before executing this operation"
+    )]
+    BadRepoVersion { minimum_spec_version: SpecVersionBin },
     #[error("unexpected error: {0}")]
     Other(String),
 }
@@ -1334,6 +1338,9 @@ impl Repository {
             )
             .into());
         }
+        // this feature is only available in IC2
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+
         let snapshot_id = self.lookup_branch(branch).await?;
 
         let session = Session::create_rearrange_session(

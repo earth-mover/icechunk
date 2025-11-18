@@ -192,7 +192,7 @@ pub async fn update_branch(
     name: &str,
     new_snapshot: SnapshotId,
     current_snapshot: Option<&SnapshotId>,
-) -> RefResult<()> {
+) -> RefResult<VersionInfo> {
     let (ref_data, version) = match fetch_branch(storage, storage_settings, name).await {
         Ok((ref_data, version)) => (Some(ref_data), version),
         Err(RefError { kind: RefErrorKind::RefNotFound(..), .. }) => {
@@ -226,7 +226,7 @@ pub async fn update_branch(
         )
         .await
     {
-        Ok(VersionedUpdateResult::Updated { .. }) => Ok(()),
+        Ok(VersionedUpdateResult::Updated { new_version }) => Ok(new_version),
         Ok(VersionedUpdateResult::NotOnLatestVersion) => {
             // If the already exists, an update happened since we checked
             // we can just try again and the conflict will be reported
