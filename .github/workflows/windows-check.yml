@@ -29,7 +29,7 @@ jobs:
       #pull-requests: read
     env:
       #CC: deny_c
-      RUST_CHANNEL: '1.89.0'
+      RUST_CHANNEL: '1.91.0'
 
 
     steps:
