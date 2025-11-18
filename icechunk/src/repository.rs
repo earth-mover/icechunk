@@ -40,7 +40,7 @@ use crate::{
     },
     refs::{
         Ref, RefError, RefErrorKind, fetch_branch_tip, fetch_tag, list_branches,
-        list_tags,
+        list_tags, update_branch,
     },
     session::{Session, SessionErrorKind, SessionResult},
     storage::{self, StorageErrorKind},
@@ -211,10 +211,12 @@ impl Repository {
             None => storage.default_settings().await?,
         };
 
+        let spec_version = spec_version.unwrap_or_default();
+
         let asset_manager = Arc::new(AssetManager::new_with_config(
             Arc::clone(&storage),
             storage_settings.clone(),
-            spec_version.unwrap_or_default(),
+            spec_version,
             config.caching(),
             config.compression().level(),
             config.max_concurrent_requests(),
@@ -225,14 +227,28 @@ impl Repository {
         }
 
         let asset_manager_c = Arc::clone(&asset_manager);
+        let storage_c = Arc::clone(&storage);
+        let settings_ref = &storage_settings;
         let create_repo_info = async move {
             // On create we need to create the default branch
             let new_snapshot = Arc::new(Snapshot::initial()?);
             asset_manager_c.write_snapshot(Arc::clone(&new_snapshot)).await?;
 
-            let snap_info = new_snapshot.as_ref().try_into()?;
-            let repo_info = Arc::new(RepoInfo::initial(snap_info));
-            let _ = asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
+            if spec_version >= SpecVersionBin::V2dot0 {
+                let snap_info = new_snapshot.as_ref().try_into()?;
+                let repo_info = Arc::new(RepoInfo::initial(snap_info));
+                let _ = asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
+            } else {
+                update_branch(
+                    storage_c.as_ref(),
+                    settings_ref,
+                    Ref::DEFAULT_BRANCH,
+                    new_snapshot.id().clone(),
+                    None,
+                )
+                .await?;
+            }
+
             Ok::<_, RepositoryError>(())
         }
         .in_current_span();
@@ -258,7 +274,7 @@ impl Repository {
 
         debug_assert!(Self::exists(Arc::clone(&storage)).await.unwrap_or(false));
         Self::new(
-            SpecVersionBin::current(),
+            spec_version,
             config,
             config_version,
             storage,
@@ -3127,6 +3143,36 @@ mod tests {
                 .is_err()
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_repo_with_spec_version_2() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::V2dot0),
+        )
+        .await?;
+        let repo = Repository::open(None, storage, Default::default()).await?;
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_repo_with_spec_version_1() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::V1dot0),
+        )
+        .await?;
+        let repo = Repository::open(None, storage, Default::default()).await?;
+        assert_eq!(repo.spec_version(), SpecVersionBin::V1dot0);
         Ok(())
     }
 }

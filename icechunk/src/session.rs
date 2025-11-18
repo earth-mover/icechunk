@@ -3010,7 +3010,7 @@ mod tests {
 
         let array1_path: Path = "/array1".try_into().unwrap();
         let node_id = NodeId::random();
-        let nodes = vec![
+        let nodes = [
             NodeSnapshot {
                 path: Path::root(),
                 id: node_id,

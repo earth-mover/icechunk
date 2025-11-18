@@ -186,7 +186,7 @@ async fn create_tag(
 
 #[async_recursion]
 #[instrument(skip(storage, storage_settings))]
-async fn update_branch(
+pub async fn update_branch(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     name: &str,

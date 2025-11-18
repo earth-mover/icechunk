@@ -361,7 +361,18 @@ pub mod format_constants {
     }
 
     #[repr(u8)]
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        Serialize,
+        Deserialize,
+        Default,
+        PartialOrd,
+        Ord,
+    )]
     pub enum SpecVersionBin {
         V1dot0 = 1u8,
         #[default]
