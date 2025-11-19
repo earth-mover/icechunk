@@ -1903,15 +1903,14 @@ impl PyRepository {
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let lock = self.0.read().await;
                     // TODO: make commit method selectable
-                    rewrite_manifests(
-                        &lock,
-                        branch,
-                        message,
-                        metadata,
-                        icechunk::session::CommitMethod::Amend,
-                    )
-                    .await
-                    .map_err(PyIcechunkStoreError::ManifestOpsError)
+                    let commit_method = if lock.spec_version() > SpecVersionBin::V1dot0 {
+                        icechunk::session::CommitMethod::Amend
+                    } else {
+                        icechunk::session::CommitMethod::NewCommit
+                    };
+                    rewrite_manifests(&lock, branch, message, metadata, commit_method)
+                        .await
+                        .map_err(PyIcechunkStoreError::ManifestOpsError)
                 })?;
             Ok(result.to_string())
         })
@@ -1932,12 +1931,18 @@ impl PyRepository {
         pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
             let repository = repository.read().await;
             // TODO: make commit method selectable
+            // TODO: make commit method selectable
+            let commit_method = if repository.spec_version() > SpecVersionBin::V1dot0 {
+                icechunk::session::CommitMethod::Amend
+            } else {
+                icechunk::session::CommitMethod::NewCommit
+            };
             let result = rewrite_manifests(
                 &repository,
                 &branch,
                 &message,
                 metadata,
-                icechunk::session::CommitMethod::Amend,
+                commit_method,
             )
             .await
             .map_err(PyIcechunkStoreError::ManifestOpsError)?;

@@ -1137,6 +1137,36 @@ impl Session {
         self._commit(message, properties, false, CommitMethod::Amend).await
     }
 
+    async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
+        let update_type =
+            UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
+
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+            let new_snapshot_info = SnapshotInfo {
+                parent_id: Some(self.snapshot_id().clone()),
+                ..new_snap.as_ref().try_into()?
+            };
+            Ok(Arc::new(repo_info.add_snapshot(
+                new_snapshot_info,
+                None,
+                update_type.clone(),
+                backup_path,
+            )?))
+        };
+
+        let _ = self
+            .asset_manager
+            // FIXME: hardcoded retries
+            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .await?;
+        Ok(())
+    }
+
+    async fn flush_v1(&mut self, _: Arc<Snapshot>) -> SessionResult<()> {
+        // In IC1 there is nothing to do here, the snapshot is already saved
+        Ok(())
+    }
+
     pub async fn flush(
         &mut self,
         message: &str,
@@ -1163,27 +1193,10 @@ impl Session {
             do_flush(flush_data, message, properties, false, CommitMethod::NewCommit)
                 .await?;
 
-        let update_type =
-            UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
-
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
-            let new_snapshot_info = SnapshotInfo {
-                parent_id: Some(self.snapshot_id().clone()),
-                ..new_snap.as_ref().try_into()?
-            };
-            Ok(Arc::new(repo_info.add_snapshot(
-                new_snapshot_info,
-                None,
-                update_type.clone(),
-                backup_path,
-            )?))
-        };
-
-        let _ = self
-            .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
-            .await?;
+        match self.asset_manager.spec_version() {
+            SpecVersionBin::V1dot0 => self.flush_v1(Arc::clone(&new_snap)).await,
+            SpecVersionBin::V2dot0 => self.flush_v2(Arc::clone(&new_snap)).await,
+        }?;
 
         info!(
             parent_id=%self.snapshot_id(),
