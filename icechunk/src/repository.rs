@@ -38,10 +38,7 @@ use crate::{
         },
         transaction_log::{Diff, DiffBuilder},
     },
-    refs::{
-        Ref, RefError, RefErrorKind, fetch_branch_tip, fetch_tag, list_branches,
-        list_tags, update_branch,
-    },
+    refs::{self, Ref, RefError, RefErrorKind},
     session::{Session, SessionErrorKind, SessionResult},
     storage::{self, StorageErrorKind},
     virtual_chunks::VirtualChunkResolver,
@@ -243,7 +240,7 @@ impl Repository {
                 let repo_info = Arc::new(RepoInfo::initial(snap_info));
                 let _ = asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
             } else {
-                update_branch(
+                refs::update_branch(
                     storage_c.as_ref(),
                     settings_ref,
                     Ref::DEFAULT_BRANCH,
@@ -428,7 +425,7 @@ impl Repository {
     ) -> RepositoryResult<Option<SpecVersionBin>> {
         let storage_c = Arc::clone(&storage);
         let is_v1 = async move {
-            match fetch_branch_tip(
+            match refs::fetch_branch_tip(
                 storage_c.as_ref(),
                 &storage_c.default_settings().await?,
                 Ref::DEFAULT_BRANCH,
@@ -610,7 +607,7 @@ impl Repository {
     /// Returns the sequence of parents of the current session, in order of latest first.
     /// Output stream includes snapshot_id argument
     #[instrument(skip(self))]
-    pub async fn snapshot_info_ancestry_v1(
+    async fn snapshot_info_ancestry_v1(
         &self,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + use<>>
@@ -626,7 +623,7 @@ impl Repository {
     /// Returns the sequence of parents of the current session, in order of latest first.
     /// Output stream includes snapshot_id argument
     #[instrument(skip(self))]
-    pub async fn snapshot_ancestry_v1(
+    async fn snapshot_ancestry_v1(
         &self,
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<Arc<Snapshot>>> + use<>>
@@ -745,15 +742,22 @@ impl Repository {
             )
             .into());
         }
-        if self.spec_version != SpecVersionBin::current() {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                // FIXME:
-                "This repository is incompatible with Icechunk version you are using"
-                    .to_string(),
-            )
-            .into());
+        match self.spec_version() {
+            SpecVersionBin::V1dot0 => {
+                self.create_branch_v1(branch_name, snapshot_id).await
+            }
+            SpecVersionBin::V2dot0 => {
+                self.create_branch_v2(branch_name, snapshot_id).await
+            }
         }
+    }
 
+    #[instrument(skip(self))]
+    async fn create_branch_v2(
+        &self,
+        branch_name: &str,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<()> {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             Ok(Arc::new(repo_info.add_branch(branch_name, snapshot_id, backup_path)?))
@@ -767,11 +771,39 @@ impl Repository {
         Ok(())
     }
 
+    #[instrument(skip(self))]
+    async fn create_branch_v1(
+        &self,
+        branch_name: &str,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<()> {
+        raise_if_invalid_snapshot_id_v1(&self.asset_manager, snapshot_id).await?;
+        refs::update_branch(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            branch_name,
+            snapshot_id.clone(),
+            None,
+        )
+        .await
+        .map_err(|e| match e {
+            RefError {
+                kind: RefErrorKind::Conflict { expected_parent, actual_parent },
+                ..
+            } => RepositoryError::from(RepositoryErrorKind::Conflict {
+                expected_parent,
+                actual_parent,
+            }),
+            err => err.into(),
+        })?;
+        Ok(())
+    }
+
     /// List all branches in the repository.
     #[instrument(skip(self))]
     async fn list_branches_v1(&self) -> RepositoryResult<BTreeSet<String>> {
         let branches =
-            list_branches(self.storage.as_ref(), &self.storage_settings).await?;
+            refs::list_branches(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(branches)
     }
 
@@ -794,7 +826,7 @@ impl Repository {
     #[instrument(skip(self))]
     async fn lookup_branch_v1(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         let branch_version =
-            fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
+            refs::fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
                 .await?;
         Ok(branch_version.snapshot)
     }
@@ -868,19 +900,50 @@ impl Repository {
     ) -> RepositoryResult<()> {
         if !self.storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create branch".to_string(),
+                "Cannot reset branch".to_string(),
             )
             .into());
         }
-        if self.spec_version != SpecVersionBin::current() {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                // FIXME:
-                "This repository is incompatible with Icechunk version you are using"
-                    .to_string(),
-            )
-            .into());
+        match self.spec_version {
+            SpecVersionBin::V1dot0 => {
+                self.reset_branch_v1(branch, to_snapshot_id, from_snapshot_id).await
+            }
+            SpecVersionBin::V2dot0 => {
+                self.reset_branch_v2(branch, to_snapshot_id, from_snapshot_id).await
+            }
         }
+    }
 
+    #[instrument(skip(self))]
+    async fn reset_branch_v1(
+        &self,
+        branch: &str,
+        to_snapshot_id: &SnapshotId,
+        from_snapshot_id: Option<&SnapshotId>,
+    ) -> RepositoryResult<()> {
+        raise_if_invalid_snapshot_id_v1(&self.asset_manager, to_snapshot_id).await?;
+        let branch_tip = match from_snapshot_id {
+            Some(snap) => snap,
+            None => &self.lookup_branch(branch).await?,
+        };
+        refs::update_branch(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            branch,
+            to_snapshot_id.clone(),
+            Some(branch_tip),
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn reset_branch_v2(
+        &self,
+        branch: &str,
+        to_snapshot_id: &SnapshotId,
+        from_snapshot_id: Option<&SnapshotId>,
+    ) -> RepositoryResult<()> {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             if let Some(from_snapshot_id) = from_snapshot_id
                 && &repo_info.resolve_branch(branch)? != from_snapshot_id
@@ -925,39 +988,45 @@ impl Repository {
             )
             .into());
         }
-        if self.spec_version != SpecVersionBin::current() {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                // FIXME:
-                "This repository is incompatible with Icechunk version you are using"
-                    .to_string(),
-            )
-            .into());
-        }
-        if branch != Ref::DEFAULT_BRANCH {
-            let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
-                let new_repo = repo_info.delete_branch(branch, backup_path).map_err(
-                    |err| match err {
-                        IcechunkFormatError {
-                            kind: IcechunkFormatErrorKind::BranchNotFound { .. },
-                            ..
-                        } => RepositoryError::from(RefError::from(
-                            RefErrorKind::RefNotFound(branch.to_string()),
-                        )),
-                        err => RepositoryError::from(err),
-                    },
-                );
-                Ok(Arc::new(new_repo?))
-            };
-
-            let _ = self
-                .asset_manager
-                // FIXME: hardcoded retries
-                .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
-                .await?;
-            Ok(())
-        } else {
+        if branch == Ref::DEFAULT_BRANCH {
             Err(RepositoryErrorKind::CannotDeleteMain.into())
+        } else {
+            match self.spec_version {
+                SpecVersionBin::V1dot0 => self.delete_branch_v1(branch).await,
+                SpecVersionBin::V2dot0 => self.delete_branch_v2(branch).await,
+            }
         }
+    }
+
+    #[instrument(skip(self))]
+    async fn delete_branch_v1(&self, branch: &str) -> RepositoryResult<()> {
+        refs::delete_branch(self.storage.as_ref(), &self.storage_settings, branch)
+            .await?;
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn delete_branch_v2(&self, branch: &str) -> RepositoryResult<()> {
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+            let new_repo =
+                repo_info.delete_branch(branch, backup_path).map_err(|err| match err {
+                    IcechunkFormatError {
+                        kind: IcechunkFormatErrorKind::BranchNotFound { .. },
+                        ..
+                    } => RepositoryError::from(RefError::from(
+                        RefErrorKind::RefNotFound(branch.to_string()),
+                    )),
+                    err => RepositoryError::from(err),
+                });
+            Ok(Arc::new(new_repo?))
+        };
+
+        let _ = self
+            .asset_manager
+            // FIXME: hardcoded retries
+            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .await?;
+        Ok(())
     }
 
     /// Delete a tag from the repository.
@@ -971,15 +1040,19 @@ impl Repository {
             )
             .into());
         }
-        if self.spec_version != SpecVersionBin::current() {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                // FIXME:
-                "This repository is incompatible with Icechunk version you are using"
-                    .to_string(),
-            )
-            .into());
+        match self.spec_version {
+            SpecVersionBin::V1dot0 => self.delete_tag_v1(tag).await,
+            SpecVersionBin::V2dot0 => self.delete_tag_v2(tag).await,
         }
+    }
 
+    #[instrument(skip(self))]
+    async fn delete_tag_v1(&self, tag: &str) -> RepositoryResult<()> {
+        Ok(refs::delete_tag(self.storage.as_ref(), &self.storage_settings, tag).await?)
+    }
+
+    #[instrument(skip(self))]
+    async fn delete_tag_v2(&self, tag: &str) -> RepositoryResult<()> {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             let new_repo =
                 repo_info.delete_tag(tag, backup_path).map_err(|err| match err {
@@ -1015,15 +1088,36 @@ impl Repository {
             )
             .into());
         }
-        if self.spec_version != SpecVersionBin::current() {
-            return Err(RepositoryErrorKind::ReadonlyStorage(
-                // FIXME:
-                "This repository is incompatible with Icechunk version you are using"
-                    .to_string(),
-            )
-            .into());
-        }
 
+        match self.spec_version {
+            SpecVersionBin::V1dot0 => self.create_tag_v1(tag_name, snapshot_id).await,
+            SpecVersionBin::V2dot0 => self.create_tag_v2(tag_name, snapshot_id).await,
+        }
+    }
+
+    #[instrument(skip(self))]
+    async fn create_tag_v1(
+        &self,
+        tag_name: &str,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<()> {
+        raise_if_invalid_snapshot_id_v1(&self.asset_manager, snapshot_id).await?;
+        refs::create_tag(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            tag_name,
+            snapshot_id.clone(),
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn create_tag_v2(
+        &self,
+        tag_name: &str,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<()> {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             let new_repo =
@@ -1052,15 +1146,18 @@ impl Repository {
     /// List all tags in the repository.
     #[instrument(skip(self))]
     async fn list_tags_v1(&self) -> RepositoryResult<BTreeSet<String>> {
-        let tags = list_tags(self.storage.as_ref(), &self.storage_settings).await?;
+        let tags = refs::list_tags(self.storage.as_ref(), &self.storage_settings).await?;
         Ok(tags)
     }
 
+    #[instrument(skip(self))]
     async fn list_tags_v2(&self) -> RepositoryResult<BTreeSet<String>> {
         let (ri, _) = self.get_repo_info().await?;
-        Ok(ri.tag_names()?.map(|s| s.to_string()).collect())
+        let tags = ri.tag_names()?;
+        Ok(tags.map(|s| s.to_string()).collect())
     }
 
+    #[instrument(skip(self))]
     pub async fn list_tags(&self) -> RepositoryResult<BTreeSet<String>> {
         match self.spec_version {
             SpecVersionBin::V1dot0 => self.list_tags_v1().await,
@@ -1071,7 +1168,7 @@ impl Repository {
     #[instrument(skip(self))]
     async fn lookup_tag_v1(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         let ref_data =
-            fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
+            refs::fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
         Ok(ref_data.snapshot)
     }
 
@@ -1111,11 +1208,12 @@ impl Repository {
             }
             RefVersionInfo::TagRef(tag) => {
                 let ref_data =
-                    fetch_tag(self.storage.as_ref(), &self.storage_settings, tag).await?;
+                    refs::fetch_tag(self.storage.as_ref(), &self.storage_settings, tag)
+                        .await?;
                 Ok(ref_data.snapshot)
             }
             RefVersionInfo::BranchTipRef(branch) => {
-                let ref_data = fetch_branch_tip(
+                let ref_data = refs::fetch_branch_tip(
                     self.storage.as_ref(),
                     &self.storage_settings,
                     branch,
@@ -1142,12 +1240,6 @@ impl Repository {
         }
     }
 
-    async fn get_repo_info(
-        &self,
-    ) -> RepositoryResult<(Arc<RepoInfo>, storage::VersionInfo)> {
-        self.asset_manager.fetch_repo_info().await
-    }
-
     #[instrument(skip(self))]
     pub async fn resolve_version(
         &self,
@@ -1160,6 +1252,12 @@ impl Repository {
                     .await
             }
         }
+    }
+
+    async fn get_repo_info(
+        &self,
+    ) -> RepositoryResult<(Arc<RepoInfo>, storage::VersionInfo)> {
+        self.asset_manager.fetch_repo_info().await
     }
 
     #[instrument(skip(self))]
@@ -1308,7 +1406,7 @@ impl Repository {
     pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
         if !self.storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create writable_session".to_string(),
+                "Cannot create writable session".to_string(),
             )
             .into());
         }
@@ -1334,7 +1432,7 @@ impl Repository {
     pub async fn rearrange_session(&self, branch: &str) -> RepositoryResult<Session> {
         if !self.storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
-                "Cannot create writable_session".to_string(),
+                "Cannot create rearrange session".to_string(),
             )
             .into());
         }
