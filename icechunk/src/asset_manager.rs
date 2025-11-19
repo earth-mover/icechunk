@@ -451,7 +451,19 @@ impl AssetManager {
     pub async fn fetch_repo_info(
         &self,
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
+        self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
         fetch_repo_info(self.storage.as_ref(), &self.storage_settings).await
+    }
+
+    pub fn fail_unless_spec_at_least(
+        &self,
+        minimum_spec_version: SpecVersionBin,
+    ) -> RepositoryResult<()> {
+        if self.spec_version() < minimum_spec_version {
+            Err(RepositoryErrorKind::BadRepoVersion { minimum_spec_version }.into())
+        } else {
+            Ok(())
+        }
     }
 
     #[instrument(skip(self))]

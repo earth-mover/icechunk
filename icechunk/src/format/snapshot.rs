@@ -366,6 +366,7 @@ impl Snapshot {
 
     pub fn from_iter<E, I>(
         id: Option<SnapshotId>,
+        parent_id: Option<SnapshotId>,
         message: String,
         properties: Option<SnapshotProperties>,
         mut manifest_files: Vec<ManifestFileInfo>,
@@ -406,9 +407,8 @@ impl Snapshot {
         let metadata_items = builder.create_vector(metadata_items.as_slice());
 
         let message = builder.create_string(&message);
-        //let parent_id = parent_id.map(|oid| generated::ObjectId12::new(&oid.0));
         // Icechunk 2.0 no longer uses this field
-        let parent_id = None;
+        let parent_id = parent_id.map(|oid| generated::ObjectId12::new(&oid.0));
         let flushed_at = flushed_at.unwrap_or_else(Utc::now).timestamp_micros() as u64;
         let id = generated::ObjectId12::new(&id.unwrap_or_else(SnapshotId::random).0);
 
@@ -443,6 +443,7 @@ impl Snapshot {
         let nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::new();
         Self::from_iter(
             Some(Self::INITIAL_SNAPSHOT_ID),
+            None,
             Self::INITIAL_COMMIT_MESSAGE.to_string(),
             Some(properties),
             Default::default(),
@@ -816,6 +817,7 @@ mod tests {
             },
         ];
         let st = Snapshot::from_iter(
+            None,
             None,
             String::default(),
             Default::default(),
