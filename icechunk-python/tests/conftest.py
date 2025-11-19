@@ -52,3 +52,8 @@ def write_chunks_to_minio(
         etags.append(etag)
 
     return etags
+
+
+@pytest.fixture(scope="function", params=[1, 2, None])
+def any_spec_version(request: pytest.FixtureRequest) -> int | None:
+    return request.param

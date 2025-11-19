@@ -9,7 +9,7 @@ import zarr
 from tests.conftest import get_minio_client
 
 
-def mk_repo() -> tuple[str, ic.Repository]:
+def mk_repo(spec_version) -> tuple[str, ic.Repository]:
     prefix = "test-repo__" + str(time.time())
     repo = ic.Repository.create(
         storage=ic.s3_storage(
@@ -23,14 +23,15 @@ def mk_repo() -> tuple[str, ic.Repository]:
             secret_access_key="minio123",
         ),
         config=ic.RepositoryConfig(inline_chunk_threshold_bytes=0),
+        spec_version=spec_version,
     )
     return (prefix, repo)
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 @pytest.mark.parametrize("use_async", [True, False])
-async def test_expire_and_gc(use_async: bool) -> None:
-    prefix, repo = mk_repo()
+async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> None:
+    prefix, repo = mk_repo(any_spec_version)
 
     session = repo.writable_session("main")
     store = session.store
