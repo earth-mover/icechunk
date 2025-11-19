@@ -366,6 +366,7 @@ impl Snapshot {
 
     pub fn from_iter<E, I>(
         id: Option<SnapshotId>,
+        parent_id: Option<SnapshotId>,
         message: String,
         properties: Option<SnapshotProperties>,
         mut manifest_files: Vec<ManifestFileInfo>,
@@ -406,9 +407,8 @@ impl Snapshot {
         let metadata_items = builder.create_vector(metadata_items.as_slice());
 
         let message = builder.create_string(&message);
-        //let parent_id = parent_id.map(|oid| generated::ObjectId12::new(&oid.0));
         // Icechunk 2.0 no longer uses this field
-        let parent_id = None;
+        let parent_id = parent_id.map(|oid| generated::ObjectId12::new(&oid.0));
         let flushed_at = flushed_at.unwrap_or_else(Utc::now).timestamp_micros() as u64;
         let id = generated::ObjectId12::new(&id.unwrap_or_else(SnapshotId::random).0);
 
@@ -443,6 +443,7 @@ impl Snapshot {
         let nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::new();
         Self::from_iter(
             Some(Self::INITIAL_SNAPSHOT_ID),
+            None,
             Self::INITIAL_COMMIT_MESSAGE.to_string(),
             Some(properties),
             Default::default(),
@@ -510,6 +511,26 @@ impl Snapshot {
 
     pub fn manifest_files(&self) -> impl Iterator<Item = ManifestFileInfo> + '_ {
         self.root().manifest_files().iter().map(|mf| mf.into())
+    }
+
+    /// Cretase a new `Snapshot` with all the same data as `new_child` but `self` as parent
+    #[deprecated(
+        since = "2.0.0",
+        note = "Shouldn't be necessary after 2.0, only to support Icechunk 1 repos"
+    )]
+    pub fn adopt(&self, new_child: &Snapshot) -> IcechunkResult<Self> {
+        // Rust flatbuffers implementation doesn't allow mutation of scalars, so we need to
+        // create a whole new buffer and write to it in full
+
+        Snapshot::from_iter(
+            Some(new_child.id()),
+            Some(self.id()),
+            new_child.message().clone(),
+            Some(new_child.metadata()?.clone()),
+            new_child.manifest_files().collect(),
+            Some(new_child.flushed_at()?),
+            new_child.iter(),
+        )
     }
 
     pub fn get_node(&self, path: &Path) -> IcechunkResult<NodeSnapshot> {
@@ -816,6 +837,7 @@ mod tests {
             },
         ];
         let st = Snapshot::from_iter(
+            None,
             None,
             String::default(),
             Default::default(),

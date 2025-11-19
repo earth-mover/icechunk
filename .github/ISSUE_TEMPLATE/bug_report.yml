@@ -26,23 +26,14 @@ body:
     attributes:
       label: Minimal Complete Verifiable Example
       description: |
-        Minimal, self-contained copy-pastable example that demonstrates the issue.         This will be automatically formatted into code, so no need for markdown backticks.
+        Minimal, self-contained copy-pastable example that demonstrates the issue.
+
+        Consider listing additional or specific dependencies in [inline script metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/#example)
+        so that calling `uv run issue.py` shows the issue when copied into `issue.py`.
+
+        This will be automatically formatted into code, so no need for markdown backticks.
       render: Python
-
-  - type: checkboxes
-    id: mvce-checkboxes
-    attributes:
-      label: MVCE confirmation
-      description: |
-        Please confirm that the bug report is in an excellent state, so we can understand & fix it quickly & efficiently. For more details, check out:
-
-        - [Minimal Complete Verifiable Examples](https://stackoverflow.com/help/mcve)
-        - [Craft Minimal Bug Reports](https://matthewrocklin.com/minimal-bug-reports)
-
-        You must list dependencies in [inline script metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/#example).
-        When put in a file named `issue.py` calling `uv run issue.py` should show the issue.
       value: |
-        ```python
         # /// script
         # requires-python = ">=3.11"
         # dependencies = [
@@ -51,17 +42,28 @@ body:
         # ]
         # ///
         #
-        # This script automatically imports the development branch of icechunk to check for issues
+        # This script automatically imports the development branch of icechunk to check for issues.
+        # Please delete this header if you have _not_ tested this script with `uv run`!
 
         import icechunk
         icechunk.print_debug_info()
-        # your reproducer code
-        ```
+        # your reproducer code ...
+
+  - type: checkboxes
+    id: mvce-checkboxes
+    attributes:
+      label: MVCE confirmation
+      description: |
+        Please confirm that the bug report is in an excellent state. For more details, check out:
+
+        - [Minimal Complete Verifiable Examples](https://stackoverflow.com/help/mcve)
+        - [Craft Minimal Bug Reports](https://matthewrocklin.com/minimal-bug-reports)
       options:
-        - label: Minimal example — the example is as focused as reasonably possible to demonstrate the underlying issue in xarray.
+        - label: Minimal example — the example is as focused as reasonably possible to demonstrate the underlying issue in icechunk.
         - label: Complete example — the example is self-contained, including all data and the text of any traceback.
-        - label: Verifiable example — the example runs when copied & pasted into an fresh python environment.
+        - label: Verifiable example — the example copy & pastes into an IPython prompt, returning the result.
         - label: New issue — a search of GitHub Issues suggests this is not a duplicate.
+        - label: Recent environment — the issue occurs with the latest version of icechunk and its dependencies.
 
   - type: textarea
     id: log-output
@@ -82,6 +84,12 @@ body:
     attributes:
       label: Environment
       description: |
-        Paste the output of `icechunk.print_debug_info()`
+        Paste the output of `icechunk.print_debug_info()` between the `<details>` tags, leaving an empty line following the opening tag.
+      value: |
+        <details>
+
+
+
+        </details>
     validations:
       required: true

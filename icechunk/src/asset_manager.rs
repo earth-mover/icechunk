@@ -1,3 +1,4 @@
+use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
@@ -47,6 +48,7 @@ use crate::{
 pub struct AssetManager {
     storage: Arc<dyn Storage + Send + Sync>,
     storage_settings: storage::Settings,
+    spec_version: SpecVersionBin,
     num_snapshot_nodes: u64,
     num_chunk_refs: u64,
     num_transaction_changes: u64,
@@ -80,6 +82,7 @@ impl private::Sealed for AssetManager {}
 struct AssetManagerSerializer {
     storage: Arc<dyn Storage + Send + Sync>,
     storage_settings: storage::Settings,
+    spec_version: SpecVersionBin,
     num_snapshot_nodes: u64,
     num_chunk_refs: u64,
     num_transaction_changes: u64,
@@ -94,6 +97,7 @@ impl From<AssetManagerSerializer> for AssetManager {
         AssetManager::new(
             value.storage,
             value.storage_settings,
+            value.spec_version,
             value.num_snapshot_nodes,
             value.num_chunk_refs,
             value.num_transaction_changes,
@@ -110,6 +114,7 @@ impl AssetManager {
     pub fn new(
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
+        spec_version: SpecVersionBin,
         num_snapshot_nodes: u64,
         num_chunk_refs: u64,
         num_transaction_changes: u64,
@@ -128,6 +133,7 @@ impl AssetManager {
             max_concurrent_requests,
             storage,
             storage_settings,
+            spec_version,
             snapshot_cache: Cache::with_weighter(1, num_snapshot_nodes, FileWeighter),
             manifest_cache: Cache::with_weighter(1, num_chunk_refs, FileWeighter),
             transactions_cache: Cache::with_weighter(
@@ -145,12 +151,14 @@ impl AssetManager {
     pub fn new_no_cache(
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
+        spec_version: SpecVersionBin,
         compression_level: u8,
         max_concurrent_requests: u16,
     ) -> Self {
         Self::new(
             storage,
             storage_settings,
+            spec_version,
             0,
             0,
             0,
@@ -164,6 +172,7 @@ impl AssetManager {
     pub fn new_with_config(
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
+        spec_version: SpecVersionBin,
         config: &CachingConfig,
         compression_level: u8,
         max_concurrent_requests: u16,
@@ -171,6 +180,7 @@ impl AssetManager {
         Self::new(
             storage,
             storage_settings,
+            spec_version,
             config.num_snapshot_nodes(),
             config.num_chunk_refs(),
             config.num_transaction_changes(),
@@ -179,6 +189,10 @@ impl AssetManager {
             compression_level,
             max_concurrent_requests,
         )
+    }
+
+    pub fn spec_version(&self) -> SpecVersionBin {
+        self.spec_version
     }
 
     pub fn limit_retries_repo_update(
@@ -437,7 +451,19 @@ impl AssetManager {
     pub async fn fetch_repo_info(
         &self,
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
+        self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
         fetch_repo_info(self.storage.as_ref(), &self.storage_settings).await
+    }
+
+    pub fn fail_unless_spec_at_least(
+        &self,
+        minimum_spec_version: SpecVersionBin,
+    ) -> RepositoryResult<()> {
+        if self.spec_version() < minimum_spec_version {
+            Err(RepositoryErrorKind::BadRepoVersion { minimum_spec_version }.into())
+        } else {
+            Ok(())
+        }
     }
 
     #[instrument(skip(self))]
@@ -705,6 +731,44 @@ impl AssetManager {
 
     pub fn backup_path_for_repo_info(&self) -> String {
         backup_destination(REPO_INFO_FILE_PATH)
+    }
+
+    #[deprecated(
+        since = "2.0.0",
+        note = "Shouldn't be necessary after 2.0, only to support Icechunk 1 repos"
+    )]
+    pub fn storage(&self) -> &Arc<dyn Storage + Send + Sync> {
+        &self.storage
+    }
+
+    #[deprecated(
+        since = "2.0.0",
+        note = "Shouldn't be necessary after 2.0, only to support Icechunk 1 repos"
+    )]
+    pub fn storage_settings(&self) -> &storage::Settings {
+        &self.storage_settings
+    }
+
+    #[deprecated(
+        since = "2.0.0",
+        note = "Shouldn't be necessary after 2.0, only to support Icechunk 1 repos"
+    )]
+    pub async fn snapshot_ancestry_v1(
+        self: Arc<Self>,
+        snapshot_id: &SnapshotId,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<Arc<Snapshot>>> + use<>>
+    {
+        let mut this = self.fetch_snapshot(snapshot_id).await?;
+        let stream = try_stream! {
+            yield Arc::clone(&this);
+            #[allow(deprecated)]
+            while let Some(parent) = this.parent_id() {
+                let snap = self.fetch_snapshot(&parent).await?;
+                yield Arc::clone(&snap);
+                this = snap;
+            }
+        };
+        Ok(stream)
     }
 }
 
@@ -1275,8 +1339,13 @@ mod test {
     async fn test_caching_caches() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
-        let manager =
-            AssetManager::new_no_cache(backend.clone(), settings.clone(), 1, 100);
+        let manager = AssetManager::new_no_cache(
+            backend.clone(),
+            settings.clone(),
+            SpecVersionBin::default(),
+            1,
+            100,
+        );
 
         let node1 = NodeId::random();
         let node2 = NodeId::random();
@@ -1301,6 +1370,7 @@ mod test {
         let caching = AssetManager::new_with_config(
             Arc::clone(&logging_c),
             settings,
+            SpecVersionBin::default(),
             &CachingConfig::default(),
             1,
             100,
@@ -1371,8 +1441,13 @@ mod test {
     async fn test_caching_storage_has_limit() -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
-        let manager =
-            AssetManager::new_no_cache(backend.clone(), settings.clone(), 1, 100);
+        let manager = AssetManager::new_no_cache(
+            backend.clone(),
+            settings.clone(),
+            SpecVersionBin::default(),
+            1,
+            100,
+        );
 
         let ci1 = ChunkInfo {
             node: NodeId::random(),
@@ -1406,6 +1481,7 @@ mod test {
         let caching = AssetManager::new_with_config(
             logging_c,
             settings,
+            SpecVersionBin::default(),
             // the cache can only fit 6 refs.
             &CachingConfig {
                 num_snapshot_nodes: Some(0),
@@ -1439,6 +1515,7 @@ mod test {
         let manager = Arc::new(AssetManager::new_no_cache(
             storage.clone(),
             settings.clone(),
+            SpecVersionBin::default(),
             1,
             100,
         ));
@@ -1460,6 +1537,7 @@ mod test {
         let manager = Arc::new(AssetManager::new_with_config(
             logging_c.clone(),
             settings,
+            SpecVersionBin::default(),
             &CachingConfig::default(),
             1,
             100,

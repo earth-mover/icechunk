@@ -1473,6 +1473,8 @@ class GCSummary:
 class UpdateType:
     @property
     def updated_at(self) -> datetime.datetime: ...
+    @property
+    def backup_path(self) -> str | None: ...
 
 class RepoInitializedUpdate(UpdateType):
     pass
@@ -1556,6 +1558,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        spec_version: int | None = None,
     ) -> PyRepository: ...
     @classmethod
     async def create_async(
@@ -1564,6 +1567,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        spec_version: int | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open(
@@ -1588,6 +1592,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        create_version: int | None = None,
     ) -> PyRepository: ...
     @classmethod
     async def open_or_create_async(
@@ -1596,6 +1601,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        create_version: int | None = None,
     ) -> PyRepository: ...
     @staticmethod
     def exists(storage: Storage) -> bool: ...

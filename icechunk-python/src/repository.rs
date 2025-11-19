@@ -14,6 +14,7 @@ use icechunk::{
     config::Credentials,
     format::{
         SnapshotId,
+        format_constants::SpecVersionBin,
         repo_info::UpdateType,
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
         transaction_log::Diff,
@@ -437,6 +438,9 @@ impl_pickle!(PyGCSummary);
 pub(crate) struct PyUpdateType {
     #[pyo3(get)]
     updated_at: DateTime<Utc>,
+
+    #[pyo3(get)]
+    backup_path: Option<String>,
 }
 
 #[pyclass(name = "RepoInitializedUpdate", eq, extends=PyUpdateType)]
@@ -627,14 +631,19 @@ impl PyExpirationRanUpdate {
     }
 }
 
-fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py<PyAny>> {
+fn mk_update_type(
+    update: &UpdateType,
+    updated_at: DateTime<Utc>,
+    backup_path: Option<String>,
+) -> PyResult<Py<PyAny>> {
     Python::attach(|py| {
         let res = match update {
-            UpdateType::RepoInitializedUpdate => {
-                Bound::new(py, (PyRepoInitializedUpdate, PyUpdateType { updated_at }))?
-                    .into_any()
-                    .unbind()
-            }
+            UpdateType::RepoInitializedUpdate => Bound::new(
+                py,
+                (PyRepoInitializedUpdate, PyUpdateType { updated_at, backup_path }),
+            )?
+            .into_any()
+            .unbind(),
             UpdateType::RepoMigratedUpdate { from_version, to_version } => Bound::new(
                 py,
                 (
@@ -642,19 +651,23 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                         from_version: *from_version as u8,
                         to_version: *to_version as u8,
                     },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
             .unbind(),
-            UpdateType::ConfigChangedUpdate => {
-                Bound::new(py, (PyConfigChangedUpdate, PyUpdateType { updated_at }))?
-                    .into_any()
-                    .unbind()
-            }
+            UpdateType::ConfigChangedUpdate => Bound::new(
+                py,
+                (PyConfigChangedUpdate, PyUpdateType { updated_at, backup_path }),
+            )?
+            .into_any()
+            .unbind(),
             UpdateType::TagCreatedUpdate { name } => Bound::new(
                 py,
-                (PyTagCreatedUpdate { name: name.clone() }, PyUpdateType { updated_at }),
+                (
+                    PyTagCreatedUpdate { name: name.clone() },
+                    PyUpdateType { updated_at, backup_path },
+                ),
             )?
             .into_any()
             .unbind(),
@@ -665,7 +678,7 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                         name: name.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
@@ -674,7 +687,7 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                 py,
                 (
                     PyBranchCreatedUpdate { name: name.clone() },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
@@ -686,7 +699,7 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                         name: name.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
@@ -698,7 +711,7 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                         name: name.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
@@ -707,7 +720,7 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                 py,
                 (
                     PyNewCommitUpdate { branch: branch.clone() },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
@@ -719,7 +732,7 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                         branch: branch.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
@@ -728,21 +741,22 @@ fn mk_update_type(update: &UpdateType, updated_at: DateTime<Utc>) -> PyResult<Py
                 py,
                 (
                     PyNewDetachedSnapshotUpdate { new_snap_id: new_snap_id.to_string() },
-                    PyUpdateType { updated_at },
+                    PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
             .unbind(),
             UpdateType::GCRanUpdate => {
-                Bound::new(py, (PyGCRanUpdate, PyUpdateType { updated_at }))?
+                Bound::new(py, (PyGCRanUpdate, PyUpdateType { updated_at, backup_path }))?
                     .into_any()
                     .unbind()
             }
-            UpdateType::ExpirationRanUpdate => {
-                Bound::new(py, (PyExpirationRanUpdate, PyUpdateType { updated_at }))?
-                    .into_any()
-                    .unbind()
-            }
+            UpdateType::ExpirationRanUpdate => Bound::new(
+                py,
+                (PyExpirationRanUpdate, PyUpdateType { updated_at, backup_path }),
+            )?
+            .into_any()
+            .unbind(),
         };
         Ok(res)
     })
@@ -775,13 +789,14 @@ impl PyRepository {
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None))]
     fn create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+        spec_version: Option<u8>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -790,10 +805,17 @@ impl PyRepository {
                     let config = config
                         .map(|c| c.try_into().map_err(PyValueError::new_err))
                         .transpose()?;
+                    let version = match spec_version {
+                        Some(n) => Some(
+                            SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?,
+                        ),
+                        None => None,
+                    };
                     Repository::create(
                         config,
                         storage.0,
                         map_credentials(authorize_virtual_chunk_access),
+                        version,
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
@@ -804,23 +826,34 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None))]
     fn create_async<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+        spec_version: Option<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
         let authorize_virtual_chunk_access =
             map_credentials(authorize_virtual_chunk_access);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let repository =
-                Repository::create(config, storage.0, authorize_virtual_chunk_access)
-                    .await
-                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+            let version = match spec_version {
+                Some(n) => {
+                    Some(SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?)
+                }
+                None => None,
+            };
+            let repository = Repository::create(
+                config,
+                storage.0,
+                authorize_virtual_chunk_access,
+                version,
+            )
+            .await
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
 
             Ok(Self(Arc::new(RwLock::new(repository))))
         })
@@ -878,13 +911,14 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None))]
     fn open_or_create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+        create_version: Option<u8>,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -893,11 +927,18 @@ impl PyRepository {
                     let config = config
                         .map(|c| c.try_into().map_err(PyValueError::new_err))
                         .transpose()?;
+                    let version = match create_version {
+                        Some(n) => Some(
+                            SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?,
+                        ),
+                        None => None,
+                    };
                     Ok::<_, PyErr>(
                         Repository::open_or_create(
                             config,
                             storage.0,
                             map_credentials(authorize_virtual_chunk_access),
+                            version,
                         )
                         .await
                         .map_err(PyIcechunkStoreError::RepositoryError)?,
@@ -909,23 +950,31 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None))]
     fn open_or_create_async<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
+        create_version: Option<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
         let authorize_virtual_chunk_access =
             map_credentials(authorize_virtual_chunk_access);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let version = match create_version {
+                Some(n) => {
+                    Some(SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?)
+                }
+                None => None,
+            };
             let repository = Repository::open_or_create(
                 config,
                 storage.0,
                 authorize_virtual_chunk_access,
+                version,
             )
             .await
             .map_err(PyIcechunkStoreError::RepositoryError)?;
@@ -1182,8 +1231,9 @@ impl PyRepository {
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?
                 .map_err(PyIcechunkStoreError::RepositoryError)
-                .and_then(|(ts, update)| async move {
-                    mk_update_type(&update, ts).map_err(PyIcechunkStoreError::from)
+                .and_then(|(ts, update, repo_path)| async move {
+                    mk_update_type(&update, ts, repo_path)
+                        .map_err(PyIcechunkStoreError::from)
                 });
 
             let prepared_list = Arc::new(Mutex::new(ops.err_into().boxed()));
@@ -1853,15 +1903,14 @@ impl PyRepository {
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let lock = self.0.read().await;
                     // TODO: make commit method selectable
-                    rewrite_manifests(
-                        &lock,
-                        branch,
-                        message,
-                        metadata,
-                        icechunk::session::CommitMethod::Amend,
-                    )
-                    .await
-                    .map_err(PyIcechunkStoreError::ManifestOpsError)
+                    let commit_method = if lock.spec_version() > SpecVersionBin::V1dot0 {
+                        icechunk::session::CommitMethod::Amend
+                    } else {
+                        icechunk::session::CommitMethod::NewCommit
+                    };
+                    rewrite_manifests(&lock, branch, message, metadata, commit_method)
+                        .await
+                        .map_err(PyIcechunkStoreError::ManifestOpsError)
                 })?;
             Ok(result.to_string())
         })
@@ -1882,12 +1931,18 @@ impl PyRepository {
         pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
             let repository = repository.read().await;
             // TODO: make commit method selectable
+            // TODO: make commit method selectable
+            let commit_method = if repository.spec_version() > SpecVersionBin::V1dot0 {
+                icechunk::session::CommitMethod::Amend
+            } else {
+                icechunk::session::CommitMethod::NewCommit
+            };
             let result = rewrite_manifests(
                 &repository,
                 &branch,
                 &message,
                 metadata,
-                icechunk::session::CommitMethod::Amend,
+                commit_method,
             )
             .await
             .map_err(PyIcechunkStoreError::ManifestOpsError)?;

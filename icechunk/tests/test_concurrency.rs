@@ -79,7 +79,7 @@ async fn do_test_concurrency(
         }),
         ..Default::default()
     };
-    let repo = Repository::create(Some(config), storage, HashMap::new()).await?;
+    let repo = Repository::create(Some(config), storage, HashMap::new(), None).await?;
 
     let mut ds = repo.writable_session("main").await?;
 

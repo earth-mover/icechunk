@@ -19,7 +19,7 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
   RUSTUP_MAX_RETRIES: 10
-  RUST_CHANNEL: '1.89.0'
+  RUST_CHANNEL: '1.91.0'
 
 jobs:
   code-quality:

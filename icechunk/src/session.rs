@@ -33,6 +33,7 @@ use crate::{
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
+        format_constants::SpecVersionBin,
         manifest::{
             ChunkInfo, ChunkPayload, ChunkRef, Manifest, ManifestExtents, ManifestRef,
             ManifestSplits, Overlap, VirtualChunkLocation, VirtualChunkRef,
@@ -46,7 +47,8 @@ use crate::{
         },
         transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
-    repository::{RepositoryError, RepositoryErrorKind},
+    refs::{RefError, RefErrorKind, update_branch},
+    repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
@@ -531,6 +533,8 @@ impl Session {
 
     #[instrument(skip(self))]
     pub async fn move_node(&mut self, from: Path, to: Path) -> SessionResult<()> {
+        // Icechunk 1 has no way to represent move in its on-disk format
+        self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
         // does the source node exist?
         let _ = self.get_node(&from).await?;
         // are we overwriting the destination node?
@@ -551,6 +555,9 @@ impl Session {
     where
         F: Fn(&ChunkIndices) -> ReindexOperationResult,
     {
+        // Itechunk 1 doesn't allow reindex, upgrade to IC2
+        self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+
         let node = self.get_array(array_path).await?;
         #[allow(clippy::panic)]
         let (shape, splits) = if let NodeData::Array { shape, dimension_names, .. } =
@@ -644,18 +651,6 @@ impl Session {
             Ok(&mut self.change_set)
         }
     }
-
-    // fn move_tracker(&self) -> &MoveTracker {
-    //     self.move_tracker.as_ref().unwrap_or(&*EMPTY_MOVE_TRACKER)
-    // }
-
-    // fn move_tracker_mut(&mut self) -> SessionResult<&mut MoveTracker> {
-    //     if self.read_only() {
-    //         Err(SessionErrorKind::ReadOnlySession.into())
-    //     } else {
-    //         self.move_tracker.as_mut().ok_or(SessionErrorKind::NonRearrangeSession.into())
-    //     }
-    // }
 
     /// This method is directly called in add_array & update_array
     /// where we know we must update the splits HashMap
@@ -1136,7 +1131,40 @@ impl Session {
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
+        // Icechunk 1 doesn't support amend
+        self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+
         self._commit(message, properties, false, CommitMethod::Amend).await
+    }
+
+    async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
+        let update_type =
+            UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
+
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+            let new_snapshot_info = SnapshotInfo {
+                parent_id: Some(self.snapshot_id().clone()),
+                ..new_snap.as_ref().try_into()?
+            };
+            Ok(Arc::new(repo_info.add_snapshot(
+                new_snapshot_info,
+                None,
+                update_type.clone(),
+                backup_path,
+            )?))
+        };
+
+        let _ = self
+            .asset_manager
+            // FIXME: hardcoded retries
+            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .await?;
+        Ok(())
+    }
+
+    async fn flush_v1(&mut self, _: Arc<Snapshot>) -> SessionResult<()> {
+        // In IC1 there is nothing to do here, the snapshot is already saved
+        Ok(())
     }
 
     pub async fn flush(
@@ -1165,27 +1193,10 @@ impl Session {
             do_flush(flush_data, message, properties, false, CommitMethod::NewCommit)
                 .await?;
 
-        let update_type =
-            UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
-
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
-            let new_snapshot_info = SnapshotInfo {
-                parent_id: Some(self.snapshot_id().clone()),
-                ..new_snap.as_ref().try_into()?
-            };
-            Ok(Arc::new(repo_info.add_snapshot(
-                new_snapshot_info,
-                None,
-                &update_type,
-                Some(backup_path),
-            )?))
-        };
-
-        let _ = self
-            .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
-            .await?;
+        match self.asset_manager.spec_version() {
+            SpecVersionBin::V1dot0 => self.flush_v1(Arc::clone(&new_snap)).await,
+            SpecVersionBin::V2dot0 => self.flush_v2(Arc::clone(&new_snap)).await,
+        }?;
 
         info!(
             parent_id=%self.snapshot_id(),
@@ -1243,6 +1254,12 @@ impl Session {
         let Some(branch_name) = &self.branch_name else {
             return Err(SessionErrorKind::ReadOnlySession.into());
         };
+
+        // amend is only allowed in spec v2, this should be checked at this point so we only assert
+        assert!(
+            self.asset_manager.spec_version() >= SpecVersionBin::V2dot0
+                || commit_method == CommitMethod::NewCommit
+        );
 
         let branch_name = branch_name.clone();
 
@@ -2309,8 +2326,16 @@ async fn do_flush(
     all_nodes
         .sort_by(|a, b| a.path.to_string().as_str().cmp(b.path.to_string().as_str()));
 
+    // Icechunk 2 no longer stores the parent snapshot id in the snapshot
+    let parent_id = if flush_data.asset_manager.spec_version() == SpecVersionBin::V1dot0 {
+        Some(flush_data.parent_id.clone())
+    } else {
+        None
+    };
+
     let new_snapshot = Snapshot::from_iter(
         None,
+        parent_id,
         message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
@@ -2407,22 +2432,108 @@ async fn do_commit(
             .await?;
     let new_snapshot_id = new_snapshot.id();
 
-    let mut attempt = 0;
+    let res = match asset_manager.spec_version() {
+        SpecVersionBin::V1dot0 =>
+        {
+            #[allow(deprecated)]
+            do_commit_v1(
+                asset_manager.storage().as_ref(),
+                asset_manager.storage_settings(),
+                branch_name,
+                snapshot_id,
+                new_snapshot_id.clone(),
+            )
+            .await
+        }
+        SpecVersionBin::V2dot0 => {
+            do_commit_v2(
+                asset_manager,
+                branch_name,
+                snapshot_id,
+                new_snapshot,
+                commit_method,
+            )
+            .await
+        }
+    };
 
+    match res {
+        Ok(new_version) => {
+            info!(
+                branch_name,
+                new_commit_object_version=?new_version,
+                %new_snapshot_id,
+                "Commit done"
+            );
+            Ok(new_snapshot_id)
+        }
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::Conflict { expected_parent, actual_parent },
+            ..
+        }) => Err(SessionError::from(SessionErrorKind::Conflict {
+            expected_parent,
+            actual_parent,
+        })),
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::NoAmendForInitialCommit,
+            ..
+        }) => Err(SessionError::from(SessionErrorKind::NoAmendForInitialCommit)),
+        Err(err) => Err(err.into()),
+    }
+}
+
+async fn do_commit_v1(
+    storage: &dyn Storage,
+    storage_settings: &storage::Settings,
+    branch_name: &str,
+    parent_snapshot_id: &SnapshotId,
+    new_snapshot_id: SnapshotId,
+) -> RepositoryResult<storage::VersionInfo> {
+    debug!(branch_name, new_snapshot_id=%new_snapshot_id, "Updating branch");
+    match update_branch(
+        storage,
+        storage_settings,
+        branch_name,
+        new_snapshot_id,
+        Some(parent_snapshot_id),
+    )
+    .await
+    {
+        Ok(version) => Ok(version),
+        Err(RefError {
+            kind: RefErrorKind::Conflict { expected_parent, actual_parent },
+            ..
+        }) => Err(RepositoryError::from(RepositoryErrorKind::Conflict {
+            expected_parent,
+            actual_parent,
+        })),
+        Err(err) => Err(err.into()),
+    }
+}
+
+async fn do_commit_v2(
+    asset_manager: Arc<AssetManager>,
+    branch_name: &str,
+    parent_snapshot_id: &SnapshotId,
+    new_snapshot: Arc<Snapshot>,
+    commit_method: CommitMethod,
+) -> RepositoryResult<storage::VersionInfo> {
+    let mut attempt = 0;
+    let new_snapshot_id = new_snapshot.id();
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
         attempt += 1;
         let actual_parent = repo_info.resolve_branch(branch_name)?;
-        if &actual_parent != snapshot_id {
+        if &actual_parent != parent_snapshot_id {
             info!(branch_name, %new_snapshot_id, attempt, "Branch tip has changed, rebase needed");
             return Err(RepositoryError::from(RepositoryErrorKind::Conflict {
-                expected_parent: Some(snapshot_id.clone()),
+                expected_parent: Some(parent_snapshot_id.clone()),
                 actual_parent: Some(actual_parent),
             }));
         }
 
-        let parent_snapshot = repo_info.find_snapshot(snapshot_id)?;
+        let parent_snapshot = repo_info.find_snapshot(parent_snapshot_id)?;
         let parent_id = match (commit_method, parent_snapshot.parent_id) {
-            (CommitMethod::NewCommit, _) => snapshot_id.clone(),
+            (CommitMethod::NewCommit, _) => parent_snapshot_id.clone(),
             (CommitMethod::Amend, Some(parent_id)) => parent_id,
             (CommitMethod::Amend, None) => {
                 return Err(RepositoryErrorKind::NoAmendForInitialCommit.into());
@@ -2447,40 +2558,16 @@ async fn do_commit(
         Ok(Arc::new(repo_info.add_snapshot(
             new_snapshot_info,
             Some(branch_name),
-            &update_type,
-            Some(backup_path),
+            update_type,
+            backup_path,
         )?))
     };
 
     let res = asset_manager
         // FIXME: hardcoded retries
         .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
-        .await;
-
-    match res {
-        Ok(new_version) => {
-            info!(
-                branch_name,
-                new_repo_info_version=?new_version,
-                %new_snapshot_id,
-                attempt,
-                "Commit done"
-            );
-            Ok(new_snapshot_id)
-        }
-        Err(RepositoryError {
-            kind: RepositoryErrorKind::Conflict { expected_parent, actual_parent },
-            ..
-        }) => Err(SessionError::from(SessionErrorKind::Conflict {
-            expected_parent,
-            actual_parent,
-        })),
-        Err(RepositoryError {
-            kind: RepositoryErrorKind::NoAmendForInitialCommit,
-            ..
-        }) => Err(SessionError::from(SessionErrorKind::NoAmendForInitialCommit)),
-        Err(err) => Err(err.into()),
-    }
+        .await?;
+    Ok(res)
 }
 
 async fn fetch_manifest(
@@ -2571,6 +2658,7 @@ mod tests {
             detector::ConflictDetector,
         },
         format::{
+            format_constants::SpecVersionBin,
             manifest::{ManifestExtents, ManifestSplits},
             repo_info::RepoInfo,
         },
@@ -2593,7 +2681,7 @@ mod tests {
     async fn create_memory_store_repository() -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new()).await.unwrap()
+        Repository::create(None, storage, HashMap::new(), None).await.unwrap()
     }
 
     #[proptest(async = "tokio")]
@@ -2868,6 +2956,7 @@ mod tests {
             }),
             storage,
             HashMap::new(),
+            None,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -2967,6 +3056,7 @@ mod tests {
         let asset_manager = AssetManager::new_no_cache(
             Arc::clone(&storage),
             storage_settings.clone(),
+            SpecVersionBin::current(),
             1,
             100,
         );
@@ -3007,7 +3097,7 @@ mod tests {
 
         let array1_path: Path = "/array1".try_into().unwrap();
         let node_id = NodeId::random();
-        let nodes = vec![
+        let nodes = [
             NodeSnapshot {
                 path: Path::root(),
                 id: node_id,
@@ -3029,6 +3119,7 @@ mod tests {
         let initial = Snapshot::initial().unwrap();
         let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
+            None,
             None,
             "message".to_string(),
             None,
@@ -3055,8 +3146,8 @@ mod tests {
         let repo_info = RepoInfo::initial((&initial).try_into()?).add_snapshot(
             snapshot.as_ref().try_into()?,
             Some("main"),
-            &UpdateType::NewCommitUpdate { branch: "main".to_string() },
-            None,
+            UpdateType::NewCommitUpdate { branch: "main".to_string() },
+            "backup_path",
         )?;
         asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 
@@ -3244,7 +3335,7 @@ mod tests {
             ..Default::default()
         };
         let repository =
-            Repository::create(Some(config), storage, HashMap::new()).await?;
+            Repository::create(Some(config), storage, HashMap::new(), None).await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -3671,7 +3762,7 @@ mod tests {
     #[tokio_test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::create(None, storage, HashMap::new()).await?;
+        let repo = Repository::create(None, storage, HashMap::new(), None).await?;
         let mut ds = repo.writable_session("main").await?;
         let def = Bytes::copy_from_slice(b"");
 
@@ -3741,7 +3832,8 @@ mod tests {
     async fn test_manifests_shrink() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = Arc::new(ObjectStorage::new_in_memory().await?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
 
         // there should be no manifests yet
         assert!(
@@ -4078,7 +4170,7 @@ mod tests {
             vec!["second amend", "make root", "Repository initialized"]
         );
         let updates =
-            repo.ops_log().await?.map_ok(|(_, up)| up).try_collect::<Vec<_>>().await?;
+            repo.ops_log().await?.map_ok(|(_, up, _)| up).try_collect::<Vec<_>>().await?;
 
         use UpdateType::*;
         assert_eq!(
@@ -4171,7 +4263,8 @@ mod tests {
     async fn test_basic_move() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4230,7 +4323,8 @@ mod tests {
     async fn test_move_errors() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4260,7 +4354,8 @@ mod tests {
     async fn test_setting_w_invalid_coords() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
         let mut ds = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4321,7 +4416,8 @@ mod tests {
     async fn test_array_shift() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
         let mut session = repo.writable_session("main").await?;
         let shape = ArrayShape::new(vec![(20, 2)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;

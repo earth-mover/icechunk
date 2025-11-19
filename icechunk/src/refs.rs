@@ -154,8 +154,7 @@ fn branch_key(branch_name: &str) -> RefResult<String> {
 }
 
 #[instrument(skip(storage, storage_settings))]
-#[allow(dead_code)]
-async fn create_tag(
+pub async fn create_tag(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     name: &str,
@@ -186,13 +185,13 @@ async fn create_tag(
 
 #[async_recursion]
 #[instrument(skip(storage, storage_settings))]
-async fn update_branch(
+pub async fn update_branch(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     name: &str,
     new_snapshot: SnapshotId,
     current_snapshot: Option<&SnapshotId>,
-) -> RefResult<()> {
+) -> RefResult<VersionInfo> {
     let (ref_data, version) = match fetch_branch(storage, storage_settings, name).await {
         Ok((ref_data, version)) => (Some(ref_data), version),
         Err(RefError { kind: RefErrorKind::RefNotFound(..), .. }) => {
@@ -226,7 +225,7 @@ async fn update_branch(
         )
         .await
     {
-        Ok(VersionedUpdateResult::Updated { .. }) => Ok(()),
+        Ok(VersionedUpdateResult::Updated { new_version }) => Ok(new_version),
         Ok(VersionedUpdateResult::NotOnLatestVersion) => {
             // If the already exists, an update happened since we checked
             // we can just try again and the conflict will be reported
@@ -342,8 +341,7 @@ pub async fn list_branches(
 }
 
 #[instrument(skip(storage, storage_settings))]
-#[allow(dead_code)]
-async fn delete_branch(
+pub async fn delete_branch(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     branch: &str,
@@ -363,8 +361,7 @@ async fn delete_branch(
 }
 
 #[instrument(skip(storage, storage_settings))]
-#[allow(dead_code)]
-async fn delete_tag(
+pub async fn delete_tag(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     tag: &str,

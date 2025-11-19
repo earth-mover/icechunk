@@ -82,6 +82,16 @@ union UpdateType {
   ExpirationRanUpdate
 }
 
+table Update {
+    update_type: UpdateType (required);
+
+    // micros since epoch
+    updated_at: uint64;
+
+    // on updates the repo object is backed up
+    backup_path: string;
+  }
+
 table Repo {
 
   spec_version: uint8;
@@ -98,16 +108,13 @@ table Repo {
   // sorted by id
   snapshots: [SnapshotInfo] (required);
 
-  // micros since epoch
-  last_updated_at: uint64;
-
   status: RepoStatus (required);
 
   metadata: [MetadataItem];
 
-  latest_update: UpdateType (required);
+  latest_updates: [Update] (required);
 
-  previous_file: string;
+  repo_before_updates: string;
 }
 
 root_type Repo;

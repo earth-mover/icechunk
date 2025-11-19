@@ -16,7 +16,10 @@ use icechunk::{
         DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestConfig, ManifestSplitCondition,
         ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
     },
-    format::{ByteRange, ChunkIndices, Path, snapshot::ArrayShape},
+    format::{
+        ByteRange, ChunkIndices, Path, format_constants::SpecVersionBin,
+        snapshot::ArrayShape,
+    },
     new_in_memory_storage,
     ops::gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
     repository::VersionInfo,
@@ -28,10 +31,17 @@ use pretty_assertions::assert_eq;
 mod common;
 
 #[tokio_test]
-pub async fn test_gc_in_minio() -> Result<(), Box<dyn std::error::Error>> {
-    let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
+pub async fn test_gc_in_minio_spec_v1() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_gc_v1_{}", Utc::now().timestamp_millis());
     let storage = common::make_minio_integration_storage(prefix)?;
-    do_test_gc(storage).await
+    do_test_gc(storage, Some(SpecVersionBin::V1dot0)).await
+}
+
+#[tokio_test]
+pub async fn test_gc_in_minio_spec_v2() -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = format!("test_gc_v2_{}", Utc::now().timestamp_millis());
+    let storage = common::make_minio_integration_storage(prefix)?;
+    do_test_gc(storage, Some(SpecVersionBin::V2dot0)).await
 }
 
 #[tokio_test]
@@ -39,7 +49,7 @@ pub async fn test_gc_in_minio() -> Result<(), Box<dyn std::error::Error>> {
 pub async fn test_gc_in_aws() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
     let storage = common::make_aws_integration_storage(prefix)?;
-    do_test_gc(storage).await
+    do_test_gc(storage, None).await
 }
 
 #[tokio_test]
@@ -47,7 +57,7 @@ pub async fn test_gc_in_aws() -> Result<(), Box<dyn std::error::Error>> {
 pub async fn test_gc_in_r2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
     let storage = common::make_r2_integration_storage(prefix)?;
-    do_test_gc(storage).await
+    do_test_gc(storage, None).await
 }
 
 #[tokio_test]
@@ -55,7 +65,7 @@ pub async fn test_gc_in_r2() -> Result<(), Box<dyn std::error::Error>> {
 pub async fn test_gc_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_{}", Utc::now().timestamp_millis());
     let storage = common::make_tigris_integration_storage(prefix)?;
-    do_test_gc(storage).await
+    do_test_gc(storage, None).await
 }
 
 /// Create a repo with two commits, reset the branch to "forget" the last commit, run gc
@@ -63,6 +73,7 @@ pub async fn test_gc_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
 /// It runs [`garbage_collect`] to verify it's doing its job.
 pub async fn do_test_gc(
     storage: Arc<dyn Storage + Send + Sync>,
+    spec_version: Option<SpecVersionBin>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let shape = ArrayShape::new(vec![(1100, 1)]).unwrap();
     // intentionally small to create garbage
@@ -87,6 +98,7 @@ pub async fn do_test_gc(
         }),
         Arc::clone(&storage),
         HashMap::new(),
+        spec_version,
     )
     .await?;
 
@@ -340,13 +352,15 @@ pub async fn do_test_expire_and_garbage_collect(
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings().await?;
-    let mut repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+    let mut repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
     let asset_manager = Arc::new(AssetManager::new_no_cache(
         storage.clone(),
         storage_settings.clone(),
+        SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
@@ -405,6 +419,7 @@ pub async fn do_test_expire_and_garbage_collect(
     let asset_manager = Arc::new(AssetManager::new_no_cache(
         storage.clone(),
         storage_settings.clone(),
+        SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
@@ -447,13 +462,15 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
 -> Result<(), Box<dyn std::error::Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
-    let mut repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+    let mut repo =
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
     let asset_manager = Arc::new(AssetManager::new_no_cache(
         storage.clone(),
         storage_settings.clone(),
+        SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));

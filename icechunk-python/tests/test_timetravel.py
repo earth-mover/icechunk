@@ -21,12 +21,13 @@ async def async_ancestry(
     "using_flush",
     [False, True],
 )
-def test_timetravel(using_flush: bool) -> None:
+def test_timetravel(using_flush: bool, any_spec_version: int | None) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
         config=config,
+        spec_version=any_spec_version,
     )
 
     session = repo.writable_session("main")
@@ -231,12 +232,13 @@ Arrays deleted:
     assert actual == repo.lookup_snapshot(actual.id)
 
 
-async def test_branch_reset() -> None:
+async def test_branch_reset(any_spec_version: int | None) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
         config=config,
+        spec_version=any_spec_version,
     )
 
     session = repo.writable_session("main")
@@ -279,9 +281,10 @@ async def test_branch_reset() -> None:
     ) is None
 
 
-async def test_tag_delete() -> None:
+async def test_tag_delete(any_spec_version: int | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
     )
 
     snap = repo.lookup_branch("main")
@@ -295,9 +298,10 @@ async def test_tag_delete() -> None:
         repo.create_tag("tag", snap)
 
 
-async def test_session_with_as_of() -> None:
+async def test_session_with_as_of(any_spec_version: int | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
     )
 
     session = repo.writable_session("main")
@@ -330,9 +334,10 @@ async def test_session_with_as_of() -> None:
         assert expected_children == actual_children
 
 
-async def test_default_commit_metadata() -> None:
+async def test_default_commit_metadata(any_spec_version: int | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
     )
 
     repo.set_default_commit_metadata({"user": "test"})
@@ -348,12 +353,13 @@ async def test_default_commit_metadata() -> None:
     "using_flush",
     [False, True],
 )
-async def test_timetravel_async(using_flush: bool) -> None:
+async def test_timetravel_async(using_flush: bool, any_spec_version: int | None) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
         config=config,
+        spec_version=any_spec_version,
     )
 
     session = await repo.writable_session_async("main")
@@ -539,38 +545,36 @@ Arrays deleted:
     actual = next(iter([parent async for parent in repo.async_ancestry(tag="v1.0")]))
     assert actual == await repo.lookup_snapshot_async(actual.id)
 
-    ops = [type(op) for op in repo.ops_log()]
-    flush_or_commit = (
-        [ic.NewCommitUpdate]
-        if not using_flush
-        else [ic.BranchResetUpdate, ic.NewDetachedSnapshotUpdate]
-    )
-    expected = (
-        [ic.BranchCreatedUpdate, ic.TagCreatedUpdate, ic.BranchDeletedUpdate]
-        + flush_or_commit
-        + [
-            ic.BranchCreatedUpdate,
-        ]
-        + flush_or_commit
-        + flush_or_commit
-        + [
-            ic.RepoInitializedUpdate,
-        ]
-    )
+    if any_spec_version is None or any_spec_version > 1:
+        ops = [type(op) for op in repo.ops_log()]
+        flush_or_commit = (
+            [ic.NewCommitUpdate]
+            if not using_flush
+            else [ic.BranchResetUpdate, ic.NewDetachedSnapshotUpdate]
+        )
+        expected = (
+            [ic.BranchCreatedUpdate, ic.TagCreatedUpdate, ic.BranchDeletedUpdate]
+            + flush_or_commit
+            + [
+                ic.BranchCreatedUpdate,
+            ]
+            + flush_or_commit
+            + flush_or_commit
+            + [
+                ic.RepoInitializedUpdate,
+            ]
+        )
 
-    print("actual")
-    print(ops)
-    print("expected")
-    print(expected)
-    assert ops == expected
+        assert ops == expected
 
 
-async def test_branch_reset_async() -> None:
+async def test_branch_reset_async(any_spec_version: int | None) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
         config=config,
+        spec_version=any_spec_version,
     )
 
     session = await repo.writable_session_async("main")
@@ -601,9 +605,9 @@ async def test_branch_reset_async() -> None:
     ) is None
 
 
-async def test_tag_delete_async() -> None:
+async def test_tag_delete_async(any_spec_version: int | None) -> None:
     repo = await ic.Repository.create_async(
-        storage=ic.in_memory_storage(),
+        storage=ic.in_memory_storage(), spec_version=any_spec_version
     )
 
     snap = await repo.lookup_branch_async("main")
@@ -617,9 +621,9 @@ async def test_tag_delete_async() -> None:
         await repo.create_tag_async("tag", snap)
 
 
-async def test_session_with_as_of_async() -> None:
+async def test_session_with_as_of_async(any_spec_version: int | None) -> None:
     repo = await ic.Repository.create_async(
-        storage=ic.in_memory_storage(),
+        storage=ic.in_memory_storage(), spec_version=any_spec_version
     )
 
     session = await repo.writable_session_async("main")
@@ -652,8 +656,11 @@ async def test_session_with_as_of_async() -> None:
         assert expected_children == actual_children
 
 
-async def test_tag_expiration_async() -> None:
-    repo = await ic.Repository.create_async(storage=ic.in_memory_storage())
+async def test_tag_expiration_async(any_spec_version: int | None) -> None:
+    repo = await ic.Repository.create_async(
+        storage=ic.in_memory_storage(), spec_version=any_spec_version
+    )
+
     session = await repo.writable_session_async("main")
     root = zarr.group(store=session.store, overwrite=True)
     a = await session.commit_async("a")
@@ -680,8 +687,11 @@ async def test_tag_expiration_async() -> None:
     assert await repo.list_tags_async() == set()
 
 
-async def test_branch_expiration_async() -> None:
-    repo = await ic.Repository.open_or_create_async(storage=ic.in_memory_storage())
+async def test_branch_expiration_async(any_spec_version: int | None) -> None:
+    repo = await ic.Repository.open_or_create_async(
+        storage=ic.in_memory_storage(),
+        create_version=any_spec_version,
+    )
     session = await repo.writable_session_async("main")
     root = zarr.group(store=session.store, overwrite=True)
     a = await session.commit_async("a")
@@ -705,15 +715,21 @@ async def test_branch_expiration_async() -> None:
     assert "branch" not in await repo.list_branches_async()
 
     for snap in (a, b):
-        with pytest.raises(ic.IcechunkError):
+        # In IC > 1 expired snapshot can no longer be reached
+        if any_spec_version is None or any_spec_version > 1:
+            with pytest.raises(ic.IcechunkError):
+                await repo.lookup_snapshot_async(snap)
+        else:
             await repo.lookup_snapshot_async(snap)
 
     # should succeed
     await repo.lookup_snapshot_async(c)
 
 
-def test_tag_expiration() -> None:
-    repo = ic.Repository.create(storage=ic.in_memory_storage())
+def test_tag_expiration(any_spec_version: int | None) -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(), spec_version=any_spec_version
+    )
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=True)
     a = session.commit("a")
@@ -740,8 +756,10 @@ def test_tag_expiration() -> None:
     assert repo.list_tags() == set()
 
 
-def test_branch_expiration() -> None:
-    repo = ic.Repository.create(storage=ic.in_memory_storage())
+def test_branch_expiration(any_spec_version: int | None) -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(), spec_version=any_spec_version
+    )
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=True)
     a = session.commit("a")
@@ -765,14 +783,18 @@ def test_branch_expiration() -> None:
     assert "branch" not in repo.list_branches()
 
     for snap in (a, b):
-        with pytest.raises(ic.IcechunkError):
+        # In IC > 1 expired snapshot can no longer be reached
+        if any_spec_version is None or any_spec_version > 1:
+            with pytest.raises(ic.IcechunkError):
+                repo.lookup_snapshot(snap)
+        else:
             repo.lookup_snapshot(snap)
 
     # should succeed
     repo.lookup_snapshot(c)
 
 
-async def test_repository_lifecycle_async() -> None:
+async def test_repository_lifecycle_async(any_spec_version: int | None) -> None:
     """Test Repository configuration and lifecycle async methods."""
     storage = ic.in_memory_storage()
 
@@ -790,6 +812,7 @@ async def test_repository_lifecycle_async() -> None:
     repo = await ic.Repository.create_async(
         storage=storage,
         config=custom_config,
+        spec_version=any_spec_version,
     )
 
     # Test exists_async with existing repo
@@ -831,11 +854,12 @@ async def test_repository_lifecycle_async() -> None:
     assert not await ic.Repository.exists_async(new_storage)
 
 
-async def test_rewrite_manifests_async() -> None:
+async def test_rewrite_manifests_async(any_spec_version: int | None) -> None:
     """Test Repository.rewrite_manifests_async method."""
     repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
         config=ic.RepositoryConfig(inline_chunk_threshold_bytes=0),
+        spec_version=any_spec_version,
     )
 
     # Create some data to generate manifests
@@ -875,7 +899,8 @@ async def test_rewrite_manifests_async() -> None:
 
     # Verify ancestry after rewrite
     new_ancestry = [snap async for snap in repo.async_ancestry(branch="main")]
-    assert len(new_ancestry) == len(initial_ancestry) + 0  # we are doing an amend
+    extra_commits = 1 if any_spec_version == 1 else 0  # we do amend in IC2+
+    assert len(new_ancestry) == len(initial_ancestry) + extra_commits
     assert new_ancestry[0].message == "rewritten manifests"
 
     # Verify data is still accessible after manifest rewrite
@@ -888,12 +913,17 @@ async def test_rewrite_manifests_async() -> None:
     assert array[99, 49] == 99  # from second commit
 
 
-def test_amend() -> None:
+@pytest.mark.parametrize(
+    "spec_version",
+    [2, None],
+)
+def test_amend(spec_version: int | None) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
         config=config,
+        spec_version=spec_version,
     )
 
     session = repo.writable_session("main")
@@ -958,3 +988,35 @@ Chunks updated:
         [5, 5]
 """
     )
+
+
+@pytest.mark.parametrize(
+    "spec_version",
+    [2, None],
+)
+async def test_long_ops_log(spec_version: int | None) -> None:
+    NUM_BRANCHES = 120
+    repo = await ic.Repository.create_async(
+        storage=ic.in_memory_storage(),
+        spec_version=spec_version,
+    )
+    snap = await repo.lookup_branch_async("main")
+    for i in range(1, NUM_BRANCHES + 1):
+        await repo.create_branch_async(str(i), snap)
+    updates = [update async for update in repo.ops_log_async()]
+    assert len(updates) == NUM_BRANCHES + 1
+
+    t = type(updates[0])
+    assert t == ic.BranchCreatedUpdate
+    assert updates[0].backup_path is None
+
+    t = type(updates[-1])
+    assert t == ic.RepoInitializedUpdate
+    assert updates[-1].backup_path is not None
+
+    for i in range(1, NUM_BRANCHES):
+        assert updates[i].backup_path is not None
+        t = type(updates[i])
+        assert t == ic.BranchCreatedUpdate
+
+    # TODO: add check for next updates page path
