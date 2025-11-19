@@ -12,9 +12,11 @@ use tokio::task::{self};
 use tracing::{debug, info, instrument};
 
 use crate::{
+    StorageError,
     asset_manager::AssetManager,
     format::{
         ChunkId, FileTypeTag, IcechunkFormatError, ManifestId, ObjectId, SnapshotId,
+        format_constants::SpecVersionBin,
         manifest::{ChunkPayload, Manifest},
         repo_info::{RepoInfo, UpdateInfo, UpdateType},
         snapshot::{ManifestFileInfo, Snapshot, SnapshotInfo},
@@ -99,7 +101,7 @@ impl GCConfig {
         )
     }
 
-    fn action_needed(&self) -> bool {
+    pub fn action_needed(&self) -> bool {
         [
             &self.dangling_chunks,
             &self.dangling_manifests,
@@ -178,6 +180,8 @@ pub enum GCError {
     Repository(#[from] RepositoryError),
     #[error("format error {0}")]
     FormatError(#[from] IcechunkFormatError),
+    #[error("storage error {0}")]
+    StorageError(#[from] StorageError),
 }
 
 pub type GCResult<A> = Result<A, GCError>;
@@ -250,7 +254,7 @@ async fn chunks_retained(
 }
 
 #[instrument(skip_all)]
-async fn find_retained(
+pub async fn find_retained(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
 ) -> GCResult<(HashSet<ChunkId>, HashSet<ManifestId>, HashSet<SnapshotId>)> {
@@ -330,8 +334,6 @@ pub async fn garbage_collect(
         return Ok(GCSummary::default());
     }
 
-    let (repo_info, _) = asset_manager.fetch_repo_info().await?;
-
     tracing::info!("Finding GC roots");
     let (keep_chunks, keep_manifests, mut keep_snapshots) =
         find_retained(Arc::clone(&asset_manager), config).await?;
@@ -342,12 +344,23 @@ pub async fn garbage_collect(
         } else {
             DateTime::<Utc>::MIN_UTC
         };
-    let non_pointed_but_new: HashSet<_> = repo_info
-        .all_snapshots()?
-        .filter_map_ok(
-            |si| if si.flushed_at >= snap_deadline { Some(si.id) } else { None },
-        )
-        .try_collect()?;
+
+    let mut non_pointed_but_new = HashSet::new();
+
+    let repo_info = if asset_manager.spec_version() > SpecVersionBin::V1dot0 {
+        let (ri, _) = asset_manager.fetch_repo_info().await?;
+        non_pointed_but_new = ri
+            .all_snapshots()?
+            .filter_map_ok(|si| {
+                if si.flushed_at >= snap_deadline { Some(si.id) } else { None }
+            })
+            .try_collect()?;
+
+        Some(ri)
+    } else {
+        None
+    };
+
     keep_snapshots.extend(non_pointed_but_new);
 
     tracing::info!(
@@ -365,7 +378,7 @@ pub async fn garbage_collect(
     // The trivial approach of parallelizing the deletes of the different types of objects doesn't
     // work: we want to dolete snapshots before deleting chunks, etc
     if config.deletes_snapshots() {
-        if !config.dry_run {
+        if !config.dry_run && repo_info.is_some() {
             delete_snapshots_from_repo_info(asset_manager.as_ref(), &keep_snapshots)
                 .await?;
         }
@@ -445,7 +458,7 @@ async fn fake_delete_result<const SIZE: usize, T: FileTypeTag>(
 }
 
 #[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
-async fn gc_chunks(
+pub async fn gc_chunks(
     asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<ChunkId>,
@@ -473,7 +486,7 @@ async fn gc_chunks(
 }
 
 #[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
-async fn gc_manifests(
+pub async fn gc_manifests(
     asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<ManifestId>,
@@ -504,7 +517,7 @@ async fn gc_manifests(
 }
 
 #[instrument(skip(asset_manager,  config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
-async fn gc_snapshots(
+pub async fn gc_snapshots(
     asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
@@ -535,7 +548,7 @@ async fn gc_snapshots(
 }
 
 #[instrument(skip(asset_manager,  config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
-async fn gc_transaction_logs(
+pub async fn gc_transaction_logs(
     asset_manager: &AssetManager,
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
@@ -596,6 +609,29 @@ pub struct ExpireResult {
 /// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
 #[instrument(skip(asset_manager))]
 pub async fn expire(
+    asset_manager: Arc<AssetManager>,
+    older_than: DateTime<Utc>,
+    expired_branches: ExpiredRefAction,
+    expired_tags: ExpiredRefAction,
+) -> GCResult<ExpireResult> {
+    match asset_manager.spec_version() {
+        SpecVersionBin::V1dot0 => {
+            super::expiration_v1::expire(
+                asset_manager,
+                older_than,
+                expired_branches,
+                expired_tags,
+            )
+            .await
+        }
+        SpecVersionBin::V2dot0 => {
+            expire_v2(asset_manager, older_than, expired_branches, expired_tags).await
+        }
+    }
+}
+
+#[instrument(skip(asset_manager))]
+pub async fn expire_v2(
     asset_manager: Arc<AssetManager>,
     older_than: DateTime<Utc>,
     expired_branches: ExpiredRefAction,

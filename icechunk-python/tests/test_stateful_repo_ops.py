@@ -301,7 +301,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @initialize(data=st.data(), target=branches)
     def initialize(self, data: st.DataObject) -> str:
-        self.repo = Repository.create(in_memory_storage())
+        # FIXME: currently this test is IC2 only
+        spec_version = data.draw(
+            st.one_of(st.integers(min_value=2, max_value=2), st.none())
+        )
+        self.repo = Repository.create(in_memory_storage(), spec_version=spec_version)
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         snap = next(iter(self.repo.ancestry(branch=DEFAULT_BRANCH)))

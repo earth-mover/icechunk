@@ -15,6 +15,7 @@ use crate::{
     refs::{RefResult, list_refs},
     repository::{RepositoryError, RepositoryResult},
 };
+pub mod expiration_v1;
 pub mod gc;
 pub mod manifests;
 pub mod stats;
