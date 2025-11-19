@@ -10,13 +10,16 @@ import zarr
 
 
 @pytest.fixture(scope="function")
-def tmp_store(tmpdir: Path) -> Generator[tuple[icechunk.IcechunkStore, str]]:
+def tmp_store(
+    tmpdir: Path, any_spec_version: int | None
+) -> Generator[tuple[icechunk.IcechunkStore, str]]:
     repo_path = f"{tmpdir}"
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
     repo = icechunk.Repository.open_or_create(
         storage=icechunk.local_filesystem_storage(repo_path),
         config=config,
+        create_version=any_spec_version,
     )
 
     session = repo.writable_session("main")
@@ -25,24 +28,26 @@ def tmp_store(tmpdir: Path) -> Generator[tuple[icechunk.IcechunkStore, str]]:
     yield store, repo_path
 
 
-def test_config_fetch() -> None:
+def test_config_fetch(any_spec_version: int | None) -> None:
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
     storage = icechunk.in_memory_storage()
     repo = icechunk.Repository.create(
         storage=storage,
         config=config,
+        spec_version=any_spec_version,
     )
 
     assert repo.config == config
     assert icechunk.Repository.fetch_config(storage) == config
 
 
-def test_config_save() -> None:
+def test_config_save(any_spec_version: int | None) -> None:
     config = icechunk.RepositoryConfig.default()
     storage = icechunk.in_memory_storage()
     repo = icechunk.Repository.create(
         storage=storage,
+        spec_version=any_spec_version,
     )
 
     config.inline_chunk_threshold_bytes = 5
@@ -142,10 +147,11 @@ def test_virtual_chunk_containers() -> None:
     assert config.virtual_chunk_containers["s3://testbucket/"] == container
 
 
-def test_can_change_deep_config_values() -> None:
+def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     storage = icechunk.in_memory_storage()
     repo = icechunk.Repository.create(
         storage=storage,
+        spec_version=any_spec_version,
     )
     config = icechunk.RepositoryConfig(
         inline_chunk_threshold_bytes=11,
@@ -240,7 +246,7 @@ def test_spec_version() -> None:
     assert icechunk.spec_version() >= 1
 
 
-def test_config_from_store() -> None:
+def test_config_from_store(any_spec_version: int | None) -> None:
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
 
@@ -252,6 +258,7 @@ def test_config_from_store() -> None:
     repo = icechunk.Repository.create(
         storage=storage,
         config=config,
+        spec_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store

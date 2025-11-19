@@ -22,7 +22,9 @@ CHUNK_DIM_SIZE = 10
 CHUNKS_PER_TASK = 2
 
 
-def mk_repo(use_object_store: bool = False) -> icechunk.Repository:
+def mk_repo(
+    spec_version: int | None, use_object_store: bool = False
+) -> icechunk.Repository:
     if use_object_store:
         storage = s3_object_store_storage(
             endpoint_url="http://localhost:9000",
@@ -50,13 +52,16 @@ def mk_repo(use_object_store: bool = False) -> icechunk.Repository:
     repo = icechunk.Repository.open_or_create(
         storage=storage,
         config=repo_config,
+        create_version=spec_version,
     )
 
     return repo
 
 
 @pytest.mark.parametrize("use_object_store", [False, True])
-async def test_distributed_writers(use_object_store: bool) -> None:
+async def test_distributed_writers(
+    use_object_store: bool, any_spec_version: int | None
+) -> None:
     """Write to an array using uncoordinated writers, distributed via Dask.
 
     We create a big array, and then we split into workers, each worker gets
@@ -65,7 +70,7 @@ async def test_distributed_writers(use_object_store: bool) -> None:
     does a distributed commit. When done, we open the store again and verify
     we can write everything we have written.
     """
-    repo = mk_repo(use_object_store)
+    repo = mk_repo(any_spec_version, use_object_store)
     session = repo.writable_session(branch="main")
     store = session.store
 
