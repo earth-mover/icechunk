@@ -738,7 +738,7 @@ class Repository:
         """
         return await self._repository.lookup_snapshot_async(snapshot_id)
 
-    def manifest_files(self, snapshot_id: str) -> list[ManifestFileInfo]:
+    def list_manifest_files(self, snapshot_id: str) -> list[ManifestFileInfo]:
         """
         Get the manifest files used by the given snapshot ID
 
@@ -751,9 +751,9 @@ class Repository:
         -------
         list[ManifestFileInfo]
         """
-        return self._repository.manifest_files(snapshot_id)
+        return self._repository.list_manifest_files(snapshot_id)
 
-    async def manifest_files_async(self, snapshot_id: str) -> list[ManifestFileInfo]:
+    async def list_manifest_files_async(self, snapshot_id: str) -> list[ManifestFileInfo]:
         """
         Get the manifest files used by the given snapshot ID
 
@@ -766,7 +766,7 @@ class Repository:
         -------
         list[ManifestFileInfo]
         """
-        return await self._repository.manifest_files_async(snapshot_id)
+        return await self._repository.list_manifest_files_async(snapshot_id)
 
     def reset_branch(
         self, branch: str, snapshot_id: str, *, from_snapshot_id: str | None = None

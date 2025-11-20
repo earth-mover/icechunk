@@ -151,19 +151,19 @@ async def do_icechunk_can_read_old_repo_with_manifest_splitting(path: str) -> No
 
     init_snapshot = ancestry[1]
     assert init_snapshot.message == "empty structure"
-    assert len(repo.manifest_files(init_snapshot.id)) == 0
+    assert len(repo.list_manifest_files(init_snapshot.id)) == 0
 
     snapshot = ancestry[2]
     assert snapshot.message == "write data"
-    assert len(repo.manifest_files(snapshot.id)) == 9
+    assert len(repo.list_manifest_files(snapshot.id)) == 9
 
     snapshot = ancestry[3]
     assert snapshot.message == "write data again"
-    assert len(await repo.manifest_files_async(snapshot.id)) == 9
+    assert len(await repo.list_manifest_files_async(snapshot.id)) == 9
 
     snapshot = ancestry[4]
     assert snapshot.message == "write data again with more splits"
-    assert len(await repo.manifest_files_async(snapshot.id)) == 17
+    assert len(await repo.list_manifest_files_async(snapshot.id)) == 17
 
     assert repo.config.manifest
     assert repo.config.manifest.splitting == UPDATED_SPLITTING_CONFIG

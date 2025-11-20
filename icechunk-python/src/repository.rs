@@ -1408,7 +1408,7 @@ impl PyRepository {
         })
     }
 
-    pub(crate) fn manifest_files(
+    pub(crate) fn list_manifest_files(
         &self,
         snapshot_id: &str,
     ) -> PyResult<Vec<PyManifestFileInfo>> {
@@ -1431,7 +1431,7 @@ impl PyRepository {
         })
     }
 
-    pub(crate) fn manifest_files_async<'py>(
+    pub(crate) fn list_manifest_files_async<'py>(
         &'py self,
         py: Python<'py>,
         snapshot_id: &str,
