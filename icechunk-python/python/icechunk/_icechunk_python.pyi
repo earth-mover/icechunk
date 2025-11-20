@@ -14,6 +14,7 @@ class S3Options:
         anonymous: bool = False,
         force_path_style: bool = False,
         network_stream_timeout_seconds: int | None = None,
+        requester_pays: bool = False,
     ) -> None:
         """
         Create a new `S3Options` object

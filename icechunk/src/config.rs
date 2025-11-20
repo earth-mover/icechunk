@@ -25,6 +25,8 @@ pub struct S3Options {
     #[serde(default = "default_force_path_style")]
     pub force_path_style: bool,
     pub network_stream_timeout_seconds: Option<u32>,
+    #[serde(default)]
+    pub requester_pays: bool,
 }
 
 fn default_force_path_style() -> bool {
@@ -35,7 +37,7 @@ impl fmt::Display for S3Options {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "S3Options(region={}, endpoint_url={}, anonymous={}, allow_http={}, force_path_style={}, network_stream_timeout_seconds={})",
+            "S3Options(region={}, endpoint_url={}, anonymous={}, allow_http={}, force_path_style={}, network_stream_timeout_seconds={}, requester_pays={})",
             self.region.as_deref().unwrap_or("None"),
             self.endpoint_url.as_deref().unwrap_or("None"),
             self.anonymous,
@@ -44,6 +46,7 @@ impl fmt::Display for S3Options {
             self.network_stream_timeout_seconds
                 .map(|n| n.to_string())
                 .unwrap_or("None".to_string()),
+            self.requester_pays,
         )
     }
 }
@@ -617,6 +620,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 }),
             )
             .unwrap(),
@@ -637,6 +641,7 @@ mod tests {
                 allow_http: false,
                 force_path_style: false,
                 network_stream_timeout_seconds: None,
+                requester_pays: false,
             }),
         )
         .unwrap();
@@ -654,6 +659,7 @@ mod tests {
             allow_http: false,
             force_path_style: false,
             network_stream_timeout_seconds: None,
+            requester_pays: false,
         });
         let bytes = rmp_serde::to_vec(&config).unwrap();
         let roundtrip = rmp_serde::from_slice(&bytes).unwrap();

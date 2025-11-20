@@ -53,6 +53,7 @@ fn minio_s3_config() -> (S3Options, S3Credentials) {
         anonymous: false,
         force_path_style: true,
         network_stream_timeout_seconds: None,
+        requester_pays: false,
     };
     let credentials = S3Credentials::Static(S3StaticCredentials {
         access_key_id: "minio123".into(),
@@ -123,6 +124,7 @@ async fn create_local_repository(
                 allow_http: false,
                 force_path_style: false,
                 network_stream_timeout_seconds: None,
+                requester_pays: false,
             }),
         )
         .unwrap(),
@@ -135,6 +137,7 @@ async fn create_local_repository(
                 allow_http: false,
                 force_path_style: false,
                 network_stream_timeout_seconds: None,
+                requester_pays: false,
             }),
         )
         .unwrap(),
@@ -202,6 +205,7 @@ async fn create_minio_repository() -> Repository {
                 allow_http: true,
                 force_path_style: true,
                 network_stream_timeout_seconds: None,
+                requester_pays: false,
             }),
         )
         .unwrap(),
@@ -800,6 +804,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
                 allow_http: true,
                 force_path_style: true,
                 network_stream_timeout_seconds: None,
+                requester_pays: false,
             }),
         )
         .unwrap(),
@@ -817,6 +822,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
                 allow_http: false,
                 force_path_style: false,
                 network_stream_timeout_seconds: None,
+                requester_pays: false,
             }),
         )
         .unwrap(),
