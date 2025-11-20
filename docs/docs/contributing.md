@@ -66,7 +66,7 @@ Install `maturin`:
     or build the project in editable mode:
 
     ```bash
-    pip install -e icechunk@.
+    pip install -e .
     ```
 
 === "uv"
