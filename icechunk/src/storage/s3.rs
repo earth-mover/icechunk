@@ -1040,7 +1040,16 @@ impl Storage for S3Storage {
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let client = self.get_client(settings).await;
         let bucket = self.bucket.clone();
-        Ok(Box::new(get_object_range(client.as_ref(), bucket, key, range, self.config.requester_pays).await?))
+        Ok(Box::new(
+            get_object_range(
+                client.as_ref(),
+                bucket,
+                key,
+                range,
+                self.config.requester_pays,
+            )
+            .await?,
+        ))
     }
 }
 
