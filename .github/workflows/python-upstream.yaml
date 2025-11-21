@@ -72,6 +72,7 @@ jobs:
           # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
 
       - name: setup
+        id: setup
         shell: bash
         working-directory: icechunk-python
         run: |
@@ -86,8 +87,51 @@ jobs:
           export UV_PRERELEASE=allow
           uv pip install "$WHEEL" --group dev \
             --resolution highest \
-            --index-strategy unsafe-best-match
+            --index-strategy unsafe-best-match 2>&1 | tee setup-output.log
           uv pip list
+
+      - name: Create or update setup failure issue
+        if: |
+          always()
+          && steps.setup.outcome == 'failure'
+          && github.event_name == 'schedule'
+          && github.repository_owner == 'earth-mover'
+        shell: bash
+        working-directory: .
+        run: |
+          # Read the template and setup output
+          template=$(cat .github/setup-failure-template.md)
+
+          setup_output="No setup output captured"
+          if [ -f "icechunk-python/setup-output.log" ]; then
+            setup_output=$(cat icechunk-python/setup-output.log)
+          fi
+
+          # Replace placeholders
+          issue_body="${template//\{\{WORKFLOW\}\}/${{ github.workflow }}}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/${{ github.run_id }}}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}}"
+          issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
+          issue_body="${issue_body//\{\{SETUP_OUTPUT\}\}/$setup_output}"
+
+          # Check for existing open issue with same title
+          issue_title="Nightly upstream dependency installation failed"
+          existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
+
+          if [ -n "$existing_issue" ]; then
+            echo "Found existing open issue #$existing_issue, updating it..."
+            echo "$issue_body" | gh issue edit "$existing_issue" --body-file -
+            echo "Updated existing issue #$existing_issue"
+          else
+            echo "No existing open issue found, creating new one..."
+            echo "$issue_body" | gh issue create \
+              --title "$issue_title" \
+              --body-file - \
+              --label "CI"
+            echo "Created new issue"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: mypy
         id: mypy
