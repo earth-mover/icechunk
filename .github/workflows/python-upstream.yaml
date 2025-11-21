@@ -79,10 +79,14 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           python --version
-          uv pip install --group upstream --pre
           PY_TAG="cp${PYTHON_VERSION//./}"
           WHEEL=$(ls dist/*-${PY_TAG}-*.whl)
-          uv pip install "$WHEEL" --no-deps --force-reinstall
+          # Install upstream dependencies from nightly wheels
+          export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
+          export UV_PRERELEASE=allow
+          uv pip install "${WHEEL}[test]" \
+            --resolution highest \
+            --index-strategy unsafe-best-match
           uv pip list
 
       - name: mypy
@@ -232,8 +236,12 @@ jobs:
           python --version
           PY_TAG="cp${PYTHON_VERSION//./}"
           WHEEL=$(ls dist/*-${PY_TAG}-*.whl)
-          uv pip install "$WHEEL" --group upstream
-          uv pip install pytest-mypy-plugins
+          # Install upstream dependencies from nightly wheels
+          export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
+          export UV_PRERELEASE=allow
+          uv pip install "${WHEEL}[test]" pytest-mypy-plugins \
+            --resolution highest \
+            --index-strategy unsafe-best-match
           uv pip list
 
       - name: Stand up MinIO

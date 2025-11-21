@@ -97,6 +97,22 @@ They can be run from the root of the repo with `docker compose up` (`ctrl-c` the
     uv run pytest
     ```
 
+#### Testing with Upstream Dependencies
+
+To test Icechunk against development versions of upstream packages (zarr, xarray, dask, distributed), use the nightly wheels from the scientific-python-nightly-wheels repository:
+
+```bash
+# Install with nightly wheels
+export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
+export UV_PRERELEASE=allow
+uv sync --extra test \
+  --resolution highest \
+  --index-strategy unsafe-best-match
+
+# Run tests
+uv run pytest
+```
+
 #### Running Xarray Backend Tests
 
 Icechunk includes integration tests that verify compatibility with Xarray's zarr backend API. These tests require the Xarray repository to be cloned locally.
