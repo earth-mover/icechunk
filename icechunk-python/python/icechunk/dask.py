@@ -1,6 +1,6 @@
 import functools
 from collections.abc import Callable, Mapping
-from typing import Any, ParamSpec, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeAlias, TypeVar
 
 import numpy as np
 from packaging.version import Version
@@ -12,6 +12,9 @@ import zarr
 from dask.array.core import Array
 from icechunk.distributed import extract_session, merge_sessions
 from icechunk.session import ForkSession
+
+if TYPE_CHECKING:
+    from zarr.core.metadata import ArrayV3Metadata
 
 SimpleGraph: TypeAlias = Mapping[tuple[str, int], tuple[Any, ...]]
 
@@ -57,7 +60,7 @@ def _assert_correct_dask_version() -> None:
 def store_dask(
     *,
     sources: list[Array],
-    targets: list[zarr.Array],
+    targets: list[zarr.Array[ArrayV3Metadata]],
     regions: list[tuple[slice, ...]] | None = None,
     split_every: int | None = None,
     **store_kwargs: Any,

@@ -1,16 +1,18 @@
 from collections.abc import Iterable
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import hypothesis.strategies as st
 
 import icechunk as ic
 import zarr
-from zarr.core.metadata import ArrayV3Metadata
+
+if TYPE_CHECKING:
+    from zarr.core.metadata import ArrayV3Metadata
 
 
 @st.composite
 def splitting_configs(
-    draw: st.DrawFn, *, arrays: Iterable[zarr.Array]
+    draw: st.DrawFn, *, arrays: Iterable[zarr.Array[ArrayV3Metadata]]
 ) -> ic.ManifestSplittingConfig:
     config_dict: dict[
         ic.ManifestSplitCondition,
