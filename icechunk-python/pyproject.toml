@@ -23,18 +23,17 @@ authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
 dependencies = ["zarr>=3,!=3.0.3"]
 
-[project.optional-dependencies]
+[dependency-groups]
+dev = [{ include-group = "test" }, "mypy", "ruff", "maturin>=1.7,<2.0"]
 test = [
   "boto3",
   "coverage",
-  "mypy",
   "object-store-python",
   "pytest",
   "pytest-cov",
   "pytest-asyncio",
   "pytest-xdist",
   "pytest-reportlog",
-  "ruff",
   "dask>=2024.11.0",
   "distributed>=2024.11.0",
   "xarray>=2025.01.2",
@@ -88,7 +87,6 @@ docs = [
   "sphinx_togglebutton",
   "sphinx-autodoc-typehints",
 ]
-
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
