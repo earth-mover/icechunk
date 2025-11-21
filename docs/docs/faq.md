@@ -119,7 +119,7 @@ There are two reasons for this:
 
 We welcome contributions from folks interested in developing Icechunk bindings for other languages!
 
-## Are there any independent implementions based on the Icechunk spec?
+## Are there any independent implementations based on the Icechunk spec?
 
 At least one independent (read-only) implementation does exist: Google's [Neuroglancer](https://github.com/google/neuroglancer) application - [Icechunk docs here](https://neuroglancer-docs.web.app/datasource/icechunk/index.html)).
 This arguably proves that the Icechunk (1.0) specification is well-defined enough to be interoperable between implementations.
