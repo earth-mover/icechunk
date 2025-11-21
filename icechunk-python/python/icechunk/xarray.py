@@ -16,7 +16,10 @@ from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
 
 if TYPE_CHECKING:
-    from zarr.core.metadata import ArrayV3Metadata
+    try:
+        from zarr.core.metadata import ArrayV3Metadata
+    except ImportError:
+        ArrayV3Metadata = Any  # type: ignore[misc,assignment]
 
 __all__ = ["to_icechunk"]
 

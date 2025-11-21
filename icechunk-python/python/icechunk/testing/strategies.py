@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import hypothesis.strategies as st
 
@@ -7,12 +7,15 @@ import icechunk as ic
 import zarr
 
 if TYPE_CHECKING:
-    from zarr.core.metadata import ArrayV3Metadata
+    try:
+        from zarr.core.metadata import ArrayV3Metadata
+    except ImportError:
+        ArrayV3Metadata = Any  # type: ignore[misc,assignment]
 
 
 @st.composite
 def splitting_configs(
-    draw: st.DrawFn, *, arrays: Iterable[zarr.Array[ArrayV3Metadata]]
+    draw: st.DrawFn, *, arrays: "Iterable[zarr.Array[ArrayV3Metadata]]"
 ) -> ic.ManifestSplittingConfig:
     config_dict: dict[
         ic.ManifestSplitCondition,
