@@ -112,8 +112,7 @@ However, because it sits _below_ Zarr in the stack, it's not immediately clear h
 No, we do not recommend implementing Icechunk independently of the existing Rust library.
 There are two reasons for this:
 
-1. Whilst the 1.0 version of the spec is stable,
-   we are still making improvements and so the specification is expected to evolve in future.
+1. The 1.0 version of the spec is stable. We are continuing to make improvements and will publish new versions of the spec as needed, accompanied with working reference implementation.
 1. It's probably much easier to bind to the Rust library from your language of choice,
    rather than re-implement from scratch.
 
@@ -122,7 +121,7 @@ We welcome contributions from folks interested in developing Icechunk bindings f
 ## Are there any independent implementations based on the Icechunk spec?
 
 At least one independent (read-only) implementation does exist: Google's [Neuroglancer](https://github.com/google/neuroglancer) application - [Icechunk docs here](https://neuroglancer-docs.web.app/datasource/icechunk/index.html)).
-This arguably proves that the Icechunk (1.0) specification is well-defined enough to be interoperable between implementations.
+This demonstrates that the Icechunk (1.0) specification is well-defined enough to be interoperable between implementations.
 
 If you are aware of any other implementations then please let us know!
 
