@@ -1,7 +1,7 @@
 from collections.abc import Hashable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from importlib.util import find_spec
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import Any, Literal, overload
 
 import numpy as np
 from packaging.version import Version
@@ -15,11 +15,10 @@ from xarray import DataArray, Dataset
 from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
 
-if TYPE_CHECKING:
-    try:
-        from zarr.core.metadata import ArrayV3Metadata
-    except ImportError:
-        ArrayV3Metadata = Any  # type: ignore[misc,assignment]
+try:
+    from zarr.core.metadata import ArrayV3Metadata
+except ImportError:
+    ArrayV3Metadata = Any  # type: ignore[misc,assignment]
 
 __all__ = ["to_icechunk"]
 
