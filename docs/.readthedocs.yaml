@@ -6,12 +6,11 @@ build:
     python: "mambaforge-latest"
 
   jobs:
-     install:
+    install:
       - which mamba
-      - cd icechunk-python && maturin build && pip install "$(ls ../target/wheels/*.whl | head -n 1)[docs]" && cd ../docs
+      - cd icechunk-python && maturin build && pip install "$(ls ../target/wheels/*.whl | head -n 1) --group docs" && cd ../docs
       - mamba list
       # - cd icechunk-python && maturin develop && cd ../docs
-
 
 conda:
   environment: docs/doc-env.yml
