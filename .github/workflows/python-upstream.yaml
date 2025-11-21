@@ -84,7 +84,7 @@ jobs:
           # Install upstream dependencies from nightly wheels
           export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
           export UV_PRERELEASE=allow
-          uv pip install "$WHEEL" --group test \
+          uv pip install "$WHEEL" --group dev \
             --resolution highest \
             --index-strategy unsafe-best-match
           uv pip list
