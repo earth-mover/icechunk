@@ -26,7 +26,7 @@ maturin develop
 or build the project in editable mode:
 
 ```bash
-pip install -e icechunk@.
+pip install -e .
 ```
 
 **Note**: This only makes the python source code editable, the rust will need to be recompiled when it changes
