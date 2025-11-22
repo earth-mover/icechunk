@@ -4,32 +4,50 @@ Python library for Icechunk Zarr Stores
 
 ## Getting Started
 
-Activate the virtual environment:
+### For Development
+
+The recommended way to set up for development is with [uv](https://docs.astral.sh/uv/):
+
+```bash
+# Install all development dependencies (test, mypy, ruff, maturin)
+uv sync
+
+# Activate the virtual environment
+source .venv/bin/activate
+
+# Run tests
+uv run pytest
+
+# Run type checking
+uv run mypy python
+
+# Run linting
+uv run ruff check python
+```
+
+uv automatically rebuilds the Rust extension as needed when you run commands with `uv run`.
+
+### Alternative: Manual Setup with pip
+
+If not using uv:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-```
 
-Install `maturin`:
-
-```bash
+# Install maturin
 pip install maturin
-```
 
-Build the project in dev mode:
+# Install dev dependencies (includes test, mypy, ruff)
+pip install --group dev
 
-```bash
+# Build the Rust extension
 maturin develop
 ```
 
-or build the project in editable mode:
+Note: Modern pip (>=21.3) supports dependency groups. If you have an older pip, upgrade with `pip install --upgrade pip`. When the Rust code changes, re-run `maturin develop` to rebuild.
 
-```bash
-pip install -e .
-```
-
-**Note**: This only makes the python source code editable, the rust will need to be recompiled when it changes
+**Note**: When using editable mode, only the Python source code is editable; the Rust code will need to be recompiled when it changes.
 
 Now you can create or open an icechunk store for use with `zarr-python`:
 

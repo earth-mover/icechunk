@@ -15,6 +15,11 @@ from xarray import DataArray, Dataset
 from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
 
+try:
+    from zarr.core.metadata import ArrayV3Metadata
+except ImportError:
+    ArrayV3Metadata = Any  # type: ignore[misc,assignment]
+
 __all__ = ["to_icechunk"]
 
 Region = Mapping[str, slice | Literal["auto"]] | Literal["auto"] | None
@@ -57,7 +62,7 @@ class LazyArrayWriter(ArrayWriter):
         super().__init__()  # type: ignore[no-untyped-call]
 
         self.eager_sources: list[np.ndarray[Any, Any]] = []
-        self.eager_targets: list[zarr.Array] = []
+        self.eager_targets: list[zarr.Array[ArrayV3Metadata]] = []
         self.eager_regions: list[tuple[slice, ...]] = []
 
     def add(self, source: Any, target: Any, region: Any = None) -> Any:

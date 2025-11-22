@@ -23,66 +23,53 @@ The Python code is developed in the `icechunk-python` subdirectory. To make chan
 cd icechunk-python
 ```
 
-Create / activate a virtual environment:
+#### Setting up your development environment
 
+=== "uv (Recommended)"
+
+    The easiest way to get started is with [uv](https://docs.astral.sh/uv/), which handles virtual environments, dependencies, and building automatically:
+
+    ```bash
+    # Install all development dependencies (includes test dependencies, mypy, ruff, maturin)
+    uv sync
+
+    # Activate the virtual environment
+    source .venv/bin/activate
+
+    # Run tests
+    uv run pytest
+
+    # Run type checking
+    uv run mypy python
+
+    # Run linting
+    uv run ruff check python
+    ```
 === "Venv"
 
     ```bash
     python3 -m venv .venv
     source .venv/bin/activate
-    ```
+
+    # Install maturin and dependencies
+    pip install maturin
+    pip install --group dev
+
+    # Build the Rust extension
+    maturin develop
 
 === "Conda / Mamba"
 
     ```bash
     mamba create -n icechunk python=3.12 rust zarr
     mamba activate icechunk
-    ```
 
-=== "uv"
-
-    ```bash
-    uv sync
-    source .venv/bin/activate
-    ```
-
-Install `maturin`:
-
-=== "Venv"
-
-    ```bash
+    # Install maturin and dependencies
     pip install maturin
-    ```
+    pip install --group dev
 
-    Build the project in dev mode:
-
-    ```bash
+    # Build the Rust extension
     maturin develop
-
-    # or with the optional dependencies
-    maturin develop --extras=test,benchmark
-    ```
-
-    or build the project in editable mode:
-
-    ```bash
-    pip install -e .
-    ```
-
-=== "uv"
-
-    uv manages rebuilding as needed, so it will run the Maturin build when using `uv run`.
-
-    To explicitly use Maturin, install it globally.
-
-    ```bash
-    uv tool install maturin
-    ```
-
-    Maturin may need to know it should work with uv, so add `--uv` to the CLI.
-
-    ```bash
-    maturin develop --uv --extras=test,benchmark
     ```
 
 #### Testing
@@ -96,6 +83,27 @@ They can be run from the root of the repo with `docker compose up` (`ctrl-c` the
     ```bash
     uv run pytest
     ```
+=== "Venv/Conda"
+
+    ```bash
+    pytest
+    ```
+
+#### Testing with Upstream Dependencies
+
+To test Icechunk against development versions of upstream packages (zarr, xarray, dask, distributed), use the nightly wheels from the scientific-python-nightly-wheels repository:
+
+```bash
+# Install with nightly wheels
+export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
+export UV_PRERELEASE=allow
+uv sync --group test \
+  --resolution highest \
+  --index-strategy unsafe-best-match
+
+# Run tests
+uv run pytest
+```
 
 #### Running Xarray Backend Tests
 
@@ -191,7 +199,7 @@ From the `icechunk-python` directory:
 
 ```bash
 # Install icechunk with docs dependencies
-uv sync --extra docs
+uv sync --group docs
 
 # Start the MkDocs development server
 cd ../docs
