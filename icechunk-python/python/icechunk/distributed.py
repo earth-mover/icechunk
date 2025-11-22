@@ -1,10 +1,16 @@
 # distributed utility functions
 from collections.abc import Generator, Iterable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import zarr
 from icechunk import IcechunkStore
 from icechunk.session import ForkSession, Session
+
+if TYPE_CHECKING:
+    try:
+        from zarr.core.metadata import ArrayV3Metadata
+    except ImportError:
+        ArrayV3Metadata = Any  # type: ignore[misc,assignment]
 
 __all__ = [
     "extract_session",
@@ -25,7 +31,7 @@ def _flatten(seq: Iterable[Any], container: type = list) -> Generator[Any, None,
 
 
 def extract_session(
-    zarray: zarr.Array, axis: Any = None, keepdims: Any = None
+    zarray: "zarr.Array[ArrayV3Metadata]", axis: Any = None, keepdims: Any = None
 ) -> Session:
     """
     Extract Icechunk Session from a zarr Array, useful for distributed array computing frameworks.
