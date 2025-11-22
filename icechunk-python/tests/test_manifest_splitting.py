@@ -33,7 +33,7 @@ def test_splitting_config_dict_roundtrip(data) -> None:
     assert ic.ManifestSplittingConfig.from_dict(config.to_dict()) == config
 
 
-def test_manifest_splitting_appends() -> None:
+def test_manifest_splitting_appends(any_spec_version: int | None) -> None:
     array_condition = ManifestSplitCondition.or_conditions(
         [
             ManifestSplitCondition.name_matches("temperature"),
@@ -49,7 +49,7 @@ def test_manifest_splitting_appends() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         ### simple create repo with manifest splitting
         storage = ic.local_filesystem_storage(tmpdir)
-        repo = ic.Repository.create(storage, config=config)
+        repo = ic.Repository.create(storage, config=config, spec_version=any_spec_version)
         assert repo.config.manifest
         assert repo.config.manifest.splitting is not None
 
@@ -126,7 +126,9 @@ def test_manifest_splitting_appends() -> None:
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
 
-def test_manifest_overwrite_splitting_config_on_read() -> None:
+def test_manifest_overwrite_splitting_config_on_read(
+    any_spec_version: int | None,
+) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {
             ManifestSplitCondition.name_matches("temperature"): {
@@ -152,7 +154,11 @@ def test_manifest_overwrite_splitting_config_on_read() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         ### simple create repo with manifest splitting
         storage = ic.local_filesystem_storage(tmpdir)
-        repo = ic.Repository.create(storage, config=config)
+        repo = ic.Repository.create(
+            storage,
+            config=config,
+            spec_version=any_spec_version,
+        )
         assert repo.config.manifest.splitting is not None
 
         ds = xr.Dataset(
@@ -189,7 +195,7 @@ def test_manifest_overwrite_splitting_config_on_read() -> None:
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
 
-def test_manifest_splitting_sparse_regions() -> None:
+def test_manifest_splitting_sparse_regions(any_spec_version: int | None) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {
             ManifestSplitCondition.name_matches("temperature"): {
@@ -203,7 +209,11 @@ def test_manifest_splitting_sparse_regions() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         ### simple create repo with manifest splitting
         storage = ic.local_filesystem_storage(tmpdir)
-        repo = ic.Repository.create(storage, config=config)
+        repo = ic.Repository.create(
+            storage,
+            config=config,
+            spec_version=any_spec_version,
+        )
         assert repo.config.manifest
         assert repo.config.manifest.splitting is not None
 
@@ -270,7 +280,9 @@ def test_manifest_splitting_sparse_regions() -> None:
         ),
     ],
 )
-def test_manifest_splitting_complex_config(config, expected_split_sizes) -> None:
+def test_manifest_splitting_complex_config(
+    config, expected_split_sizes, any_spec_version: int | None
+) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {ManifestSplitCondition.AnyArray(): config}
     )
@@ -280,7 +292,11 @@ def test_manifest_splitting_complex_config(config, expected_split_sizes) -> None
     with tempfile.TemporaryDirectory() as tmpdir:
         ### simple create repo with manifest splitting
         storage = ic.local_filesystem_storage(tmpdir)
-        repo = ic.Repository.create(storage, config=config)
+        repo = ic.Repository.create(
+            storage,
+            config=config,
+            spec_version=any_spec_version,
+        )
         assert repo.config.manifest
         assert repo.config.manifest.splitting is not None
 

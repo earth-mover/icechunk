@@ -15,16 +15,21 @@ from icechunk import (
 )
 
 
-def create_local_repo(path: str) -> Repository:
-    repo = Repository.create(storage=local_filesystem_storage(path))
+def create_local_repo(path: str, spec_version: int | None) -> Repository:
+    repo = Repository.create(
+        storage=local_filesystem_storage(path), spec_version=spec_version
+    )
     repo.set_default_commit_metadata({"author": "test"})
     return repo
 
 
 @pytest.fixture(scope="function")
-def tmp_repo(tmpdir: Path) -> Repository:
+def tmp_repo(tmpdir: Path, any_spec_version: int | None) -> Repository:
     store_path = f"{tmpdir}"
-    repo = create_local_repo(store_path)
+    repo = create_local_repo(
+        store_path,
+        spec_version=any_spec_version,
+    )
     return repo
 
 
@@ -67,7 +72,7 @@ def get_credentials() -> S3StaticCredentials:
     return S3StaticCredentials("minio123", "minio123")
 
 
-def test_pickle() -> None:
+def test_pickle(any_spec_version: int | None) -> None:
     # we test with refreshable credentials because that gave us problems in the past
 
     def mk_repo() -> tuple[str, Repository]:
@@ -83,6 +88,7 @@ def test_pickle() -> None:
                 get_credentials=get_credentials,
             ),
             config=RepositoryConfig(inline_chunk_threshold_bytes=0),
+            spec_version=any_spec_version,
         )
         return (prefix, repo)
 

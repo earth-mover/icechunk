@@ -7,65 +7,93 @@ import zarr
 
 
 @mock.patch.dict(os.environ, {"ICECHUNK_LOG": "debug"}, clear=True)
-def test_debug_logs_from_environment(capfd) -> None:
+def test_debug_logs_from_environment(capfd, any_spec_version: int | None) -> None:
     ic.set_logs_filter(None)
-    ic.Repository.create(storage=ic.in_memory_storage())
+    ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
+    )
     assert "Creating Repository" in capfd.readouterr().out
 
 
 @mock.patch.dict(os.environ, clear=True)
-def test_no_logs_from_environment(capfd) -> None:
+def test_no_logs_from_environment(capfd, any_spec_version: int | None) -> None:
     ic.set_logs_filter(None)
-    ic.Repository.create(storage=ic.in_memory_storage())
+    ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
+    )
     assert capfd.readouterr().out == ""
 
 
 @mock.patch.dict(os.environ, clear=True)
-def test_change_log_levels_from_env(capfd) -> None:
+def test_change_log_levels_from_env(capfd, any_spec_version: int | None) -> None:
     # first with logs disabled
     ic.set_logs_filter(None)
-    ic.Repository.create(storage=ic.in_memory_storage())
+    ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
+    )
     assert capfd.readouterr().out == ""
 
     # now with logs enabled
     with mock.patch.dict(os.environ, {"ICECHUNK_LOG": "debug"}, clear=True):
         ic.set_logs_filter(None)
-        ic.Repository.create(storage=ic.in_memory_storage())
+        ic.Repository.create(
+            storage=ic.in_memory_storage(),
+            spec_version=any_spec_version,
+        )
         assert "Creating Repository" in capfd.readouterr().out
 
 
-def test_debug_logs_from_argument(capfd) -> None:
+def test_debug_logs_from_argument(capfd, any_spec_version: int | None) -> None:
     ic.set_logs_filter("debug")
-    ic.Repository.create(storage=ic.in_memory_storage())
+    ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
+    )
     assert "Creating Repository" in capfd.readouterr().out
 
 
 @mock.patch.dict(os.environ, {"ICECHUNK_LOG": "debug"}, clear=True)
-def test_no_logs_from_argument(capfd) -> None:
+def test_no_logs_from_argument(capfd, any_spec_version: int | None) -> None:
     ic.set_logs_filter("false")
-    ic.Repository.create(storage=ic.in_memory_storage())
+    ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
+    )
     assert capfd.readouterr().out == ""
 
 
-def test_change_log_levels_from_argument(capfd) -> None:
+def test_change_log_levels_from_argument(capfd, any_spec_version: int | None) -> None:
     # first with logs disabled
     ic.set_logs_filter("")
-    ic.Repository.create(storage=ic.in_memory_storage())
+    ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
+    )
     assert capfd.readouterr().out == ""
 
     # now with logs enabled
     ic.set_logs_filter("debug")
-    ic.Repository.create(storage=ic.in_memory_storage())
+    ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
+    )
     assert "Creating Repository" in capfd.readouterr().out
 
 
-def test_warn_on_small_caches(capfd) -> None:
+def test_warn_on_small_caches(capfd, any_spec_version: int | None) -> None:
     # first with logs disabled
     ic.set_logs_filter("warn")
     config = ic.RepositoryConfig(
         caching=ic.CachingConfig(num_chunk_refs=0, num_snapshot_nodes=0),
     )
-    repo = ic.Repository.create(storage=ic.in_memory_storage(), config=config)
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        config=config,
+        spec_version=any_spec_version,
+    )
     session = repo.writable_session("main")
 
     array1 = zarr.create_array(

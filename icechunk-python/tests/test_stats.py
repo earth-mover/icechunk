@@ -7,12 +7,13 @@ import zarr
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-def test_total_chunks_storage() -> None:
+def test_total_chunks_storage(any_spec_version: int | None) -> None:
     """We only test the interface, more detailed test is done in Rust"""
 
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
         config=ic.RepositoryConfig(inline_chunk_threshold_bytes=0),
+        spec_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store
@@ -33,12 +34,13 @@ def test_total_chunks_storage() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_total_chunks_storage_async() -> None:
+async def test_total_chunks_storage_async(any_spec_version: int | None) -> None:
     """Test the async version of total_chunks_storage"""
 
     repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
         config=ic.RepositoryConfig(inline_chunk_threshold_bytes=0),
+        spec_version=any_spec_version,
     )
     session = await repo.writable_session_async("main")
     store = session.store

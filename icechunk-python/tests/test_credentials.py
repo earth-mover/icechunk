@@ -191,6 +191,7 @@ def test_s3_refreshable_credentials_refresh(
 def test_s3_refreshable_credentials_pickle_with_optimization(
     tmp_path: Path,
     scatter_initial_credentials: bool,
+    any_spec_version: int | None,
 ) -> None:
     """Verifies pickled repos don't need to call get_credentials again if scatter_initial_credentials=True"""
     path = tmp_path / "calls.txt"
@@ -208,7 +209,10 @@ def test_s3_refreshable_credentials_pickle_with_optimization(
         scatter_initial_credentials=scatter_initial_credentials,
     )
     # let's create and use a repo
-    repo = Repository.create(storage=st)
+    repo = Repository.create(
+        storage=st,
+        spec_version=any_spec_version,
+    )
     assert Repository.exists(st)
     assert Repository.exists(st)
 

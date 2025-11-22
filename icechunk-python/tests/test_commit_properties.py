@@ -6,9 +6,10 @@ import icechunk as ic
 import zarr
 
 
-def test_property_types() -> None:
+def test_property_types(any_spec_version: int | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store
@@ -39,9 +40,10 @@ class NoJson:
     pass
 
 
-def test_invalid_property_types() -> None:
+def test_invalid_property_types(any_spec_version: int | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store
