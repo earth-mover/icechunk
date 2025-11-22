@@ -99,7 +99,7 @@ jobs:
           python --version
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
-          uv pip install "${WHEEL}[test]"
+          uv pip install "$WHEEL" --group test
           # Install specific versions based on matrix
           if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
             echo "Installing minimum versions:"
@@ -186,7 +186,7 @@ jobs:
           python --version
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
-          uv pip install "${WHEEL}[test]"
+          uv pip install "$WHEEL" --group test
           uv pip install pytest-mypy-plugins
           # Install specific xarray version based on matrix
           if [ "${{ matrix.xarray-version.version }}" != "latest-release" ]; then
