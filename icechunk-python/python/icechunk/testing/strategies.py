@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import hypothesis.strategies as st
 
@@ -34,7 +34,7 @@ def splitting_configs(
         else:
             array_condition = ic.ManifestSplitCondition.path_matches(array.path)
         dimnames = (
-            cast(ArrayV3Metadata, array.metadata).dimension_names or (None,) * array.ndim
+            getattr(array.metadata, "dimension_names", None) or (None,) * array.ndim
         )
         dimsize_axis_names = draw(
             st.lists(
