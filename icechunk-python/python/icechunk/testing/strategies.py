@@ -1,16 +1,21 @@
 from collections.abc import Iterable
-from typing import cast
+from typing import TYPE_CHECKING, Any
 
 import hypothesis.strategies as st
 
 import icechunk as ic
 import zarr
-from zarr.core.metadata import ArrayV3Metadata
+
+if TYPE_CHECKING:
+    try:
+        from zarr.core.metadata import ArrayV3Metadata
+    except ImportError:
+        ArrayV3Metadata = Any  # type: ignore[misc,assignment]
 
 
 @st.composite
 def splitting_configs(
-    draw: st.DrawFn, *, arrays: Iterable[zarr.Array]
+    draw: st.DrawFn, *, arrays: "Iterable[zarr.Array[ArrayV3Metadata]]"
 ) -> ic.ManifestSplittingConfig:
     config_dict: dict[
         ic.ManifestSplitCondition,
@@ -29,7 +34,7 @@ def splitting_configs(
         else:
             array_condition = ic.ManifestSplitCondition.path_matches(array.path)
         dimnames = (
-            cast(ArrayV3Metadata, array.metadata).dimension_names or (None,) * array.ndim
+            getattr(array.metadata, "dimension_names", None) or (None,) * array.ndim
         )
         dimsize_axis_names = draw(
             st.lists(
