@@ -10,9 +10,12 @@ from icechunk.distributed import merge_sessions
 
 
 @pytest.mark.parametrize("use_async", [True, False])
-async def test_session_fork(use_async: bool) -> None:
+async def test_session_fork(use_async: bool, any_spec_version: int | None) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
-        repo = Repository.create(local_filesystem_storage(tmpdir))
+        repo = Repository.create(
+            local_filesystem_storage(tmpdir),
+            spec_version=any_spec_version,
+        )
         session = repo.writable_session("main")
         zarr.group(session.store)
         assert session.has_uncommitted_changes
