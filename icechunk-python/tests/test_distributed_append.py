@@ -21,7 +21,7 @@ IC_STORAGE = ic.local_filesystem_storage(
 )
 
 
-def do_test(scheduler) -> None:
+def do_test(scheduler, spec_version: int | None) -> None:
     # Writing the initial dataset
     if scheduler in ["processes", "sync"]:
         CHUNKX = 3
@@ -69,7 +69,7 @@ def do_test(scheduler) -> None:
         }
     ).chunk(x=CHUNKX, y=CHUNKY)
 
-    repo = ic.Repository.open_or_create(IC_STORAGE)
+    repo = ic.Repository.open_or_create(IC_STORAGE, create_version=spec_version)
     session = repo.writable_session("main")
     with dask.config.set(scheduler=scheduler):
         to_icechunk(initial, session=session, mode="w", split_every=SPLIT_EVERY)
@@ -124,8 +124,8 @@ def do_test(scheduler) -> None:
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_dask_distributed_appends(scheduler) -> None:
-    do_test(scheduler)
+def test_dask_distributed_appends(scheduler, any_spec_version: int | None) -> None:
+    do_test(scheduler, spec_version=any_spec_version)
 
 
 if __name__ == "__main__":

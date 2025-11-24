@@ -19,8 +19,14 @@ from zarr.storage import StorePath
 
 # @pytest.fixture(params=["local"])
 @pytest.fixture
-def store(request: pytest.FixtureRequest, tmpdir: Path) -> IcechunkStore:
-    repo = parse_repo("local", str(tmpdir))
+def store(
+    request: pytest.FixtureRequest, tmpdir: Path, any_spec_version: int | None
+) -> IcechunkStore:
+    repo = parse_repo(
+        "local",
+        str(tmpdir),
+        spec_version=any_spec_version,
+    )
     session = repo.writable_session("main")
     return session.store
 

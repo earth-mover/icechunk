@@ -7,21 +7,27 @@ from mypy_boto3_s3.client import S3Client
 from icechunk import Repository, in_memory_storage, local_filesystem_storage
 
 
-def parse_repo(store: Literal["local", "memory"], path: str) -> Repository:
+def parse_repo(
+    store: Literal["local", "memory"], path: str, spec_version: int | None
+) -> Repository:
     if store == "local":
         return Repository.create(
             storage=local_filesystem_storage(path),
+            spec_version=spec_version,
         )
     if store == "memory":
         return Repository.create(
             storage=in_memory_storage(),
+            spec_version=spec_version,
         )
 
 
 @pytest.fixture(scope="function")
-def repo(request: pytest.FixtureRequest, tmpdir: str) -> tuple[Repository, str]:
+def repo(
+    request: pytest.FixtureRequest, tmpdir: str, any_spec_version: int | None
+) -> tuple[Repository, str]:
     param = request.param
-    repo = parse_repo(param, tmpdir)
+    repo = parse_repo(param, tmpdir, spec_version=any_spec_version)
     return repo, tmpdir
 
 
@@ -54,6 +60,8 @@ def write_chunks_to_minio(
     return etags
 
 
-@pytest.fixture(scope="function", params=[1, 2, None])
+@pytest.fixture(
+    scope="function", params=[1, 2, None], ids=["spec-v1", "spec-v2", "no-spec-version"]
+)
 def any_spec_version(request: pytest.FixtureRequest) -> int | None:
     return request.param

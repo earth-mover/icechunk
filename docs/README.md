@@ -22,7 +22,7 @@ From the `icechunk-python` directory:
 
 ```bash
 # Install icechunk with docs dependencies
-uv sync --extra docs
+uv sync --group docs
 
 # Start the MkDocs development server
 cd ../docs
@@ -41,7 +41,6 @@ uv run mkdocs build
 ```
 
 Builds output to: `docs/.site` directory.
-
 
 ### Deploying
 

@@ -9,9 +9,10 @@ import zarr
 
 
 @pytest.fixture
-def repo(tmpdir: Path) -> icechunk.Repository:
+def repo(tmpdir: Path, any_spec_version: int | None) -> icechunk.Repository:
     repo = icechunk.Repository.create(
-        storage=icechunk.local_filesystem_storage(str(tmpdir))
+        storage=icechunk.local_filesystem_storage(str(tmpdir)),
+        spec_version=any_spec_version,
     )
 
     session = repo.writable_session("main")
@@ -192,10 +193,11 @@ def test_rebase_chunks_with_ours(
     assert array_c[0, 1] == 1
 
 
-async def test_rebase_async() -> None:
+async def test_rebase_async(any_spec_version: int | None) -> None:
     """Test async rebase functionality with conflict detection and resolution."""
     repo = await icechunk.Repository.create_async(
         storage=icechunk.in_memory_storage(),
+        spec_version=any_spec_version,
     )
 
     # Set up initial state

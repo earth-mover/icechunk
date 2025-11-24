@@ -16,14 +16,17 @@ from tests.test_xarray import create_test_data, roundtrip
 from xarray.testing import assert_identical
 
 
-def test_store_dask() -> None:
+def test_store_dask(any_spec_version: int | None) -> None:
     shape = (100, 100)
     dask_chunks = (20, 20)
     dask_array = dask.array.random.random(shape, chunks=dask_chunks)
 
     zarr_chunks = (10, 10)
     with tempfile.TemporaryDirectory() as tmpdir:
-        repo = Repository.create(local_filesystem_storage(tmpdir))
+        repo = Repository.create(
+            local_filesystem_storage(tmpdir),
+            spec_version=any_spec_version,
+        )
         session = repo.writable_session("main")
         group = zarr.group(store=session.store, overwrite=True)
 
@@ -52,27 +55,35 @@ def test_store_dask() -> None:
             store_dask(sources=[dask_array], targets=[zarray])
 
 
-def test_distributed() -> None:
+def test_distributed(any_spec_version: int | None) -> None:
     with distributed.Client():  # type: ignore [no-untyped-call]
         ds = create_test_data().chunk(dim1=3, dim2=4)
-        with roundtrip(ds, commit=True) as actual:
+        with roundtrip(ds, commit=True, spec_version=any_spec_version) as actual:
             assert_identical(actual, ds)
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_dask_schedulers(scheduler) -> None:
+def test_dask_schedulers(scheduler, any_spec_version: int | None) -> None:
     with dask.config.set(scheduler=scheduler):
         ds = create_test_data().chunk(dim1=3, dim2=4)
-        with roundtrip(ds, commit=scheduler == "processes") as actual:
+        with roundtrip(
+            ds,
+            commit=scheduler == "processes",
+            spec_version=any_spec_version,
+        ) as actual:
             assert_identical(actual, ds)
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_xarray_to_icechunk_nested_pickling(scheduler) -> None:
+def test_xarray_to_icechunk_nested_pickling(
+    scheduler, any_spec_version: int | None
+) -> None:
     with dask.config.set(scheduler=scheduler):
         ds = create_test_data(dim_sizes=(2, 3, 4)).chunk(-1)
         with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Repository.create(local_filesystem_storage(tmpdir))
+            repo = Repository.create(
+                local_filesystem_storage(tmpdir), spec_version=any_spec_version
+            )
             session = repo.writable_session("main")
 
             to_icechunk(ds, session=session, mode="w")
@@ -93,11 +104,14 @@ def test_xarray_to_icechunk_nested_pickling(scheduler) -> None:
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_fork_session_deep_copies(scheduler) -> None:
+def test_fork_session_deep_copies(scheduler, any_spec_version: int | None) -> None:
     with dask.config.set(scheduler=scheduler):
         ds = create_test_data(dim_sizes=(2, 3, 4)).drop_encoding().chunk(dim3=1)
         with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Repository.create(local_filesystem_storage(tmpdir))
+            repo = Repository.create(
+                local_filesystem_storage(tmpdir),
+                spec_version=any_spec_version,
+            )
 
             session = repo.writable_session("main")
             ds.to_zarr(session.store, mode="w", compute=False)

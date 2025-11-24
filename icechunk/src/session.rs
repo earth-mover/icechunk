@@ -47,7 +47,7 @@ use crate::{
         },
         transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
-    refs::{RefError, RefErrorKind, update_branch},
+    refs::{RefError, RefErrorKind, fetch_branch_tip, update_branch},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
@@ -64,6 +64,8 @@ pub enum SessionErrorKind {
     FormatError(IcechunkFormatErrorKind),
     #[error(transparent)]
     VirtualReferenceError(VirtualReferenceErrorKind),
+    #[error(transparent)]
+    RefError(RefErrorKind),
 
     #[error("Read only sessions cannot modify the repository")]
     ReadOnlySession,
@@ -178,6 +180,12 @@ impl From<VirtualReferenceError> for SessionError {
             SessionErrorKind::VirtualReferenceError(value.kind),
             value.context,
         )
+    }
+}
+
+impl From<RefError> for SessionError {
+    fn from(value: RefError) -> Self {
+        Self::with_context(SessionErrorKind::RefError(value.kind), value.context)
     }
 }
 
@@ -1412,6 +1420,108 @@ impl Session {
 
         debug!("Rebase started");
 
+        let new_commits = match self.asset_manager.spec_version() {
+            SpecVersionBin::V1dot0 => {
+                self.commits_to_rebase_v1(branch_name.as_str()).await?
+            }
+            SpecVersionBin::V2dot0 => {
+                self.commits_to_rebase_v2(branch_name.as_str()).await?
+            }
+        };
+
+        trace!("Found {} commits to rebase over", new_commits.len());
+
+        // we need to reverse the iterator to process them in order of oldest first
+        for snap_id in new_commits.into_iter().rev() {
+            debug!("Rebasing snapshot {}", &snap_id);
+            let tx_log = self.asset_manager.fetch_transaction_log(&snap_id).await?;
+
+            let session = Self::create_readonly_session(
+                self.config.clone(),
+                self.storage_settings.as_ref().clone(),
+                Arc::clone(&self.storage),
+                Arc::clone(&self.asset_manager),
+                Arc::clone(&self.virtual_resolver),
+                snap_id.clone(),
+            );
+
+            let mut fresh = self.change_set().fresh();
+            std::mem::swap(self.change_set_mut()?, &mut fresh);
+            let change_set = fresh;
+            // TODO: this should probably execute in a worker thread
+            match solver.solve(&tx_log, &session, change_set, self).await? {
+                ConflictResolution::Patched(patched_changeset) => {
+                    trace!("Snapshot rebased");
+                    self.change_set = patched_changeset;
+                    self.snapshot_id = snap_id;
+                }
+                ConflictResolution::Unsolvable { reason, unmodified } => {
+                    warn!("Snapshot cannot be rebased. Aborting rebase.");
+                    self.change_set = unmodified;
+                    return Err(SessionErrorKind::RebaseFailed {
+                        snapshot: snap_id,
+                        conflicts: reason,
+                    }
+                    .into());
+                }
+            }
+        }
+        debug!("Rebase done");
+        Ok(())
+    }
+
+    async fn commits_to_rebase_v1(
+        &self,
+        branch_name: &str,
+    ) -> SessionResult<Vec<SnapshotId>> {
+        let ref_data = match fetch_branch_tip(
+            self.storage.as_ref(),
+            self.storage_settings.as_ref(),
+            branch_name,
+        )
+        .await
+        {
+            Ok(ref_data) => Ok(ref_data),
+            Err(RefError { kind: RefErrorKind::RefNotFound { .. }, .. }) => {
+                warn!(
+                    branch = &self.branch_name,
+                    "No rebase is needed, the branch was deleted. Aborting rebase."
+                );
+                return Ok(Vec::new());
+            }
+            Err(err) => Err(SessionError::from(err)),
+        }?;
+
+        if ref_data.snapshot == self.snapshot_id {
+            // nothing to do, commit should work without rebasing
+            warn!(
+                branch = &self.branch_name,
+                "No rebase is needed, parent snapshot is at the top of the branch. Aborting rebase."
+            );
+            Ok(Vec::new())
+        } else {
+            let current_snapshot =
+                self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
+            #[allow(deprecated)]
+            let ancestry = Arc::clone(&self.asset_manager)
+                .snapshot_ancestry_v1(&current_snapshot.id())
+                .await?
+                .map_ok(|meta| meta.id());
+            let new_commits =
+                stream::once(ready(Ok(ref_data.snapshot.clone())))
+                    .chain(ancestry.try_take_while(|snap_id| {
+                        ready(Ok(snap_id != &self.snapshot_id))
+                    }))
+                    .try_collect()
+                    .await?;
+            Ok(new_commits)
+        }
+    }
+
+    async fn commits_to_rebase_v2(
+        &self,
+        branch_name: &str,
+    ) -> SessionResult<Vec<SnapshotId>> {
         let (latest_repo_info, _) = self.asset_manager.fetch_repo_info().await?;
 
         match latest_repo_info.resolve_branch(branch_name) {
@@ -1425,7 +1535,7 @@ impl Session {
                     branch = &self.branch_name,
                     "No rebase is needed, the branch was deleted. Aborting rebase."
                 );
-                Ok(())
+                Ok(Vec::new())
             }
             Err(err) => Err(err.into()),
             Ok(current_snapshot_id) if current_snapshot_id == self.snapshot_id => {
@@ -1434,7 +1544,7 @@ impl Session {
                     branch = &self.branch_name,
                     "No rebase is needed, parent snapshot is at the top of the branch. Aborting rebase."
                 );
-                Ok(())
+                Ok(Vec::new())
             }
             Ok(current_snapshot_id) => {
                 let ancestry = stream::iter(
@@ -1442,55 +1552,11 @@ impl Session {
                         .ancestry(&current_snapshot_id)?
                         .map_ok(|snap| snap.id),
                 );
-                let new_commits = ancestry
+                let res = ancestry
                     .try_take_while(|snap_id| ready(Ok(snap_id != &self.snapshot_id)))
-                    .try_collect::<Vec<_>>()
+                    .try_collect()
                     .await?;
-                trace!("Found {} commits to rebase over", new_commits.len());
-
-                // TODO: this clone is expensive
-                // we currently need it to be able to process commits one by one without modifying the
-                // changeset in case of failure
-                // let mut changeset = self.change_set.clone();
-
-                // we need to reverse the iterator to process them in order of oldest first
-                for snap_id in new_commits.into_iter().rev() {
-                    debug!("Rebasing snapshot {}", &snap_id);
-                    let tx_log =
-                        self.asset_manager.fetch_transaction_log(&snap_id).await?;
-
-                    let session = Self::create_readonly_session(
-                        self.config.clone(),
-                        self.storage_settings.as_ref().clone(),
-                        Arc::clone(&self.storage),
-                        Arc::clone(&self.asset_manager),
-                        Arc::clone(&self.virtual_resolver),
-                        current_snapshot_id.clone(),
-                    );
-
-                    let mut fresh = self.change_set().fresh();
-                    std::mem::swap(self.change_set_mut()?, &mut fresh);
-                    let change_set = fresh;
-                    // TODO: this should probably execute in a worker thread
-                    match solver.solve(&tx_log, &session, change_set, self).await? {
-                        ConflictResolution::Patched(patched_changeset) => {
-                            trace!("Snapshot rebased");
-                            self.change_set = patched_changeset;
-                            self.snapshot_id = snap_id;
-                        }
-                        ConflictResolution::Unsolvable { reason, unmodified } => {
-                            warn!("Snapshot cannot be rebased. Aborting rebase.");
-                            self.change_set = unmodified;
-                            return Err(SessionErrorKind::RebaseFailed {
-                                snapshot: snap_id,
-                                conflicts: reason,
-                            }
-                            .into());
-                        }
-                    }
-                }
-                debug!("Rebase done");
-                Ok(())
+                Ok(res)
             }
         }
     }
