@@ -238,7 +238,6 @@ def tigris_storage(
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
-    requester_pays: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -281,8 +280,6 @@ def tigris_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled.
-    requester_pays: bool
-        Enable requester pays for S3 buckets
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -299,7 +296,6 @@ def tigris_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
-        requester_pays=requester_pays,
     )
     return Storage.new_tigris(
         config=options,
@@ -327,7 +323,6 @@ def r2_storage(
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
-    requester_pays: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -370,8 +365,6 @@ def r2_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled.
-    requester_pays: bool
-        Enable requester pays for S3 buckets
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -388,7 +381,6 @@ def r2_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
-        requester_pays=requester_pays,
     )
     return Storage.new_r2(
         config=options,
