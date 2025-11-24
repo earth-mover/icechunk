@@ -37,7 +37,7 @@ jobs:
       || github.event_name == 'schedule'
       }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install Just
         run: sudo snap install --edge --classic just
       - name: Stand up MinIO
@@ -245,11 +245,11 @@ jobs:
       || github.event_name == 'schedule'
       }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           path: "icechunk"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           repository: "pydata/xarray"
           path: "xarray"
