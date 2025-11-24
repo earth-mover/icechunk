@@ -195,7 +195,6 @@ def s3_object_store_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     force_path_style: bool = False,
-    requester_pays: bool = False,
 ) -> Storage:
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -211,7 +210,6 @@ def s3_object_store_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         force_path_style=force_path_style,
-        requester_pays=requester_pays,
     )
     return Storage.new_s3_object_store(
         config=options,
