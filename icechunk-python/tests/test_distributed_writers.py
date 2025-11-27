@@ -110,7 +110,7 @@ async def test_distributed_writers(
 
         group = zarr.open_group(store=store, mode="r")
 
-        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)
+        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)  # type: ignore [no-untyped-call]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
             assert_eq(roundtripped, dask_array)  # type: ignore [no-untyped-call]
