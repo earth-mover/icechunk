@@ -13,7 +13,7 @@ file as a python script: `python ./tests/test_can_read_old.py`.
 
 import shutil
 from datetime import UTC, datetime
-from typing import cast
+from typing import cast, Any
 
 import pytest
 from numpy.testing import assert_array_equal
@@ -213,8 +213,8 @@ async def write_a_test_repo(path: str) -> None:
     session = repo.writable_session("main")
     store = session.store
     root = zarr.group(store=store)
-    big_chunks = cast(zarr.Array, root["group1/big_chunks"])
-    small_chunks = cast(zarr.Array, root["group1/small_chunks"])
+    big_chunks = cast(zarr.Array[Any], root["group1/big_chunks"])
+    small_chunks = cast(zarr.Array[Any], root["group1/small_chunks"])
 
     big_chunks[:] = 42.0
     small_chunks[:] = 84

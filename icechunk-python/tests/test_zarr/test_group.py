@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import operator
-from typing import Literal, cast
+from typing import Literal, cast, Any
 
 import numpy as np
 import pytest
@@ -110,7 +110,7 @@ def test_group_members(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
 
     path = "group"
     group = Group.from_store(store=store, zarr_format=zarr_format)
-    members_expected: dict[str, Array | Group] = {}
+    members_expected: dict[str, Array[Any] | Group] = {}
 
     members_expected["subgroup"] = group.create_group("subgroup")
     # make a sub-sub-subgroup, to ensure that the children calculation doesn't go
