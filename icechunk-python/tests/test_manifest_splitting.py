@@ -288,7 +288,7 @@ def test_manifest_splitting_complex_config(
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {ManifestSplitCondition.AnyArray(): config}
     )
-    config = ic.RepositoryConfig(
+    repo_config = ic.RepositoryConfig(
         inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)
     )
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -296,7 +296,7 @@ def test_manifest_splitting_complex_config(
         storage = ic.local_filesystem_storage(tmpdir)
         repo = ic.Repository.create(
             storage,
-            config=config,
+            config=repo_config,
             spec_version=any_spec_version,
         )
         assert repo.config.manifest
