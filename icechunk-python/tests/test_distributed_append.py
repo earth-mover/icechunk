@@ -21,7 +21,7 @@ IC_STORAGE = ic.local_filesystem_storage(
 )
 
 
-def do_test(scheduler, spec_version: int | None) -> None:
+def do_test(scheduler: str, spec_version: int | None) -> None:
     # Writing the initial dataset
     if scheduler in ["processes", "sync"]:
         CHUNKX = 3
@@ -124,7 +124,7 @@ def do_test(scheduler, spec_version: int | None) -> None:
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_dask_distributed_appends(scheduler, any_spec_version: int | None) -> None:
+def test_dask_distributed_appends(scheduler: str, any_spec_version: int | None) -> None:
     do_test(scheduler, spec_version=any_spec_version)
 
 

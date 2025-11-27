@@ -125,7 +125,7 @@ async def test_transaction_failed_no_commit(any_spec_version: int | None) -> Non
     assert cid1 == cid2, "Transaction committed changes despite error"
 
 
-def test_shards(any_spec_version: int | None):
+def test_shards(any_spec_version: int | None) -> None:
     # regression test for GH1019
     storage = ic.in_memory_storage()
     repo = ic.Repository.create(

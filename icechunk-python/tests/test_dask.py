@@ -63,7 +63,7 @@ def test_distributed(any_spec_version: int | None) -> None:
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_dask_schedulers(scheduler, any_spec_version: int | None) -> None:
+def test_dask_schedulers(scheduler: str, any_spec_version: int | None) -> None:
     with dask.config.set(scheduler=scheduler):
         ds = create_test_data().chunk(dim1=3, dim2=4)
         with roundtrip(
@@ -76,7 +76,7 @@ def test_dask_schedulers(scheduler, any_spec_version: int | None) -> None:
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
 def test_xarray_to_icechunk_nested_pickling(
-    scheduler, any_spec_version: int | None
+    scheduler: str, any_spec_version: int | None
 ) -> None:
     with dask.config.set(scheduler=scheduler):
         ds = create_test_data(dim_sizes=(2, 3, 4)).chunk(-1)
@@ -104,7 +104,7 @@ def test_xarray_to_icechunk_nested_pickling(
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_fork_session_deep_copies(scheduler, any_spec_version: int | None) -> None:
+def test_fork_session_deep_copies(scheduler: str, any_spec_version: int | None) -> None:
     with dask.config.set(scheduler=scheduler):
         ds = create_test_data(dim_sizes=(2, 3, 4)).drop_encoding().chunk(dim3=1)
         with tempfile.TemporaryDirectory() as tmpdir:

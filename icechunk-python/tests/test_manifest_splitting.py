@@ -23,7 +23,7 @@ DIMS = ("time", "latitude", "longitude")
 
 
 @given(data=st.data())
-def test_splitting_config_dict_roundtrip(data) -> None:
+def test_splitting_config_dict_roundtrip(data: st.DataObject) -> None:
     arrays = data.draw(
         st.lists(
             zarr_arrays(compressors=st.none(), attrs=st.none(), zarr_formats=st.just(3))
@@ -281,7 +281,7 @@ def test_manifest_splitting_sparse_regions(any_spec_version: int | None) -> None
     ],
 )
 def test_manifest_splitting_complex_config(
-    config, expected_split_sizes, any_spec_version: int | None
+    config: ic.RepositoryConfig, expected_split_sizes: tuple[int, int, int], any_spec_version: int | None
 ) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {ManifestSplitCondition.AnyArray(): config}

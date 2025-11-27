@@ -9,7 +9,7 @@ import zarr
 from tests.conftest import get_minio_client
 
 
-def mk_repo(spec_version) -> tuple[str, ic.Repository]:
+def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
     prefix = "test-repo__" + str(time.time())
     repo = ic.Repository.create(
         storage=ic.s3_storage(
@@ -109,7 +109,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     # empty array + 20 old versions
     assert len(expired_snapshots) == 21
 
-    def space_used():
+    def space_used() -> int:
         space = 0
         for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/snapshots")[
             "Contents"
