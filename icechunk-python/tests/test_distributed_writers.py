@@ -119,6 +119,6 @@ async def test_distributed_writers(
         do_writes("with-processes")
         await verify("with-processes")
 
-    with dask.config.set(scheduler="threads"):  # type: ignore[no-untyped-call]
+    with dask.config.set(scheduler="threads"):
         do_writes("with-threads")
         await verify("with-threads")
