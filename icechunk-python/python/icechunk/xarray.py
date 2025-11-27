@@ -1,7 +1,7 @@
 from collections.abc import Hashable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from importlib.util import find_spec
-from typing import Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 from packaging.version import Version
@@ -14,6 +14,9 @@ from icechunk.vendor.xarray import _choose_default_mode
 from xarray import DataArray, Dataset
 from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
+
+if TYPE_CHECKING:
+    from zarr.core.metadata import ArrayV3Metadata
 
 __all__ = ["to_icechunk"]
 
@@ -57,7 +60,7 @@ class LazyArrayWriter(ArrayWriter):
         super().__init__()  # type: ignore[no-untyped-call]
 
         self.eager_sources: list[np.ndarray[Any, Any]] = []
-        self.eager_targets: list[zarr.Array] = []
+        self.eager_targets: list[zarr.Array[ArrayV3Metadata]] = []
         self.eager_regions: list[tuple[slice, ...]] = []
 
     def add(self, source: Any, target: Any, region: Any = None) -> Any:
