@@ -21,7 +21,7 @@ IC_STORAGE = ic.local_filesystem_storage(
 )
 
 
-def do_test(scheduler: str, spec_version: int | None) -> None:
+def do_test(scheduler: str, spec_version: int | None = None) -> None:
     # Writing the initial dataset
     if scheduler in ["processes", "sync"]:
         CHUNKX = 3
