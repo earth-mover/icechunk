@@ -159,6 +159,7 @@ def test_manifest_overwrite_splitting_config_on_read(
             config=config,
             spec_version=any_spec_version,
         )
+        assert repo.config.manifest is not None
         assert repo.config.manifest.splitting is not None
 
         ds = xr.Dataset(
@@ -181,6 +182,7 @@ def test_manifest_overwrite_splitting_config_on_read(
         #### check that config is overwritten on read
         ### append along time - no splitting specified along this dimension
         repo = ic.Repository.open(storage, config=new_config)
+        assert repo.config.manifest is not None
         assert repo.config.manifest.splitting is not None
         session = repo.writable_session("main")
         with zarr.config.set({"array.write_empty_chunks": True}):

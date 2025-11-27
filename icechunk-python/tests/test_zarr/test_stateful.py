@@ -248,8 +248,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         store_array = zarr.open_array(path=array, store=self.store)
         indexer, _ = data.draw(orthogonal_indices(shape=model_array.shape))
         note(f"overwriting array orthogonal {indexer=}")
+        shape = model_array.oindex[indexer].shape  # type: ignore[union-attr]
         new_data = data.draw(
-            npst.arrays(shape=model_array.oindex[indexer].shape, dtype=model_array.dtype)
+            npst.arrays(shape=shape, dtype=model_array.dtype)
         )
         model_array.oindex[indexer] = new_data
         store_array.oindex[indexer] = new_data
@@ -320,8 +321,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         store_array = zarr.open_array(path=array, store=self.store)
         slicer = data.draw(basic_indices(shape=model_array.shape))
         note(f"overwriting array basic {slicer=}")
+        shape = model_array[slicer].shape # type: ignore [union-attr]
         new_data = data.draw(
-            npst.arrays(shape=model_array[slicer].shape, dtype=model_array.dtype)
+            npst.arrays(shape=shape, dtype=model_array.dtype)
         )
         model_array[slicer] = new_data
         store_array[slicer] = new_data

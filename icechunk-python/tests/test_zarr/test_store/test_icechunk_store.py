@@ -202,7 +202,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         store_dict = dict(zip(keys, data_buf, strict=True))
         await store._set_many(store_dict.items())
         for k, v in store_dict.items():
-            assert (await self.get(store, k)).to_bytes() == v.to_bytes()
+            store_val = await self.get(store, k)
+            assert store_val is not None
+            assert store_val.to_bytes() == v.to_bytes()
 
     async def test_set_not_open(self, store_not_open: IcechunkStore) -> None:
         """
@@ -384,14 +386,17 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         )
 
         assert len(values) == 3
+        assert values[0]
         data = values[0].to_bytes()
         assert len(data) == 5
         assert data == DEFAULT_GROUP_METADATA[:5]
 
+        assert values[1]
         data = values[1].to_bytes()
         assert len(data) == len(DEFAULT_GROUP_METADATA) - 5
         assert data == DEFAULT_GROUP_METADATA[:-5]
 
+        assert values[2]
         data = values[2].to_bytes()
         assert len(data) == len(DEFAULT_GROUP_METADATA) - 10
         assert data == DEFAULT_GROUP_METADATA[10:]
@@ -400,7 +405,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         await store.set("zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
         assert await store.exists("zarr.json")
         result = await self.get(store, "zarr.json")
-        assert result.to_bytes() == DEFAULT_GROUP_METADATA
+        assert result and result.to_bytes() == DEFAULT_GROUP_METADATA
 
     async def test_get(self, store: IcechunkStore) -> None:
         await self.set(
