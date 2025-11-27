@@ -71,7 +71,7 @@ def test_manifest_splitting_appends(any_spec_version: int | None) -> None:
                 mode="w",
             )
         session.commit("initialize")
-        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)  # type: ignore[arg-type]
         xr.testing.assert_identical(roundtripped, ds)
 
         nchunks = math.prod(SHAPE) * 2
@@ -88,7 +88,7 @@ def test_manifest_splitting_appends(any_spec_version: int | None) -> None:
         with zarr.config.set({"array.write_empty_chunks": True}):
             to_icechunk(ds, session, mode="a", append_dim="time")
         session.commit("appended")
-        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)  # type: ignore[arg-type]
         xr.testing.assert_identical(roundtripped, xr.concat([ds, ds], dim="time"))
         nchunks += math.prod(SHAPE) * 2
         nmanifests += 6 * 2
@@ -112,7 +112,7 @@ def test_manifest_splitting_appends(any_spec_version: int | None) -> None:
         with zarr.config.set({"array.write_empty_chunks": True}):
             to_icechunk(newds, session, mode="a", append_dim="longitude")
         session.commit("appended")
-        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)  # type: ignore[arg-type]
         xr.testing.assert_identical(
             roundtripped,
             xr.concat([xr.concat([ds, ds], dim="time"), newds], dim="longitude"),
@@ -170,7 +170,7 @@ def test_manifest_overwrite_splitting_config_on_read(
                 ds, session, encoding={"temperature": {"chunks": CHUNKS}}, mode="w"
             )
         session.commit("initialize")
-        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)  # type: ignore[arg-type]
         xr.testing.assert_identical(roundtripped, ds)
 
         nchunks = math.prod(SHAPE)
@@ -186,7 +186,7 @@ def test_manifest_overwrite_splitting_config_on_read(
         with zarr.config.set({"array.write_empty_chunks": True}):
             to_icechunk(ds, session, mode="a", append_dim="time")
         session.commit("appended")
-        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)  # type: ignore[arg-type]
         xr.testing.assert_identical(roundtripped, xr.concat([ds, ds], dim="time"))
         nchunks = 2 * math.prod(SHAPE)
         nmanifests += 2
@@ -235,7 +235,7 @@ def test_manifest_splitting_sparse_regions(any_spec_version: int | None) -> None
         with zarr.config.set({"array.write_empty_chunks": False}):
             to_icechunk(ds.isel(longitude=slice(1, 4)), session, region="auto")
         session.commit("write region 1")
-        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)  # type: ignore[arg-type]
         expected = xr.zeros_like(ds)
         expected.loc[{"longitude": slice(1, 3)}] = ds.isel(longitude=slice(1, 4))
         xr.testing.assert_identical(roundtripped, expected)

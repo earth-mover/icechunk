@@ -166,8 +166,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             (ValueError, TypeError), match=r"Unexpected byte_range, got.*"
         ):
             await store.get(
-                "c/0/0/0", prototype=default_buffer_prototype(), byte_range=(0, 2)
-            )  # type: ignore[arg-type]
+                "c/0/0/0", prototype=default_buffer_prototype(), byte_range=(0, 2)  # type: ignore[arg-type]
+            )
 
     @pytest.mark.xfail(reason="Not implemented")
     async def test_store_context_manager(self, open_kwargs: dict[str, Any]) -> None:

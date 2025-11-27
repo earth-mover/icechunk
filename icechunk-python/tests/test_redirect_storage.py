@@ -57,7 +57,7 @@ def test_era5_with_redirect() -> None:
 
         session = repo.readonly_session("main")
         ds = xr.open_dataset(
-            session.store,
+            session.store, # type: ignore[arg-type]
             group="1x721x1440",
             engine="zarr",
             chunks=None,
