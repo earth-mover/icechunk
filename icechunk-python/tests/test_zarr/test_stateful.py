@@ -79,7 +79,7 @@ def with_frequency(frequency: float) -> Callable[[Frequency], Frequency]:
             return (current_count * frequency) % 1.0 >= (1.0 - frequency)
 
         # Apply the precondition to the wrapped function
-        return frequency_check(wrapper)
+        return frequency_check(wrapper)  # type: ignore [return-value]
 
     return decorator
 
