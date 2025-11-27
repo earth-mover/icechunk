@@ -332,7 +332,7 @@ def test_group_setitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
         a = group[key]
         assert isinstance(a, Array)
         assert a.shape == (3, 5)
-        np.testing.assert_array_equal(a, arr)  # type: ignore [arg-type]
+        np.testing.assert_array_equal(a, arr)
 
 
 def test_group_contains(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
