@@ -197,6 +197,6 @@ async def test_tag_with_open_session(any_spec_version: int | None) -> None:
     session = repo.writable_session("main")
     store = session.store
 
-    for k in store.list_prefix(""):
+    async for k in store.list_prefix(""):
         value = await store.get(k, default_buffer_prototype())
         assert value is not None, k

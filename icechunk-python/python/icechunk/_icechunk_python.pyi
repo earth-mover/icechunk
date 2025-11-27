@@ -731,6 +731,15 @@ class ManifestSplittingConfig:
             ],
         ],
     ) -> ManifestSplittingConfig: ...
+    def to_dict(config: ManifestSplittingConfig) -> dict[
+        ManifestSplitCondition,
+        dict[
+            ManifestSplitDimCondition.Axis
+            | ManifestSplitDimCondition.DimensionName
+            | ManifestSplitDimCondition.Any,
+            int,
+        ]
+    ]: ...
     def __init__(self, split_sizes: SplitSizes) -> None:
         """Configuration for how Icechunk manifests will be split.
 
