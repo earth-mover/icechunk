@@ -22,11 +22,10 @@ import copy
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import pytest
-from hypothesis import assume, note
+from hypothesis import assume, note, settings
 from hypothesis.stateful import (
     Bundle,
     RuleBasedStateMachine,
-    Settings,
     consumes,
     initialize,
     invariant,
@@ -629,7 +628,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             assert ancestry[-1] == self.initial_snapshot
 
 
-VersionControlStateMachine.TestCase.settings = Settings(
+VersionControlStateMachine.TestCase.settings = settings(
     deadline=None,
     # stateful_step_count=100,
     # report_multiple_bugs=False,

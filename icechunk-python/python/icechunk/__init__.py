@@ -267,6 +267,6 @@ def upgrade_icechunk_repository(
 
 
 ManifestSplittingConfig.from_dict = from_dict  # type: ignore[method-assign]
-ManifestSplittingConfig.to_dict = to_dict  # type: ignore[attr-defined]
+ManifestSplittingConfig.to_dict = to_dict  # type: ignore[method-assign]
 
 initialize_logs()

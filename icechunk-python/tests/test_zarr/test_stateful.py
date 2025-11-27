@@ -7,9 +7,8 @@ import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import assume, note
+from hypothesis import assume, note, settings
 from hypothesis.stateful import (
-    Settings,
     invariant,
     precondition,
     rule,
@@ -101,6 +100,8 @@ def chunk_paths(
 # TODO: more before/after commit invariants?
 # TODO: add "/" to self.all_groups, deleting "/" seems to be problematic
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
+    store: ic.IcechunkStore  # Override parent class type annotation
+
     def __init__(self, storage: Storage) -> None:
         self.storage = storage
         self.repo = Repository.create(self.storage)
@@ -387,7 +388,7 @@ def test_zarr_hierarchy() -> None:
         return ModifiedZarrHierarchyStateMachine(in_memory_storage())
 
     run_state_machine_as_test(  # type: ignore[no-untyped-call]
-        mk_test_instance_sync, settings=Settings(report_multiple_bugs=False)
+        mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
     )
 
 
@@ -400,5 +401,5 @@ def test_zarr_store() -> None:
     #     return ZarrStoreStateMachine(store)
 
     # run_state_machine_as_test(
-    #     mk_test_instance_sync, settings=Settings(report_multiple_bugs=False)
+    #     mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
     # )
