@@ -40,7 +40,7 @@ Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 # ]
 
 
-def with_frequency(frequency: float) -> Frequency:
+def with_frequency(frequency: float) -> Callable[[Frequency], Frequency]:
     """
     Decorator to control how frequently a rule runs in Hypothesis stateful tests.
 
