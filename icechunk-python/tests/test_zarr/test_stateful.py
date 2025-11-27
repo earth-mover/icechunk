@@ -1,7 +1,7 @@
 import functools
 import json
 import pickle
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, TypeVar, cast
 
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
@@ -71,7 +71,7 @@ def with_frequency(frequency: float) -> Callable[[Frequency], Frequency]:
                 setattr(self, counter_attr, 0)
 
             # Increment counter
-            current_count = getattr(self, counter_attr) + 1
+            current_count = cast(int, getattr(self, counter_attr)) + 1
             setattr(self, counter_attr, current_count)
 
             # Check if we should run based on frequency

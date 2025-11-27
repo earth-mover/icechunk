@@ -2,7 +2,7 @@ import socket
 import threading
 from contextlib import closing
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any
+from typing import Any, cast
 
 import icechunk as ic
 import xarray as xr
@@ -14,7 +14,7 @@ def find_free_port() -> int:
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
         s.bind(("", 0))
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return s.getsockname()[1]
+        return cast(int, s.getsockname()[1])
 
 
 class RedirectHandler(BaseHTTPRequestHandler):
