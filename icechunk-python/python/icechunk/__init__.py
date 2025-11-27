@@ -222,14 +222,15 @@ def print_debug_info() -> None:
 # So on the python side, we can accept a dict as a nicer API, and immediately
 # convert it to tuples that preserve order, and pass those to Rust
 
+ManifestSplitValues: TypeAlias = dict[
+    ManifestSplitDimCondition.Axis
+    | ManifestSplitDimCondition.DimensionName
+    | ManifestSplitDimCondition.Any,
+    int,
+]
 SplitSizesDict: TypeAlias = dict[
     ManifestSplitCondition,
-    dict[
-        ManifestSplitDimCondition.Axis
-        | ManifestSplitDimCondition.DimensionName
-        | ManifestSplitDimCondition.Any,
-        int,
-    ],
+    ManifestSplitValues,
 ]
 
 
