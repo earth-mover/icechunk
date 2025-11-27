@@ -1,7 +1,7 @@
 import functools
 import json
 import pickle
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
@@ -32,6 +32,8 @@ from zarr.testing.strategies import (
 
 PROTOTYPE = default_buffer_prototype()
 
+Frequency = TypeVar("Frequency", bound=Callable[..., Any])
+
 # pytestmark = [
 #     pytest.mark.filterwarnings(
 #         "ignore::zarr.core.dtype.common.UnstableSpecificationWarning"
@@ -39,7 +41,7 @@ PROTOTYPE = default_buffer_prototype()
 # ]
 
 
-def with_frequency(frequency):
+def with_frequency(frequency: float) -> Frequency:
     """
     Decorator to control how frequently a rule runs in Hypothesis stateful tests.
 
@@ -54,17 +56,17 @@ def with_frequency(frequency):
             pass
     """
 
-    def decorator(func):
+    def decorator(func: Frequency) -> Frequency:
         # Create a counter attribute name specific to this function
         counter_attr = f"__{func.__name__}_counter"
 
         @functools.wraps(func)
-        def wrapper(self, *args, **kwargs):
+        def wrapper(self: object, *args: Any, **kwargs: Any) -> Any:
             return func(self, *args, **kwargs)
 
         # Add precondition that checks frequency
         @precondition
-        def frequency_check(self):
+        def frequency_check(self: object) -> bool:
             # Initialize counter if it doesn't exist
             if not hasattr(self, counter_attr):
                 setattr(self, counter_attr, 0)
@@ -110,7 +112,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         and bool(self.all_arrays)
     )
     @rule(data=st.data())
-    def reopen_with_config(self, data):
+    def reopen_with_config(self, data: st.DataObject) -> None:
         array_paths = data.draw(
             st.lists(st.sampled_from(sorted(self.all_arrays)), max_size=3, unique=True)
         )
@@ -127,7 +129,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
-    def rewrite_manifests(self, data):
+    def rewrite_manifests(self, data: st.DataObject) -> None:
         config_dict = {
             ic.ManifestSplitCondition.AnyArray(): {
                 ic.ManifestSplitDimCondition.Any(): data.draw(
@@ -151,7 +153,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     @precondition(lambda self: self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
-    def commit_with_check(self, data) -> None:
+    def commit_with_check(self, data: st.DataObject) -> None:
         note("committing and checking list_prefix")
 
         lsbefore = sorted(self._sync_iter(self.store.list_prefix("")))
@@ -275,7 +277,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # TODO: MemoryStore is broken?
         # assert not self._sync(self.model.is_empty("/"))
 
-    def draw_directory(self, data) -> str:
+    def draw_directory(self, data: st.DataObject) -> str:
         group_st = (
             st.sampled_from(sorted(self.all_groups)) if self.all_groups else st.nothing()
         )
@@ -299,7 +301,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     @precondition(lambda self: bool(self.all_arrays))
     @rule(data=st.data())
-    def delete_chunk(self, data) -> None:
+    def delete_chunk(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
         arr = zarr.open_array(path=array, store=self.model)
         chunk_path = data.draw(
@@ -312,7 +314,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     @precondition(lambda self: bool(self.all_arrays))
     @rule(data=st.data())
-    def overwrite_array_basic_indexing(self, data) -> None:
+    def overwrite_array_basic_indexing(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
         model_array = zarr.open_array(path=array, store=self.model)
         store_array = zarr.open_array(path=array, store=self.store)
@@ -326,7 +328,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     @precondition(lambda self: bool(self.all_arrays))
     @rule(data=st.data())
-    def resize_array(self, data) -> None:
+    def resize_array(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
         model_array = zarr.open_array(path=array, store=self.model)
         store_array = zarr.open_array(path=array, store=self.store)
@@ -338,7 +340,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
     @rule(data=st.data())
-    def delete_dir(self, data) -> None:
+    def delete_dir(self, data: st.DataObject) -> None:
         path = self.draw_directory(data)
         note(f"delete_dir with {path=!r}")
         self._sync(self.model.delete_dir(path))

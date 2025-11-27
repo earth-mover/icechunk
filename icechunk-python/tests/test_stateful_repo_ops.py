@@ -7,7 +7,7 @@ import operator
 import textwrap
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Self
+from typing import Any, Iterator, Self
 
 import numpy as np
 import pytest
@@ -102,7 +102,7 @@ class TagModel:
 
 
 class Model:
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         self.store: dict[str, Any] = {}  #
 
         self.initial_snapshot_id: str | None = None
@@ -198,7 +198,7 @@ class Model:
         assert prefix == ""
         return tuple(self.store)
 
-    def refs_iter(self):
+    def refs_iter(self) -> Iterator[str]:
         tag_iter = map(operator.attrgetter("commit_id"), self.tags.values())
         return itertools.chain(self.branches.values(), tag_iter)
 
@@ -569,7 +569,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 self.session = self.repo.writable_session(DEFAULT_BRANCH)
                 self.model.checkout_branch(DEFAULT_BRANCH)
 
-    def check_commit(self, commit) -> None:
+    def check_commit(self, commit: str) -> None:
         assume(commit in self.model.commits)
         note(f"Checking {commit=!r}")
         expected = self.model.commits[commit]
