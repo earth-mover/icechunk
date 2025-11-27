@@ -5,6 +5,7 @@ import time
 import uuid
 from random import randrange
 from threading import Event
+from typing import Any
 
 import pytest
 from termcolor import colored
@@ -17,7 +18,7 @@ N = 15
 
 
 async def write_to_store(
-    array: zarr.Array, x: int, y: int, barrier: asyncio.Barrier
+    array: zarr.Array[Any], x: int, y: int, barrier: asyncio.Barrier
 ) -> None:
     await barrier.wait()
     await asyncio.sleep(random.uniform(0, 0.5))
@@ -25,7 +26,7 @@ async def write_to_store(
     # await asyncio.sleep(0)
 
 
-async def read_store(array: zarr.Array, x: int, y: int, barrier: asyncio.Barrier) -> None:
+async def read_store(array: zarr.Array[Any], x: int, y: int, barrier: asyncio.Barrier) -> None:
     await barrier.wait()
     while True:
         value = array[x, y]

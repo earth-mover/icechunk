@@ -1,6 +1,6 @@
 import time
 from datetime import UTC, datetime
-from typing import cast
+from typing import cast, Any
 
 import pytest
 
@@ -50,7 +50,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
         session = repo.writable_session("main")
         store = session.store
         group = zarr.open_group(store=store)
-        array = cast(zarr.core.array.Array, group["array"])
+        array = cast(zarr.core.array.Array[Any], group["array"])
         array[i] = i
         session.commit(f"written coord {i}")
 
@@ -59,7 +59,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     session = repo.writable_session("main")
     store = session.store
     group = zarr.open_group(store=store)
-    array = cast(zarr.core.array.Array, group["array"])
+    array = cast(zarr.core.array.Array[Any], group["array"])
     array[999] = 0
     session.commit("written coord 999")
 
@@ -207,7 +207,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     session = repo.readonly_session(branch="main")
     store = session.store
     group = zarr.open_group(store=store, mode="r")
-    array = cast(zarr.core.array.Array, group["array"])
+    array = cast(zarr.core.array.Array[Any], group["array"])
     assert array[999] == 0
     for i in range(20):
         assert array[i] == i
