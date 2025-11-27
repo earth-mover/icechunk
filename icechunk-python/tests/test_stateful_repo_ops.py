@@ -7,7 +7,7 @@ import operator
 import textwrap
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Iterator, Self
+from typing import Any, Iterator, Self, cast
 
 import numpy as np
 import pytest
@@ -140,7 +140,7 @@ class Model:
         self.store[key] = value
 
     def __getitem__(self, key: str) -> Buffer:
-        return self.store[key]
+        return cast(Buffer, self.store[key])
 
     @property
     def has_commits(self) -> bool:
