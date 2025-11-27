@@ -176,21 +176,23 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                 f" \n\n Before : {lsbefore!r} \n\n After: {lsafter!r}, \n\n Expected: {lsexpect!r}"
             )
 
+        get_after_cmp: Any
+        get_before_cmp: Any
         # if it's metadata, we need to compare the data parsed, not raw (because of map ordering)
         if path.endswith(".json"):
-            get_after = json.loads(get_after.to_bytes())
-            get_before = json.loads(get_before.to_bytes())
+            get_after_cmp = json.loads(get_after.to_bytes())
+            get_before_cmp = json.loads(get_before.to_bytes())
         else:
-            get_after = get_after.to_bytes()
-            get_before = get_before.to_bytes()
+            get_after_cmp = get_after.to_bytes()
+            get_before_cmp = get_before.to_bytes()
 
-        if get_before != get_after:
+        if get_before_cmp != get_after_cmp:
             get_expect = self._sync(self.model.get(path, prototype=PROTOTYPE))
             assert get_expect
             raise ValueError(
                 f"Value changed before and after commit for path {path}"
-                f" \n\n Before : {get_before!r} \n\n "
-                f"After: {get_after!r}, \n\n "
+                f" \n\n Before : {get_before_cmp!r} \n\n "
+                f"After: {get_after_cmp!r}, \n\n "
                 f"Expected: {get_expect.to_bytes()!r}"
             )
 
