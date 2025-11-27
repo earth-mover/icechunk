@@ -85,7 +85,7 @@ class CommitModel:
     id: str
     written_at: datetime.datetime
     store: dict[str, Any]
-    parent_id: str
+    parent_id: str | None
 
     @classmethod
     def from_snapshot_and_store(cls, snap: SnapshotInfo, store: dict[str, Any]) -> Self:
@@ -268,8 +268,9 @@ class Model:
         for commit_id in self.refs_iter():
             while commit_id != self.initial_snapshot_id:
                 reachable_snaps.add(commit_id)
-                commit_id = self.commits[commit_id].parent_id
-
+                parent_id = self.commits[commit_id].parent_id
+                assert parent_id is not None, f"Commit {commit_id} has no parent but is not the initial snapshot"
+                commit_id = parent_id
         deleted = set()
         for k in set(self.ondisk_snaps) - reachable_snaps:
             if self.ondisk_snaps[k].written_at < older_than:

@@ -39,8 +39,8 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     group = zarr.group(store=store, overwrite=True)
     array = group.create_array(
         "array",
-        shape=(1000),
-        chunks=(10),
+        shape=(1000,),
+        chunks=(10,),
         dtype="i4",
         fill_value=-1,
     )
