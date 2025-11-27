@@ -75,7 +75,7 @@ async def test_resize_and_shift_right() -> None:
     session.shift_array("/array", (4,))
     np.testing.assert_equal(array[8:58], np.arange(50))
     np.testing.assert_equal(array[0:8], np.arange(8))
-    assert (array[58:] == 42).all()
+    assert np.all(array[58:] == 42)
     session.commit("shifted")
 
     # test still valid after commit
@@ -85,4 +85,4 @@ async def test_resize_and_shift_right() -> None:
     assert array.shape == (100,)
     np.testing.assert_equal(array[8:58], np.arange(50))
     np.testing.assert_equal(array[0:8], np.arange(8))
-    assert (array[58:] == 42).all()
+    assert np.all(array[58:] == 42)
