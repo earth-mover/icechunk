@@ -35,8 +35,6 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def get(self, store: IcechunkStore, key: str) -> Buffer | None:
         try:
             result = await store._store.get(key)
-            if result is None:
-                return None
         except ValueError as _e:
             # Zarr python expects None to be returned if the key does not exist
             # but an IcechunkStore returns an error if the key does not exist

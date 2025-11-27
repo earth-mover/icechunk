@@ -428,7 +428,8 @@ async def test_timetravel_async(using_flush: bool, any_spec_version: int | None)
 
     session.discard_changes()
     assert not session.has_uncommitted_changes
-    assert air_temp[200, 6] == 54
+    # I don't understand why I need to ignore here
+    assert air_temp[200, 6] == 54  # type: ignore [unreachable]
 
     await repo.create_branch_async("feature", new_snapshot_id)
     session = await repo.writable_session_async("feature")
