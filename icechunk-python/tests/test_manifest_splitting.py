@@ -283,7 +283,7 @@ def test_manifest_splitting_sparse_regions(any_spec_version: int | None) -> None
     ],
 )
 def test_manifest_splitting_complex_config(
-    config: ic.RepositoryConfig, expected_split_sizes: tuple[int, int, int], any_spec_version: int | None
+    config: ic.ManifestSplitValues, expected_split_sizes: tuple[int, int, int], any_spec_version: int | None
 ) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {ManifestSplitCondition.AnyArray(): config}
