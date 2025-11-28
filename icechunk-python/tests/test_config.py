@@ -264,6 +264,7 @@ def test_config_from_store(any_spec_version: int | None) -> None:
     store = session.store
 
     assert store.session.config == config
+    assert store.session.config.virtual_chunk_containers is not None
     assert store.session.config.virtual_chunk_containers.keys() == {"s3://example/"}
 
 

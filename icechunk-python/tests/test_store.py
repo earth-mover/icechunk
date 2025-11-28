@@ -34,7 +34,7 @@ async def test_store_clear_chunk_list(any_spec_version: int | None) -> None:
         name="0", shape=(1, 3, 5, 1), chunks=(1, 3, 2, 1), fill_value=-1, dtype=np.int64
     )
     group = zarr.group(store=store)
-    group.create_array(**array_kwargs)
+    group.create_array(**array_kwargs)  # type: ignore[arg-type]
     session.commit("created node /")
 
     session = repo.writable_session("main")
@@ -42,7 +42,7 @@ async def test_store_clear_chunk_list(any_spec_version: int | None) -> None:
     await store.clear()
 
     group = zarr.group(store=store)
-    array = group.create_array(**array_kwargs, overwrite=True)
+    array = group.create_array(**array_kwargs, overwrite=True)  # type: ignore[arg-type]
     assert len([_ async for _ in store.list_prefix("/")]) == 2
     array[:] = rng.integers(
         low=0,
@@ -125,7 +125,7 @@ async def test_transaction_failed_no_commit(any_spec_version: int | None) -> Non
     assert cid1 == cid2, "Transaction committed changes despite error"
 
 
-def test_shards(any_spec_version: int | None):
+def test_shards(any_spec_version: int | None) -> None:
     # regression test for GH1019
     storage = ic.in_memory_storage()
     repo = ic.Repository.create(

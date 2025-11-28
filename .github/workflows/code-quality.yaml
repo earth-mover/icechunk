@@ -68,7 +68,7 @@ jobs:
         shell: bash
         working-directory: icechunk-python
         run: |
-          uvx --with mypy --with zarr --with hypothesis --with xarray --with dask mypy python
+          uv run --all-groups mypy python tests
 
       - name: Run pre-commit checks (skip Rust)
         uses: pre-commit/action@v3.0.1

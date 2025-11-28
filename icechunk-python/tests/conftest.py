@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, cast
 
 import boto3
 import pytest
@@ -64,4 +64,4 @@ def write_chunks_to_minio(
     scope="function", params=[1, 2, None], ids=["spec-v1", "spec-v2", "no-spec-version"]
 )
 def any_spec_version(request: pytest.FixtureRequest) -> int | None:
-    return request.param
+    return cast(int | None, request.param)

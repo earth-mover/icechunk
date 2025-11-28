@@ -5,7 +5,7 @@ import icechunk as ic
 import zarr
 
 
-async def test_basic_move():
+async def test_basic_move() -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
     )
@@ -60,7 +60,7 @@ Nodes moved/renamed:
     )
 
 
-def test_move_errors():
+def test_move_errors() -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
     )
@@ -80,7 +80,7 @@ def test_move_errors():
         session.move("/not-found", "/my/new/path")
 
 
-def test_doesnt_rebase():
+def test_doesnt_rebase() -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
     )
