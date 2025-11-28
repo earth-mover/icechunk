@@ -74,6 +74,7 @@ def s3_store(
     s3_compatible: bool = False,
     force_path_style: bool = False,
     network_stream_timeout_seconds: int = 60,
+    requester_pays: bool = False,
 ) -> ObjectStoreConfig.S3Compatible | ObjectStoreConfig.S3:
     """Build an ObjectStoreConfig instance for S3 or S3 compatible object stores."""
 
@@ -83,6 +84,7 @@ def s3_store(
         allow_http=allow_http,
         force_path_style=force_path_style,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+        requester_pays=requester_pays,
     )
     return (
         ObjectStoreConfig.S3Compatible(options)
@@ -108,6 +110,7 @@ def s3_storage(
     scatter_initial_credentials: bool = False,
     force_path_style: bool = False,
     network_stream_timeout_seconds: int = 60,
+    requester_pays: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -148,6 +151,8 @@ def s3_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled.
+    requester_pays: bool
+        Enable requester pays for S3 buckets
     """
 
     credentials = s3_credentials(
@@ -166,6 +171,7 @@ def s3_storage(
         allow_http=allow_http,
         force_path_style=force_path_style,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+        requester_pays=requester_pays,
     )
     return Storage.new_s3(
         config=options,

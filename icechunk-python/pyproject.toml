@@ -106,8 +106,8 @@ upstream = [
   "termcolor",
   # "object-store-python @ git+https://github.com/roeap/object-store-python.git", # doesn't work with uv
   "object-store-python",
-  "dask @ git+https://github.com/dask/dask.git",
-  "distributed @ git+https://github.com/dask/distributed.git",
+  "distributed==2025.11.0",
+  "dask==2025.11.0",
   "xarray @ git+https://github.com/pydata/xarray.git",
   "zarr @ git+https://github.com/zarr-developers/zarr.git",
 ]

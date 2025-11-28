@@ -303,7 +303,12 @@ impl S3Storage {
         key: &str,
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let client = self.get_client(settings).await;
-        let b = client.get_object().bucket(self.bucket.as_str()).key(key);
+        let mut b = client.get_object().bucket(self.bucket.as_str()).key(key);
+
+        if self.config.requester_pays {
+            b = b.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
         Ok(Box::new(b.send().await.map_err(Box::new)?.body.into_async_read()))
     }
 
@@ -508,14 +513,18 @@ impl Storage for S3Storage {
         settings: &Settings,
     ) -> StorageResult<FetchConfigResult> {
         let key = self.get_config_path()?;
-        let res = self
+        let mut req = self
             .get_client(settings)
             .await
             .get_object()
             .bucket(self.bucket.clone())
-            .key(key)
-            .send()
-            .await;
+            .key(key);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let res = req.send().await;
 
         match res {
             Ok(output) => match output.e_tag {
@@ -758,14 +767,18 @@ impl Storage for S3Storage {
         ref_key: &str,
     ) -> StorageResult<GetRefResult> {
         let key = self.ref_key(ref_key)?;
-        let res = self
+        let mut req = self
             .get_client(settings)
             .await
             .get_object()
             .bucket(self.bucket.clone())
-            .key(key.clone())
-            .send()
-            .await;
+            .key(key.clone());
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let res = req.send().await;
 
         match res {
             Ok(res) => {
@@ -791,14 +804,18 @@ impl Storage for S3Storage {
     #[instrument(skip_all)]
     async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>> {
         let prefix = self.ref_key("")?;
-        let mut paginator = self
+        let mut req = self
             .get_client(settings)
             .await
             .list_objects_v2()
             .bucket(self.bucket.clone())
-            .prefix(prefix.clone())
-            .into_paginator()
-            .send();
+            .prefix(prefix.clone());
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let mut paginator = req.into_paginator().send();
 
         let mut res = Vec::new();
 
@@ -876,12 +893,18 @@ impl Storage for S3Storage {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let prefix = format!("{}/{}", self.prefix, prefix).replace("//", "/");
-        let stream = self
+        let mut req = self
             .get_client(settings)
             .await
             .list_objects_v2()
             .bucket(self.bucket.clone())
-            .prefix(prefix)
+            .prefix(prefix);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let stream = req
             .into_paginator()
             .send()
             .into_stream_03x()
@@ -961,15 +984,18 @@ impl Storage for S3Storage {
         snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>> {
         let key = self.get_snapshot_path(snapshot)?;
-        let res = self
+        let mut req = self
             .get_client(settings)
             .await
             .head_object()
             .bucket(self.bucket.clone())
-            .key(key)
-            .send()
-            .await
-            .map_err(Box::new)?;
+            .key(key);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let res = req.send().await.map_err(Box::new)?;
 
         let res = res.last_modified.ok_or(StorageErrorKind::Other(
             "Object has no last_modified field".to_string(),
@@ -988,13 +1014,18 @@ impl Storage for S3Storage {
         key: &str,
         range: &Range<u64>,
     ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
-        let b = self
+        let mut b = self
             .get_client(settings)
             .await
             .get_object()
             .bucket(self.bucket.clone())
             .key(key)
             .range(range_to_header(range));
+
+        if self.config.requester_pays {
+            b = b.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
         Ok(Box::new(
             b.send().await.map_err(Box::new)?.body.collect().await.map_err(Box::new)?,
         ))
@@ -1009,7 +1040,16 @@ impl Storage for S3Storage {
     ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
         let client = self.get_client(settings).await;
         let bucket = self.bucket.clone();
-        Ok(Box::new(get_object_range(client.as_ref(), bucket, key, range).await?))
+        Ok(Box::new(
+            get_object_range(
+                client.as_ref(),
+                bucket,
+                key,
+                range,
+                self.config.requester_pays,
+            )
+            .await?,
+        ))
     }
 }
 
@@ -1062,8 +1102,14 @@ async fn get_object_range(
     bucket: String,
     key: &str,
     range: &Range<ChunkOffset>,
+    requester_pays: bool,
 ) -> StorageResult<impl AsyncRead + use<>> {
-    let b = client.get_object().bucket(bucket).key(key).range(range_to_header(range));
+    let mut b = client.get_object().bucket(bucket).key(key).range(range_to_header(range));
+
+    if requester_pays {
+        b = b.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+    }
+
     Ok(b.send().await.map_err(Box::new)?.body.into_async_read())
 }
 
@@ -1089,6 +1135,7 @@ mod tests {
             anonymous: false,
             force_path_style: false,
             network_stream_timeout_seconds: None,
+            requester_pays: true,
         };
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "access_key_id".to_string(),
@@ -1111,7 +1158,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null,"requester_pays":true},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
@@ -1128,6 +1175,7 @@ mod tests {
                 anonymous: false,
                 force_path_style: false,
                 network_stream_timeout_seconds: None,
+                requester_pays: false,
             },
             "bucket".to_string(),
             Some("prefix".to_string()),
