@@ -32,7 +32,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def set(self, store: IcechunkStore, key: str, value: Buffer) -> None:
         await store._store.set(key, value.to_bytes())
 
-    async def get(self, store: IcechunkStore, key: str) -> Buffer | None:
+    async def get(self, store: IcechunkStore, key: str) -> Buffer | None:  # type: ignore[override]
         try:
             result = await store._store.get(key)
         except ValueError as _e:
@@ -105,7 +105,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert store._is_open
         assert store.read_only == read_only
 
-    async def test_read_only_store_raises(
+    async def test_read_only_store_raises(  # type: ignore[override]
         self, store: IcechunkStore, store_kwargs: dict[str, Any]
     ) -> None:
         kwargs = {**store_kwargs}
@@ -126,7 +126,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     @pytest.mark.skip(
         reason="icechunk requires opting-in to pickling at the session level"
     )
-    def test_serializable_store(self, store: IcechunkStore) -> None:
+    def test_serializable_store(self, store: IcechunkStore) -> None:  # type: ignore[override]
         foo = pickle.dumps(store)
         loaded = pickle.loads(foo)
         # pickled stores dont point to the same session instance, so they are not equal
@@ -368,7 +368,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             pytest.skip("store does not support deletes")
         await store.delete("zarr.json")
 
-    async def test_get_partial_values(
+    async def test_get_partial_values(  # type: ignore[override]
         self,
         store: IcechunkStore,
     ) -> None:
@@ -401,13 +401,13 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert len(data) == len(DEFAULT_GROUP_METADATA) - 10
         assert data == DEFAULT_GROUP_METADATA[10:]
 
-    async def test_set(self, store: IcechunkStore) -> None:
+    async def test_set(self, store: IcechunkStore) -> None:  # type: ignore[override]
         await store.set("zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
         assert await store.exists("zarr.json")
         result = await self.get(store, "zarr.json")
         assert result and result.to_bytes() == DEFAULT_GROUP_METADATA
 
-    async def test_get(self, store: IcechunkStore) -> None:
+    async def test_get(self, store: IcechunkStore) -> None:  # type: ignore[override]
         await self.set(
             store, "zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         )
@@ -497,7 +497,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert not await store.exists("foo/zarr.json")
         assert not await store.exists("foo/c/0/0/0")
 
-    async def test_getsize(self, store: IcechunkStore) -> None:
+    async def test_getsize(self, store: IcechunkStore) -> None:  # type: ignore[override]
         key = "k/zarr.json"
         data = self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         await self.set(store, key, data)
