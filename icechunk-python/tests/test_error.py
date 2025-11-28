@@ -2,7 +2,7 @@ import glob
 import re
 from pathlib import Path
 from shutil import rmtree
-from typing import cast, Any
+from typing import Any, cast
 
 import pytest
 

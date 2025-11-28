@@ -13,7 +13,7 @@ file as a python script: `python ./tests/test_can_read_old.py`.
 
 import shutil
 from datetime import UTC, datetime
-from typing import cast, Any
+from typing import Any, cast
 
 import pytest
 from numpy.testing import assert_array_equal

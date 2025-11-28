@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from typing import cast, Any
+from typing import Any, cast
 
 import numpy as np
 

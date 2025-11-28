@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import operator
-from typing import Literal, cast, Any
+from typing import Any, Literal, cast
 
 import numpy as np
 import pytest

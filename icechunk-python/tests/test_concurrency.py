@@ -26,7 +26,9 @@ async def write_to_store(
     # await asyncio.sleep(0)
 
 
-async def read_store(array: zarr.Array[Any], x: int, y: int, barrier: asyncio.Barrier) -> None:
+async def read_store(
+    array: zarr.Array[Any], x: int, y: int, barrier: asyncio.Barrier
+) -> None:
     await barrier.wait()
     while True:
         value = array[x, y]
