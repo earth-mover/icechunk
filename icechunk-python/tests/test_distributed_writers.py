@@ -1,6 +1,6 @@
 import time
 import warnings
-from typing import cast, Any
+from typing import Any, cast
 
 import pytest
 

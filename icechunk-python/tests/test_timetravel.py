@@ -1,6 +1,6 @@
 import asyncio
 from datetime import timedelta
-from typing import cast, Any
+from typing import Any, cast
 
 import pytest
 

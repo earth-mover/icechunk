@@ -125,7 +125,7 @@ def test_fork_session_deep_copies(scheduler: str, any_spec_version: int | None) 
             session.commit("yaya writes succeeded")
 
             actual = xr.open_dataset(
-                repo.readonly_session("main").store, # type: ignore [arg-type]
-                engine="zarr"
+                repo.readonly_session("main").store,  # type: ignore [arg-type]
+                engine="zarr",
             )
             xr.testing.assert_identical(actual, ds)

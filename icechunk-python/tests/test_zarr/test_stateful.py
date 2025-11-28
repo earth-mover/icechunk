@@ -1,7 +1,8 @@
 import functools
 import json
 import pickle
-from typing import Any, Callable, TypeVar, cast
+from collections.abc import Callable
+from typing import Any, TypeVar, cast
 
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
@@ -131,13 +132,15 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def rewrite_manifests(self, data: st.DataObject) -> None:
-        sconfig = ic.ManifestSplittingConfig.from_dict({
-            ic.ManifestSplitCondition.AnyArray(): {
-                ic.ManifestSplitDimCondition.Any(): data.draw(
-                    st.integers(min_value=1, max_value=10)
-                )
+        sconfig = ic.ManifestSplittingConfig.from_dict(
+            {
+                ic.ManifestSplitCondition.AnyArray(): {
+                    ic.ManifestSplitDimCondition.Any(): data.draw(
+                        st.integers(min_value=1, max_value=10)
+                    )
+                }
             }
-        })
+        )
 
         config = ic.RepositoryConfig(
             inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)
@@ -251,9 +254,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         indexer, _ = data.draw(orthogonal_indices(shape=model_array.shape))
         note(f"overwriting array orthogonal {indexer=}")
         shape = model_array.oindex[indexer].shape  # type: ignore[union-attr]
-        new_data = data.draw(
-            npst.arrays(shape=shape, dtype=model_array.dtype)
-        )
+        new_data = data.draw(npst.arrays(shape=shape, dtype=model_array.dtype))
         model_array.oindex[indexer] = new_data
         store_array.oindex[indexer] = new_data
 
@@ -323,10 +324,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         store_array = zarr.open_array(path=array, store=self.store)
         slicer = data.draw(basic_indices(shape=model_array.shape))
         note(f"overwriting array basic {slicer=}")
-        shape = model_array[slicer].shape # type: ignore [union-attr]
-        new_data = data.draw(
-            npst.arrays(shape=shape, dtype=model_array.dtype)
-        )
+        shape = model_array[slicer].shape  # type: ignore [union-attr]
+        new_data = data.draw(npst.arrays(shape=shape, dtype=model_array.dtype))
         model_array[slicer] = new_data
         store_array[slicer] = new_data
 

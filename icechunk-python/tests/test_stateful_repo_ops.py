@@ -5,9 +5,10 @@ import itertools
 import json
 import operator
 import textwrap
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Iterator, Self, cast
+from typing import Any, Self, cast
 
 import numpy as np
 import pytest
@@ -269,7 +270,9 @@ class Model:
             while commit_id != self.initial_snapshot_id:
                 reachable_snaps.add(commit_id)
                 parent_id = self.commits[commit_id].parent_id
-                assert parent_id is not None, f"Commit {commit_id} has no parent but is not the initial snapshot"
+                assert (
+                    parent_id is not None
+                ), f"Commit {commit_id} has no parent but is not the initial snapshot"
                 commit_id = parent_id
         deleted = set()
         for k in set(self.ondisk_snaps) - reachable_snaps:
