@@ -54,7 +54,7 @@ INITIAL_SNAPSHOT = "1CECHNKREP0F1RSTCMT0"
 
 
 class NewSyncStoreWrapper(SyncStoreWrapper):
-    def list_prefix(self, prefix: str) -> list[str]:
+    def list_prefix(self, prefix: str) -> list[str]:  # type: ignore[override]
         return self._sync_iter(self.store.list_prefix(prefix))
 
 
