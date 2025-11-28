@@ -110,6 +110,7 @@
               packages = [
                 python
                 pkgs.uv
+                pkgs.ruff
 
                 fenix.packages.x86_64-linux.stable.toolchain
                 pkgs.cargo-nextest # test runner
@@ -122,15 +123,20 @@
                 pkgs.just # script launcher with a make flavor
                 pkgs.alejandra # nix code formatter
                 pkgs.markdownlint-cli2
+                pkgs.flatbuffers
+
+                # necessary for reqwest
+                pkgs.openssl
+                pkgs.pkg-config
               ];
 
               env = {
                 # Prevent uv from managing Python downloads
                 UV_PYTHON_DOWNLOADS = "never";
-                # Force uv to use nixpkgs Python interpreter
-                UV_PYTHON = python.interpreter;
 
                 RUSTFLAGS = "-W unreachable-pub -W bare-trait-objects";
+
+                MOLD_JOBS = 10;
               }
               // lib.optionalAttrs pkgs.stdenv.isLinux {
                 # Python libraries often load native shared objects using dlopen(3).
@@ -205,11 +211,9 @@
               # Don't create venv using uv
               UV_NO_SYNC = "1";
 
-              # Force uv to use nixpkgs Python interpreter
-              UV_PYTHON = python.interpreter;
-
               # Prevent uv from downloading managed Python's
               UV_PYTHON_DOWNLOADS = "never";
+
             };
 
             shellHook = ''
