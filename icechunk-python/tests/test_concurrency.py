@@ -18,7 +18,7 @@ N = 15
 
 
 async def write_to_store(
-    array: zarr.Array[Any], x: int, y: int, barrier: asyncio.Barrier
+    array: "zarr.Array[Any]", x: int, y: int, barrier: asyncio.Barrier
 ) -> None:
     await barrier.wait()
     await asyncio.sleep(random.uniform(0, 0.5))
@@ -27,7 +27,7 @@ async def write_to_store(
 
 
 async def read_store(
-    array: zarr.Array[Any], x: int, y: int, barrier: asyncio.Barrier
+    array: "zarr.Array[Any]", x: int, y: int, barrier: asyncio.Barrier
 ) -> None:
     await barrier.wait()
     while True:

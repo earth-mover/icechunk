@@ -88,7 +88,7 @@ async def test_issue_418(any_spec_version: int | None) -> None:
     store = session.store
 
     root = zarr.Group.open(store=store)
-    time = cast(zarr.core.array.Array[Any], root["time"])
+    time = cast("zarr.core.array.Array[Any]", root["time"])
     root.require_array(name="lon", shape=((1,)), chunks=((1,)), dtype="i4")
 
     # resize the array and append a new chunk

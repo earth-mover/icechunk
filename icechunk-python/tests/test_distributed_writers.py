@@ -93,7 +93,7 @@ async def test_distributed_writers(
         session = repo.writable_session(branch=branch_name)
         fork = session.fork()
         group = zarr.open_group(store=fork.store)
-        zarray = cast(zarr.Array[Any], group["array"])
+        zarray = cast("zarr.Array[Any]", group["array"])
         merged_session = store_dask(sources=[dask_array], targets=[zarray])
         session.merge(merged_session)
         commit_res = session.commit("distributed commit")

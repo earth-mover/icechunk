@@ -21,7 +21,7 @@ async def test_shift_using_function() -> None:
 
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=False)
-    array = cast(zarr.Array[Any], root["array"])
+    array = cast("zarr.Array[Any]", root["array"])
     assert array[0] == 0
     assert array[49] == 49
 
@@ -50,7 +50,7 @@ async def test_shift_using_shift_by_offset() -> None:
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=False)
     session.shift_array("/array", (-4,))
-    array = cast(zarr.Array[Any], root["array"])
+    array = cast("zarr.Array[Any]", root["array"])
     # we moved 4 chunks to the left, that's 8 array elements
     np.testing.assert_equal(array[0:42], np.arange(8, 50))
     np.testing.assert_equal(array[42:], np.arange(42, 50))
@@ -70,7 +70,7 @@ async def test_resize_and_shift_right() -> None:
 
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=False)
-    array = cast(zarr.Array[Any], root["array"])
+    array = cast("zarr.Array[Any]", root["array"])
     array.resize((100,))
     assert array.shape == (100,)
     session.shift_array("/array", (4,))
@@ -82,7 +82,7 @@ async def test_resize_and_shift_right() -> None:
     # test still valid after commit
     session = repo.readonly_session(branch="main")
     root = zarr.open_group(store=session.store, mode="r")
-    array = cast(zarr.Array[Any], root["array"])
+    array = cast("zarr.Array[Any]", root["array"])
     assert array.shape == (100,)
     np.testing.assert_equal(array[8:58], np.arange(50))
     np.testing.assert_equal(array[0:8], np.arange(8))
