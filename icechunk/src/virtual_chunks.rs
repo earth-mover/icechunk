@@ -815,6 +815,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
@@ -829,6 +830,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
@@ -843,6 +845,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
@@ -857,6 +860,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
@@ -871,6 +875,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
@@ -885,6 +890,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
@@ -899,6 +905,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
