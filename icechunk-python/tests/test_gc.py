@@ -1,6 +1,6 @@
 import time
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -9,7 +9,7 @@ import zarr
 from tests.conftest import get_minio_client
 
 
-def mk_repo(spec_version) -> tuple[str, ic.Repository]:
+def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
     prefix = "test-repo__" + str(time.time())
     repo = ic.Repository.create(
         storage=ic.s3_storage(
@@ -39,8 +39,8 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     group = zarr.group(store=store, overwrite=True)
     array = group.create_array(
         "array",
-        shape=(1000),
-        chunks=(10),
+        shape=(1000,),
+        chunks=(10,),
         dtype="i4",
         fill_value=-1,
     )
@@ -50,7 +50,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
         session = repo.writable_session("main")
         store = session.store
         group = zarr.open_group(store=store)
-        array = cast(zarr.core.array.Array, group["array"])
+        array = cast("zarr.core.array.Array[Any]", group["array"])
         array[i] = i
         session.commit(f"written coord {i}")
 
@@ -59,7 +59,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     session = repo.writable_session("main")
     store = session.store
     group = zarr.open_group(store=store)
-    array = cast(zarr.core.array.Array, group["array"])
+    array = cast("zarr.core.array.Array[Any]", group["array"])
     array[999] = 0
     session.commit("written coord 999")
 
@@ -109,7 +109,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     # empty array + 20 old versions
     assert len(expired_snapshots) == 21
 
-    def space_used():
+    def space_used() -> int:
         space = 0
         for obj in client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/snapshots")[
             "Contents"
@@ -207,7 +207,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     session = repo.readonly_session(branch="main")
     store = session.store
     group = zarr.open_group(store=store, mode="r")
-    array = cast(zarr.core.array.Array, group["array"])
+    array = cast("zarr.core.array.Array[Any]", group["array"])
     assert array[999] == 0
     for i in range(20):
         assert array[i] == i

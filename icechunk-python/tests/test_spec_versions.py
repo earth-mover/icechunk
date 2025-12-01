@@ -4,19 +4,19 @@ import icechunk as ic
 import zarr
 
 
-def test_create_repo_with_spec_version_2():
+def test_create_repo_with_spec_version_2() -> None:
     storage = ic.in_memory_storage()
     ic.Repository.create(storage, spec_version=2)
     assert ic.Repository.open(storage).spec_version() == 2
 
 
-def test_create_repo_with_spec_version_1():
+def test_create_repo_with_spec_version_1() -> None:
     storage = ic.in_memory_storage()
     ic.Repository.create(storage, spec_version=1)
     assert ic.Repository.open(storage).spec_version() == 1
 
 
-def test_cannot_amend_with_spec_version_1():
+def test_cannot_amend_with_spec_version_1() -> None:
     storage = ic.in_memory_storage()
     repo = ic.Repository.create(storage, spec_version=1)
     session = repo.writable_session("main")

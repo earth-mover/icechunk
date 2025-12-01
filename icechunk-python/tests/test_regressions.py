@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -88,7 +88,7 @@ async def test_issue_418(any_spec_version: int | None) -> None:
     store = session.store
 
     root = zarr.Group.open(store=store)
-    time = cast(zarr.core.array.Array, root["time"])
+    time = cast("zarr.core.array.Array[Any]", root["time"])
     root.require_array(name="lon", shape=((1,)), chunks=((1,)), dtype="i4")
 
     # resize the array and append a new chunk
@@ -197,6 +197,6 @@ async def test_tag_with_open_session(any_spec_version: int | None) -> None:
     session = repo.writable_session("main")
     store = session.store
 
-    for k in store.list_prefix(""):
+    async for k in store.list_prefix(""):
         value = await store.get(k, default_buffer_prototype())
         assert value is not None, k

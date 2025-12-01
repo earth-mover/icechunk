@@ -30,7 +30,9 @@ from tests.conftest import write_chunks_to_minio
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 @pytest.mark.parametrize("use_async", [True, False])
-async def test_write_minio_virtual_refs(use_async, any_spec_version: int | None) -> None:
+async def test_write_minio_virtual_refs(
+    use_async: bool, any_spec_version: int | None
+) -> None:
     prefix = str(uuid.uuid4())
     etags = write_chunks_to_minio(
         [

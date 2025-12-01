@@ -1,6 +1,6 @@
 import time
 import warnings
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -93,7 +93,7 @@ async def test_distributed_writers(
         session = repo.writable_session(branch=branch_name)
         fork = session.fork()
         group = zarr.open_group(store=fork.store)
-        zarray = cast(zarr.Array, group["array"])
+        zarray = cast("zarr.Array[Any]", group["array"])
         merged_session = store_dask(sources=[dask_array], targets=[zarray])
         session.merge(merged_session)
         commit_res = session.commit("distributed commit")
@@ -110,7 +110,7 @@ async def test_distributed_writers(
 
         group = zarr.open_group(store=store, mode="r")
 
-        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)  # type: ignore [no-untyped-call, attr-defined]
+        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)  # type: ignore [no-untyped-call]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
             assert_eq(roundtripped, dask_array)  # type: ignore [no-untyped-call]
@@ -119,6 +119,6 @@ async def test_distributed_writers(
         do_writes("with-processes")
         await verify("with-processes")
 
-    with dask.config.set(scheduler="threads"):  # type: ignore[no-untyped-call]
+    with dask.config.set(scheduler="threads"):
         do_writes("with-threads")
         await verify("with-threads")

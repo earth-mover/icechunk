@@ -40,7 +40,7 @@ cd icechunk-python
     uv run pytest
 
     # Run type checking
-    uv run mypy python
+    uv run mypy python tests
 
     # Run linting
     uv run ruff check python

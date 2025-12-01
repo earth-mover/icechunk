@@ -2,7 +2,7 @@ import glob
 import re
 from pathlib import Path
 from shutil import rmtree
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -60,7 +60,7 @@ def test_error_message_when_manifest_file_altered(
     session = repo.readonly_session(branch="main")
     store = session.store
     group = zarr.Group.open(store=store)
-    fetched_array = cast(zarr.Array, group["array"])
+    fetched_array = cast("zarr.Array[Any]", group["array"])
 
     ## we check error includes the spans for ancestry and fetch_snapshot
     with pytest.raises(

@@ -1,6 +1,6 @@
 import asyncio
 from datetime import timedelta
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -64,7 +64,7 @@ def test_timetravel(using_flush: bool, any_spec_version: int | None) -> None:
     session = repo.writable_session("main")
     store = session.store
     group = zarr.open_group(store=store)
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
 
     air_temp[:, :] = 54
     assert air_temp[200, 6] == 54
@@ -78,21 +78,21 @@ def test_timetravel(using_flush: bool, any_spec_version: int | None) -> None:
     session = repo.readonly_session(snapshot_id=first_snapshot_id)
     store = session.store
     group = zarr.open_group(store=store, mode="r")
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     assert store.read_only
     assert air_temp[200, 6] == 42
 
     session = repo.readonly_session(snapshot_id=new_snapshot_id)
     store = session.store
     group = zarr.open_group(store=store, mode="r")
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     assert store.read_only
     assert air_temp[200, 6] == 54
 
     session = repo.writable_session("main")
     store = session.store
     group = zarr.open_group(store=store)
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
 
     air_temp[:, :] = 76
     assert session.has_uncommitted_changes
@@ -111,7 +111,7 @@ def test_timetravel(using_flush: bool, any_spec_version: int | None) -> None:
     assert session.branch == "feature"
 
     group = zarr.open_group(store=store)
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     air_temp[:, :] = 90
 
     if using_flush:
@@ -135,7 +135,7 @@ def test_timetravel(using_flush: bool, any_spec_version: int | None) -> None:
     assert session.branch is None
 
     group = zarr.open_group(store=store, mode="r")
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     assert air_temp[200, 6] == 90
 
     parents = list(repo.ancestry(snapshot_id=feature_snapshot_id))
@@ -392,7 +392,7 @@ async def test_timetravel_async(using_flush: bool, any_spec_version: int | None)
 
     session = await repo.writable_session_async("main")
     group = zarr.open_group(store=session.store)
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
 
     air_temp[:, :] = 54
     assert air_temp[200, 6] == 54
@@ -406,20 +406,20 @@ async def test_timetravel_async(using_flush: bool, any_spec_version: int | None)
     session = await repo.readonly_session_async(snapshot_id=first_snapshot_id)
     store = session.store
     group = zarr.open_group(store=store, mode="r")
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     assert store.read_only
     assert air_temp[200, 6] == 42
 
     session = await repo.readonly_session_async(snapshot_id=new_snapshot_id)
     store = session.store
     group = zarr.open_group(store=store, mode="r")
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     assert store.read_only
     assert air_temp[200, 6] == 54
 
     session = await repo.writable_session_async("main")
     group = zarr.open_group(store=session.store)
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
 
     air_temp[:, :] = 76
     assert session.has_uncommitted_changes
@@ -428,7 +428,8 @@ async def test_timetravel_async(using_flush: bool, any_spec_version: int | None)
 
     session.discard_changes()
     assert not session.has_uncommitted_changes
-    assert air_temp[200, 6] == 54
+    # I don't understand why I need to ignore here
+    assert air_temp[200, 6] == 54  # type: ignore [unreachable]
 
     await repo.create_branch_async("feature", new_snapshot_id)
     session = await repo.writable_session_async("feature")
@@ -436,7 +437,7 @@ async def test_timetravel_async(using_flush: bool, any_spec_version: int | None)
     assert session.branch == "feature"
 
     group = zarr.open_group(store=session.store)
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     air_temp[:, :] = 90
 
     if using_flush:
@@ -459,7 +460,7 @@ async def test_timetravel_async(using_flush: bool, any_spec_version: int | None)
     assert session.branch is None
 
     group = zarr.open_group(store=session.store, mode="r")
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     assert air_temp[200, 6] == 90
 
     parents = [
@@ -880,7 +881,7 @@ async def test_rewrite_manifests_async(any_spec_version: int | None) -> None:
     # Add more data
     session = await repo.writable_session_async("main")
     group = zarr.open_group(store=session.store)
-    array = group["test_array"]
+    array = cast("zarr.core.array.Array[Any]", group["test_array"])
     array[50:, 25:] = 99
     second_commit = await session.commit_async("more data")
 
@@ -906,7 +907,7 @@ async def test_rewrite_manifests_async(any_spec_version: int | None) -> None:
     # Verify data is still accessible after manifest rewrite
     session = await repo.readonly_session_async("main")
     group = zarr.open_group(store=session.store, mode="r")
-    array = group["test_array"]
+    array = cast("zarr.core.array.Array[Any]", group["test_array"])
 
     # Check that data is preserved
     assert array[0, 0] == 42  # from first commit
@@ -940,7 +941,7 @@ def test_amend(spec_version: int | None) -> None:
     session = repo.writable_session("main")
     store = session.store
     group = zarr.open_group(store=store)
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
 
     air_temp[0, 0] = 54
     air_temp[500, 500] = 42
@@ -953,7 +954,7 @@ def test_amend(spec_version: int | None) -> None:
     session = repo.readonly_session(snapshot_id=new_snapshot_id)
     store = session.store
     group = zarr.open_group(store=store, mode="r")
-    air_temp = cast(zarr.core.array.Array, group["air_temp"])
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     assert air_temp[0, 0] == 54
     assert air_temp[500, 500] == 42
 
