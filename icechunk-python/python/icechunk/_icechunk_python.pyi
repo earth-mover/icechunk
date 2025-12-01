@@ -14,6 +14,7 @@ class S3Options:
         anonymous: bool = False,
         force_path_style: bool = False,
         network_stream_timeout_seconds: int | None = None,
+        requester_pays: bool = False,
     ) -> None:
         """
         Create a new `S3Options` object
@@ -33,6 +34,8 @@ class S3Options:
         network_stream_timeout_seconds: int | None
             Timeout requests if no bytes can be transmitted during this period of time.
             If set to 0, timeout is disabled. Default is 60 seconds.
+        requester_pays: bool
+            Enable requester pays for S3 buckets
         """
 
     @property
