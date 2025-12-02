@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -9,9 +9,10 @@ import zarr
 
 
 @pytest.fixture
-def repo(tmpdir: Path) -> icechunk.Repository:
+def repo(tmpdir: Path, any_spec_version: int | None) -> icechunk.Repository:
     repo = icechunk.Repository.create(
-        storage=icechunk.local_filesystem_storage(str(tmpdir))
+        storage=icechunk.local_filesystem_storage(str(tmpdir)),
+        spec_version=any_spec_version,
     )
 
     session = repo.writable_session("main")
@@ -31,13 +32,13 @@ def test_detect_conflicts(repo: icechunk.Repository) -> None:
     store_b = session_b.store
 
     root_a = zarr.group(store=store_a)
-    array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
+    array_a = cast("zarr.Array[Any]", root_a["foo/bar/some-array"])
     array_a[:, :] = 1
     array_a.attrs["repo"] = 1
     session_a.commit("update array")
 
     root_b = zarr.group(store=store_b)
-    array_b = cast(zarr.Array, root_b["foo/bar/some-array"])
+    array_b = cast("zarr.Array[Any]", root_b["foo/bar/some-array"])
     array_b[:, :] = 2
     array_b.attrs["repo"] = 2
 
@@ -75,12 +76,12 @@ def test_rebase_no_conflicts(repo: icechunk.Repository) -> None:
     store_b = session_b.store
 
     root_a = zarr.group(store=store_a)
-    array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
+    array_a = cast("zarr.Array[Any]", root_a["foo/bar/some-array"])
     array_a[:] = 1
     session_a.commit("update array")
 
     root_b = zarr.group(store=store_b)
-    array_b = cast(zarr.Array, root_b["foo/bar/some-array"])
+    array_b = cast("zarr.Array[Any]", root_b["foo/bar/some-array"])
     array_b.attrs["repo"] = 2
 
     session_b.commit("update array", rebase_with=icechunk.ConflictDetector())
@@ -88,7 +89,7 @@ def test_rebase_no_conflicts(repo: icechunk.Repository) -> None:
     session_c = repo.readonly_session(branch="main")
     store_c = session_c.store
     root_c = zarr.open_group(store=store_c, mode="r")
-    array_c = cast(zarr.Array, root_c["foo/bar/some-array"])
+    array_c = cast("zarr.Array[Any]", root_c["foo/bar/some-array"])
     np.testing.assert_array_equal(array_c[:], 1)
     assert array_c.attrs["repo"] == 2
 
@@ -100,12 +101,12 @@ def test_rebase_fails_on_user_atts_double_edit(repo: icechunk.Repository) -> Non
     store_b = session_b.store
 
     root_a = zarr.group(store=store_a)
-    array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
+    array_a = cast("zarr.Array[Any]", root_a["foo/bar/some-array"])
     array_a.attrs["repo"] = 1
     session_a.commit("update array")
 
     root_b = zarr.group(store=store_b)
-    array_b = cast(zarr.Array, root_b["foo/bar/some-array"])
+    array_b = cast("zarr.Array[Any]", root_b["foo/bar/some-array"])
     array_b.attrs["repo"] = 2
 
     with pytest.raises(icechunk.ConflictError):
@@ -129,12 +130,12 @@ def test_rebase_chunks_with_ours(
     store_b = session_b.store
 
     root_a = zarr.group(store=store_a)
-    array_a = cast(zarr.Array, root_a["foo/bar/some-array"])
+    array_a = cast("zarr.Array[Any]", root_a["foo/bar/some-array"])
     array_a[:] = 1
     session_a.commit("update array")
 
     root_b = zarr.group(store=store_b)
-    array_b = cast(zarr.Array, root_b["foo/bar/some-array"])
+    array_b = cast("zarr.Array[Any]", root_b["foo/bar/some-array"])
     array_b[:, 0] = 2
 
     with pytest.raises(icechunk.ConflictError):
@@ -183,7 +184,7 @@ def test_rebase_chunks_with_ours(
     session_c = repo.readonly_session(branch="main")
     store_c = session_c.store
     root_c = zarr.open_group(store=store_c, mode="r")
-    array_c = cast(zarr.Array, root_c["foo/bar/some-array"])
+    array_c = cast("zarr.Array[Any]", root_c["foo/bar/some-array"])
     assert (
         array_c[0, 0] == 2
         if on_chunk_conflict == icechunk.VersionSelection.UseOurs
@@ -192,10 +193,11 @@ def test_rebase_chunks_with_ours(
     assert array_c[0, 1] == 1
 
 
-async def test_rebase_async() -> None:
+async def test_rebase_async(any_spec_version: int | None) -> None:
     """Test async rebase functionality with conflict detection and resolution."""
     repo = await icechunk.Repository.create_async(
         storage=icechunk.in_memory_storage(),
+        spec_version=any_spec_version,
     )
 
     # Set up initial state
@@ -212,11 +214,11 @@ async def test_rebase_async() -> None:
     # Create conflicting sessions
     session_b = await repo.writable_session_async("main")
     root_b = zarr.open_group(store=session_b.store)
-    array_b = cast(zarr.Array, root_b["foo/bar/some-array"])
+    array_b = cast("zarr.Array[Any]", root_b["foo/bar/some-array"])
 
     session_c = await repo.writable_session_async("main")
     root_c = zarr.open_group(store=session_c.store)
-    array_c = cast(zarr.Array, root_c["foo/bar/some-array"])
+    array_c = cast("zarr.Array[Any]", root_c["foo/bar/some-array"])
 
     # Make changes in session_c and commit first
     array_c[:, :] = 3
@@ -253,7 +255,7 @@ async def test_rebase_async() -> None:
     session_final = await repo.readonly_session_async(branch="main")
     store_final = session_final.store
     root_final = zarr.open_group(store=store_final, mode="r")
-    array_final = cast(zarr.Array, root_final["foo/bar/some-array"])
+    array_final = cast("zarr.Array[Any]", root_final["foo/bar/some-array"])
 
     # Should have session_b's values due to UseOurs selection
     assert array_final[0, 0] == 2

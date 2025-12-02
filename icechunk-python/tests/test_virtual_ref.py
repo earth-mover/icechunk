@@ -30,7 +30,9 @@ from tests.conftest import write_chunks_to_minio
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 @pytest.mark.parametrize("use_async", [True, False])
-async def test_write_minio_virtual_refs(use_async) -> None:
+async def test_write_minio_virtual_refs(
+    use_async: bool, any_spec_version: int | None
+) -> None:
     prefix = str(uuid.uuid4())
     etags = write_chunks_to_minio(
         [
@@ -62,6 +64,7 @@ async def test_write_minio_virtual_refs(use_async) -> None:
         storage=in_memory_storage(),
         config=config,
         authorize_virtual_chunk_access=credentials,
+        create_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store
@@ -248,6 +251,7 @@ async def test_public_virtual_refs(
     url_prefix: str,
     store_config: ObjectStoreConfig.S3 | ObjectStoreConfig.Http,
     use_async: bool,
+    any_spec_version: int | None,
 ) -> None:
     config = RepositoryConfig.default()
     container = VirtualChunkContainer(url_prefix, store_config)
@@ -257,6 +261,7 @@ async def test_public_virtual_refs(
         storage=local_filesystem_storage(f"{tmpdir}/virtual-{container_type}"),
         config=config,
         authorize_virtual_chunk_access={url_prefix: None},
+        create_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store
@@ -368,9 +373,12 @@ async def test_public_virtual_refs(
     assert np.allclose(year_values, actual_values)
 
 
-def test_error_on_nonexisting_virtual_chunk_container() -> None:
+def test_error_on_nonexisting_virtual_chunk_container(
+    any_spec_version: int | None,
+) -> None:
     repo = Repository.open_or_create(
         storage=in_memory_storage(),
+        create_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store
@@ -393,12 +401,14 @@ def test_error_on_nonexisting_virtual_chunk_container() -> None:
     )
 
     with pytest.raises(
-        IcechunkError, match="file:///foo.* edit the repository configuration"
+        IcechunkError, match=r"file:///foo.* edit the repository configuration"
     ):
         array[0]
 
 
-def test_error_on_non_authorized_virtual_chunk_container() -> None:
+def test_error_on_non_authorized_virtual_chunk_container(
+    any_spec_version: int | None,
+) -> None:
     store_config = local_filesystem_store("/foo")
     container = VirtualChunkContainer("file:///foo/", store_config)
     config = RepositoryConfig.default()
@@ -406,6 +416,7 @@ def test_error_on_non_authorized_virtual_chunk_container() -> None:
     repo = Repository.open_or_create(
         storage=in_memory_storage(),
         config=config,
+        create_version=any_spec_version,
     )
 
     session = repo.writable_session("main")
@@ -428,13 +439,14 @@ def test_error_on_non_authorized_virtual_chunk_container() -> None:
         ],
     )
 
-    with pytest.raises(IcechunkError, match="file:///foo.*authorize"):
+    with pytest.raises(IcechunkError, match=r"file:///foo.*authorize"):
         array[0]
 
 
-def test_cannot_write_invalid_urls() -> None:
+def test_cannot_write_invalid_urls(any_spec_version: int | None) -> None:
     repo = Repository.create(
         storage=in_memory_storage(),
+        spec_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store

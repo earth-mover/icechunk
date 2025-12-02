@@ -27,7 +27,7 @@ jobs:
   build-wheels:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -63,7 +63,7 @@ jobs:
             distributed: "latest-release"
             zarr: "latest-release"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Stand up MinIO
         run: |
           docker compose up -d minio
@@ -99,7 +99,7 @@ jobs:
           python --version
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
-          uv pip install "${WHEEL}[test]"
+          uv pip install "$WHEEL" --group test
           # Install specific versions based on matrix
           if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
             echo "Installing minimum versions:"
@@ -153,7 +153,7 @@ jobs:
             version: "latest-release"
             zarr: "latest-release"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           path: "icechunk"
 
@@ -186,7 +186,7 @@ jobs:
           python --version
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
-          uv pip install "${WHEEL}[test]"
+          uv pip install "$WHEEL" --group test
           uv pip install pytest-mypy-plugins
           # Install specific xarray version based on matrix
           if [ "${{ matrix.xarray-version.version }}" != "latest-release" ]; then
@@ -245,11 +245,11 @@ jobs:
   check-xarray-docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           path: "icechunk"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           repository: "pydata/xarray"
           path: "xarray"

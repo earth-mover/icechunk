@@ -13,7 +13,7 @@ file as a python script: `python ./tests/test_can_read_old.py`.
 
 import shutil
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from numpy.testing import assert_array_equal
@@ -151,19 +151,19 @@ async def do_icechunk_can_read_old_repo_with_manifest_splitting(path: str) -> No
 
     init_snapshot = ancestry[1]
     assert init_snapshot.message == "empty structure"
-    assert len(repo.manifest_files(init_snapshot.id)) == 0
+    assert len(repo.list_manifest_files(init_snapshot.id)) == 0
 
     snapshot = ancestry[2]
     assert snapshot.message == "write data"
-    assert len(repo.manifest_files(snapshot.id)) == 9
+    assert len(repo.list_manifest_files(snapshot.id)) == 9
 
     snapshot = ancestry[3]
     assert snapshot.message == "write data again"
-    assert len(await repo.manifest_files_async(snapshot.id)) == 9
+    assert len(await repo.list_manifest_files_async(snapshot.id)) == 9
 
     snapshot = ancestry[4]
     assert snapshot.message == "write data again with more splits"
-    assert len(await repo.manifest_files_async(snapshot.id)) == 17
+    assert len(await repo.list_manifest_files_async(snapshot.id)) == 17
 
     assert repo.config.manifest
     assert repo.config.manifest.splitting == UPDATED_SPLITTING_CONFIG
@@ -213,8 +213,8 @@ async def write_a_test_repo(path: str) -> None:
     session = repo.writable_session("main")
     store = session.store
     root = zarr.group(store=store)
-    big_chunks = cast(zarr.Array, root["group1/big_chunks"])
-    small_chunks = cast(zarr.Array, root["group1/small_chunks"])
+    big_chunks = cast("zarr.Array[Any]", root["group1/big_chunks"])
+    small_chunks = cast("zarr.Array[Any]", root["group1/small_chunks"])
 
     big_chunks[:] = 42.0
     small_chunks[:] = 84
@@ -350,10 +350,10 @@ async def do_icechunk_can_read_old_repo(path: str) -> None:
 
     root = zarr.group(store=store)
     # inner is not initialized, so it's all fill values
-    inner = root["group2/group3/group4/group5/inner"]
+    inner = cast("zarr.Array[Any]", root["group2/group3/group4/group5/inner"])
     assert_array_equal(inner[:], float("nan"))
 
-    small_chunks = root["group1/small_chunks"]
+    small_chunks = cast("zarr.Array[Any]", root["group1/small_chunks"])
     # has 5 elements, we deleted the last chunk (of size 1), and the fill value is 8
     assert_array_equal(small_chunks[:], [84, 84, 84, 84, 8])
 
@@ -371,7 +371,7 @@ async def do_icechunk_can_read_old_repo(path: str) -> None:
         ]
     )
 
-    big_chunks = root["group1/big_chunks"]
+    big_chunks = cast("zarr.Array[Any]", root["group1/big_chunks"])
     assert_array_equal(big_chunks[:], 42.0)
 
     parents = list(repo.ancestry(branch="main"))

@@ -14,6 +14,7 @@ class S3Options:
         anonymous: bool = False,
         force_path_style: bool = False,
         network_stream_timeout_seconds: int | None = None,
+        requester_pays: bool = False,
     ) -> None:
         """
         Create a new `S3Options` object
@@ -33,6 +34,8 @@ class S3Options:
         network_stream_timeout_seconds: int | None
             Timeout requests if no bytes can be transmitted during this period of time.
             If set to 0, timeout is disabled. Default is 60 seconds.
+        requester_pays: bool
+            Enable requester pays for S3 buckets
         """
 
     @property
@@ -728,6 +731,17 @@ class ManifestSplittingConfig:
             ],
         ],
     ) -> ManifestSplittingConfig: ...
+    def to_dict(
+        config: ManifestSplittingConfig,
+    ) -> dict[
+        ManifestSplitCondition,
+        dict[
+            ManifestSplitDimCondition.Axis
+            | ManifestSplitDimCondition.DimensionName
+            | ManifestSplitDimCondition.Any,
+            int,
+        ],
+    ]: ...
     def __init__(self, split_sizes: SplitSizes) -> None:
         """Configuration for how Icechunk manifests will be split.
 
@@ -1651,8 +1665,10 @@ class PyRepository:
     async def lookup_branch_async(self, branch: str) -> str: ...
     def lookup_snapshot(self, snapshot_id: str) -> SnapshotInfo: ...
     async def lookup_snapshot_async(self, snapshot_id: str) -> SnapshotInfo: ...
-    def manifest_files(self, snapshot_id: str) -> list[ManifestFileInfo]: ...
-    async def manifest_files_async(self, snapshot_id: str) -> list[ManifestFileInfo]: ...
+    def list_manifest_files(self, snapshot_id: str) -> list[ManifestFileInfo]: ...
+    async def list_manifest_files_async(
+        self, snapshot_id: str
+    ) -> list[ManifestFileInfo]: ...
     def reset_branch(
         self, branch: str, to_snapshot_id: str, from_snapshot_id: str | None
     ) -> None: ...
