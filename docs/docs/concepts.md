@@ -148,6 +148,7 @@ data = zarr.open_group(session.store)["temperature"][:]
 **Durability** - "Commits are permanent"
 
 Once your transaction is committed, it's saved permanently. Even if your computer crashes immediately after committing, your data is safe. The commit won't be lost or partially applied.
+Icechunk's durability is inherited from the durability of the underlying storage medium, such as S3.
 
 #### Why ACID Matters for Array Data
 
