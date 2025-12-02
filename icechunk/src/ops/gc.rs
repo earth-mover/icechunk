@@ -426,6 +426,7 @@ async fn delete_snapshots_from_repo_info(
             repo_info.branches()?,
             repo_info.deleted_tags()?,
             kept_snaps,
+            &repo_info.metadata()?,
             UpdateInfo {
                 update_type: UpdateType::GCRanUpdate,
                 update_time: Utc::now(),
@@ -811,6 +812,7 @@ pub async fn expire_v2(
             branches,
             deleted_tag_names,
             retained.clone(),
+            &repo_info.metadata()?,
             UpdateInfo {
                 update_type: UpdateType::ExpirationRanUpdate,
                 update_time: Utc::now(),

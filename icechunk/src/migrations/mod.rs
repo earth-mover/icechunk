@@ -226,6 +226,7 @@ pub async fn migrate_1_to_2(
         branches,
         deleted_tags.iter().map(|s| s.as_str()),
         all_snapshots,
+        &Default::default(),
         UpdateInfo {
             update_type: UpdateType::RepoMigratedUpdate {
                 from_version: SpecVersionBin::V1dot0,

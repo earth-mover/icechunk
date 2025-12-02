@@ -460,6 +460,10 @@ pub(crate) struct PyRepoMigratedUpdate {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PyConfigChangedUpdate;
 
+#[pyclass(name = "MetadataChangedUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PyMetadataChangedUpdate;
+
 #[pyclass(name = "GCRanUpdate", eq, extends=PyUpdateType)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PyGCRanUpdate;
@@ -543,6 +547,13 @@ impl PyRepoInitializedUpdate {
 impl PyConfigChangedUpdate {
     fn __repr__(&self) -> PyResult<String> {
         Ok("ConfigChangedUpdate()".to_string())
+    }
+}
+
+#[pymethods]
+impl PyMetadataChangedUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok("MetadataChangedUpdate()".to_string())
     }
 }
 
@@ -659,6 +670,12 @@ fn mk_update_type(
             UpdateType::ConfigChangedUpdate => Bound::new(
                 py,
                 (PyConfigChangedUpdate, PyUpdateType { updated_at, backup_path }),
+            )?
+            .into_any()
+            .unbind(),
+            UpdateType::MetadataChangedUpdate => Bound::new(
+                py,
+                (PyMetadataChangedUpdate, PyUpdateType { updated_at, backup_path }),
             )?
             .into_any()
             .unbind(),
@@ -1186,6 +1203,106 @@ impl PyRepository {
         py.detach(move || {
             let metadata = self.0.blocking_read().default_commit_metadata().clone();
             metadata.into()
+        })
+    }
+
+    pub(crate) fn get_metadata(&self, py: Python<'_>) -> PyResult<PySnapshotProperties> {
+        py.detach(move || {
+            let metadata =
+                pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                    self.0
+                        .read()
+                        .await
+                        .get_metadata()
+                        .await
+                        .map_err(PyIcechunkStoreError::RepositoryError)
+                })?;
+            Ok(metadata.into())
+        })
+    }
+
+    pub(crate) fn get_metadata_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = repository.read().await;
+            let res: PySnapshotProperties = repository
+                .get_metadata()
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?
+                .into();
+            Ok(res)
+        })
+    }
+
+    pub(crate) fn set_metadata(
+        &self,
+        py: Python<'_>,
+        metadata: PySnapshotProperties,
+    ) -> PyResult<()> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                self.0
+                    .read()
+                    .await
+                    .set_metadata(&metadata.into())
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)
+            })?;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn set_metadata_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        metadata: PySnapshotProperties,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = repository.read().await;
+            repository
+                .set_metadata(&metadata.into())
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn update_metadata(
+        &self,
+        py: Python<'_>,
+        metadata: PySnapshotProperties,
+    ) -> PyResult<PySnapshotProperties> {
+        py.detach(move || {
+            let res = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                self.0
+                    .read()
+                    .await
+                    .update_metadata(&metadata.into())
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)
+            })?;
+            Ok(res.into())
+        })
+    }
+
+    pub(crate) fn update_metadata_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        metadata: PySnapshotProperties,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let repository = repository.read().await;
+            let res: PySnapshotProperties = repository
+                .update_metadata(&metadata.into())
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?
+                .into();
+            Ok(res)
         })
     }
 
