@@ -88,7 +88,8 @@ with repo.transaction("main", message="Add 6-hour forecast") as store:
 # Transaction commits here - all changes become visible at once
 ```
 
-While the transaction is running (inside the `with` block), these changes exist in a kind of "scratch space" that only you can see. Other users reading the data see the previous committed version. When the transaction completes successfully:
+While the transaction is running (inside the `with` block), these changes exist in a kind of "scratch space" that only you can see. (The scratch space in is the remote storage, i.e. S3, not your local computer.)
+Other users reading the data see the previous committed version. When the transaction completes successfully:
 
 - All four variables get updated together
 - A new snapshot is created with all changes
