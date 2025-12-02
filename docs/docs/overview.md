@@ -124,7 +124,7 @@ This is a serious problem as weather model writes are large enough that there ca
 
 There are other consistency issues with Zarr that you can read about in more detail in the [Multi-Player Mode](https://earthmover.io/blog/multi-player-mode-why-teams-that-use-zarr-need-icechunk) blog post.
 
-In contrast, **Icechunk** is, by design, always consistent. It implements ACID transactions, which ensures you will never run into these issues.
+In contrast, **Icechunk** is, by design, always consistent. It implements [ACID transactions](concepts.md#acid-transactions), which ensures you will never run into these issues.
 
 ### Reproducibility
 
