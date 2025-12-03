@@ -1502,6 +1502,9 @@ class RepoMigratedUpdate(UpdateType):
 class ConfigChangedUpdate(UpdateType):
     pass
 
+class MetadataChangedUpdate(UpdateType):
+    pass
+
 class TagCreatedUpdate(UpdateType):
     @property
     def name(self) -> str: ...
