@@ -289,3 +289,21 @@ repo = icechunk.Repository.open(
     authorize_virtual_chunk_access=credentials,
 )
 ```
+
+## Proxy configuration
+
+Icechunk supports routing its requests through a proxy. This is useful when your object storage service itself is behind a proxy.
+
+Icechunk automatically detects proxy settings from environment variables:
+
+```bash
+export HTTPS_PROXY=http://proxy.corp.com:8080
+export HTTP_PROXY=http://proxy.corp.com:8080
+```
+
+No code changes are required. Icechunk checks proxy sources in this order:
+1. `HTTPS_PROXY` / `https_proxy` - highest priority
+2. `HTTP_PROXY` / `http_proxy`
+3. `ALL_PROXY` / `all_proxy`
+
+Note that you must set the environment variable at the OS level, not via the python interpreter.
