@@ -33,6 +33,8 @@ table RepoMigratedUpdate {
 }
 table ConfigChangedUpdate {
 }
+table MetadataChangedUpdate {
+}
 table TagCreatedUpdate {
   name: string (required);
 }
@@ -70,6 +72,7 @@ union UpdateType {
   RepoInitializedUpdate,
   RepoMigratedUpdate,
   ConfigChangedUpdate,
+  MetadataChangedUpdate,
   TagCreatedUpdate,
   TagDeletedUpdate,
   BranchCreatedUpdate,

@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeSet, HashMap},
 };
 
-use crate::refs::Ref;
+use crate::{format::snapshot::SnapshotProperties, refs::Ref};
 
 use super::{
     IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
@@ -47,6 +47,7 @@ impl std::fmt::Debug for RepoInfo {
                 Err(_) => "#err".to_string(),
             })
             .join(", ");
+        // FIXME: add other fields
         f.debug_struct("RepoInfo")
             .field("tags", &tags)
             .field("branches", &branches)
@@ -59,7 +60,8 @@ impl std::fmt::Debug for RepoInfo {
 pub enum UpdateType {
     RepoInitializedUpdate,
     RepoMigratedUpdate { from_version: SpecVersionBin, to_version: SpecVersionBin },
-    ConfigChangedUpdate,
+    ConfigChangedUpdate, // FIXME: implement
+    MetadataChangedUpdate,
     TagCreatedUpdate { name: String },
     TagDeletedUpdate { name: String, previous_snap_id: SnapshotId },
     BranchCreatedUpdate { name: String },
@@ -97,6 +99,7 @@ impl RepoInfo {
         branches: impl IntoIterator<Item = (&'a str, SnapshotId)>,
         deleted_tags: impl IntoIterator<Item = &'a str>,
         snapshots: impl IntoIterator<Item = SnapshotInfo>,
+        metadata: &SnapshotProperties,
         update: UpdateInfo<I>,
         backup_path: Option<&'a str>,
     ) -> IcechunkResult<Self> {
@@ -106,7 +109,15 @@ impl RepoInfo {
         let branches = resolve_ref_iter(&snapshots, branches)?;
         let mut deleted_tags: Vec<_> = deleted_tags.into_iter().collect();
         deleted_tags.sort();
-        Self::from_parts(tags, branches, deleted_tags, snapshots, update, backup_path)
+        Self::from_parts(
+            tags,
+            branches,
+            deleted_tags,
+            snapshots,
+            metadata,
+            update,
+            backup_path,
+        )
     }
 
     fn from_parts<
@@ -117,6 +128,7 @@ impl RepoInfo {
         sorted_branches: impl IntoIterator<Item = (&'a str, u32)>,
         sorted_deleted_tags: impl IntoIterator<Item = &'a str>,
         sorted_snapshots: impl IntoIterator<Item = SnapshotInfo>,
+        metadata: &SnapshotProperties,
         update: UpdateInfo<I>,
         backup_path: Option<&'a str>,
     ) -> IcechunkResult<Self> {
@@ -188,7 +200,7 @@ impl RepoInfo {
                     .iter()
                     .map(|(k, v)| {
                         let name = builder.create_shared_string(k.as_str());
-                        let serialized = rmp_serde::to_vec(v).map_err(Box::new)?;
+                        let serialized = flexbuffers::to_vec(v).map_err(Box::new)?;
                         let value = builder.create_vector(serialized.as_slice());
                         let item = generated::MetadataItem::create(
                             &mut builder,
@@ -226,9 +238,21 @@ impl RepoInfo {
             },
         );
 
-        // TODO: repo metadata
-        let metadata =
-            builder.create_vector(&[] as &[WIPOffset<generated::MetadataItem>]);
+        let metadata_items: Vec<_> = metadata
+            .iter()
+            .map(|(k, v)| {
+                let name = builder.create_shared_string(k.as_str());
+                let serialized = flexbuffers::to_vec(v).map_err(Box::new)?;
+                let value = builder.create_vector(serialized.as_slice());
+                let item = generated::MetadataItem::create(
+                    &mut builder,
+                    &generated::MetadataItemArgs { name: Some(name), value: Some(value) },
+                );
+                Ok::<_, IcechunkFormatError>(item)
+            })
+            .try_collect()?;
+
+        let metadata = builder.create_vector(metadata_items.as_slice());
 
         let (latest_updates, repo_before_updates) =
             Self::mk_latest_updates(&mut builder, update, backup_path)?;
@@ -347,6 +371,7 @@ impl RepoInfo {
             [("main", 0)],
             [],
             [snapshot],
+            &Default::default(),
             UpdateInfo {
                 update_type: UpdateType::RepoInitializedUpdate,
                 update_time: last_updated_at,
@@ -355,6 +380,20 @@ impl RepoInfo {
             None,
         )
         .expect("Cannot generate initial snapshot")
+    }
+
+    pub fn metadata(&self) -> IcechunkResult<SnapshotProperties> {
+        self.root()?
+            .metadata()
+            .unwrap_or_default()
+            .iter()
+            .map(|item| {
+                let key = item.name().to_string();
+                let value =
+                    flexbuffers::from_slice(item.value().bytes()).map_err(Box::new)?;
+                Ok((key, value))
+            })
+            .try_collect()
     }
 
     fn all_tags(&self) -> IcechunkResult<impl Iterator<Item = (&str, u32)>> {
@@ -414,6 +453,7 @@ impl RepoInfo {
             branches,
             self.deleted_tags()?,
             snapshots,
+            &self.metadata()?,
             UpdateInfo {
                 update_type,
                 update_time: flushed_at,
@@ -449,6 +489,7 @@ impl RepoInfo {
                     branches,
                     self.deleted_tags()?,
                     snaps,
+                    &self.metadata()?,
                     UpdateInfo {
                         update_type: UpdateType::BranchCreatedUpdate {
                             name: name.to_string(),
@@ -478,6 +519,7 @@ impl RepoInfo {
                     branches,
                     self.deleted_tags()?,
                     snaps,
+                    &self.metadata()?,
                     UpdateInfo {
                         update_type: UpdateType::BranchDeletedUpdate {
                             name: name.to_string(),
@@ -518,6 +560,7 @@ impl RepoInfo {
                     branches,
                     self.deleted_tags()?,
                     snaps,
+                    &self.metadata()?,
                     UpdateInfo {
                         update_type: UpdateType::BranchResetUpdate {
                             name: name.to_string(),
@@ -561,6 +604,7 @@ impl RepoInfo {
                     self.all_branches()?,
                     self.deleted_tags()?,
                     snaps,
+                    &self.metadata()?,
                     UpdateInfo {
                         update_type: UpdateType::TagCreatedUpdate {
                             name: name.to_string(),
@@ -594,6 +638,7 @@ impl RepoInfo {
                     self.all_branches()?,
                     deleted_tags,
                     snaps,
+                    &self.metadata()?,
                     UpdateInfo {
                         update_type: UpdateType::TagDeletedUpdate {
                             name: name.to_string(),
@@ -613,6 +658,27 @@ impl RepoInfo {
             }
             Err(err) => Err(err),
         }
+    }
+
+    pub fn set_metadata(
+        &self,
+        metadata: &SnapshotProperties,
+        previous_file: &str,
+    ) -> IcechunkResult<Self> {
+        let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+        Self::from_parts(
+            self.all_tags()?,
+            self.all_branches()?,
+            self.deleted_tags()?,
+            snaps,
+            metadata,
+            UpdateInfo {
+                update_type: UpdateType::MetadataChangedUpdate,
+                update_time: Utc::now(),
+                previous_updates: self.latest_updates()?,
+            },
+            Some(previous_file),
+        )
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {
@@ -740,6 +806,9 @@ impl RepoInfo {
             }
             generated::UpdateType::ConfigChangedUpdate => {
                 Ok(UpdateType::ConfigChangedUpdate)
+            }
+            generated::UpdateType::MetadataChangedUpdate => {
+                Ok(UpdateType::MetadataChangedUpdate)
             }
             generated::UpdateType::TagCreatedUpdate => {
                 let up = update.update_type_as_tag_created_update().unwrap();
@@ -906,8 +975,8 @@ fn mk_snapshot_info(
                 .iter()
                 .map(|item| {
                     let name = item.name().to_string();
-                    let value =
-                        rmp_serde::from_slice(item.value().bytes()).map_err(Box::new)?;
+                    let value = flexbuffers::from_slice(item.value().bytes())
+                        .map_err(Box::new)?;
                     Ok::<_, IcechunkFormatError>((name, value))
                 })
                 .try_collect()?;
@@ -957,6 +1026,14 @@ fn update_type_to_fb<'bldr>(
             generated::ConfigChangedUpdate::create(
                 builder,
                 &generated::ConfigChangedUpdateArgs {},
+            )
+            .as_union_value(),
+        )),
+        UpdateType::MetadataChangedUpdate => Ok((
+            generated::UpdateType::MetadataChangedUpdate,
+            generated::MetadataChangedUpdate::create(
+                builder,
+                &generated::MetadataChangedUpdateArgs {},
             )
             .as_union_value(),
         )),
