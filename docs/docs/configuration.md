@@ -31,7 +31,7 @@ The number of concurrent requests to make when getting partial values from stora
 ### [`max_concurrent_requests`](./reference.md#icechunk.RepositoryConfig.max_concurrent_requests)
 
 The maximum total number of concurrent requests this repo will allow.
-See [Performance | Concurrency](../performance#Concurrency) for details.
+See [Performance | Concurrency](performance#Concurrency) for details.
 
 ### [`compression`](./reference.md#icechunk.RepositoryConfig.compression)
 
