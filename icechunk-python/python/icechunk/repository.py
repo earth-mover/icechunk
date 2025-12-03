@@ -530,6 +530,92 @@ class Repository:
         """
         return self._repository.default_commit_metadata()
 
+    def get_metadata(self) -> dict[str, Any]:
+        """
+        Get the current configured repository metadata.
+
+        Returns
+        -------
+        dict[str, Any]
+            The repository level metadata.
+        """
+        return self._repository.get_metadata()
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """
+        Get the current configured repository metadata.
+
+        Returns
+        -------
+        dict[str, Any]
+            The repository level metadata.
+        """
+        return self._repository.get_metadata()
+
+    async def get_metadata_async(self) -> dict[str, Any]:
+        """
+        Get the current configured repository metadata.
+
+        Returns
+        -------
+        dict[str, Any]
+            The repository level metadata.
+        """
+        return await self._repository.get_metadata_async()
+
+    def set_metadata(self, metadata: dict[str, Any]) -> None:
+        """
+        Set the repository metadata, the passed dict will replace the complete metadata.
+
+        If you prefer to only update some metadata values, use Repository.update_metadata
+
+        Parameters
+        ----------
+        metadata : dict[str, Any]
+            The value to use as repository metadata.
+        """
+        self._repository.set_metadata(metadata)
+
+    async def set_metadata_async(self, metadata: dict[str, Any]) -> None:
+        """
+        Set the repository metadata, the passed dict will replace the complete metadata.
+
+        If you prefer to only update some metadata values, use Repository.update_metadata
+
+        Parameters
+        ----------
+        metadata : dict[str, Any]
+            The value to use as repository metadata.
+        """
+        await self._repository.set_metadata_async(metadata)
+
+    def update_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        """
+        Update the repository metadata.
+
+        The passed dict will be merged with the current metadata, overriding existing keys.
+
+        Parameters
+        ----------
+        metadata : dict[str, Any]
+            The dict to merge into the repository metadata.
+        """
+        return self._repository.update_metadata(metadata)
+
+    async def update_metadata_async(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        """
+        Update the repository metadata.
+
+        The passed dict will be merged with the current metadata, overriding existing keys.
+
+        Parameters
+        ----------
+        metadata : dict[str, Any]
+            The dict to merge into the repository metadata.
+        """
+        return await self._repository.update_metadata_async(metadata)
+
     def ancestry(
         self,
         *,

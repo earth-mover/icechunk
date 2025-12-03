@@ -349,6 +349,55 @@ async def test_default_commit_metadata(any_spec_version: int | None) -> None:
     assert snap.metadata == {"user": "test"}
 
 
+def test_set_metadata() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+    assert repo.metadata == {}
+
+    repo.set_metadata({"user": "test"})
+    assert repo.get_metadata() == {"user": "test"}
+    assert repo.metadata == {"user": "test"}
+
+
+async def test_set_metadata_async() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+    assert repo.metadata == {}
+
+    await repo.set_metadata_async({"user": "test"})
+    assert await repo.get_metadata_async() == {"user": "test"}
+
+
+async def test_update_metadata() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+    assert repo.metadata == {}
+
+    repo.update_metadata({"user": "test"})
+    assert repo.get_metadata() == {"user": "test"}
+    repo.update_metadata({"foo": 42})
+    assert repo.get_metadata() == {"user": "test", "foo": 42}
+    repo.update_metadata({"foo": 43})
+    assert repo.get_metadata() == {"user": "test", "foo": 43}
+
+
+async def test_update_metadata_async() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+    assert repo.metadata == {}
+
+    await repo.update_metadata_async({"user": "test"})
+    assert await repo.get_metadata_async() == {"user": "test"}
+    await repo.update_metadata_async({"foo": 42})
+    assert await repo.get_metadata_async() == {"user": "test", "foo": 42}
+    await repo.update_metadata_async({"foo": 43})
+    assert await repo.get_metadata_async() == {"user": "test", "foo": 43}
+
+
 @pytest.mark.parametrize(
     "using_flush",
     [False, True],

@@ -70,7 +70,7 @@ pub mod generated {
         type Inner = Self;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+            let b = unsafe { flatbuffers::read_scalar_at::<u8>(buf, loc) };
             Self(b)
         }
     }
@@ -79,7 +79,9 @@ pub mod generated {
         type Output = NodeData;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            flatbuffers::emplace_scalar::<u8>(dst, self.0);
+            unsafe {
+                flatbuffers::emplace_scalar::<u8>(dst, self.0);
+            }
         }
     }
 
@@ -165,7 +167,7 @@ pub mod generated {
         type Inner = Self;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+            let b = unsafe { flatbuffers::read_scalar_at::<u8>(buf, loc) };
             Self(b)
         }
     }
@@ -174,7 +176,9 @@ pub mod generated {
         type Output = RepoAvailability;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            flatbuffers::emplace_scalar::<u8>(dst, self.0);
+            unsafe {
+                flatbuffers::emplace_scalar::<u8>(dst, self.0);
+            }
         }
     }
 
@@ -213,17 +217,18 @@ pub mod generated {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_UPDATE_TYPE: u8 = 13;
+    pub const ENUM_MAX_UPDATE_TYPE: u8 = 14;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 14] = [
+    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 15] = [
         UpdateType::NONE,
         UpdateType::RepoInitializedUpdate,
         UpdateType::RepoMigratedUpdate,
         UpdateType::ConfigChangedUpdate,
+        UpdateType::MetadataChangedUpdate,
         UpdateType::TagCreatedUpdate,
         UpdateType::TagDeletedUpdate,
         UpdateType::BranchCreatedUpdate,
@@ -245,24 +250,26 @@ pub mod generated {
         pub const RepoInitializedUpdate: Self = Self(1);
         pub const RepoMigratedUpdate: Self = Self(2);
         pub const ConfigChangedUpdate: Self = Self(3);
-        pub const TagCreatedUpdate: Self = Self(4);
-        pub const TagDeletedUpdate: Self = Self(5);
-        pub const BranchCreatedUpdate: Self = Self(6);
-        pub const BranchDeletedUpdate: Self = Self(7);
-        pub const BranchResetUpdate: Self = Self(8);
-        pub const NewCommitUpdate: Self = Self(9);
-        pub const CommitAmendedUpdate: Self = Self(10);
-        pub const NewDetachedSnapshotUpdate: Self = Self(11);
-        pub const GCRanUpdate: Self = Self(12);
-        pub const ExpirationRanUpdate: Self = Self(13);
+        pub const MetadataChangedUpdate: Self = Self(4);
+        pub const TagCreatedUpdate: Self = Self(5);
+        pub const TagDeletedUpdate: Self = Self(6);
+        pub const BranchCreatedUpdate: Self = Self(7);
+        pub const BranchDeletedUpdate: Self = Self(8);
+        pub const BranchResetUpdate: Self = Self(9);
+        pub const NewCommitUpdate: Self = Self(10);
+        pub const CommitAmendedUpdate: Self = Self(11);
+        pub const NewDetachedSnapshotUpdate: Self = Self(12);
+        pub const GCRanUpdate: Self = Self(13);
+        pub const ExpirationRanUpdate: Self = Self(14);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 13;
+        pub const ENUM_MAX: u8 = 14;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::NONE,
             Self::RepoInitializedUpdate,
             Self::RepoMigratedUpdate,
             Self::ConfigChangedUpdate,
+            Self::MetadataChangedUpdate,
             Self::TagCreatedUpdate,
             Self::TagDeletedUpdate,
             Self::BranchCreatedUpdate,
@@ -281,6 +288,7 @@ pub mod generated {
                 Self::RepoInitializedUpdate => Some("RepoInitializedUpdate"),
                 Self::RepoMigratedUpdate => Some("RepoMigratedUpdate"),
                 Self::ConfigChangedUpdate => Some("ConfigChangedUpdate"),
+                Self::MetadataChangedUpdate => Some("MetadataChangedUpdate"),
                 Self::TagCreatedUpdate => Some("TagCreatedUpdate"),
                 Self::TagDeletedUpdate => Some("TagDeletedUpdate"),
                 Self::BranchCreatedUpdate => Some("BranchCreatedUpdate"),
@@ -308,7 +316,7 @@ pub mod generated {
         type Inner = Self;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+            let b = unsafe { flatbuffers::read_scalar_at::<u8>(buf, loc) };
             Self(b)
         }
     }
@@ -317,7 +325,9 @@ pub mod generated {
         type Output = UpdateType;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            flatbuffers::emplace_scalar::<u8>(dst, self.0);
+            unsafe {
+                flatbuffers::emplace_scalar::<u8>(dst, self.0);
+            }
         }
     }
 
@@ -369,24 +379,26 @@ pub mod generated {
         type Inner = &'a ObjectId12;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            <&'a ObjectId12>::follow(buf, loc)
+            unsafe { <&'a ObjectId12>::follow(buf, loc) }
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a ObjectId12 {
         type Inner = &'a ObjectId12;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            flatbuffers::follow_cast_ref::<ObjectId12>(buf, loc)
+            unsafe { flatbuffers::follow_cast_ref::<ObjectId12>(buf, loc) }
         }
     }
     impl<'b> flatbuffers::Push for ObjectId12 {
         type Output = ObjectId12;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            let src = ::core::slice::from_raw_parts(
-                self as *const ObjectId12 as *const u8,
-                <Self as flatbuffers::Push>::size(),
-            );
+            let src = unsafe {
+                ::core::slice::from_raw_parts(
+                    self as *const ObjectId12 as *const u8,
+                    <Self as flatbuffers::Push>::size(),
+                )
+            };
             dst.copy_from_slice(src);
         }
         #[inline]
@@ -449,24 +461,26 @@ pub mod generated {
         type Inner = &'a ObjectId8;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            <&'a ObjectId8>::follow(buf, loc)
+            unsafe { <&'a ObjectId8>::follow(buf, loc) }
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a ObjectId8 {
         type Inner = &'a ObjectId8;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            flatbuffers::follow_cast_ref::<ObjectId8>(buf, loc)
+            unsafe { flatbuffers::follow_cast_ref::<ObjectId8>(buf, loc) }
         }
     }
     impl<'b> flatbuffers::Push for ObjectId8 {
         type Output = ObjectId8;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            let src = ::core::slice::from_raw_parts(
-                self as *const ObjectId8 as *const u8,
-                <Self as flatbuffers::Push>::size(),
-            );
+            let src = unsafe {
+                ::core::slice::from_raw_parts(
+                    self as *const ObjectId8 as *const u8,
+                    <Self as flatbuffers::Push>::size(),
+                )
+            };
             dst.copy_from_slice(src);
         }
         #[inline]
@@ -533,24 +547,26 @@ pub mod generated {
         type Inner = &'a ManifestFileInfo;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            <&'a ManifestFileInfo>::follow(buf, loc)
+            unsafe { <&'a ManifestFileInfo>::follow(buf, loc) }
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a ManifestFileInfo {
         type Inner = &'a ManifestFileInfo;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            flatbuffers::follow_cast_ref::<ManifestFileInfo>(buf, loc)
+            unsafe { flatbuffers::follow_cast_ref::<ManifestFileInfo>(buf, loc) }
         }
     }
     impl<'b> flatbuffers::Push for ManifestFileInfo {
         type Output = ManifestFileInfo;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            let src = ::core::slice::from_raw_parts(
-                self as *const ManifestFileInfo as *const u8,
-                <Self as flatbuffers::Push>::size(),
-            );
+            let src = unsafe {
+                ::core::slice::from_raw_parts(
+                    self as *const ManifestFileInfo as *const u8,
+                    <Self as flatbuffers::Push>::size(),
+                )
+            };
             dst.copy_from_slice(src);
         }
         #[inline]
@@ -676,24 +692,26 @@ pub mod generated {
         type Inner = &'a ChunkIndexRange;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            <&'a ChunkIndexRange>::follow(buf, loc)
+            unsafe { <&'a ChunkIndexRange>::follow(buf, loc) }
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a ChunkIndexRange {
         type Inner = &'a ChunkIndexRange;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            flatbuffers::follow_cast_ref::<ChunkIndexRange>(buf, loc)
+            unsafe { flatbuffers::follow_cast_ref::<ChunkIndexRange>(buf, loc) }
         }
     }
     impl<'b> flatbuffers::Push for ChunkIndexRange {
         type Output = ChunkIndexRange;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            let src = ::core::slice::from_raw_parts(
-                self as *const ChunkIndexRange as *const u8,
-                <Self as flatbuffers::Push>::size(),
-            );
+            let src = unsafe {
+                ::core::slice::from_raw_parts(
+                    self as *const ChunkIndexRange as *const u8,
+                    <Self as flatbuffers::Push>::size(),
+                )
+            };
             dst.copy_from_slice(src);
         }
         #[inline]
@@ -806,24 +824,26 @@ pub mod generated {
         type Inner = &'a DimensionShape;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            <&'a DimensionShape>::follow(buf, loc)
+            unsafe { <&'a DimensionShape>::follow(buf, loc) }
         }
     }
     impl<'a> flatbuffers::Follow<'a> for &'a DimensionShape {
         type Inner = &'a DimensionShape;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            flatbuffers::follow_cast_ref::<DimensionShape>(buf, loc)
+            unsafe { flatbuffers::follow_cast_ref::<DimensionShape>(buf, loc) }
         }
     }
     impl<'b> flatbuffers::Push for DimensionShape {
         type Output = DimensionShape;
         #[inline]
         unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
-            let src = ::core::slice::from_raw_parts(
-                self as *const DimensionShape as *const u8,
-                <Self as flatbuffers::Push>::size(),
-            );
+            let src = unsafe {
+                ::core::slice::from_raw_parts(
+                    self as *const DimensionShape as *const u8,
+                    <Self as flatbuffers::Push>::size(),
+                )
+            };
             dst.copy_from_slice(src);
         }
         #[inline]
@@ -924,7 +944,7 @@ pub mod generated {
         type Inner = MetadataItem<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1079,7 +1099,7 @@ pub mod generated {
         type Inner = ChunkRef<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1360,7 +1380,7 @@ pub mod generated {
         type Inner = ArrayManifest<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1508,7 +1528,7 @@ pub mod generated {
         type Inner = Manifest<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1658,7 +1678,7 @@ pub mod generated {
         type Inner = ManifestRef<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1794,7 +1814,7 @@ pub mod generated {
         type Inner = DimensionName<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1907,7 +1927,7 @@ pub mod generated {
         type Inner = GroupNodeData<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -1986,7 +2006,7 @@ pub mod generated {
         type Inner = ArrayNodeData<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -2182,7 +2202,7 @@ pub mod generated {
         type Inner = NodeSnapshot<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -2461,7 +2481,7 @@ pub mod generated {
         type Inner = Snapshot<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -2749,7 +2769,7 @@ pub mod generated {
         type Inner = ChunkIndices<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -2866,7 +2886,7 @@ pub mod generated {
         type Inner = ArrayUpdatedChunks<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -3019,7 +3039,7 @@ pub mod generated {
         type Inner = MoveOperation<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -3166,7 +3186,7 @@ pub mod generated {
         type Inner = TransactionLog<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -3533,7 +3553,7 @@ pub mod generated {
         type Inner = Ref<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -3662,7 +3682,7 @@ pub mod generated {
         type Inner = SnapshotInfo<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -3876,7 +3896,7 @@ pub mod generated {
         type Inner = RepoStatus<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -4043,7 +4063,7 @@ pub mod generated {
         type Inner = RepoInitializedUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -4122,7 +4142,7 @@ pub mod generated {
         type Inner = RepoMigratedUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -4245,7 +4265,7 @@ pub mod generated {
         type Inner = ConfigChangedUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -4313,6 +4333,85 @@ pub mod generated {
             ds.finish()
         }
     }
+    pub enum MetadataChangedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct MetadataChangedUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for MetadataChangedUpdate<'a> {
+        type Inner = MetadataChangedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+        }
+    }
+
+    impl<'a> MetadataChangedUpdate<'a> {
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            MetadataChangedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            _args: &'args MetadataChangedUpdateArgs,
+        ) -> flatbuffers::WIPOffset<MetadataChangedUpdate<'bldr>> {
+            let mut builder = MetadataChangedUpdateBuilder::new(_fbb);
+            builder.finish()
+        }
+    }
+
+    impl flatbuffers::Verifiable for MetadataChangedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?.finish();
+            Ok(())
+        }
+    }
+    pub struct MetadataChangedUpdateArgs {}
+    impl<'a> Default for MetadataChangedUpdateArgs {
+        #[inline]
+        fn default() -> Self {
+            MetadataChangedUpdateArgs {}
+        }
+    }
+
+    pub struct MetadataChangedUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> MetadataChangedUpdateBuilder<'a, 'b, A> {
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> MetadataChangedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            MetadataChangedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<MetadataChangedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for MetadataChangedUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("MetadataChangedUpdate");
+            ds.finish()
+        }
+    }
     pub enum TagCreatedUpdateOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -4324,7 +4423,7 @@ pub mod generated {
         type Inner = TagCreatedUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -4442,7 +4541,7 @@ pub mod generated {
         type Inner = TagDeletedUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -4595,7 +4694,7 @@ pub mod generated {
         type Inner = BranchCreatedUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -4713,7 +4812,7 @@ pub mod generated {
         type Inner = BranchDeletedUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -4866,7 +4965,7 @@ pub mod generated {
         type Inner = BranchResetUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -5019,7 +5118,7 @@ pub mod generated {
         type Inner = NewCommitUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -5137,7 +5236,7 @@ pub mod generated {
         type Inner = CommitAmendedUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -5290,7 +5389,7 @@ pub mod generated {
         type Inner = NewDetachedSnapshotUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -5411,7 +5510,7 @@ pub mod generated {
         type Inner = GCRanUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -5490,7 +5589,7 @@ pub mod generated {
         type Inner = ExpirationRanUpdate<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -5569,7 +5668,7 @@ pub mod generated {
         type Inner = Update<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
@@ -5695,6 +5794,22 @@ pub mod generated {
                 // Created from a valid Table for this object
                 // Which contains a valid union in this slot
                 Some(unsafe { ConfigChangedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_metadata_changed_update(
+            &self,
+        ) -> Option<MetadataChangedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::MetadataChangedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { MetadataChangedUpdate::init_from_table(u) })
             } else {
                 None
             }
@@ -5866,6 +5981,7 @@ pub mod generated {
           UpdateType::RepoInitializedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RepoInitializedUpdate>>("UpdateType::RepoInitializedUpdate", pos),
           UpdateType::RepoMigratedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RepoMigratedUpdate>>("UpdateType::RepoMigratedUpdate", pos),
           UpdateType::ConfigChangedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ConfigChangedUpdate>>("UpdateType::ConfigChangedUpdate", pos),
+          UpdateType::MetadataChangedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<MetadataChangedUpdate>>("UpdateType::MetadataChangedUpdate", pos),
           UpdateType::TagCreatedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<TagCreatedUpdate>>("UpdateType::TagCreatedUpdate", pos),
           UpdateType::TagDeletedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<TagDeletedUpdate>>("UpdateType::TagDeletedUpdate", pos),
           UpdateType::BranchCreatedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<BranchCreatedUpdate>>("UpdateType::BranchCreatedUpdate", pos),
@@ -5978,6 +6094,13 @@ pub mod generated {
                         ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
                     }
                 }
+                UpdateType::MetadataChangedUpdate => {
+                    if let Some(x) = self.update_type_as_metadata_changed_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
                 UpdateType::TagCreatedUpdate => {
                     if let Some(x) = self.update_type_as_tag_created_update() {
                         ds.field("update_type", &x)
@@ -6069,7 +6192,7 @@ pub mod generated {
         type Inner = Repo<'a>;
         #[inline]
         unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-            Self { _tab: flatbuffers::Table::new(buf, loc) }
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
         }
     }
 
