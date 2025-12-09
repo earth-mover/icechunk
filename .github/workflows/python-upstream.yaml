@@ -141,7 +141,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          mypy python 2>&1 | tee mypy-output.log
+          mypy --python-version ${{ env.PYTHON_VERSION }} python 2>&1 | tee mypy-output.log
 
       - name: Create or update mypy failure issue
         if: |
