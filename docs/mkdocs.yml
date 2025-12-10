@@ -202,6 +202,7 @@ nav:
     - Quickstart: quickstart.md
     - How To: howto.md
   - Understanding Icechunk:
+    - Core Concepts: concepts.md
     - Transactions and Version Control: version-control.md
     - Data Expiration and Garbage Collection: expiration.md
     - Parallel / Distributed Writing: parallel.md
