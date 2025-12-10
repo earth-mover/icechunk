@@ -1,5 +1,11 @@
 # Changelog
 
+## Python Icechunk Library 1.1.14
+
+### Fixes
+
+- Solve issue resolving virtual chunks in URLs with special characters
+
 ## Python Icechunk Library 1.1.13
 
 ### Features
