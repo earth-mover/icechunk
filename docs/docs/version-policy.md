@@ -29,7 +29,13 @@ For example, breaking changes to widely-used user-facing APIs should only be app
   Users and downstream projects should carefully consider the impact of a major release before adopting it. 
   In advance of a major release, developers should communicate the scope of the upcoming changes, and help users prepare for them.
 
-  IMPORTANT: Any backwards-incompatible change to the Icechunk format specification is always treated as a significant change for users, and so will therefore always be accompanied by a major release. See the [section](#data-format-specification-compatibility) on data format specification compatibility below.
+  :::info
+  
+  Any backwards-incompatible change to the Icechunk format specification is always treated as a significant change for users, and so will therefore always be accompanied by a major release. 
+  
+  For more details see the [section](#data-format-specification-compatibility) on data format specification compatibility below.
+
+  :::
 
 * **minor** releases (for example, `3.0.0` -> `3.1.0`) are for changes that do not require significant effort from most users or downstream downstream projects to respond to. API changes are possible in minor releases if the burden on users imposed by those changes is sufficiently small.
 
