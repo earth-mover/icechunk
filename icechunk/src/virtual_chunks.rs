@@ -572,8 +572,8 @@ impl ChunkFetcher for S3Fetcher {
             ))?
         };
 
-        let key = chunk_location.path();
-        let key = key.strip_prefix('/').unwrap_or(key);
+        let key = urlencoding::decode(chunk_location.path())?;
+        let key = key.strip_prefix('/').unwrap_or(key.as_ref());
 
         let mut b = self
             .client
@@ -771,7 +771,7 @@ impl ChunkFetcher for ObjectStoreFetcher {
             None => {}
         }
 
-        let path = Path::parse(chunk_location.path())
+        let path = Path::parse(urlencoding::decode(chunk_location.path())?)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))?;
 
         match self.client.get_opts(&path, options).await {
