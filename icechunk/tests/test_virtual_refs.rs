@@ -210,6 +210,19 @@ async fn create_minio_repository() -> Repository {
         )
         .unwrap(),
         VirtualChunkContainer::new(
+            "s3://testbucket/path with spaces/".to_string(),
+            ObjectStoreConfig::S3Compatible(S3Options {
+                region: Some(String::from("us-east-1")),
+                endpoint_url: Some("http://localhost:9000".to_string()),
+                anonymous: false,
+                allow_http: true,
+                force_path_style: true,
+                network_stream_timeout_seconds: None,
+                requester_pays: false,
+            }),
+        )
+        .unwrap(),
+        VirtualChunkContainer::new(
             "az://testcontainer/".to_string(),
             ObjectStoreConfig::Azure(HashMap::from([
                 ("account".to_string(), "devstoreaccount1".to_string()),
@@ -222,6 +235,15 @@ async fn create_minio_repository() -> Repository {
     let credentials = [
         (
             "s3://testbucket/".to_string(),
+            Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
+                access_key_id: "minio123".to_string(),
+                secret_access_key: "minio123".to_string(),
+                session_token: None,
+                expires_after: None,
+            }))),
+        ),
+        (
+            "s3://testbucket/path with spaces/".to_string(),
             Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
                 access_key_id: "minio123".to_string(),
                 secret_access_key: "minio123".to_string(),
