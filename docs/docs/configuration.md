@@ -294,6 +294,10 @@ repo = icechunk.Repository.open(
 
 Icechunk supports routing its requests through a proxy. This is useful when your object storage service itself is behind a proxy.
 
+!!! note
+
+    Proxy support is currently only implemented for S3-compatible storage instances.
+
 Icechunk automatically detects proxy settings from environment variables:
 
 ```bash
