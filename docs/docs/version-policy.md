@@ -8,21 +8,22 @@ There are three versions referred to in this document:
 
 ## Icechunk Spec
 
-The spec will advance with any revisions as defined in the [Spec document](./spec.md).
+The Icechunk format specification versions are identified by a single integer. The spec version will increment with any revisions as defined in the [Spec document](./spec.md).
 
 ## `icechunk` Python Library
 
-Versions of this library are identified by a triplet of integers with the form `<major>.<minor>.<patch>`
+Versions of this library are identified by a triplet of integers with the form `<major>.<minor>.<patch>`.
 
 ### Library Version
 
 #### Major Versions
 
-The `icechunk` Python library will change when there is an on-disk incompatible change in the Icechunk Spec.
+The `icechunk` Python library major version will increment when and only when there is an on-disk incompatible change in the Icechunk Spec.
 
 ##### Reading
 
-The latest release of `icechunk` Python will always be able to read data written against any version of the Icechunk Spec.
+The latest release of `icechunk` Python will always be able to read data written against any previous version of the Icechunk Spec.
+It in general will not be able to read data written using a future version of the Icechunk Spec.
 
 ##### Writing
 
@@ -31,7 +32,7 @@ The latest release of `icechunk` Python will always be able to read data written
 
 ###### Forward Compatibility
 
-`icechunk` Python will **not** implement forward compatible reading and writing. `icechunk` Python version 1.x.x will not be able to read or write the Icechunk 2 format.
+`icechunk` Python will **not** implement forward compatible reading and writing. For example `icechunk` Python version 1.x.x will not be able to read or write data using the Icechunk format 2 (or later).
 
 #### Minor Versions
 
