@@ -295,11 +295,11 @@ impl VirtualChunkResolver {
         &self,
         chunk_location: &Url,
     ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
-        let cont = self
-            .matching_container(chunk_location.to_string().as_str())
-            .ok_or_else(|| {
-                VirtualReferenceErrorKind::NoContainerForUrl(chunk_location.to_string())
-            })?;
+        let location = chunk_location.to_string();
+        let location = urlencoding::decode(location.as_str())?;
+        let cont = self.matching_container(location.as_ref()).ok_or_else(|| {
+            VirtualReferenceErrorKind::NoContainerForUrl(chunk_location.to_string())
+        })?;
 
         let cache_key = fetcher_cache_key(cont, chunk_location)?;
         // TODO: we shouldn't need to clone the container name
@@ -416,7 +416,7 @@ impl VirtualChunkResolver {
                 };
 
                 let bucket_name = if let Some(host) = chunk_location.host_str() {
-                    host.to_string()
+                    urlencoding::decode(host)?.into_owned()
                 } else {
                     Err(VirtualReferenceErrorKind::CannotParseBucketName(
                         "No bucket name found".to_string(),
@@ -475,7 +475,7 @@ impl VirtualChunkResolver {
                 };
 
                 let container = if let Some(host) = chunk_location.host_str() {
-                    host.to_string()
+                    urlencoding::decode(host)?.into_owned()
                 } else {
                     Err(VirtualReferenceErrorKind::CannotParseBucketName(
                         "No bucket name found".to_string(),
@@ -566,7 +566,7 @@ impl ChunkFetcher for S3Fetcher {
         checksum: Option<&Checksum>,
     ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
         let bucket_name = if let Some(host) = chunk_location.host_str() {
-            host.to_string()
+            urlencoding::decode(host)?.into_owned()
         } else {
             Err(VirtualReferenceErrorKind::CannotParseBucketName(
                 "No bucket name found".to_string(),
