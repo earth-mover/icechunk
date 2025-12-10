@@ -393,7 +393,7 @@ async fn test_repository_with_minio_virtual_refs() -> Result<(), Box<dyn Error>>
     let bytes2 = Bytes::copy_from_slice(b"second0000");
     let chunks = [
         ("/path/to/chunk-1".into(), bytes1.clone()),
-        ("/path/to/chunk-2".into(), bytes2.clone()),
+        ("/path with spaces/to/chunk-2".into(), bytes2.clone()),
     ];
     write_chunks_to_minio(chunks.iter().cloned()).await;
 
@@ -534,7 +534,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
     let bytes2 = Bytes::copy_from_slice(b"second0000");
     let chunks = [
         ("/path/to/chunk-1".into(), bytes1.clone()),
-        ("/path/to/chunk-2".into(), bytes2.clone()),
+        ("/path with spaces/to/chunk-2".into(), bytes2.clone()),
     ];
     write_chunks_to_minio(chunks.iter().cloned()).await;
 
@@ -859,7 +859,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
     let minio_bytes3 = Bytes::copy_from_slice(b"modified");
     let chunks = [
         ("/path/to/chunk-1".into(), minio_bytes1.clone()),
-        ("/path/to/chunk-2".into(), minio_bytes2.clone()),
+        ("/path with spaces/to/chunk-2".into(), minio_bytes2.clone()),
         ("/path/to/chunk-3".into(), minio_bytes3.clone()),
     ];
     write_chunks_to_minio(chunks.iter().cloned()).await;
@@ -1039,7 +1039,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         [
             "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc".to_string(),
             "s3://testbucket/path/to/chunk-1".to_string(),
-            "s3://testbucket/path/to/chunk-2".to_string(),
+            "s3://testbucket/path%20with%20spaces/to/chunk-2".to_string(),
             "s3://testbucket/path/to/chunk-3".to_string(),
             format!("file://{}", local_chunks[0].0),
             format!("file://{}", local_chunks[1].0),
