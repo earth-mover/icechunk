@@ -4,6 +4,7 @@ use std::{
     convert::Infallible,
     iter::zip,
     ops::Range,
+    string::FromUtf8Error,
     sync::Arc,
 };
 
@@ -241,6 +242,8 @@ pub enum VirtualReferenceErrorKind {
     InvalidObjectSize { expected: u64, available: u64 },
     #[error("azure store configuration must include an account")]
     AzureConfigurationMustIncludeAccount,
+    #[error("decoding virtual chunk url")]
+    Decoding(#[from] FromUtf8Error),
     #[error("unknown error")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
