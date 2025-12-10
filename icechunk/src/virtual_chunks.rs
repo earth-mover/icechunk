@@ -533,6 +533,7 @@ fn fetcher_cache_key(
 pub struct S3Fetcher {
     client: Arc<Client>,
     settings: storage::Settings,
+    requester_pays: bool,
 }
 
 impl S3Fetcher {
@@ -543,7 +544,7 @@ impl S3Fetcher {
     ) -> Self {
         let client =
             mk_client(opts, credentials.clone(), Vec::new(), Vec::new(), &settings).await;
-        Self { settings, client: Arc::new(client) }
+        Self { settings, client: Arc::new(client), requester_pays: opts.requester_pays }
     }
 }
 
@@ -572,8 +573,8 @@ impl ChunkFetcher for S3Fetcher {
             ))?
         };
 
-        let key = chunk_location.path();
-        let key = key.strip_prefix('/').unwrap_or(key);
+        let key = urlencoding::decode(chunk_location.path())?;
+        let key = key.strip_prefix('/').unwrap_or(key.as_ref());
 
         let mut b = self
             .client
@@ -593,6 +594,10 @@ impl ChunkFetcher for S3Fetcher {
             }
             None => {}
         };
+
+        if self.requester_pays {
+            b = b.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
 
         let res = b
             .send()
@@ -771,7 +776,7 @@ impl ChunkFetcher for ObjectStoreFetcher {
             None => {}
         }
 
-        let path = Path::parse(chunk_location.path())
+        let path = Path::parse(urlencoding::decode(chunk_location.path())?)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))?;
 
         match self.client.get_opts(&path, options).await {
@@ -815,6 +820,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
@@ -829,6 +835,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
@@ -843,6 +850,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
@@ -857,6 +865,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
@@ -871,6 +880,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
@@ -885,6 +895,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()
@@ -899,6 +910,7 @@ mod tests {
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 })
             )
             .is_err()

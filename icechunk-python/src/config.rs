@@ -415,12 +415,14 @@ pub struct PyS3Options {
     pub force_path_style: bool,
     #[pyo3(get, set)]
     pub network_stream_timeout_seconds: Option<u32>,
+    #[pyo3(get, set)]
+    pub requester_pays: bool,
 }
 
 #[pymethods]
 impl PyS3Options {
     #[new]
-    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=false, network_stream_timeout_seconds=None))]
+    #[pyo3(signature = ( region=None, endpoint_url=None, allow_http=false, anonymous=false, force_path_style=false, network_stream_timeout_seconds=None, requester_pays=false))]
     pub(crate) fn new(
         region: Option<String>,
         endpoint_url: Option<String>,
@@ -428,6 +430,7 @@ impl PyS3Options {
         anonymous: bool,
         force_path_style: bool,
         network_stream_timeout_seconds: Option<u32>,
+        requester_pays: bool,
     ) -> Self {
         Self {
             region,
@@ -436,13 +439,14 @@ impl PyS3Options {
             anonymous,
             force_path_style,
             network_stream_timeout_seconds,
+            requester_pays,
         }
     }
 
     pub fn __repr__(&self) -> String {
         // TODO: escape
         format!(
-            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon}, force_path_style={force_path_style}, network_stream_timeout_seconds={net_timeout})"#,
+            r#"S3Options(region={region}, endpoint_url={url}, allow_http={http}, anonymous={anon}, force_path_style={force_path_style}, network_stream_timeout_seconds={net_timeout}, requester_pays={requester_pays})"#,
             region = format_option(self.region.as_ref()),
             url = format_option(self.endpoint_url.as_ref()),
             http = format_bool(self.allow_http),
@@ -450,6 +454,7 @@ impl PyS3Options {
             force_path_style = format_bool(self.force_path_style),
             net_timeout =
                 format_option(self.network_stream_timeout_seconds.map(|n| n.to_string())),
+            requester_pays = format_bool(self.requester_pays),
         )
     }
 }
@@ -463,6 +468,7 @@ impl From<&PyS3Options> for S3Options {
             anonymous: options.anonymous,
             force_path_style: options.force_path_style,
             network_stream_timeout_seconds: options.network_stream_timeout_seconds,
+            requester_pays: options.requester_pays,
         }
     }
 }
@@ -476,6 +482,7 @@ impl From<S3Options> for PyS3Options {
             anonymous: value.anonymous,
             force_path_style: value.force_path_style,
             network_stream_timeout_seconds: value.network_stream_timeout_seconds,
+            requester_pays: value.requester_pays,
         }
     }
 }

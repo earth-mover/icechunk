@@ -132,7 +132,8 @@ prop_compose! {
             anonymous: false,
             allow_http: false,
             force_path_style: false,
-            network_stream_timeout_seconds
+            network_stream_timeout_seconds,
+            requester_pays: false,
         }
     }
 }

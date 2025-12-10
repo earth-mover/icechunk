@@ -4,6 +4,7 @@ use std::{
     convert::Infallible,
     iter::zip,
     ops::Range,
+    string::FromUtf8Error,
     sync::Arc,
 };
 
@@ -205,7 +206,7 @@ impl ManifestSplits {
 pub fn uniform_manifest_split_edges(num_chunks: u32, split_size: &u32) -> Vec<u32> {
     (0u32..=num_chunks)
         .step_by(*split_size as usize)
-        .chain((num_chunks % split_size != 0).then_some(num_chunks))
+        .chain((!num_chunks.is_multiple_of(*split_size)).then_some(num_chunks))
         .collect()
 }
 #[derive(Debug, Error)]
@@ -241,6 +242,8 @@ pub enum VirtualReferenceErrorKind {
     InvalidObjectSize { expected: u64, available: u64 },
     #[error("azure store configuration must include an account")]
     AzureConfigurationMustIncludeAccount,
+    #[error("decoding virtual chunk url")]
+    Decoding(#[from] FromUtf8Error),
     #[error("unknown error")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }

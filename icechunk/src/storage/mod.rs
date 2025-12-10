@@ -1074,7 +1074,7 @@ mod tests {
             // the request sizes add up to total size
             prop_assert_eq!(res.iter().map(|range| range.end - range.start).sum::<u64>(), size);
 
-            let sizes: Vec<_> = res.iter().map(|range| (range.end - range.start)).collect();
+            let sizes: Vec<_> = res.iter().map(|range| range.end - range.start).collect();
             if sizes.len() > 1 {
                 // all but last request have the same size
                 assert_eq!(sizes.iter().rev().skip(1).unique().count(), 1);
@@ -1114,7 +1114,7 @@ mod tests {
             prop_assert_eq!(res.iter().map(|range| range.end - range.start).sum::<u64>(), size);
 
             // there are only two request sizes
-            let sizes: HashSet<_> = res.iter().map(|range| (range.end - range.start)).collect();
+            let sizes: HashSet<_> = res.iter().map(|range| range.end - range.start).collect();
             prop_assert!(sizes.len() <= 2); // only last element is smaller
             if sizes.len() > 1 {
                 // the smaller request size is one less than the big ones

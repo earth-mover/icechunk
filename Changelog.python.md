@@ -1,5 +1,16 @@
 # Changelog
 
+## Python Icechunk Library 1.1.13
+
+### Features
+
+- Add support for requester pays in S3: `s3_storage(..., requester_pays=True)`.
+- Add support for network proxy when using S3 compatible storage, using
+  environment variables:
+  - `HTTPS_PROXY` (this is probably the one you want),
+  - `HTTP_PROXY`,
+  - `ALL_PROXY`,
+  - `NO_PROXY`
 
 ## Python Icechunk Library 1.1.12
 
