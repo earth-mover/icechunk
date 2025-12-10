@@ -15,5 +15,6 @@ virtual_chunk_containers:
       allow_http: true
       force_path_style: true
       network_stream_timeout_seconds: 60
+      requester_pays: false
 manifest: null
 previous_file: null

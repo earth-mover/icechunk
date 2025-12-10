@@ -5,6 +5,7 @@ import time
 import uuid
 from random import randrange
 from threading import Event
+from typing import Any
 
 import pytest
 from termcolor import colored
@@ -17,7 +18,7 @@ N = 15
 
 
 async def write_to_store(
-    array: zarr.Array, x: int, y: int, barrier: asyncio.Barrier
+    array: "zarr.Array[Any]", x: int, y: int, barrier: asyncio.Barrier
 ) -> None:
     await barrier.wait()
     await asyncio.sleep(random.uniform(0, 0.5))
@@ -25,7 +26,9 @@ async def write_to_store(
     # await asyncio.sleep(0)
 
 
-async def read_store(array: zarr.Array, x: int, y: int, barrier: asyncio.Barrier) -> None:
+async def read_store(
+    array: "zarr.Array[Any]", x: int, y: int, barrier: asyncio.Barrier
+) -> None:
     await barrier.wait()
     while True:
         value = array[x, y]
@@ -160,7 +163,7 @@ async def test_thread_concurrency(any_spec_version: int | None) -> None:
     group = zarr.group(store=store, overwrite=True)
     group.create_array("array", shape=(1_000,), chunks=(1,), dtype="i4", compressors=None)
 
-    def do_virtual_writes(start, stop) -> int:
+    def do_virtual_writes(start: Event, stop: Event) -> int:
         n = 0
         start.wait()
         while not stop.is_set():
@@ -175,7 +178,7 @@ async def test_thread_concurrency(any_spec_version: int | None) -> None:
             n += 1
         return n
 
-    def do_native_writes(start, stop) -> int:
+    def do_native_writes(start: Event, stop: Event) -> int:
         async def do() -> int:
             n = 0
             while not stop.is_set():
@@ -190,7 +193,7 @@ async def test_thread_concurrency(any_spec_version: int | None) -> None:
         start.wait()
         return asyncio.run(do())
 
-    def do_reads(start, stop) -> int:
+    def do_reads(start: Event, stop: Event) -> int:
         buffer_prototype = zarr.core.buffer.default_buffer_prototype()
 
         async def do() -> int:
@@ -205,7 +208,7 @@ async def test_thread_concurrency(any_spec_version: int | None) -> None:
         start.wait()
         return asyncio.run(do())
 
-    def do_deletes(start, stop) -> int:
+    def do_deletes(start: Event, stop: Event) -> int:
         async def do() -> int:
             n = 0
             while not stop.is_set():
@@ -218,7 +221,7 @@ async def test_thread_concurrency(any_spec_version: int | None) -> None:
         start.wait()
         return asyncio.run(do())
 
-    def do_lists(start, stop) -> int:
+    def do_lists(start: Event, stop: Event) -> int:
         async def do() -> int:
             n = 0
             while not stop.is_set():

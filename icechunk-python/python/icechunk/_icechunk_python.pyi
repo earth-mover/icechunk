@@ -14,6 +14,7 @@ class S3Options:
         anonymous: bool = False,
         force_path_style: bool = False,
         network_stream_timeout_seconds: int | None = None,
+        requester_pays: bool = False,
     ) -> None:
         """
         Create a new `S3Options` object
@@ -33,6 +34,8 @@ class S3Options:
         network_stream_timeout_seconds: int | None
             Timeout requests if no bytes can be transmitted during this period of time.
             If set to 0, timeout is disabled. Default is 60 seconds.
+        requester_pays: bool
+            Enable requester pays for S3 buckets
         """
 
     @property
@@ -728,6 +731,17 @@ class ManifestSplittingConfig:
             ],
         ],
     ) -> ManifestSplittingConfig: ...
+    def to_dict(
+        config: ManifestSplittingConfig,
+    ) -> dict[
+        ManifestSplitCondition,
+        dict[
+            ManifestSplitDimCondition.Axis
+            | ManifestSplitDimCondition.DimensionName
+            | ManifestSplitDimCondition.Any,
+            int,
+        ],
+    ]: ...
     def __init__(self, split_sizes: SplitSizes) -> None:
         """Configuration for how Icechunk manifests will be split.
 
@@ -1488,6 +1502,9 @@ class RepoMigratedUpdate(UpdateType):
 class ConfigChangedUpdate(UpdateType):
     pass
 
+class MetadataChangedUpdate(UpdateType):
+    pass
+
 class TagCreatedUpdate(UpdateType):
     @property
     def name(self) -> str: ...
@@ -1635,6 +1652,12 @@ class PyRepository:
     ) -> PyRepository: ...
     def set_default_commit_metadata(self, metadata: dict[str, Any]) -> None: ...
     def default_commit_metadata(self) -> dict[str, Any]: ...
+    def get_metadata(self) -> dict[str, Any]: ...
+    async def get_metadata_async(self) -> dict[str, Any]: ...
+    def set_metadata(self, metadata: dict[str, Any]) -> None: ...
+    async def set_metadata_async(self, metadata: dict[str, Any]) -> None: ...
+    def update_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]: ...
+    async def update_metadata_async(self, metadata: dict[str, Any]) -> dict[str, Any]: ...
     def async_ancestry(
         self,
         *,

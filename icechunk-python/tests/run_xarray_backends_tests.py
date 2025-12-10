@@ -145,7 +145,7 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
             yield session.store
 
     @contextlib.contextmanager
-    def create(self):
+    def create(self) -> Generator[tuple[IcechunkStore, xr.Dataset], None, None]:
         x = np.arange(0, 50, 10)
         y = np.arange(0, 20, 2)
         data = np.ones((5, 10))
@@ -159,32 +159,32 @@ class TestIcechunkRegionAuto(ZarrRegionAutoTests):
             session.commit("initial commit")
             yield repo.writable_session("main").store, ds
 
-    def save(self, target, ds, **kwargs):
+    def save(self, target: IcechunkStore, ds: xr.Dataset, **kwargs: Any) -> None:
         # not really important here
         kwargs.pop("compute", None)
         to_icechunk(ds, session=target.session, **kwargs)
 
-    def test_zarr_append_chunk_partial(self):
+    def test_zarr_append_chunk_partial(self) -> None:
         pytest.skip(
             "this test requires multiple saves, and is meant to exercise Xarray logic."
         )
 
-    def test_zarr_safe_chunk_region(self, *args, **kwargs):
+    def test_zarr_safe_chunk_region(self, *args: Any, **kwargs: Any) -> None:
         pytest.skip(
             "this test requires multiple saves, and is meant to exercise Xarray logic."
         )
 
-    def test_zarr_safe_chunk_append_dim(self, *args, **kwargs):
+    def test_zarr_safe_chunk_append_dim(self, *args: Any, **kwargs: Any) -> None:
         pytest.skip(
             "this test requires multiple saves, and is meant to exercise Xarray logic."
         )
 
-    def test_zarr_region_chunk_partial_offset(self):
+    def test_zarr_region_chunk_partial_offset(self) -> None:
         pytest.skip(
             "this test requires multiple saves, and is meant to exercise Xarray logic."
         )
 
-    def test_dataset_to_zarr_align_chunks_true(self, tmp_store) -> None:  # noqa: F811
+    def test_dataset_to_zarr_align_chunks_true(self, tmp_store: IcechunkStore) -> None:  # noqa: F811
         pytest.skip(
             "this test requires multiple saves, and is meant to exercise Xarray logic."
         )

@@ -546,6 +546,64 @@ impl Repository {
         &self.default_commit_metadata
     }
 
+    #[instrument(skip_all)]
+    pub async fn get_metadata(&self) -> RepositoryResult<SnapshotProperties> {
+        // this feature is only available in IC2
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        let (repo, _) = self.asset_manager().fetch_repo_info().await?;
+        Ok(repo.metadata()?)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn update_metadata(
+        &self,
+        metadata: &SnapshotProperties,
+    ) -> RepositoryResult<SnapshotProperties> {
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot set metadata".to_string(),
+            )
+            .into());
+        }
+        let mut final_metadata = Default::default();
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+            final_metadata = repo_info.metadata()?;
+            final_metadata.extend(metadata.clone());
+            Ok(Arc::new(repo_info.set_metadata(&final_metadata, backup_path)?))
+        };
+
+        let _ = self
+            .asset_manager
+            // FIXME: hardcoded retries
+            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .await?;
+        Ok(final_metadata)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn set_metadata(
+        &self,
+        metadata: &SnapshotProperties,
+    ) -> RepositoryResult<()> {
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot set metadata".to_string(),
+            )
+            .into());
+        }
+
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+            Ok(Arc::new(repo_info.set_metadata(metadata, backup_path)?))
+        };
+
+        let _ = self
+            .asset_manager
+            // FIXME: hardcoded retries
+            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .await?;
+        Ok(())
+    }
+
     #[instrument(skip(storage, config))]
     pub(crate) async fn store_config(
         storage: Arc<dyn Storage + Send + Sync>,
@@ -3278,6 +3336,52 @@ mod tests {
         .await?;
         let repo = Repository::open(None, storage, Default::default()).await?;
         assert_eq!(repo.spec_version(), SpecVersionBin::V1dot0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_metadata() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+        assert_eq!(repo.get_metadata().await?, Default::default());
+
+        let meta =
+            [("foo".to_string(), "bar".into()), ("number".to_string(), 42.into())].into();
+        repo.set_metadata(&meta).await?;
+        assert_eq!(repo.get_metadata().await?, meta);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_metadata() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo =
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+
+        let meta =
+            [("foo".to_string(), "bar".into()), ("number".to_string(), 42.into())].into();
+        let res = repo.update_metadata(&meta).await?;
+        assert_eq!(res, meta);
+        assert_eq!(repo.get_metadata().await?, meta);
+
+        let res =
+            repo.update_metadata(&[("number".to_string(), 43.into())].into()).await?;
+        let expected =
+            [("foo".to_string(), "bar".into()), ("number".to_string(), 43.into())].into();
+        assert_eq!(res, expected);
+        assert_eq!(repo.get_metadata().await?, expected,);
+
+        let res = repo
+            .update_metadata(&[("foo".to_string(), None::<String>.into())].into())
+            .await?;
+        let expected = [
+            ("foo".to_string(), None::<String>.into()),
+            ("number".to_string(), 43.into()),
+        ]
+        .into();
+        assert_eq!(res, expected);
+        assert_eq!(repo.get_metadata().await?, expected,);
         Ok(())
     }
 }

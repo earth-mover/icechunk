@@ -35,6 +35,7 @@ from icechunk._icechunk_python import (
     ManifestSplitCondition,
     ManifestSplitDimCondition,
     ManifestSplittingConfig,
+    MetadataChangedUpdate,
     NewCommitUpdate,
     NewDetachedSnapshotUpdate,
     ObjectStoreConfig,
@@ -145,6 +146,7 @@ __all__ = [
     "ManifestSplitCondition",
     "ManifestSplitDimCondition",
     "ManifestSplittingConfig",
+    "MetadataChangedUpdate",
     "NewCommitUpdate",
     "NewDetachedSnapshotUpdate",
     "ObjectStoreConfig",
@@ -222,14 +224,15 @@ def print_debug_info() -> None:
 # So on the python side, we can accept a dict as a nicer API, and immediately
 # convert it to tuples that preserve order, and pass those to Rust
 
+ManifestSplitValues: TypeAlias = dict[
+    ManifestSplitDimCondition.Axis
+    | ManifestSplitDimCondition.DimensionName
+    | ManifestSplitDimCondition.Any,
+    int,
+]
 SplitSizesDict: TypeAlias = dict[
     ManifestSplitCondition,
-    dict[
-        ManifestSplitDimCondition.Axis
-        | ManifestSplitDimCondition.DimensionName
-        | ManifestSplitDimCondition.Any,
-        int,
-    ],
+    ManifestSplitValues,
 ]
 
 
@@ -267,6 +270,6 @@ def upgrade_icechunk_repository(
 
 
 ManifestSplittingConfig.from_dict = from_dict  # type: ignore[method-assign]
-ManifestSplittingConfig.to_dict = to_dict  # type: ignore[attr-defined]
+ManifestSplittingConfig.to_dict = to_dict  # type: ignore[method-assign]
 
 initialize_logs()

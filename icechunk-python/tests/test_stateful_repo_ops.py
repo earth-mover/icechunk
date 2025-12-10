@@ -5,9 +5,10 @@ import itertools
 import json
 import operator
 import textwrap
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Self
+from typing import Any, Self, cast
 
 import numpy as np
 import pytest
@@ -22,11 +23,10 @@ import copy
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import pytest
-from hypothesis import assume, note
+from hypothesis import assume, note, settings
 from hypothesis.stateful import (
     Bundle,
     RuleBasedStateMachine,
-    Settings,
     consumes,
     initialize,
     invariant,
@@ -55,7 +55,7 @@ INITIAL_SNAPSHOT = "1CECHNKREP0F1RSTCMT0"
 
 
 class NewSyncStoreWrapper(SyncStoreWrapper):
-    def list_prefix(self, prefix: str) -> list[str]:
+    def list_prefix(self, prefix: str) -> list[str]:  # type: ignore[override]
         return self._sync_iter(self.store.list_prefix(prefix))
 
 
@@ -86,7 +86,7 @@ class CommitModel:
     id: str
     written_at: datetime.datetime
     store: dict[str, Any]
-    parent_id: str
+    parent_id: str | None
 
     @classmethod
     def from_snapshot_and_store(cls, snap: SnapshotInfo, store: dict[str, Any]) -> Self:
@@ -102,7 +102,7 @@ class TagModel:
 
 
 class Model:
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         self.store: dict[str, Any] = {}  #
 
         self.initial_snapshot_id: str | None = None
@@ -141,7 +141,7 @@ class Model:
         self.store[key] = value
 
     def __getitem__(self, key: str) -> Buffer:
-        return self.store[key]
+        return cast(Buffer, self.store[key])
 
     @property
     def has_commits(self) -> bool:
@@ -198,7 +198,7 @@ class Model:
         assert prefix == ""
         return tuple(self.store)
 
-    def refs_iter(self):
+    def refs_iter(self) -> Iterator[str]:
         tag_iter = map(operator.attrgetter("commit_id"), self.tags.values())
         return itertools.chain(self.branches.values(), tag_iter)
 
@@ -269,8 +269,11 @@ class Model:
         for commit_id in self.refs_iter():
             while commit_id != self.initial_snapshot_id:
                 reachable_snaps.add(commit_id)
-                commit_id = self.commits[commit_id].parent_id
-
+                parent_id = self.commits[commit_id].parent_id
+                assert (
+                    parent_id is not None
+                ), f"Commit {commit_id} has no parent but is not the initial snapshot"
+                commit_id = parent_id
         deleted = set()
         for k in set(self.ondisk_snaps) - reachable_snaps:
             if self.ondisk_snaps[k].written_at < older_than:
@@ -569,7 +572,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 self.session = self.repo.writable_session(DEFAULT_BRANCH)
                 self.model.checkout_branch(DEFAULT_BRANCH)
 
-    def check_commit(self, commit) -> None:
+    def check_commit(self, commit: str) -> None:
         assume(commit in self.model.commits)
         note(f"Checking {commit=!r}")
         expected = self.model.commits[commit]
@@ -629,7 +632,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             assert ancestry[-1] == self.initial_snapshot
 
 
-VersionControlStateMachine.TestCase.settings = Settings(
+VersionControlStateMachine.TestCase.settings = settings(
     deadline=None,
     # stateful_step_count=100,
     # report_multiple_bugs=False,

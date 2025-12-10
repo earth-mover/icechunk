@@ -587,6 +587,9 @@ impl Storage for S3Storage {
         if let Some(ct) = content_type {
             req = req.content_type(ct);
         }
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
         match req.send().await {
             Ok(_) => Ok(VersionedUpdateResult::Updated { new_version: version.clone() }),
             Err(SdkError::ServiceError(err)) => {
@@ -639,12 +642,18 @@ impl Storage for S3Storage {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let prefix = format!("{}/{}", self.prefix, prefix).replace("//", "/");
-        let stream = self
+        let mut req = self
             .get_client(settings)
             .await
             .list_objects_v2()
             .bucket(self.bucket.clone())
-            .prefix(prefix.clone())
+            .prefix(prefix.clone());
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let stream = req
             .into_paginator()
             .send()
             .into_stream_03x()
@@ -690,15 +699,18 @@ impl Storage for S3Storage {
             .build()
             .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
 
-        let res = self
+        let mut req = self
             .get_client(settings)
             .await
             .delete_objects()
             .bucket(self.bucket.clone())
-            .delete(delete)
-            .send()
-            .await
-            .map_err(Box::new)?;
+            .delete(delete);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let res = req.send().await.map_err(Box::new)?;
 
         if let Some(err) = res.errors.as_ref().and_then(|e| e.first()) {
             tracing::error!(
@@ -727,15 +739,18 @@ impl Storage for S3Storage {
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
         let key = self.prefixed_path(path);
-        let res = self
+        let mut req = self
             .get_client(settings)
             .await
             .head_object()
             .bucket(self.bucket.clone())
-            .key(key)
-            .send()
-            .await
-            .map_err(Box::new)?;
+            .key(key);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let res = req.send().await.map_err(Box::new)?;
 
         let res = res.last_modified.ok_or(StorageErrorKind::Other(
             "Object has no last_modified field".to_string(),
@@ -759,11 +774,14 @@ impl Storage for S3Storage {
         let client = self.get_client(settings).await;
         let bucket = self.bucket.clone();
         let key = self.prefixed_path(path);
-        let mut b = client.get_object().bucket(bucket).key(key);
+        let mut req = client.get_object().bucket(bucket).key(key);
         if let Some(range) = range {
-            b = b.range(range_to_header(range));
+            req = req.range(range_to_header(range));
         }
-        match b.send().await {
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+        match req.send().await {
             Ok(output) => match output.e_tag {
                 Some(etag) => {
                     let stream = stream2stream(output.body).err_into();
@@ -862,6 +880,7 @@ mod tests {
             anonymous: false,
             force_path_style: false,
             network_stream_timeout_seconds: None,
+            requester_pays: false,
         };
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "access_key_id".to_string(),
@@ -884,7 +903,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null,"requester_pays":false},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();

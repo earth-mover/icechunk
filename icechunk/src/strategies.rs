@@ -139,8 +139,9 @@ prop_compose! {
     (region in option::of(string_regex("[a-zA-Z0-9\\-_]*").unwrap()),
      endpoint_url in option::of(url()),
        is_anonymous in any::<bool>(),
-        should_path_style_be_forced in any::<bool>(),
-     network_stream_timeout_seconds in option::of(0..120u32)
+       should_path_style_be_forced in any::<bool>(),
+       network_stream_timeout_seconds in option::of(0..120u32),
+       requester_pays in any::<bool>(),
     ) ->S3Options {
         let cpy = endpoint_url.clone();
         S3Options{
@@ -149,7 +150,8 @@ prop_compose! {
             anonymous: is_anonymous,
             allow_http: cpy.is_none_or(|link| !link.starts_with("https")),
             force_path_style: should_path_style_be_forced,
-            network_stream_timeout_seconds
+            network_stream_timeout_seconds,
+            requester_pays,
         }
     }
 }

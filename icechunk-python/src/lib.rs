@@ -33,9 +33,10 @@ use pyo3::wrap_pyfunction;
 use repository::{
     PyBranchCreatedUpdate, PyBranchDeletedUpdate, PyBranchResetUpdate,
     PyCommitAmendedUpdate, PyConfigChangedUpdate, PyDiff, PyExpirationRanUpdate,
-    PyGCRanUpdate, PyGCSummary, PyManifestFileInfo, PyNewCommitUpdate,
-    PyNewDetachedSnapshotUpdate, PyRepoInitializedUpdate, PyRepoMigratedUpdate,
-    PyRepository, PySnapshotInfo, PyTagCreatedUpdate, PyTagDeletedUpdate, PyUpdateType,
+    PyGCRanUpdate, PyGCSummary, PyManifestFileInfo, PyMetadataChangedUpdate,
+    PyNewCommitUpdate, PyNewDetachedSnapshotUpdate, PyRepoInitializedUpdate,
+    PyRepoMigratedUpdate, PyRepository, PySnapshotInfo, PyTagCreatedUpdate,
+    PyTagDeletedUpdate, PyUpdateType,
 };
 use session::PySession;
 use store::{PyStore, VirtualChunkSpec};
@@ -200,6 +201,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRepoInitializedUpdate>()?;
     m.add_class::<PyRepoMigratedUpdate>()?;
     m.add_class::<PyConfigChangedUpdate>()?;
+    m.add_class::<PyMetadataChangedUpdate>()?;
     m.add_class::<PyTagCreatedUpdate>()?;
     m.add_class::<PyTagDeletedUpdate>()?;
     m.add_class::<PyBranchCreatedUpdate>()?;

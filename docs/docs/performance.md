@@ -19,7 +19,7 @@ print(zarr.config.get("async.concurrency"))
 Large machines in close proximity to object storage can benefit from much more concurrency. For high-performance configuration, we recommend much higher values, e.g.
 
 ```python
-zarr.config.get({"async.concurrency": 128})
+zarr.config.set({"async.concurrency": 128})
 ```
 
 Note that this concurrency limit is _per individual Zarr Array read/write operation_
