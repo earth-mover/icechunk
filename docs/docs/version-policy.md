@@ -1,12 +1,10 @@
 # Icechunk Version Policy
 
-
 There are three versions referred to in this document:
 
 1. Icechunk Spec Version
 2. `icechunk` Python Library Version
 3. `icechunk` Rust Crate Version
-
 
 ## Icechunk Spec
 
