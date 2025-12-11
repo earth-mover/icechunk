@@ -402,12 +402,17 @@ pub struct RepositoryConfig {
 
     #[serde(default)]
     pub previous_file: Option<String>,
+
+    #[serde(default)]
+    pub num_updates_per_repo_info_file: Option<usize>,
 }
 
 static DEFAULT_COMPRESSION: OnceLock<CompressionConfig> = OnceLock::new();
 static DEFAULT_CACHING: OnceLock<CachingConfig> = OnceLock::new();
 static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: u16 = 256;
+// usize?
+pub const DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE: usize = 100;
 
 impl RepositoryConfig {
     pub fn inline_chunk_threshold_bytes(&self) -> u16 {
@@ -439,6 +444,11 @@ impl RepositoryConfig {
 
     pub fn max_concurrent_requests(&self) -> u16 {
         self.max_concurrent_requests.unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS)
+    }
+
+    pub fn num_updates_per_repo_info_file(&self) -> usize {
+        self.num_updates_per_repo_info_file
+            .unwrap_or(DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE)
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -499,6 +509,15 @@ impl RepositoryConfig {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            num_updates_per_repo_info_file: match (
+                &self.num_updates_per_repo_info_file,
+                other.num_updates_per_repo_info_file,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
                 (Some(_), Some(theirs)) => Some(theirs),
             },
         }
