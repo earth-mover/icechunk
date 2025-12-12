@@ -19,6 +19,38 @@ use crate::{
     stream_utils::{StreamLimiter, try_unique_stream},
 };
 
+/// Statistics about chunk storage across different chunk types
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChunkStorageStats {
+    /// Total bytes stored in native chunks (stored in icechunk's chunk storage)
+    pub native_bytes: u64,
+    /// Total bytes stored in virtual chunks (references to external data)
+    pub virtual_bytes: u64,
+    /// Total bytes stored in inline chunks (stored directly in manifests)
+    pub inlined_bytes: u64,
+}
+
+impl ChunkStorageStats {
+    /// Create a new ChunkStorageStats with the specified byte counts
+    pub fn new(native_bytes: u64, virtual_bytes: u64, inlined_bytes: u64) -> Self {
+        Self { native_bytes, virtual_bytes, inlined_bytes }
+    }
+
+    /// Get the total bytes excluding virtual chunks (this is ~= to the size of all objects in the icechunk repo)
+    pub fn non_virtual_bytes(&self) -> u64 {
+        self.native_bytes
+            .saturating_add(self.native_bytes)
+            .saturating_add(self.inlined_bytes)
+    }
+
+    /// Get the total bytes across all chunk types
+    pub fn total_bytes(&self) -> u64 {
+        self.native_bytes
+            .saturating_add(self.virtual_bytes)
+            .saturating_add(self.inlined_bytes)
+    }
+}
+
 fn calculate_manifest_storage(
     manifest: Arc<Manifest>,
     seen_chunks: Arc<Mutex<HashSet<ChunkId>>>,
