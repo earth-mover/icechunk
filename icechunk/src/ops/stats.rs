@@ -64,6 +64,27 @@ impl Add for ChunkStorageStats {
     }
 }
 
+/// Helper function to deduplicate chunks by inserting into a HashSet and counting if new
+fn insert_and_increment_size_if_new<T: Eq + std::hash::Hash>(
+    seen: &Arc<Mutex<HashSet<T>>>,
+    key: T,
+    size_increment: u64,
+    size_counter: &mut u64,
+) -> RepositoryResult<()> {
+    if seen
+        .lock()
+        .map_err(|e| {
+            RepositoryErrorKind::Other(format!(
+                "Thread panic during manifest_chunk_storage: {e}"
+            ))
+        })?
+        .insert(key)
+    {
+        *size_counter += size_increment;
+    }
+    Ok(())
+}
+
 fn calculate_manifest_storage(
     manifest: Arc<Manifest>,
     // Different types of chunks require using different types of ids to de-duplicate them when counting.
@@ -85,33 +106,23 @@ fn calculate_manifest_storage(
         match payload {
             Ok(ChunkPayload::Ref(chunk_ref)) => {
                 // Deduplicate native chunks by ChunkId
-                if seen_native_chunks
-                    .lock()
-                    .map_err(|e| {
-                        RepositoryErrorKind::Other(format!(
-                            "Thread panic during manifest_chunk_storage: {e}"
-                        ))
-                    })?
-                    .insert(chunk_ref.id)
-                {
-                    native_bytes += chunk_ref.length;
-                }
+                insert_and_increment_size_if_new(
+                    &seen_native_chunks,
+                    chunk_ref.id,
+                    chunk_ref.length,
+                    &mut native_bytes,
+                )?;
             }
             Ok(ChunkPayload::Virtual(virtual_ref)) => {
                 // Deduplicate by checksum if available, otherwise by (location, offset, length)
                 if let Some(checksum) = &virtual_ref.checksum {
                     // Has checksum: deduplicate by checksum
-                    if seen_virtual_checksums
-                        .lock()
-                        .map_err(|e| {
-                            RepositoryErrorKind::Other(format!(
-                                "Thread panic during manifest_chunk_storage: {e}"
-                            ))
-                        })?
-                        .insert(checksum.clone())
-                    {
-                        virtual_bytes += virtual_ref.length;
-                    }
+                    insert_and_increment_size_if_new(
+                        &seen_virtual_checksums,
+                        checksum.clone(),
+                        virtual_ref.length,
+                        &mut virtual_bytes,
+                    )?;
                 } else {
                     // No checksum: deduplicate by (location, offset, length)
                     let virtual_identifier = (
@@ -119,18 +130,12 @@ fn calculate_manifest_storage(
                         virtual_ref.offset,
                         virtual_ref.length,
                     );
-
-                    if seen_virtual_identifiers
-                        .lock()
-                        .map_err(|e| {
-                            RepositoryErrorKind::Other(format!(
-                                "Thread panic during manifest_chunk_storage: {e}"
-                            ))
-                        })?
-                        .insert(virtual_identifier)
-                    {
-                        virtual_bytes += virtual_ref.length;
-                    }
+                    insert_and_increment_size_if_new(
+                        &seen_virtual_identifiers,
+                        virtual_identifier,
+                        virtual_ref.length,
+                        &mut virtual_bytes,
+                    )?;
                 }
             }
             Ok(ChunkPayload::Inline(bytes)) => {
