@@ -2,6 +2,7 @@ use futures::{StreamExt, TryStream, TryStreamExt, future::ready, stream};
 use std::{
     collections::HashSet,
     num::{NonZeroU16, NonZeroUsize},
+    ops::Add,
     sync::{Arc, Mutex},
 };
 use tokio::task;
@@ -11,7 +12,7 @@ use crate::{
     asset_manager::AssetManager,
     format::{
         ChunkId, SnapshotId,
-        manifest::{ChunkPayload, Manifest},
+        manifest::{Checksum, ChunkPayload, Manifest},
         snapshot::ManifestFileInfo,
     },
     ops::pointed_snapshots,
@@ -51,16 +52,32 @@ impl ChunkStorageStats {
     }
 }
 
+impl Add for ChunkStorageStats {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            native_bytes: self.native_bytes.saturating_add(other.native_bytes),
+            virtual_bytes: self.virtual_bytes.saturating_add(other.virtual_bytes),
+            inlined_bytes: self.inlined_bytes.saturating_add(other.inlined_bytes),
+        }
+    }
+}
+
 fn calculate_manifest_storage(
     manifest: Arc<Manifest>,
-    seen_chunks: Arc<Mutex<HashSet<ChunkId>>>,
-) -> RepositoryResult<u64> {
+    seen_native_chunks: Arc<Mutex<HashSet<ChunkId>>>,
+    seen_virtual_checksums: Arc<Mutex<HashSet<Checksum>>>,
+) -> RepositoryResult<ChunkStorageStats> {
     trace!(manifest_id = %manifest.id(), "Processing manifest");
-    let mut size = 0;
+    let mut native_bytes: u64 = 0;
+    let mut virtual_bytes: u64 = 0;
+    let mut inlined_bytes: u64 = 0;
     for payload in manifest.chunk_payloads() {
         match payload {
             Ok(ChunkPayload::Ref(chunk_ref)) => {
-                if seen_chunks
+                // Deduplicate native chunks by ChunkId
+                if seen_native_chunks
                     .lock()
                     .map_err(|e| {
                         RepositoryErrorKind::Other(format!(
@@ -69,10 +86,35 @@ fn calculate_manifest_storage(
                     })?
                     .insert(chunk_ref.id)
                 {
-                    size += chunk_ref.length;
+                    native_bytes += chunk_ref.length;
                 }
             }
-            Ok(_) => {}
+            Ok(ChunkPayload::Virtual(virtual_ref)) => {
+                // If no checksum available, conservatively count it each time
+                // TODO: Can we do better by using url + offset + length to make a pseudo-checksum?
+                let Some(checksum) = &virtual_ref.checksum else {
+                    virtual_bytes += virtual_ref.length;
+                    continue;
+                };
+
+                // Deduplicate virtual chunks by checksum
+                if seen_virtual_checksums
+                    .lock()
+                    .map_err(|e| {
+                        RepositoryErrorKind::Other(format!(
+                            "Thread panic during manifest_chunk_storage: {e}"
+                        ))
+                    })?
+                    .insert(checksum.clone())
+                {
+                    virtual_bytes += virtual_ref.length;
+                }
+            }
+            Ok(ChunkPayload::Inline(bytes)) => {
+                // Inline chunks are stored in the manifest itself,
+                // so count each occurrence since they're actually stored repeatedly across different manifests
+                inlined_bytes += bytes.len() as u64;
+            }
             // TODO: don't skip errors
             Err(err) => {
                 tracing::error!(
@@ -83,7 +125,9 @@ fn calculate_manifest_storage(
         }
     }
     trace!(manifest_id = %manifest.id(), "Manifest done");
-    Ok(size)
+
+    let stats = ChunkStorageStats::new(native_bytes, virtual_bytes, inlined_bytes);
+    Ok(stats)
 }
 
 async fn unique_manifest_infos<'a>(
@@ -116,7 +160,7 @@ pub async fn repo_chunks_storage(
     max_snapshots_in_memory: NonZeroU16,
     max_compressed_manifest_mem_bytes: NonZeroUsize,
     max_concurrent_manifest_fetches: NonZeroU16,
-) -> RepositoryResult<u64> {
+) -> RepositoryResult<ChunkStorageStats> {
     let extra_roots = Default::default();
     let manifest_infos = unique_manifest_infos(
         asset_manager.clone(),
@@ -136,7 +180,8 @@ pub async fn repo_chunks_storage(
     let rate_limited_manifests =
         limiter.limit_stream(manifest_infos, |minfo| minfo.size_bytes as usize);
 
-    let seen_chunks = &Arc::new(Mutex::new(HashSet::new()));
+    let seen_native_chunks = &Arc::new(Mutex::new(HashSet::new()));
+    let seen_virtual_checksums = &Arc::new(Mutex::new(HashSet::new()));
     let asset_manager = &asset_manager;
 
     let compute_stream = rate_limited_manifests
@@ -149,19 +194,27 @@ pub async fn repo_chunks_storage(
         // StreamLimiter we know memory is not going to blow up
         .try_buffer_unordered(max_concurrent_manifest_fetches.get() as usize)
         .and_then(|(manifest, minfo)| async move {
-            let seen_chunks = Arc::clone(seen_chunks);
-            let size = task::spawn_blocking(|| {
-                calculate_manifest_storage(manifest, seen_chunks)
+            let seen_native_chunks = Arc::clone(seen_native_chunks);
+            let seen_virtual_checksums = Arc::clone(seen_virtual_checksums);
+            let stats = task::spawn_blocking(|| {
+                calculate_manifest_storage(
+                    manifest,
+                    seen_native_chunks,
+                    seen_virtual_checksums,
+                )
             })
             .await??;
-            Ok((size, minfo))
+            Ok((stats, minfo))
         });
     let (_, res) = limiter
         .unlimit_stream(compute_stream, |(_, minfo)| minfo.size_bytes as usize)
-        .try_fold((0u64, 0), |(processed, total_size), (partial, _)| {
-            //info!("Processed {processed} manifests");
-            ready(Ok((processed + 1, total_size + partial)))
-        })
+        .try_fold(
+            (0u64, ChunkStorageStats::default()),
+            |(processed, total_stats), (partial, _)| {
+                //info!("Processed {processed} manifests");
+                ready(Ok((processed + 1, total_stats + partial)))
+            },
+        )
         .await?;
 
     debug_assert_eq!(limiter.current_usage(), 0);
