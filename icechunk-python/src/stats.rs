@@ -5,16 +5,16 @@ use icechunk::ops::stats::ChunkStorageStats;
 /// Statistics about chunk storage across different chunk types.
 #[pyclass(name = "ChunkStorageStats")]
 #[derive(Clone, Debug)]
-pub struct PyChunkStorageStats {
+pub (crate) struct PyChunkStorageStats {
     /// Total bytes stored in native chunks (stored in icechunk's chunk storage)
     #[pyo3(get)]
-    pub native_bytes: u64,
+    pub (crate) native_bytes: u64,
     /// Total bytes stored in virtual chunks (references to external data)
     #[pyo3(get)]
-    pub virtual_bytes: u64,
+    pub (crate) virtual_bytes: u64,
     /// Total bytes stored in inline chunks (stored directly in manifests)
     #[pyo3(get)]
-    pub inlined_bytes: u64,
+    pub (crate) inlined_bytes: u64,
 }
 
 impl From<ChunkStorageStats> for PyChunkStorageStats {
@@ -37,7 +37,7 @@ impl PyChunkStorageStats {
     ///
     /// Returns:
     ///     int: The sum of native_bytes and inlined_bytes
-    pub fn non_virtual_bytes(&self) -> u64 {
+    pub (crate) fn non_virtual_bytes(&self) -> u64 {
         self.native_bytes
             .saturating_add(self.native_bytes)
             .saturating_add(self.inlined_bytes)
@@ -51,13 +51,13 @@ impl PyChunkStorageStats {
     ///
     /// Returns:
     ///     int: The sum of all chunk storage bytes
-    pub fn total_bytes(&self) -> u64 {
+    pub (crate) fn total_bytes(&self) -> u64 {
         self.native_bytes
             .saturating_add(self.virtual_bytes)
             .saturating_add(self.inlined_bytes)
     }
 
-    pub fn __repr__(&self) -> String {
+    pub (crate) fn __repr__(&self) -> String {
         format!(
             "ChunkStorageStats(native_bytes={}, virtual_bytes={}, inlined_bytes={})",
             self.native_bytes, self.virtual_bytes, self.inlined_bytes
