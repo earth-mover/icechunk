@@ -2,6 +2,7 @@ import datetime
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from typing import Any, Self, cast
+import warnings
 
 from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
@@ -1676,7 +1677,13 @@ class Repository:
             Don't run more than this many concurrent manifest fetches.
         """
 
-        # TODO: throw deprecation warning
+        warnings.warn(
+            "The ``total_chunks_storage`` method has been deprecated in favour of the ``chunk_storage_stats`` method. " \
+            "The new method is superior, as it actually calculates storage size occupied by inlined and virtual chunks in addition to native chunks. " \
+            "You can still access just the total native bytes: to keep your existing behaviour using API that will not be removed in a future version, " \
+            "please replace your existing ``.total_chunks_storage(**kwargs)`` method call with ``.chunk_storage_stats(**same_kwargs).native_bytes``.",
+            DeprecationWarning,
+        )
 
         stats = self._repository.chunk_storage_stats(
             max_snapshots_in_memory=max_snapshots_in_memory,
@@ -1712,7 +1719,13 @@ class Repository:
             Don't run more than this many concurrent manifest fetches.
         """
 
-        # TODO: throw deprecation warning
+        warnings.warn(
+            "The ``total_chunks_storage_async`` method has been deprecated in favour of the ``chunk_storage_stats_async`` method. " \
+            "The new method is superior, as it actually calculates storage size occupied by inlined and virtual chunks in addition to native chunks. " \
+            "You can still access just the total native bytes: to keep your existing behaviour using API that will not be removed in a future version, " \
+            "please replace your existing ``.total_chunks_storage_async(**kwargs)`` method call with ``.chunk_storage_stats_async(**same_kwargs).native_bytes``.",
+            DeprecationWarning,
+        )
         
         stats = await self._repository.chunk_storage_stats(
             max_snapshots_in_memory=max_snapshots_in_memory,
