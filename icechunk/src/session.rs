@@ -1148,7 +1148,7 @@ impl Session {
     async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
         let update_type =
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
-
+        let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
@@ -1159,6 +1159,7 @@ impl Session {
                 None,
                 update_type.clone(),
                 backup_path,
+                num_updates,
             )?))
         };
 
@@ -1279,6 +1280,7 @@ impl Session {
                 merged
             })
             .unwrap_or(default_metadata);
+        let num_updates = self.config().num_updates_per_repo_info_file();
         {
             // we need to play this trick because we need to borrow from self twice
             // once to get the mutable change set, and other to compute
@@ -1300,6 +1302,7 @@ impl Session {
             &self.splits,
             rewrite_manifests,
             commit_method,
+            num_updates,
         )
         .await?;
 
@@ -2488,6 +2491,7 @@ async fn do_commit(
     splits: &HashMap<NodeId, ManifestSplits>,
     rewrite_manifests: bool,
     commit_method: CommitMethod,
+    num_updates_per_repo_info_file: usize,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
     let properties = properties.unwrap_or_default();
@@ -2518,6 +2522,7 @@ async fn do_commit(
                 snapshot_id,
                 new_snapshot,
                 commit_method,
+                num_updates_per_repo_info_file,
             )
             .await
         }
@@ -2583,6 +2588,7 @@ async fn do_commit_v2(
     parent_snapshot_id: &SnapshotId,
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
+    num_updates_per_repo_info_file: usize,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
@@ -2626,6 +2632,7 @@ async fn do_commit_v2(
             Some(branch_name),
             update_type,
             backup_path,
+            num_updates_per_repo_info_file,
         )?))
     };
 
