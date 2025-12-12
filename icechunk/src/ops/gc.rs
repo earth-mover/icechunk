@@ -422,6 +422,7 @@ async fn delete_snapshots_from_repo_info(
             .try_collect()?;
 
         let new_repo_info = RepoInfo::new(
+            asset_manager.spec_version(),
             repo_info.tags()?,
             repo_info.branches()?,
             repo_info.deleted_tags()?,
@@ -808,6 +809,7 @@ pub async fn expire_v2(
             }),
         );
         let new_repo_info = RepoInfo::new(
+            asset_manager.spec_version(),
             tags,
             branches,
             deleted_tag_names,
