@@ -182,7 +182,7 @@ async fn unique_manifest_infos<'a>(
 }
 
 /// Compute the total size in bytes of all committed repo chunks.
-/// It doesn't include inline or virtual chunks.
+/// The total for each type of chunk is computed separately.
 pub async fn repo_chunks_storage(
     asset_manager: Arc<AssetManager>,
     max_snapshots_in_memory: NonZeroU16,
