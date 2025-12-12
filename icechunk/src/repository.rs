@@ -232,12 +232,12 @@ impl Repository {
         let settings_ref = &storage_settings;
         let create_repo_info = async move {
             // On create we need to create the default branch
-            let new_snapshot = Arc::new(Snapshot::initial()?);
+            let new_snapshot = Arc::new(Snapshot::initial(spec_version)?);
             asset_manager_c.write_snapshot(Arc::clone(&new_snapshot)).await?;
 
             if spec_version >= SpecVersionBin::V2dot0 {
                 let snap_info = new_snapshot.as_ref().try_into()?;
-                let repo_info = Arc::new(RepoInfo::initial(snap_info));
+                let repo_info = Arc::new(RepoInfo::initial(spec_version, snap_info));
                 let _ = asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
             } else {
                 refs::update_branch(
@@ -569,7 +569,11 @@ impl Repository {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             final_metadata = repo_info.metadata()?;
             final_metadata.extend(metadata.clone());
-            Ok(Arc::new(repo_info.set_metadata(&final_metadata, backup_path)?))
+            Ok(Arc::new(repo_info.set_metadata(
+                self.spec_version(),
+                &final_metadata,
+                backup_path,
+            )?))
         };
 
         let _ = self
@@ -593,7 +597,11 @@ impl Repository {
         }
 
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
-            Ok(Arc::new(repo_info.set_metadata(metadata, backup_path)?))
+            Ok(Arc::new(repo_info.set_metadata(
+                self.spec_version(),
+                metadata,
+                backup_path,
+            )?))
         };
 
         let _ = self
@@ -818,7 +826,12 @@ impl Repository {
     ) -> RepositoryResult<()> {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
-            Ok(Arc::new(repo_info.add_branch(branch_name, snapshot_id, backup_path)?))
+            Ok(Arc::new(repo_info.add_branch(
+                self.spec_version(),
+                branch_name,
+                snapshot_id,
+                backup_path,
+            )?))
         };
 
         let _ = self
@@ -1014,7 +1027,7 @@ impl Repository {
             }
 
             let new_repo = repo_info
-                .update_branch(branch, to_snapshot_id, backup_path)
+                .update_branch(self.spec_version(), branch, to_snapshot_id, backup_path)
                 .map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::BranchNotFound { .. },
@@ -1066,8 +1079,9 @@ impl Repository {
     #[instrument(skip(self))]
     async fn delete_branch_v2(&self, branch: &str) -> RepositoryResult<()> {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
-            let new_repo =
-                repo_info.delete_branch(branch, backup_path).map_err(|err| match err {
+            let new_repo = repo_info
+                .delete_branch(self.spec_version(), branch, backup_path)
+                .map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::BranchNotFound { .. },
                         ..
@@ -1112,8 +1126,9 @@ impl Repository {
     #[instrument(skip(self))]
     async fn delete_tag_v2(&self, tag: &str) -> RepositoryResult<()> {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
-            let new_repo =
-                repo_info.delete_tag(tag, backup_path).map_err(|err| match err {
+            let new_repo = repo_info
+                .delete_tag(self.spec_version(), tag, backup_path)
+                .map_err(|err| match err {
                     IcechunkFormatError {
                         kind: IcechunkFormatErrorKind::TagNotFound { .. },
                         ..
@@ -1178,17 +1193,16 @@ impl Repository {
     ) -> RepositoryResult<()> {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
-            let new_repo =
-                repo_info.add_tag(tag_name, snapshot_id, backup_path).map_err(|err| {
-                    match err {
-                        IcechunkFormatError {
-                            kind: IcechunkFormatErrorKind::TagAlreadyExists { .. },
-                            ..
-                        } => RepositoryError::from(RefError::from(
-                            RefErrorKind::TagAlreadyExists(tag_name.to_string()),
-                        )),
-                        err => RepositoryError::from(err),
-                    }
+            let new_repo = repo_info
+                .add_tag(self.spec_version(), tag_name, snapshot_id, backup_path)
+                .map_err(|err| match err {
+                    IcechunkFormatError {
+                        kind: IcechunkFormatErrorKind::TagAlreadyExists { .. },
+                        ..
+                    } => RepositoryError::from(RefError::from(
+                        RefErrorKind::TagAlreadyExists(tag_name.to_string()),
+                    )),
+                    err => RepositoryError::from(err),
                 });
             Ok(Arc::new(new_repo?))
         };
