@@ -11,8 +11,8 @@ use tracing::trace;
 use crate::{
     asset_manager::AssetManager,
     format::{
-        ChunkId, SnapshotId,
-        manifest::{Checksum, ChunkPayload, Manifest},
+        ChunkId, ChunkLength, ChunkOffset, SnapshotId,
+        manifest::{Checksum, ChunkPayload, Manifest, VirtualChunkLocation},
         snapshot::ManifestFileInfo,
     },
     ops::pointed_snapshots,
@@ -66,8 +66,16 @@ impl Add for ChunkStorageStats {
 
 fn calculate_manifest_storage(
     manifest: Arc<Manifest>,
+    // Different types of chunks require using different types of ids to de-duplicate them when counting.
     seen_native_chunks: Arc<Mutex<HashSet<ChunkId>>>,
     seen_virtual_checksums: Arc<Mutex<HashSet<Checksum>>>,
+    // Virtual chunks don't necessarily have checksums. For those which don't we instead use the (url, offset, length) tuple as an identifier.
+    // This is more expensive, but should still work to de-duplicate because the only way that this identifier could be the same for different chunks
+    // is if the data were entirely overwritten at that exact storage location. In this scenario it makes sense not to count both chunks towards the storage total,
+    // as the overwritten data is no longer accessible anyway.
+    seen_virtual_identifiers: Arc<
+        Mutex<HashSet<(VirtualChunkLocation, ChunkOffset, ChunkLength)>>,
+    >,
 ) -> RepositoryResult<ChunkStorageStats> {
     trace!(manifest_id = %manifest.id(), "Processing manifest");
     let mut native_bytes: u64 = 0;
@@ -90,24 +98,39 @@ fn calculate_manifest_storage(
                 }
             }
             Ok(ChunkPayload::Virtual(virtual_ref)) => {
-                // If no checksum available, conservatively count it each time
-                // TODO: Can we do better by using url + offset + length to make a pseudo-checksum?
-                let Some(checksum) = &virtual_ref.checksum else {
-                    virtual_bytes += virtual_ref.length;
-                    continue;
-                };
+                // Deduplicate by checksum if available, otherwise by (location, offset, length)
+                if let Some(checksum) = &virtual_ref.checksum {
+                    // Has checksum: deduplicate by checksum
+                    if seen_virtual_checksums
+                        .lock()
+                        .map_err(|e| {
+                            RepositoryErrorKind::Other(format!(
+                                "Thread panic during manifest_chunk_storage: {e}"
+                            ))
+                        })?
+                        .insert(checksum.clone())
+                    {
+                        virtual_bytes += virtual_ref.length;
+                    }
+                } else {
+                    // No checksum: deduplicate by (location, offset, length)
+                    let virtual_identifier = (
+                        virtual_ref.location.clone(),
+                        virtual_ref.offset,
+                        virtual_ref.length,
+                    );
 
-                // Deduplicate virtual chunks by checksum
-                if seen_virtual_checksums
-                    .lock()
-                    .map_err(|e| {
-                        RepositoryErrorKind::Other(format!(
-                            "Thread panic during manifest_chunk_storage: {e}"
-                        ))
-                    })?
-                    .insert(checksum.clone())
-                {
-                    virtual_bytes += virtual_ref.length;
+                    if seen_virtual_identifiers
+                        .lock()
+                        .map_err(|e| {
+                            RepositoryErrorKind::Other(format!(
+                                "Thread panic during manifest_chunk_storage: {e}"
+                            ))
+                        })?
+                        .insert(virtual_identifier)
+                    {
+                        virtual_bytes += virtual_ref.length;
+                    }
                 }
             }
             Ok(ChunkPayload::Inline(bytes)) => {
@@ -182,6 +205,7 @@ pub async fn repo_chunks_storage(
 
     let seen_native_chunks = &Arc::new(Mutex::new(HashSet::new()));
     let seen_virtual_checksums = &Arc::new(Mutex::new(HashSet::new()));
+    let seen_virtual_composites = &Arc::new(Mutex::new(HashSet::new()));
     let asset_manager = &asset_manager;
 
     let compute_stream = rate_limited_manifests
@@ -196,11 +220,13 @@ pub async fn repo_chunks_storage(
         .and_then(|(manifest, minfo)| async move {
             let seen_native_chunks = Arc::clone(seen_native_chunks);
             let seen_virtual_checksums = Arc::clone(seen_virtual_checksums);
+            let seen_virtual_composites = Arc::clone(seen_virtual_composites);
             let stats = task::spawn_blocking(|| {
                 calculate_manifest_storage(
                     manifest,
                     seen_native_chunks,
                     seen_virtual_checksums,
+                    seen_virtual_composites,
                 )
             })
             .await??;
