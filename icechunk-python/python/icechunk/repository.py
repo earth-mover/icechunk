@@ -1583,6 +1583,21 @@ class Repository:
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
 
+    # TODO add chunk_storage_stats_async
+
+    def chunk_storage_stats(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> PyChunkStorageStats:
+        return self._repository.chunk_storage_stats(
+            max_snapshots_in_memory=max_snapshots_in_memory,
+            max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
+        )
+
     def total_chunks_storage(
         self,
         *,
@@ -1590,7 +1605,7 @@ class Repository:
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> int:
-        """Calculate the total storage used for chunks, in bytes .
+        """Calculate the total storage used for chunks, in bytes.
 
         It reports the storage needed to store all snapshots in the repository that
         are reachable from any branches or tags. Unreachable snapshots can be generated
@@ -1610,11 +1625,14 @@ class Repository:
             Don't run more than this many concurrent manifest fetches.
         """
 
-        return self._repository.total_chunks_storage(
+        # TODO: throw deprecation warning
+
+        stats = self._repository.chunk_storage_stats(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
+        return stats.native_bytes
 
     async def total_chunks_storage_async(
         self,
@@ -1643,26 +1661,14 @@ class Repository:
             Don't run more than this many concurrent manifest fetches.
         """
 
-        return await self._repository.total_chunks_storage_async(
+        # TODO: throw deprecation warning
+        
+        stats = await self._repository.chunk_storage_stats(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
-    
-    # TODO add chunk_storage_stats_async
-
-    def chunk_storage_stats(
-        self,
-        *,
-        max_snapshots_in_memory: int = 50,
-        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
-        max_concurrent_manifest_fetches: int = 500,
-    ) -> PyChunkStorageStats:
-        return self._repository.chunk_storage_stats(
-            max_snapshots_in_memory=max_snapshots_in_memory,
-            max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
-            max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
-        )
+        return stats.native_bytes
 
     def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str:
         return self._repository.inspect_snapshot(snapshot_id, pretty=pretty)
