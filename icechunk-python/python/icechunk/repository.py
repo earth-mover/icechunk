@@ -1583,8 +1583,6 @@ class Repository:
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
 
-    # TODO add chunk_storage_stats_async
-
     def chunk_storage_stats(
         self,
         *,
@@ -1592,7 +1590,60 @@ class Repository:
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> PyChunkStorageStats:
+        """Calculate the total storage used for chunks, in bytes.
+
+        It reports the storage needed to store all snapshots in the repository that
+        are reachable from any branches or tags. Unreachable snapshots can be generated
+        by using `reset_branch` or `expire_snapshots`. The chunks for these snapshots
+        are not included in the result, and they should probably be deleted using
+        `garbage_collection`.
+
+        The result is a dataclass with attributes for storage consumed by different 
+        types of chunks (e.g. `native_bytes`, `virtual_bytes`, `total_bytes`).
+
+        Parameters
+        ----------
+        max_snapshots_in_memory: int
+            Don't prefetch more than this many Snapshots to memory.
+        max_compressed_manifest_mem_bytes : int
+            Don't use more than this memory to store compressed in-flight manifests.
+        max_concurrent_manifest_fetches : int
+            Don't run more than this many concurrent manifest fetches.
+        """
         return self._repository.chunk_storage_stats(
+            max_snapshots_in_memory=max_snapshots_in_memory,
+            max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
+        )
+    
+    async def chunk_storage_stats_async(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> PyChunkStorageStats:
+        """Calculate the total storage used for chunks, in bytes (async version).
+
+        It reports the storage needed to store all snapshots in the repository that
+        are reachable from any branches or tags. Unreachable snapshots can be generated
+        by using `reset_branch` or `expire_snapshots`. The chunks for these snapshots
+        are not included in the result, and they should probably be deleted using
+        `garbage_collection`.
+
+        The result is a dataclass with attributes for storage consumed by different 
+        types of chunks (e.g. `native_bytes`, `virtual_bytes`, `total_bytes`).
+
+        Parameters
+        ----------
+        max_snapshots_in_memory: int
+            Don't prefetch more than this many Snapshots to memory.
+        max_compressed_manifest_mem_bytes : int
+            Don't use more than this memory to store compressed in-flight manifests.
+        max_concurrent_manifest_fetches : int
+            Don't run more than this many concurrent manifest fetches.
+        """
+        return await self._repository.chunk_storage_stats_async(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
