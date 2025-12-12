@@ -13,6 +13,7 @@ from icechunk._icechunk_python import (
     SnapshotInfo,
     Storage,
     UpdateType,
+    PyChunkStorageStats,
 )
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
@@ -1643,6 +1644,21 @@ class Repository:
         """
 
         return await self._repository.total_chunks_storage_async(
+            max_snapshots_in_memory=max_snapshots_in_memory,
+            max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
+        )
+    
+    # TODO add chunk_storage_stats_async
+
+    def chunk_storage_stats(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> PyChunkStorageStats:
+        return self._repository.chunk_storage_stats(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,

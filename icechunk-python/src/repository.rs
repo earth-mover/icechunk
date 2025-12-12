@@ -41,11 +41,7 @@ use crate::{
     config::{
         PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings, datetime_repr,
         format_option_to_string,
-    },
-    errors::PyIcechunkStoreError,
-    impl_pickle,
-    session::PySession,
-    streams::PyAsyncGenerator,
+    }, errors::PyIcechunkStoreError, impl_pickle, session::PySession, stats::PyChunkStorageStats, streams::PyAsyncGenerator
 };
 
 /// Wrapper needed to implement pyo3 conversion classes
@@ -2215,13 +2211,13 @@ impl PyRepository {
         })
     }
 
-    pub(crate) fn total_chunks_storage(
+    pub(crate) fn chunk_storage_stats(
         &self,
         py: Python<'_>,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
-    ) -> PyResult<u64> {
+    ) -> PyResult<PyChunkStorageStats> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let result =
@@ -2241,10 +2237,11 @@ impl PyRepository {
                     Ok::<_, PyIcechunkStoreError>(result)
                 })?;
 
-            Ok(result)
+            Ok(result.into())
         })
     }
 
+    // TODO: remove in favour of chunk_storage_stats
     fn total_chunks_storage_async<'py>(
         &'py self,
         py: Python<'py>,
@@ -2253,7 +2250,7 @@ impl PyRepository {
         max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py::<_, u64>(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py::<_, PyChunkStorageStats>(py, async move {
             let asset_manager = {
                 let lock = repository.read().await;
                 Arc::clone(lock.asset_manager())
@@ -2266,7 +2263,7 @@ impl PyRepository {
             )
             .await
             .map_err(PyIcechunkStoreError::RepositoryError)?;
-            Ok(result)
+            Ok(result.into())
         })
     }
 
