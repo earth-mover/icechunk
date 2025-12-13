@@ -39,7 +39,6 @@ impl PyChunkStorageStats {
     ///     int: The sum of native_bytes and inlined_bytes
     pub (crate) fn non_virtual_bytes(&self) -> u64 {
         self.native_bytes
-            .saturating_add(self.native_bytes)
             .saturating_add(self.inlined_bytes)
     }
 

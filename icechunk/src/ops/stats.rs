@@ -40,7 +40,6 @@ impl ChunkStorageStats {
     /// Get the total bytes excluding virtual chunks (this is ~= to the size of all objects in the icechunk repo)
     pub fn non_virtual_bytes(&self) -> u64 {
         self.native_bytes
-            .saturating_add(self.native_bytes)
             .saturating_add(self.inlined_bytes)
     }
 
