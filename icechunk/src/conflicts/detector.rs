@@ -253,14 +253,14 @@ impl ConflictSolver for ConflictDetector {
     }
 }
 
-struct PathFinder<It>(Mutex<(HashMap<NodeId, Path>, Option<It>)>);
+pub(crate) struct PathFinder<It>(Mutex<(HashMap<NodeId, Path>, Option<It>)>);
 
 impl<It: Iterator<Item = SessionResult<NodeSnapshot>>> PathFinder<It> {
-    fn new(iter: It) -> Self {
+    pub(crate) fn new(iter: It) -> Self {
         Self(Mutex::new((HashMap::new(), Some(iter))))
     }
 
-    fn find(&self, node_id: &NodeId) -> SessionResult<Path> {
+    pub(crate) fn find(&self, node_id: &NodeId) -> SessionResult<Path> {
         // we can safely unwrap the result of `lock` because there is no failing code called while
         // the mutex is hold. The mutex is there purely to support interior mutability
         #![allow(clippy::expect_used)]
