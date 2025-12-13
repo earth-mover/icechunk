@@ -12,7 +12,7 @@ use crate::{
     asset_manager::AssetManager,
     format::{
         ChunkId, ChunkLength, ChunkOffset, SnapshotId,
-        manifest::{Checksum, ChunkPayload, Manifest, VirtualChunkLocation},
+        manifest::{ChunkPayload, Manifest, VirtualChunkLocation},
         snapshot::ManifestFileInfo,
     },
     ops::pointed_snapshots,
@@ -39,8 +39,7 @@ impl ChunkStorageStats {
 
     /// Get the total bytes excluding virtual chunks (this is ~= to the size of all objects in the icechunk repo)
     pub fn non_virtual_bytes(&self) -> u64 {
-        self.native_bytes
-            .saturating_add(self.inlined_bytes)
+        self.native_bytes.saturating_add(self.inlined_bytes)
     }
 
     /// Get the total bytes across all chunk types
@@ -88,12 +87,12 @@ fn calculate_manifest_storage(
     manifest: Arc<Manifest>,
     // Different types of chunks require using different types of ids to de-duplicate them when counting.
     seen_native_chunks: Arc<Mutex<HashSet<ChunkId>>>,
-    seen_virtual_checksums: Arc<Mutex<HashSet<Checksum>>>,
-    // Virtual chunks don't necessarily have checksums. For those which don't we instead use the (url, offset, length) tuple as an identifier.
-    // This is more expensive, but should still work to de-duplicate because the only way that this identifier could be the same for different chunks
-    // is if the data were entirely overwritten at that exact storage location. In this scenario it makes sense not to count both chunks towards the storage total,
+    // Virtual chunks don't necessarily have checksums, so we instead use the (url, offset, length) tuple as an identifier.
+    // This is more expensive, but should work to de-duplicate because the only way that this identifier could be the same
+    // for different chunks is if the data were entirely overwritten at that exact storage location.
+    // In that scenario it makes sense not to count both chunks towards the storage total,
     // as the overwritten data is no longer accessible anyway.
-    seen_virtual_identifiers: Arc<
+    seen_virtual_chunks: Arc<
         Mutex<HashSet<(VirtualChunkLocation, ChunkOffset, ChunkLength)>>,
     >,
 ) -> RepositoryResult<ChunkStorageStats> {
@@ -113,29 +112,18 @@ fn calculate_manifest_storage(
                 )?;
             }
             Ok(ChunkPayload::Virtual(virtual_ref)) => {
-                // Deduplicate by checksum if available, otherwise by (location, offset, length)
-                if let Some(checksum) = &virtual_ref.checksum {
-                    // Has checksum: deduplicate by checksum
-                    insert_and_increment_size_if_new(
-                        &seen_virtual_checksums,
-                        checksum.clone(),
-                        virtual_ref.length,
-                        &mut virtual_bytes,
-                    )?;
-                } else {
-                    // No checksum: deduplicate by (location, offset, length)
-                    let virtual_identifier = (
-                        virtual_ref.location.clone(),
-                        virtual_ref.offset,
-                        virtual_ref.length,
-                    );
-                    insert_and_increment_size_if_new(
-                        &seen_virtual_identifiers,
-                        virtual_identifier,
-                        virtual_ref.length,
-                        &mut virtual_bytes,
-                    )?;
-                }
+                // Deduplicate by by (location, offset, length)
+                let virtual_chunk_identifier = (
+                    virtual_ref.location.clone(),
+                    virtual_ref.offset,
+                    virtual_ref.length,
+                );
+                insert_and_increment_size_if_new(
+                    &seen_virtual_chunks,
+                    virtual_chunk_identifier,
+                    virtual_ref.length,
+                    &mut virtual_bytes,
+                )?;
             }
             Ok(ChunkPayload::Inline(bytes)) => {
                 // Inline chunks are stored in the manifest itself,
@@ -208,8 +196,7 @@ pub async fn repo_chunks_storage(
         limiter.limit_stream(manifest_infos, |minfo| minfo.size_bytes as usize);
 
     let seen_native_chunks = &Arc::new(Mutex::new(HashSet::new()));
-    let seen_virtual_checksums = &Arc::new(Mutex::new(HashSet::new()));
-    let seen_virtual_composites = &Arc::new(Mutex::new(HashSet::new()));
+    let seen_virtual_chunks = &Arc::new(Mutex::new(HashSet::new()));
     let asset_manager = &asset_manager;
 
     let compute_stream = rate_limited_manifests
@@ -223,14 +210,12 @@ pub async fn repo_chunks_storage(
         .try_buffer_unordered(max_concurrent_manifest_fetches.get() as usize)
         .and_then(|(manifest, minfo)| async move {
             let seen_native_chunks = Arc::clone(seen_native_chunks);
-            let seen_virtual_checksums = Arc::clone(seen_virtual_checksums);
-            let seen_virtual_composites = Arc::clone(seen_virtual_composites);
+            let seen_virtual_chunks = Arc::clone(seen_virtual_chunks);
             let stats = task::spawn_blocking(|| {
                 calculate_manifest_storage(
                     manifest,
                     seen_native_chunks,
-                    seen_virtual_checksums,
-                    seen_virtual_composites,
+                    seen_virtual_chunks,
                 )
             })
             .await??;
