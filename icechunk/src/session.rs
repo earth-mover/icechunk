@@ -28,7 +28,7 @@ use crate::{
     asset_manager::AssetManager,
     change_set::{ArrayData, ChangeSet},
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
-    conflicts::{Conflict, ConflictResolution, ConflictSolver},
+    conflicts::{Conflict, ConflictResolution, ConflictSolver, detector::PathFinder},
     error::ICError,
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
@@ -291,6 +291,8 @@ impl Session {
             snapshot_id,
             change_set: ChangeSet::for_edits(),
             default_commit_metadata,
+            // Splits are populated for a node during
+            // `add_array`, `update_array`, and `set_chunk_ref`
             splits: Default::default(),
         }
     }
@@ -1102,7 +1104,8 @@ impl Session {
         if self.read_only() {
             return Err(SessionErrorKind::ReadOnlySession.into());
         }
-        let Session { splits: other_splits, change_set, .. } = other;
+        let Session { splits: other_splits, change_set, config: other_config, .. } =
+            other;
 
         if self.splits.iter().any(|(node, our_splits)| {
             other_splits
@@ -1110,7 +1113,7 @@ impl Session {
                 .is_some_and(|their_splits| !our_splits.compatible_with(their_splits))
         }) {
             let ours = self.config().manifest().splitting().clone();
-            let theirs = self.config().manifest().splitting().clone();
+            let theirs = other_config.manifest().splitting().clone();
             return Err(
                 SessionErrorKind::IncompatibleSplittingConfig { ours, theirs }.into()
             );
@@ -1449,11 +1452,34 @@ impl Session {
             std::mem::swap(self.change_set_mut()?, &mut fresh);
             let change_set = fresh;
             // TODO: this should probably execute in a worker thread
+            let finder = PathFinder::new(session.list_nodes(&Path::root()).await?);
+
             match solver.solve(&tx_log, &session, change_set, self).await? {
                 ConflictResolution::Patched(patched_changeset) => {
                     trace!("Snapshot rebased");
                     self.change_set = patched_changeset;
                     self.snapshot_id = snap_id;
+
+                    // we have rebased on top of `snap_id`, now we update splits to match the config in that snap.
+                    let mut new_splits: HashMap<NodeId, ManifestSplits> = HashMap::new();
+                    for node_id in self.change_set.arrays_with_chunk_changes() {
+                        let node_path = finder.find(node_id)?;
+                        // by now the conflict solver has solved any needed conflicts,
+                        // we grab the *updated* node to get the *updated* metadata (shape, dimension_names)
+                        if let NodeSnapshot {
+                            node_data: NodeData::Array { shape, dimension_names, .. },
+                            ..
+                        } = self.get_array(&node_path).await?
+                        {
+                            let new_size = session
+                                .config()
+                                .manifest()
+                                .splitting()
+                                .get_split_sizes(&node_path, &shape, &dimension_names);
+                            new_splits.insert(node_id.clone(), new_size);
+                        }
+                    }
+                    self.splits = new_splits;
                 }
                 ConflictResolution::Unsolvable { reason, unmodified } => {
                     warn!("Snapshot cannot be rebased. Aborting rebase.");
@@ -2108,7 +2134,9 @@ impl<'a> FlushProcess<'a> {
 
         // ``modified_splits`` (i.e. splits used in this session)
         // must be a subset of ``splits`` (the splits set in the config)
-        debug_assert!(modified_splits.is_subset(&splits.iter().collect::<HashSet<_>>()));
+        // This is not a debug_assert! because custom conflict solvers might
+        // modify a changeset and break this invariant.
+        assert!(modified_splits.is_subset(&splits.iter().collect::<HashSet<_>>()));
 
         for extent in splits.iter() {
             if rewrite_manifests || modified_splits.contains(extent) {
