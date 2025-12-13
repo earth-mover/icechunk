@@ -17,6 +17,7 @@ use crate::storage::{
 use crate::virtual_chunks::VirtualChunkContainer;
 use crate::{ObjectStoreConfig, Repository, RepositoryConfig};
 use chrono::{DateTime, Utc};
+use itertools::Itertools;
 use prop::string::string_regex;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};
@@ -24,6 +25,7 @@ use std::collections::HashMap;
 use std::num::{NonZeroU16, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 
 const MAX_NDIM: usize = 4;
 
@@ -455,4 +457,16 @@ pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
 pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
     use AzureCredentials::*;
     prop_oneof![Just(FromEnv), azure_static_credentials().prop_map(Static)].boxed()
+}
+
+pub fn path() -> BoxedStrategy<Path> {
+    Just(())
+        .prop_filter_map("Could not generate a valid file path", |_| {
+            let canon_file_path = NamedTempFile::new()
+                .ok()
+                .and_then(|file| file.path().canonicalize().ok())?;
+
+            canon_file_path.to_str().and_then(|file_name| Path::new(file_name).ok())
+        })
+        .boxed()
 }
