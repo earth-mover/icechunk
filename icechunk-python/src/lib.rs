@@ -4,6 +4,7 @@ mod errors;
 mod pickle;
 mod repository;
 mod session;
+mod stats;
 mod store;
 mod streams;
 
@@ -39,6 +40,7 @@ use repository::{
     PyTagDeletedUpdate, PyUpdateType,
 };
 use session::PySession;
+use stats::PyChunkStorageStats;
 use store::{PyStore, VirtualChunkSpec};
 
 #[cfg(feature = "cli")]
@@ -167,6 +169,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStore>()?;
     m.add_class::<PySnapshotInfo>()?;
     m.add_class::<PyManifestFileInfo>()?;
+    m.add_class::<PyChunkStorageStats>()?;
     m.add_class::<PyConflictSolver>()?;
     m.add_class::<PyBasicConflictSolver>()?;
     m.add_class::<PyConflictDetector>()?;
