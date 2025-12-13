@@ -1155,6 +1155,7 @@ impl Session {
                 ..new_snap.as_ref().try_into()?
             };
             Ok(Arc::new(repo_info.add_snapshot(
+                self.spec_version(),
                 new_snapshot_info,
                 None,
                 update_type.clone(),
@@ -1173,6 +1174,10 @@ impl Session {
     async fn flush_v1(&mut self, _: Arc<Snapshot>) -> SessionResult<()> {
         // In IC1 there is nothing to do here, the snapshot is already saved
         Ok(())
+    }
+
+    fn spec_version(&self) -> SpecVersionBin {
+        self.asset_manager.spec_version()
     }
 
     pub async fn flush(
@@ -1201,7 +1206,7 @@ impl Session {
             do_flush(flush_data, message, properties, false, CommitMethod::NewCommit)
                 .await?;
 
-        match self.asset_manager.spec_version() {
+        match self.spec_version() {
             SpecVersionBin::V1dot0 => self.flush_v1(Arc::clone(&new_snap)).await,
             SpecVersionBin::V2dot0 => self.flush_v2(Arc::clone(&new_snap)).await,
         }?;
@@ -1265,7 +1270,7 @@ impl Session {
 
         // amend is only allowed in spec v2, this should be checked at this point so we only assert
         assert!(
-            self.asset_manager.spec_version() >= SpecVersionBin::V2dot0
+            self.spec_version() >= SpecVersionBin::V2dot0
                 || commit_method == CommitMethod::NewCommit
         );
 
@@ -1420,7 +1425,7 @@ impl Session {
 
         debug!("Rebase started");
 
-        let new_commits = match self.asset_manager.spec_version() {
+        let new_commits = match self.spec_version() {
             SpecVersionBin::V1dot0 => {
                 self.commits_to_rebase_v1(branch_name.as_str()).await?
             }
@@ -2402,6 +2407,7 @@ async fn do_flush(
     let new_snapshot = Snapshot::from_iter(
         None,
         parent_id,
+        flush_data.asset_manager.spec_version(),
         message.to_string(),
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
@@ -2622,6 +2628,7 @@ async fn do_commit_v2(
             },
         };
         Ok(Arc::new(repo_info.add_snapshot(
+            asset_manager.spec_version(),
             new_snapshot_info,
             Some(branch_name),
             update_type,
@@ -3182,11 +3189,12 @@ mod tests {
             },
         ];
 
-        let initial = Snapshot::initial().unwrap();
+        let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
         let manifests = vec![ManifestFileInfo::new(manifest.as_ref(), manifest_size)];
         let snapshot = Arc::new(Snapshot::from_iter(
             None,
             None,
+            SpecVersionBin::current(),
             "message".to_string(),
             None,
             manifests,
@@ -3209,12 +3217,15 @@ mod tests {
             &storage::VersionInfo::for_creation(),
         )
         .await?;
-        let repo_info = RepoInfo::initial((&initial).try_into()?).add_snapshot(
-            snapshot.as_ref().try_into()?,
-            Some("main"),
-            UpdateType::NewCommitUpdate { branch: "main".to_string() },
-            "backup_path",
-        )?;
+        let repo_info =
+            RepoInfo::initial(SpecVersionBin::current(), (&initial).try_into()?)
+                .add_snapshot(
+                    SpecVersionBin::current(),
+                    snapshot.as_ref().try_into()?,
+                    Some("main"),
+                    UpdateType::NewCommitUpdate { branch: "main".to_string() },
+                    "backup_path",
+                )?;
         asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 
         let repo = Repository::open(None, storage, HashMap::new()).await?;

@@ -364,9 +364,11 @@ impl Snapshot {
         self.buffer.as_slice()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn from_iter<E, I>(
         id: Option<SnapshotId>,
         parent_id: Option<SnapshotId>,
+        spec_version: SpecVersionBin,
         message: String,
         properties: Option<SnapshotProperties>,
         mut manifest_files: Vec<ManifestFileInfo>,
@@ -395,7 +397,11 @@ impl Snapshot {
             .iter()
             .map(|(k, v)| {
                 let name = builder.create_shared_string(k.as_str());
-                let serialized = flexbuffers::to_vec(v).map_err(Box::new)?;
+                let serialized = if spec_version == SpecVersionBin::V1dot0 {
+                    rmp_serde::to_vec(v).map_err(Box::new)?
+                } else {
+                    flexbuffers::to_vec(v).map_err(Box::new)?
+                };
 
                 let value = builder.create_vector(serialized.as_slice());
                 Ok::<_, IcechunkFormatError>(generated::MetadataItem::create(
@@ -435,15 +441,16 @@ impl Snapshot {
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Ok(Snapshot { buffer, spec_version: SpecVersionBin::current() })
+        Ok(Snapshot { buffer, spec_version })
     }
 
-    pub fn initial() -> IcechunkResult<Self> {
+    pub fn initial(spec_version: SpecVersionBin) -> IcechunkResult<Self> {
         let properties = [("__root".to_string(), serde_json::Value::from(true))].into();
         let nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::new();
         Self::from_iter(
             Some(Self::INITIAL_SNAPSHOT_ID),
             None,
+            spec_version,
             Self::INITIAL_COMMIT_MESSAGE.to_string(),
             Some(properties),
             Default::default(),
@@ -525,6 +532,7 @@ impl Snapshot {
         Snapshot::from_iter(
             Some(new_child.id()),
             Some(self.id()),
+            SpecVersionBin::V1dot0, // 2.0 doesn't use adopt
             new_child.message().clone(),
             Some(new_child.metadata()?.clone()),
             new_child.manifest_files().collect(),
@@ -839,6 +847,7 @@ mod tests {
         let st = Snapshot::from_iter(
             None,
             None,
+            SpecVersionBin::current(),
             String::default(),
             Default::default(),
             manifests,

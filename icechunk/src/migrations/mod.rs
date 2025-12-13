@@ -118,7 +118,9 @@ async fn do_migrate(
     delete_unused_v1_files: bool,
 ) -> MigrationResult<()> {
     info!("Writing new repository info file");
-    let new_version_info = repo.asset_manager().create_repo_info(repo_info).await?;
+    let new_asset_manager =
+        repo.asset_manager().clone_for_spec_version(SpecVersionBin::V2dot0);
+    let new_version_info = new_asset_manager.create_repo_info(repo_info).await?;
 
     info!(version=?new_version_info, "Written repository info file");
 
@@ -222,6 +224,7 @@ pub async fn migrate_1_to_2(
 
     info!("Creating repository info file");
     let repo_info = Arc::new(RepoInfo::new(
+        SpecVersionBin::V2dot0,
         tags,
         branches,
         deleted_tags.iter().map(|s| s.as_str()),
