@@ -6,29 +6,35 @@ use icechunk::ops::stats::ChunkStorageStats;
 #[pyclass(name = "ChunkStorageStats")]
 #[derive(Clone, Debug)]
 pub (crate) struct PyChunkStorageStats {
-    /// Total bytes stored in native chunks (stored in icechunk's chunk storage)
-    #[pyo3(get)]
-    pub (crate) native_bytes: u64,
-    /// Total bytes stored in virtual chunks (references to external data)
-    #[pyo3(get)]
-    pub (crate) virtual_bytes: u64,
-    /// Total bytes stored in inline chunks (stored directly in manifests)
-    #[pyo3(get)]
-    pub (crate) inlined_bytes: u64,
+    inner: ChunkStorageStats,
 }
 
 impl From<ChunkStorageStats> for PyChunkStorageStats {
     fn from(stats: ChunkStorageStats) -> Self {
-        Self {
-            native_bytes: stats.native_bytes,
-            virtual_bytes: stats.virtual_bytes,
-            inlined_bytes: stats.inlined_bytes,
-        }
+        Self { inner: stats }
     }
 }
 
 #[pymethods]
 impl PyChunkStorageStats {
+    /// Total bytes stored in native chunks (stored in icechunk's chunk storage)
+    #[getter]
+    pub (crate) fn native_bytes(&self) -> u64 {
+        self.inner.native_bytes
+    }
+
+    /// Total bytes stored in virtual chunks (references to external data)
+    #[getter]
+    pub (crate) fn virtual_bytes(&self) -> u64 {
+        self.inner.virtual_bytes
+    }
+
+    /// Total bytes stored in inline chunks (stored directly in manifests)
+    #[getter]
+    pub (crate) fn inlined_bytes(&self) -> u64 {
+        self.inner.inlined_bytes
+    }
+
     /// Total bytes excluding virtual chunks.
     ///
     /// This represents the approximate size of all objects stored in the
@@ -38,8 +44,7 @@ impl PyChunkStorageStats {
     /// Returns:
     ///     int: The sum of native_bytes and inlined_bytes
     pub (crate) fn non_virtual_bytes(&self) -> u64 {
-        self.native_bytes
-            .saturating_add(self.inlined_bytes)
+        self.inner.non_virtual_bytes()
     }
 
     /// Total bytes across all chunk types.
@@ -51,15 +56,13 @@ impl PyChunkStorageStats {
     /// Returns:
     ///     int: The sum of all chunk storage bytes
     pub (crate) fn total_bytes(&self) -> u64 {
-        self.native_bytes
-            .saturating_add(self.virtual_bytes)
-            .saturating_add(self.inlined_bytes)
+        self.inner.total_bytes()
     }
 
     pub (crate) fn __repr__(&self) -> String {
         format!(
             "ChunkStorageStats(native_bytes={}, virtual_bytes={}, inlined_bytes={})",
-            self.native_bytes, self.virtual_bytes, self.inlined_bytes
+            self.inner.native_bytes, self.inner.virtual_bytes, self.inner.inlined_bytes
         )
     }
 }
