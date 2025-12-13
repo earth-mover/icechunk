@@ -114,6 +114,8 @@ fn calculate_manifest_storage(
             Ok(ChunkPayload::Virtual(virtual_ref)) => {
                 // Deduplicate by by (location, offset, length)
                 let virtual_chunk_identifier = (
+                    // TODO: Remove the need for this clone somehow?
+                    // It could potentially save a lot of memory usage for large virtual stores with long urls...
                     virtual_ref.location.clone(),
                     virtual_ref.offset,
                     virtual_ref.length,
