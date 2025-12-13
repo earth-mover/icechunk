@@ -632,25 +632,15 @@ pub enum Credentials {
     Azure(AzureCredentials),
 }
 
-#[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use crate::strategies::{
-        azure_credentials, gcs_static_credentials, repository_config,
-        s3_static_credentials,
-    };
-
-    use proptest::prelude::*;
-
-    // This macro is used for creating property tests
-    // which check that serializing and deserializing
-    // an instance of a type T is equivalent to the
-    // identity function
-    // Given pairs of test names and arbitraries to be used
-    // for the tests, e.g., (n1, a1), (n2, a2),... (nx, ax)
-    // the tests can be created by doing
-    // roundtrip_serialization_tests!(n1 - a1, n2 - a2, .... nx - ax)
-    macro_rules! roundtrip_serialization_tests {
+// This macro is used for creating property tests
+// which check that serializing and deserializing
+// an instance of a type T is equivalent to the
+// identity function
+// Given pairs of test names and arbitraries to be used
+// for the tests, e.g., (n1, a1), (n2, a2),... (nx, ax)
+// the tests can be created by doing
+// roundtrip_serialization_tests!(n1 - a1, n2 - a2, .... nx - ax)
+macro_rules! roundtrip_serialization_tests {
         ($($test_name: ident - $generator: ident), +) => {
                             $(
                 proptest!{
@@ -662,6 +652,17 @@ mod tests {
         }})*
         }
     }
+
+#[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use crate::strategies::{
+        azure_credentials, gcs_static_credentials, repository_config,
+        s3_static_credentials,
+    };
+
+    use proptest::prelude::*;
+
 
     roundtrip_serialization_tests!(
         test_config_roundtrip - repository_config,
