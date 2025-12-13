@@ -14,7 +14,7 @@ from icechunk._icechunk_python import (
     SnapshotInfo,
     Storage,
     UpdateType,
-    PyChunkStorageStats,
+    ChunkStorageStats,
 )
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
@@ -1590,7 +1590,7 @@ class Repository:
         max_snapshots_in_memory: int = 50,
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
-    ) -> PyChunkStorageStats:
+    ) -> ChunkStorageStats:
         """Calculate the total storage used for chunks, in bytes.
 
         It reports the storage needed to store all snapshots in the repository that
