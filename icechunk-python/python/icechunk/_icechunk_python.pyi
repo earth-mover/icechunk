@@ -2607,3 +2607,6 @@ class ChunkStorageStats:
 
     def __repr__(self) -> str:
         ...
+
+    def __add__(self, other: ChunkStorageStats) -> ChunkStorageStats:
+        ...

@@ -65,4 +65,10 @@ impl PyChunkStorageStats {
             self.inner.native_bytes, self.inner.virtual_bytes, self.inner.inlined_bytes
         )
     }
+
+    pub (crate) fn __add__(&self, other: &PyChunkStorageStats) -> PyChunkStorageStats {
+        PyChunkStorageStats {
+            inner: self.inner + other.inner,
+        }
+    }
 }
