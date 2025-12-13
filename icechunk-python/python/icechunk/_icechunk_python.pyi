@@ -2559,7 +2559,7 @@ def _upgrade_icechunk_repository(
     """
     ...
 
-class PyChunkStorageStats:
+class ChunkStorageStats:
     """Statistics about chunk storage across different chunk types."""
 
     @property
