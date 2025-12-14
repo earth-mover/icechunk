@@ -1455,14 +1455,14 @@ impl Session {
             let finder = PathFinder::new(session.list_nodes(&Path::root()).await?);
 
             match solver.solve(&tx_log, &session, change_set, self).await? {
-                ConflictResolution::Patched(patched_changeset) => {
+                ConflictResolution::Patched(mut patched_changeset) => {
                     trace!("Snapshot rebased");
-                    self.change_set = patched_changeset;
-                    self.snapshot_id = snap_id;
 
-                    // we have rebased on top of `snap_id`, now we update splits to match the config in that snap.
                     let mut new_splits: HashMap<NodeId, ManifestSplits> = HashMap::new();
-                    for node_id in self.change_set.arrays_with_chunk_changes() {
+                    // we have rebased on top of `snap_id`, now we update splits to match the config in that snap.
+                    // `splits` would have changed if an array was resized. `flush` uses `splits` so if left unupdated,
+                    // we run the risk of losing data.
+                    for node_id in patched_changeset.arrays_with_chunk_changes() {
                         let node_path = finder.find(node_id)?;
                         // by now the conflict solver has solved any needed conflicts,
                         // we grab the *updated* node to get the *updated* metadata (shape, dimension_names)
@@ -1477,8 +1477,14 @@ impl Session {
                                 .splitting()
                                 .get_split_sizes(&node_path, &shape, &dimension_names);
                             new_splits.insert(node_id.clone(), new_size);
-                        }
+                        };
                     }
+                    // now we update the changeset to be consistent with these new splits
+                    patched_changeset.replay_set_chunk_refs(&new_splits)?;
+
+                    self.change_set = patched_changeset;
+                    self.snapshot_id = snap_id;
+                    // important to keep this consistent since it is used in flush
                     self.splits = new_splits;
                 }
                 ConflictResolution::Unsolvable { reason, unmodified } => {

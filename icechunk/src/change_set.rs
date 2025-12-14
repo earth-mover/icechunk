@@ -71,6 +71,16 @@ impl EditChanges {
             })
         });
     }
+
+    // extract the `set_chunks` manifest and replace with an empty one
+    pub(crate) fn extract_manifest(
+        &mut self,
+    ) -> BTreeMap<NodeId, HashMap<ManifestExtents, SplitManifest>> {
+        let mut fresh: BTreeMap<NodeId, HashMap<ManifestExtents, SplitManifest>> =
+            Default::default();
+        std::mem::swap(&mut self.set_chunks, &mut fresh);
+        fresh
+    }
 }
 
 pub static EMPTY_EDITS: LazyLock<EditChanges> = LazyLock::new(Default::default);
@@ -336,8 +346,7 @@ impl ChangeSet {
                     }
 
                     // TODO: replace with `BTreeMap.drain_filter` after it is stable.
-                    let mut extracted =
-                        BTreeMap::<ChunkIndices, Option<ChunkPayload>>::new();
+                    let mut extracted = SplitManifest::new();
                     chunks.retain(|coord, payload| {
                         let cond = new_extents.contains(coord.0.as_slice());
                         if cond {
@@ -453,14 +462,32 @@ impl ChangeSet {
             .set_chunks
             .entry(node_id)
             .or_insert_with(|| {
-                HashMap::<
-                    ManifestExtents,
-                    BTreeMap<ChunkIndices, Option<ChunkPayload>>,
-                >::with_capacity(splits.len())
+                HashMap::<ManifestExtents, SplitManifest>::with_capacity(splits.len())
             })
             .entry(extent.clone())
             .or_default()
             .insert(coord, data);
+        Ok(())
+    }
+
+    // extracts the manifests, and re-sets the chunk refs using new `splits`.
+    pub fn replay_set_chunk_refs(
+        &mut self,
+        splits: &HashMap<NodeId, ManifestSplits>,
+    ) -> SessionResult<()> {
+        let manifests = self.edits_mut()?.extract_manifest();
+        manifests
+            .into_iter()
+            .flat_map(|(node_id, manifest)| {
+                manifest.into_values().flatten().map(move |item| (node_id.clone(), item))
+            })
+            .try_for_each(|(node_id, (coord, data))| {
+                #[allow(clippy::expect_used)]
+                let node_splits = splits.get(&node_id).expect(
+                    "logic bug! manifest splits not set when replaying set chunk refs.",
+                );
+                self.set_chunk_ref(node_id, coord, data, node_splits)
+            })?;
         Ok(())
     }
 
