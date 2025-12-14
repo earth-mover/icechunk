@@ -1448,11 +1448,11 @@ impl Session {
                 snap_id.clone(),
             );
 
+            let finder = PathFinder::new(session.list_nodes(&Path::root()).await?);
             let mut fresh = self.change_set().fresh();
             std::mem::swap(self.change_set_mut()?, &mut fresh);
             let change_set = fresh;
             // TODO: this should probably execute in a worker thread
-            let finder = PathFinder::new(session.list_nodes(&Path::root()).await?);
 
             match solver.solve(&tx_log, &session, change_set, self).await? {
                 ConflictResolution::Patched(mut patched_changeset) => {
