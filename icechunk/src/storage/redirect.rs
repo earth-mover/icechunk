@@ -55,6 +55,7 @@ impl RedirectStorage {
     }
 
     async fn mk_backend(&self) -> StorageResult<Arc<dyn Storage>> {
+        println!("\n------Using this function-----\n\n");
         let redirect = |attempt: rw::redirect::Attempt| {
             // TODO: make configurable
             if attempt.previous().len() > 10 {
@@ -77,6 +78,8 @@ impl RedirectStorage {
                     "Cannot build http client for redirect Storage instance: {e}"
                 )))
             })?;
+
+        println!(" The URL is {}", self.url.clone());
         let req = client.get(self.url.clone()).build().map_err(|e| {
             StorageError::from(StorageErrorKind::BadRedirect(format!(
                 "Cannot build http request for redirect Storage instance: {e}"
@@ -87,6 +90,7 @@ impl RedirectStorage {
                 "Request to redirect url ({}) failed, cannot find target Storage instance: {e}", &self.url
             )))
         })?;
+        println!("The status: {}, The headers: {:?}", res.status(), res.headers());
         let storage_url = res.headers().get("location").ok_or_else(|| {
             StorageError::from(StorageErrorKind::BadRedirect(
                 "Redirect Storage response must be a redirect, no location header detected".to_string()
