@@ -17,7 +17,6 @@ use crate::storage::{
 use crate::virtual_chunks::VirtualChunkContainer;
 use crate::{ObjectStoreConfig, Repository, RepositoryConfig};
 use chrono::{DateTime, Utc};
-use itertools::Itertools;
 use prop::string::string_regex;
 use proptest::prelude::*;
 use proptest::{collection::vec, option, strategy::Strategy};

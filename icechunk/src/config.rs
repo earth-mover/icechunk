@@ -640,6 +640,7 @@ pub enum Credentials {
 // for the tests, e.g., (n1, a1), (n2, a2),... (nx, ax)
 // the tests can be created by doing
 // roundtrip_serialization_tests!(n1 - a1, n2 - a2, .... nx - ax)
+#[allow(unused_macros)]
 macro_rules! roundtrip_serialization_tests {
         ($($test_name: ident - $generator: ident), +) => {
                             $(
@@ -662,6 +663,7 @@ mod tests {
     };
 
     use proptest::prelude::*;
+
 
 
     roundtrip_serialization_tests!(
