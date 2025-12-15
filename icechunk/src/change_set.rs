@@ -470,7 +470,7 @@ impl ChangeSet {
         Ok(())
     }
 
-    // extracts the manifests, and re-sets the chunk refs using new `splits`.
+    // extracts the chunk refs in `set_chunks`, and re-sets them using new `splits`.
     pub fn replay_set_chunk_refs(
         &mut self,
         splits: &HashMap<NodeId, ManifestSplits>,

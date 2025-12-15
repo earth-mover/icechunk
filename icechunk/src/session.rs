@@ -1458,6 +1458,10 @@ impl Session {
                 ConflictResolution::Patched(mut patched_changeset) => {
                     trace!("Snapshot rebased");
 
+                    // important to set this here, so that the `get_array` below gets the
+                    // *updated* node with updated shape and dimension_names
+                    self.snapshot_id = snap_id;
+
                     let mut new_splits: HashMap<NodeId, ManifestSplits> = HashMap::new();
                     // we have rebased on top of `snap_id`, now we update splits to match the config in that snap.
                     // `splits` would have changed if an array was resized. `flush` uses `splits` so if left unupdated,
@@ -1483,7 +1487,6 @@ impl Session {
                     patched_changeset.replay_set_chunk_refs(&new_splits)?;
 
                     self.change_set = patched_changeset;
-                    self.snapshot_id = snap_id;
                     // important to keep this consistent since it is used in flush
                     self.splits = new_splits;
                 }
@@ -2770,6 +2773,7 @@ mod tests {
     };
 
     use super::*;
+    use async_trait::async_trait;
     use icechunk_macros::tokio_test;
     use itertools::{Itertools, assert_equal};
     use pretty_assertions::assert_eq;
@@ -5225,6 +5229,101 @@ mod tests {
         // so now the parent is the first commit
         assert_eq!(ds2.snapshot_id(), &non_conflicting_snap);
 
+        Ok(())
+    }
+
+    #[icechunk_macros::tokio_test]
+    // Test rebase over a commit with a resize.
+    //
+    // Error-triggering flow:
+    // 1. Session A starts from snapshot S1 (array shape [5, 1])
+    // 2. Splits are cached for the array with extent [0..5)
+    // 3. Session A writes chunk [3]
+    // 4. Meanwhile, another session resizes array to [20, 1] and writes chunk [10]
+    // 5. Session A rebases to the new snapshot
+    // 6. BUG: Session A's splits are NOT updated (still [0..5))
+    // 7. Session A commits - during flush, verified_node_chunk_iterator filters
+    //    parent chunks by extent, dropping chunk [10] because it's outside [0..5)
+    // 8. Result: chunk [10] is lost
+    //
+    // The fix requires updating Session.splits during rebase to match the new
+    // parent snapshot's array shapes.
+    async fn test_rebase_over_resize() -> Result<(), Box<dyn Error>> {
+        struct YoloSolver;
+        #[async_trait]
+        impl ConflictSolver for YoloSolver {
+            async fn solve(
+                &self,
+                _previous_change: &TransactionLog,
+                _previous_repo: &Session,
+                current_changes: ChangeSet,
+                _sccurrent_repo: &Session,
+            ) -> SessionResult<ConflictResolution> {
+                Ok(ConflictResolution::Patched(current_changes))
+            }
+        }
+
+        let repo = get_repo_for_conflict().await?;
+
+        let mut ds1 = repo.writable_session("main").await?;
+        let mut ds2 = repo.writable_session("main").await?;
+
+        let path: Path = "/foo/bar/some-array".try_into().unwrap();
+        ds1.set_chunk_ref(
+            path.clone(),
+            ChunkIndices(vec![1]),
+            Some(ChunkPayload::Inline("repo 1".into())),
+        )
+        .await?;
+        ds1.commit("writer 1 updated non-conflict chunk", None).await?;
+
+        let mut ds1 = repo.writable_session("main").await?;
+        ds1.update_array(
+            &path,
+            ArrayShape::new(vec![(20, 1)]).unwrap(),
+            None,
+            Bytes::new(),
+        )
+        .await?;
+        // Write a chunk beyond the original extent [0..5) to trigger the bug
+        ds1.set_chunk_ref(
+            path.clone(),
+            ChunkIndices(vec![10]),
+            Some(ChunkPayload::Inline("repo 1 chunk 10".into())),
+        )
+        .await?;
+        ds1.commit("writer 1 updates array size and adds chunk 10", None).await?;
+
+        // now set a chunk ref that is valid with both old and new shape.
+        ds2.set_chunk_ref(
+            path.clone(),
+            ChunkIndices(vec![3]),
+            Some(ChunkPayload::Inline("repo 2".into())),
+        )
+        .await?;
+        ds2.commit_rebasing(
+            &YoloSolver,
+            1u16,
+            "writer 2 writes chunk 0",
+            None,
+            async |_| {},
+            async |_| {},
+        )
+        .await?;
+
+        let ds3 = repo.writable_session("main").await?;
+        // All three chunks should be present: [1] and [10] from ds1, [3] from ds2
+        for i in [1u32, 3, 10] {
+            assert!(
+                get_chunk(
+                    ds3.get_chunk_reader(&path, &ChunkIndices(vec![i]), &ByteRange::ALL,)
+                        .await?
+                )
+                .await?
+                .is_some(),
+                "chunk [{i}] should be present"
+            );
+        }
         Ok(())
     }
 
