@@ -641,6 +641,7 @@ pub enum Credentials {
 // the tests can be created by doing
 // roundtrip_serialization_tests!(n1 - a1, n2 - a2, .... nx - ax)
 #[allow(unused_macros)]
+#[macro_export]
 macro_rules! roundtrip_serialization_tests {
         ($($test_name: ident - $generator: ident), +) => {
                             $(

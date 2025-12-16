@@ -6,10 +6,11 @@ use crate::config::{
     ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3Options,
     S3StaticCredentials,
 };
+use bytes::Bytes;
 use crate::format::format_constants::SpecVersionBin;
 use crate::format::manifest::ManifestExtents;
 use crate::format::snapshot::{ArrayShape, DimensionName};
-use crate::format::{ChunkIndices, Path};
+use crate::format::{ChunkIndices, NodeId, Path};
 use crate::session::Session;
 use crate::storage::{
     ConcurrencySettings, RetriesSettings, Settings, new_in_memory_storage,
@@ -25,6 +26,8 @@ use std::num::{NonZeroU16, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
+
+use crate::change_set::{ArrayData};
 
 const MAX_NDIM: usize = 4;
 
@@ -469,3 +472,44 @@ pub fn path() -> BoxedStrategy<Path> {
         })
         .boxed()
 }
+
+type DimensionShapeInfo = (u64, u64);
+
+prop_compose! {
+    fn dimension_shape_info()(dim_length in any::<u64>(), chunk_length in any::<NonZeroU64>()) -> DimensionShapeInfo {
+        (dim_length, chunk_length.get())
+    }
+}
+
+prop_compose! {
+    fn array_shape()(dimensions in vec(dimension_shape_info(), 10)) -> ArrayShape {
+        ArrayShape::new(dimensions).unwrap()
+    }
+}
+
+fn dimension_name() -> BoxedStrategy<DimensionName> {
+    use DimensionName::*;
+    prop_oneof![
+        Just(NotSpecified),
+        any::<String>().prop_map(Name)
+    ].boxed()
+}
+
+prop_compose! {
+    fn bytes()(random_data in any::<Vec<u8>>()) -> Bytes {
+        Bytes::from(random_data)
+    }
+}
+
+prop_compose! {
+    fn array_data()(shape in array_shape(),
+        dimension_names in option::of(vec(dimension_name(), 10)),
+    user_data in bytes()) -> ArrayData {
+        ArrayData{shape, dimension_names, user_data}
+    }
+}
+
+fn node_id() -> BoxedStrategy<NodeId> {
+    Just(NodeId::random()).boxed()
+}
+
