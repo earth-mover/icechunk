@@ -715,16 +715,16 @@ mod tests {
 
     use super::ChangeSet;
 
-    use proptest::prelude::*;
     use crate::{
         change_set::{ArrayData, MoveTracker},
-        roundtrip_serialization_tests,
         format::{
             ChunkIndices, NodeId, Path,
             manifest::{ChunkInfo, ChunkPayload, ManifestSplits},
             snapshot::ArrayShape,
         },
+        roundtrip_serialization_tests,
     };
+    use proptest::prelude::*;
 
     #[icechunk_macros::test]
     fn test_new_arrays_chunk_iterator() -> Result<(), Box<dyn std::error::Error>> {
