@@ -665,8 +665,6 @@ mod tests {
 
     use proptest::prelude::*;
 
-
-
     roundtrip_serialization_tests!(
         test_config_roundtrip - repository_config,
         test_s3_static_credentials_roundtrip - s3_static_credentials,

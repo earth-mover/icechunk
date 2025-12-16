@@ -6,28 +6,30 @@ use crate::config::{
     ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3Options,
     S3StaticCredentials,
 };
-use bytes::Bytes;
 use crate::format::format_constants::SpecVersionBin;
-use crate::format::manifest::ManifestExtents;
+use crate::format::manifest::{ManifestExtents, ChunkPayload, VirtualChunkRef, ChunkRef, VirtualChunkLocation, SecondsSinceEpoch };
 use crate::format::snapshot::{ArrayShape, DimensionName};
-use crate::format::{ChunkIndices, NodeId, Path};
+use crate::format::{manifest, ChunkId, ChunkIndices, NodeId, Path};
 use crate::session::Session;
 use crate::storage::{
-    ConcurrencySettings, RetriesSettings, Settings, new_in_memory_storage,
+    ConcurrencySettings, RetriesSettings, Settings, new_in_memory_storage, ETag
 };
 use crate::virtual_chunks::VirtualChunkContainer;
 use crate::{ObjectStoreConfig, Repository, RepositoryConfig};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use prop::string::string_regex;
 use proptest::prelude::*;
-use proptest::{collection::vec, option, strategy::Strategy};
+use proptest::collection::{vec, hash_map, btree_map};
+use proptest::{option, strategy::Strategy};
 use std::collections::HashMap;
 use std::num::{NonZeroU16, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
+use aws_sdk_s3::types::Checksum;
 use tempfile::NamedTempFile;
 
-use crate::change_set::{ArrayData};
+use crate::change_set::ArrayData;
 
 const MAX_NDIM: usize = 4;
 
@@ -489,10 +491,7 @@ prop_compose! {
 
 fn dimension_name() -> BoxedStrategy<DimensionName> {
     use DimensionName::*;
-    prop_oneof![
-        Just(NotSpecified),
-        any::<String>().prop_map(Name)
-    ].boxed()
+    prop_oneof![Just(NotSpecified), any::<String>().prop_map(Name)].boxed()
 }
 
 prop_compose! {
@@ -513,3 +512,70 @@ fn node_id() -> BoxedStrategy<NodeId> {
     Just(NodeId::random()).boxed()
 }
 
+// Generates two collections of numbers, a, b, such that a is
+// never is bigger than b elementwise
+fn start_and_end_range() -> BoxedStrategy<(u32, u32)> {
+    (any::<u32>(), any::<u32>())
+        .prop_filter("Beginning of range cannot exceed end of range", |(start, end)| {
+            start <= end
+        })
+        .boxed()
+}
+
+// Generates two collections of numbers, a, b, such that a is
+// never is bigger than b elementwise
+fn start_and_end_ranges() -> BoxedStrategy<ManifestExtents> {
+    vec(start_and_end_range(), 3..7)
+        .prop_map(|coll: Vec::<(u32, u32)>| coll.into_iter().unzip())
+        .prop_map(|(to, from): (Vec<u32>, Vec<u32>)| ManifestExtents::new(&to[..], &from[..]))
+        .boxed()
+}
+
+fn chunk_id() -> BoxedStrategy<ChunkId> {
+    Just(ChunkId::random()).boxed()
+}
+
+prop_compose! {
+    fn chunk_ref()(id in chunk_id(), offset in any::<u64>(), length in any::<u64>()) -> ChunkRef {
+        ChunkRef{ id, offset, length }
+    }
+}
+
+fn etag() -> BoxedStrategy<ETag> {
+    any::<String>().prop_map(ETag).boxed()
+}
+fn checksum() -> BoxedStrategy<manifest::Checksum> {
+    use manifest::Checksum::*;
+    prop_oneof![
+        any::<u32>().prop_map(SecondsSinceEpoch).prop_map(LastModified),
+        etag().prop_map(ETag)].boxed()
+}
+
+prop_compose! {
+    fn virtual_chunk_ref()(location in any::<String>().prop_map(VirtualChunkLocation),
+        offset in any::<u64>(),
+        length in any::<u64>(),
+       checksum in option::of(checksum())) -> VirtualChunkRef {
+        VirtualChunkRef{ location, offset, length, checksum }
+    }
+}
+
+
+
+// prop_compose! {
+// fn chunk_ref()()
+// }
+
+// prop_compose! {
+//     fn edit_changes()(new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
+//     new_arrays in hash_map(path(),(node_id(), bytes()), 3..7),
+//        updated_arrays in hash_map(node_id(), array_data(), 3..7),
+//        updated_groups in hash_map(node_id(), bytes(), 3..7),
+//        set_chunks in btree_map(node_id(),
+//             hash_map(manifest_extents(), split_manifest(), 3..7),
+//         3..7),
+//
+//     ) -> EditChanges {
+//         EditChanges{}
+//     }
+// }
