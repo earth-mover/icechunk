@@ -31,7 +31,7 @@ impl TransactionLog {
         let mut new_groups: Vec<_> =
             cs.new_groups().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
         let mut new_arrays: Vec<_> =
-            cs.new_arrays().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
+            cs.new_arrays().map(|(_, id, _)| generated::ObjectId8::new(&id.0)).collect();
         let mut deleted_groups: Vec<_> =
             cs.deleted_groups().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
         let mut deleted_arrays: Vec<_> =
@@ -622,10 +622,8 @@ mod tests {
     use crate::{
         change_set::{ArrayData, ChangeSet},
         format::{
-            ChunkIndices, NodeId, SnapshotId,
-            manifest::{ChunkPayload, ManifestExtents, ManifestSplits},
-            snapshot::ArrayShape,
-            transaction_log::TransactionLog,
+            ChunkIndices, NodeId, SnapshotId, manifest::ChunkPayload,
+            snapshot::ArrayShape, transaction_log::TransactionLog,
         },
     };
 
@@ -655,7 +653,6 @@ mod tests {
             chunk_added.clone(),
             ChunkIndices(vec![0]),
             Some(ChunkPayload::Inline(Bytes::new())),
-            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
         )?;
 
         let t1 = TransactionLog::new(&SnapshotId::random(), &cs1);
@@ -690,29 +687,17 @@ mod tests {
         )?;
         cs2.delete_array("/a2".try_into().unwrap(), &deleted_array2)?;
         cs2.update_group(&updated_group2, &"/g3".try_into().unwrap(), Bytes::new())?;
-        cs2.set_chunk_ref(
-            chunk_added.clone(),
-            ChunkIndices(vec![0]),
-            None,
-            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
-        )?;
+        cs2.set_chunk_ref(chunk_added.clone(), ChunkIndices(vec![0]), None)?;
         cs2.set_chunk_ref(
             chunk_added.clone(),
             ChunkIndices(vec![1]),
             Some(ChunkPayload::Inline(Bytes::new())),
-            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
         )?;
-        cs2.set_chunk_ref(
-            chunk_added.clone(),
-            ChunkIndices(vec![42]),
-            None,
-            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
-        )?;
+        cs2.set_chunk_ref(chunk_added.clone(), ChunkIndices(vec![42]), None)?;
         cs2.set_chunk_ref(
             chunk_added2.clone(),
             ChunkIndices(vec![7]),
             Some(ChunkPayload::Inline(Bytes::new())),
-            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
         )?;
 
         let t3 = TransactionLog::new(&SnapshotId::random(), &cs2);
