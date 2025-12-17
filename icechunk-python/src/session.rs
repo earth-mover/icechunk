@@ -4,6 +4,7 @@ use async_stream::try_stream;
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Store,
+    display::{dataclass_html_repr, dataclass_repr, dataclass_str},
     format::{ChunkIndices, Path},
     session::{Session, SessionErrorKind},
     store::{StoreError, StoreErrorKind},
@@ -31,6 +32,66 @@ pub struct PySession(pub Arc<RwLock<Session>>);
 /// Most functions in this class block, so they need to `detach` so other
 /// python threads can make progress
 impl PySession {
+    pub(crate) fn __repr__(&self) -> String {
+        let session = self.0.blocking_read();
+        let branch_repr = match session.branch() {
+            Some(b) => format!("\"{}\"", b),
+            None => "None".to_string(),
+        };
+        dataclass_repr(
+            "Session",
+            &[
+                ("read_only", session.read_only().to_string()),
+                ("snapshot_id", format!("\"{}\"", session.snapshot_id())),
+                ("branch", branch_repr),
+                (
+                    "has_uncommitted_changes",
+                    session.has_uncommitted_changes().to_string(),
+                ),
+            ],
+        )
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        let session = self.0.blocking_read();
+        let branch_str = match session.branch() {
+            Some(b) => b.to_string(),
+            None => "None".to_string(),
+        };
+        dataclass_str(
+            "Session",
+            &[
+                ("read_only", session.read_only().to_string()),
+                ("snapshot_id", session.snapshot_id().to_string()),
+                ("branch", branch_str),
+                (
+                    "has_uncommitted_changes",
+                    session.has_uncommitted_changes().to_string(),
+                ),
+            ],
+        )
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        let session = self.0.blocking_read();
+        let branch_str = match session.branch() {
+            Some(b) => b.to_string(),
+            None => "None".to_string(),
+        };
+        dataclass_html_repr(
+            "Session",
+            &[
+                ("read_only", session.read_only().to_string()),
+                ("snapshot_id", session.snapshot_id().to_string()),
+                ("branch", branch_str),
+                (
+                    "has_uncommitted_changes",
+                    session.has_uncommitted_changes().to_string(),
+                ),
+            ],
+        )
+    }
+
     #[classmethod]
     fn from_bytes(
         _cls: Bound<'_, PyType>,
