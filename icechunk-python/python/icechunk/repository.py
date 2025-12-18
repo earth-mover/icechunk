@@ -1727,7 +1727,7 @@ class Repository:
             DeprecationWarning,
         )
         
-        stats = await self._repository.chunk_storage_stats(
+        stats = await self._repository.chunk_storage_stats_async(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
