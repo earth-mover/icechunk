@@ -1770,6 +1770,20 @@ class PyRepository:
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> GCSummary: ...
+    def chunk_storage_stats(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> ChunkStorageStats: ...
+    async def chunk_storage_stats_async(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> ChunkStorageStats: ...
     def total_chunks_storage(
         self,
         *,
