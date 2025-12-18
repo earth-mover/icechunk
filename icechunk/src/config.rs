@@ -264,7 +264,7 @@ pub enum ManifestPreloadCondition {
 pub struct ManifestPreloadConfig {
     pub max_total_refs: Option<u32>,
     pub preload_if: Option<ManifestPreloadCondition>,
-    pub max_arrays_to_scan: Option<u32>
+    pub max_arrays_to_scan: Option<u32>,
 }
 
 impl ManifestPreloadConfig {
@@ -280,7 +280,9 @@ impl ManifestPreloadConfig {
         self.max_total_refs.unwrap_or(10_000)
     }
 
-    pub fn max_arrays_to_scan(&self) -> u32 {self.max_arrays_to_scan.unwrap_or(50)}
+    pub fn max_arrays_to_scan(&self) -> u32 {
+        self.max_arrays_to_scan.unwrap_or(50)
+    }
 
     pub fn preload_if(&self) -> &ManifestPreloadCondition {
         self.preload_if.as_ref().unwrap_or_else(|| {

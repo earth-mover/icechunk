@@ -1101,7 +1101,7 @@ pub struct PyManifestPreloadConfig {
     #[pyo3(get, set)]
     pub preload_if: Option<Py<PyManifestPreloadCondition>>,
     #[pyo3(get, set)]
-    pub max_arrays_to_scan: Option<u32>
+    pub max_arrays_to_scan: Option<u32>,
 }
 
 #[pymethods]
@@ -1111,7 +1111,7 @@ impl PyManifestPreloadConfig {
     fn new(
         max_total_refs: Option<u32>,
         preload_if: Option<Py<PyManifestPreloadCondition>>,
-        max_arrays_to_scan: Option<u32>
+        max_arrays_to_scan: Option<u32>,
     ) -> Self {
         Self { max_total_refs, preload_if, max_arrays_to_scan }
     }
