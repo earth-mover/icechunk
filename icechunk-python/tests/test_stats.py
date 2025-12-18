@@ -30,7 +30,8 @@ def test_total_chunks_storage(any_spec_version: int | None) -> None:
     array[:] = 42
     session.commit("commit 1")
 
-    assert repo.total_chunks_storage() == 100 * 4
+    with pytest.warns(DeprecationWarning, match="total_chunks_storage"):
+        assert repo.total_chunks_storage() == 100 * 4
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
@@ -57,7 +58,8 @@ async def test_total_chunks_storage_async(any_spec_version: int | None) -> None:
     array[:] = 42
     await session.commit_async("commit 1")
 
-    assert await repo.total_chunks_storage_async() == 100 * 4
+    with pytest.warns(DeprecationWarning, match="total_chunks_storage_async"):
+        assert await repo.total_chunks_storage_async() == 100 * 4
 
 
 @pytest.mark.parametrize(
@@ -67,7 +69,8 @@ def test_chunk_storage_on_filesystem(dir: str) -> None:
     repo = ic.Repository.open(
         storage=ic.local_filesystem_storage(dir),
     )
-    actual = repo.total_chunks_storage()
+    with pytest.warns(DeprecationWarning, match="total_chunks_storage"):
+        actual = repo.total_chunks_storage()
     expected = sum(
         f.stat().st_size for f in (Path(dir) / "chunks").glob("*") if f.is_file()
     )
