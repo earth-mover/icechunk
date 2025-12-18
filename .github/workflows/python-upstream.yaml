@@ -189,7 +189,7 @@ jobs:
       - name: Restore cached hypothesis directory
         id: restore-hypothesis-cache
         if: always()
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
@@ -221,7 +221,7 @@ jobs:
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
