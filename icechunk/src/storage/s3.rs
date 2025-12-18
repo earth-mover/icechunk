@@ -243,7 +243,7 @@ impl S3Storage {
     /// client is not serializeable and must be initialized after deserialization. Under normal construction
     /// the original client is returned immediately.
     #[instrument(skip_all)]
-    async fn get_client(&self, settings: &Settings) -> &Arc<Client> {
+    pub async fn get_client(&self, settings: &Settings) -> &Arc<Client> {
         self.client
             .get_or_init(|| async {
                 Arc::new(
@@ -260,7 +260,7 @@ impl S3Storage {
             .await
     }
 
-    fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
+    pub fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
         let path = PathBuf::from_iter([self.prefix.as_str(), file_prefix, id]);
         let path_str =
             path.into_os_string().into_string().map_err(StorageErrorKind::BadPrefix)?;
