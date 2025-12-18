@@ -130,7 +130,7 @@ For example, if we have a repo which contains data that we plan to open as an [`
 config.manifest = icechunk.ManifestConfig(
     preload=icechunk.ManifestPreloadConfig(
         max_total_refs=100_000_000,
-        max_arrays_to_scan=1000, 
+        max_arrays_to_scan=1000,
         preload_if=icechunk.ManifestPreloadCondition.name_matches(".*time|.*latitude|.*longitude"),
     ),
 )
