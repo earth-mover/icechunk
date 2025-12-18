@@ -116,6 +116,12 @@ This will add a second `VirtualChunkContainer` but not overwrite the first one t
 
 The manifest configuration for the repository. [`ManifestConfig`](./reference.md#icechunk.ManifestConfig) allows you to configure behavior for how manifests are loaded. In particular, the `preload` parameter allows you to configure the preload behavior of the manifest using a [`ManifestPreloadConfig`](./reference.md#icechunk.ManifestPreloadConfig). This allows you to control the number of references that are loaded into memory when a session is created, along with which manifests are available to be preloaded.
 
+The `ManifestPreloadConfig` accepts the following parameters:
+
+- `max_total_refs`: Maximum total chunk references to preload across all manifests.
+- `max_arrays_to_scan`: Maximum number of arrays to scan when looking for manifests to preload (default: 50). Increase this for repositories with many nested groups where coordinate arrays may appear later in the hierarchy.
+- `preload_if`: A condition that determines which manifests should be preloaded.
+
 #### Example
 
 For example, if we have a repo which contains data that we plan to open as an [`Xarray`](./xarray.md) dataset, we may want to configure the manifest preload to only preload manifests that contain arrays that are coordinates, in our case `time`, `latitude`, and `longitude`.
@@ -124,6 +130,7 @@ For example, if we have a repo which contains data that we plan to open as an [`
 config.manifest = icechunk.ManifestConfig(
     preload=icechunk.ManifestPreloadConfig(
         max_total_refs=100_000_000,
+        max_arrays_to_scan=1000,
         preload_if=icechunk.ManifestPreloadCondition.name_matches(".*time|.*latitude|.*longitude"),
     ),
 )
