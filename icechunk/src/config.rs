@@ -264,6 +264,7 @@ pub enum ManifestPreloadCondition {
 pub struct ManifestPreloadConfig {
     pub max_total_refs: Option<u32>,
     pub preload_if: Option<ManifestPreloadCondition>,
+    pub max_arrays_to_scan: Option<u32>,
 }
 
 impl ManifestPreloadConfig {
@@ -271,11 +272,16 @@ impl ManifestPreloadConfig {
         Self {
             max_total_refs: other.max_total_refs.or(self.max_total_refs),
             preload_if: other.preload_if.or(self.preload_if.clone()),
+            max_arrays_to_scan: other.max_arrays_to_scan.or(self.max_arrays_to_scan),
         }
     }
 
     pub fn max_total_refs(&self) -> u32 {
         self.max_total_refs.unwrap_or(10_000)
+    }
+
+    pub fn max_arrays_to_scan(&self) -> u32 {
+        self.max_arrays_to_scan.unwrap_or(50)
     }
 
     pub fn preload_if(&self) -> &ManifestPreloadCondition {
@@ -355,12 +361,13 @@ impl ManifestConfig {
                 .get_or_init(ManifestSplittingConfig::default)
         })
     }
-    // for testing only, create a config with no preloading and no splitting
+    // for testing only, create a config with no preloading, no splitting, and no max_arrays to scan
     pub fn empty() -> Self {
         ManifestConfig {
             preload: Some(ManifestPreloadConfig {
                 max_total_refs: None,
                 preload_if: None,
+                max_arrays_to_scan: None,
             }),
             splitting: None,
         }

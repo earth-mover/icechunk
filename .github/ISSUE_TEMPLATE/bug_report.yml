@@ -37,9 +37,20 @@ body:
         # /// script
         # requires-python = ">=3.11"
         # dependencies = [
-        #   "icechunk@git+https://github.com/earthmover/icechunk.git@main",
-        #   "zarr@git+https://github.com/zarr-developers/zarr-python.git@main",
+        #   "icechunk<2",
+        #   "zarr",
         # ]
+        #
+        # [[tool.uv.index]]
+        # name = "scientific-python-nightly-wheels"
+        # url = "https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
+        #
+        # [tool.uv.sources]
+        # icechunk = { index = "scientific-python-nightly-wheels" }
+        # zarr = { index = "scientific-python-nightly-wheels" }
+        #
+        # [tool.uv]
+        # prerelease = "allow"
         # ///
         #
         # This script automatically imports the development branch of icechunk to check for issues.
