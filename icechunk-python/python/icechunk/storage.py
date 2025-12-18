@@ -103,6 +103,7 @@ def s3_store(
         force_path_style=force_path_style,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
         requester_pays=requester_pays,
+        anonymous=anonymous or False,
     )
     return (
         ObjectStoreConfig.S3Compatible(options)
@@ -190,6 +191,7 @@ def s3_storage(
         force_path_style=force_path_style,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
         requester_pays=requester_pays,
+        anonymous=anonymous or False,
     )
     return Storage.new_s3(
         config=options,
@@ -228,6 +230,7 @@ def s3_object_store_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         force_path_style=force_path_style,
+        anonymous=anonymous or False,
     )
     return Storage.new_s3_object_store(
         config=options,
@@ -312,6 +315,7 @@ def tigris_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+        anonymous=anonymous or False,
     )
     return Storage.new_tigris(
         config=options,
@@ -397,6 +401,7 @@ def r2_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+        anonymous=anonymous or False,
     )
     return Storage.new_r2(
         config=options,
