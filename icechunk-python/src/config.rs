@@ -1100,17 +1100,20 @@ pub struct PyManifestPreloadConfig {
     pub max_total_refs: Option<u32>,
     #[pyo3(get, set)]
     pub preload_if: Option<Py<PyManifestPreloadCondition>>,
+    #[pyo3(get, set)]
+    pub max_arrays_to_scan: Option<u32>
 }
 
 #[pymethods]
 impl PyManifestPreloadConfig {
     #[new]
-    #[pyo3(signature = (max_total_refs=None, preload_if=None))]
+    #[pyo3(signature = (max_total_refs=None, preload_if=None, max_arrays_to_scan=None))]
     fn new(
         max_total_refs: Option<u32>,
         preload_if: Option<Py<PyManifestPreloadCondition>>,
+        max_arrays_to_scan: Option<u32>
     ) -> Self {
-        Self { max_total_refs, preload_if }
+        Self { max_total_refs, preload_if, max_arrays_to_scan }
     }
 }
 
@@ -1127,6 +1130,7 @@ impl From<&PyManifestPreloadConfig> for ManifestPreloadConfig {
         Python::attach(|py| Self {
             max_total_refs: value.max_total_refs,
             preload_if: value.preload_if.as_ref().map(|c| (&*c.borrow(py)).into()),
+            max_arrays_to_scan: value.max_arrays_to_scan,
         })
     }
 }
@@ -1140,6 +1144,7 @@ impl From<ManifestPreloadConfig> for PyManifestPreloadConfig {
                 Py::new(py, Into::<PyManifestPreloadCondition>::into(c))
                     .expect("Cannot create instance of ManifestPreloadCondition")
             }),
+            max_arrays_to_scan: value.max_arrays_to_scan,
         })
     }
 }

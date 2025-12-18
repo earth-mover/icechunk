@@ -1520,6 +1520,7 @@ impl Repository {
         debug!("Preloading manifests");
         let asset_manager = Arc::clone(self.asset_manager());
         let preload_config = self.config().manifest().preload().clone();
+        let max_arrays_to_scan = preload_config.max_arrays_to_scan() as usize;
         if preload_config.max_total_refs() == 0
             || matches!(preload_config.preload_if(), ManifestPreloadCondition::False)
         {
@@ -1535,8 +1536,7 @@ impl Repository {
                 for node in snap
                     .iter_arc(&Path::root())
                     .filter_ok(|node| node.node_type() == NodeType::Array)
-                    // TODO: make configurable
-                    .take(50)
+                    .take(max_arrays_to_scan)
                 {
                     match node {
                         Err(err) => {
@@ -1923,6 +1923,7 @@ mod tests {
             preload: Some(ManifestPreloadConfig {
                 max_total_refs: None,
                 preload_if: None,
+                max_arrays_to_scan: None,
             }),
             splitting: Some(split_config.clone()),
         };
@@ -1948,6 +1949,7 @@ mod tests {
             preload: Some(ManifestPreloadConfig {
                 max_total_refs: None,
                 preload_if: None,
+                max_arrays_to_scan: None,
             }),
             splitting: Some(split_config.clone()),
         };
@@ -3211,6 +3213,7 @@ mod tests {
             preload: Some(ManifestPreloadConfig {
                 max_total_refs: Some(2),
                 preload_if: None,
+                max_arrays_to_scan: None,
             }),
             ..ManifestConfig::default()
         };

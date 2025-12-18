@@ -1,5 +1,13 @@
 # Changelog
 
+## Python Icechunk Library 1.1.12
+
+### Features
+
+- Added `max_arrays_to_scan` parameter to `ManifestPreloadConfig` to control how many arrays
+  are scanned when looking for manifests to preload. This is useful for repositories with many
+  nested groups where coordinate arrays may appear later in the hierarchy. Default is 50.
+
 ## Python Icechunk Library 1.1.11
 
 ### Features

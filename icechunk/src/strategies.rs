@@ -281,9 +281,10 @@ pub fn manifest_split_condition() -> BoxedStrategy<ManifestSplitCondition> {
 prop_compose! {
     pub fn manifest_preload_config()
         (max_total_refs in option::of(any::<u32>()),
-        preload_if in option::of(manifest_preload_condition())
+        preload_if in option::of(manifest_preload_condition()),
+            max_arrays_to_scan in option::of(any::<u32>())
     ) -> ManifestPreloadConfig {
-        ManifestPreloadConfig { max_total_refs, preload_if }
+        ManifestPreloadConfig { max_total_refs, preload_if, max_arrays_to_scan}
     }
 }
 
