@@ -103,7 +103,7 @@ def s3_store(
         force_path_style=force_path_style,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
         requester_pays=requester_pays,
-        anonymous=anonymous or False,
+        anonymous=anonymous,
     )
     return (
         ObjectStoreConfig.S3Compatible(options)
