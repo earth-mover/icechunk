@@ -42,9 +42,9 @@ async-stream = "0.3.6"
 rmpv = { version = "1.3.0", features = ["serde", "with-serde"] }
 aws-sdk-s3 = "1.115.0"
 aws-config = "1.8.11"
-aws-credential-types = "1.2.10"
+aws-credential-types = "1.2.11"
 typed-path = "0.12.0"
-aws-smithy-types-convert = { version = "0.60.10", features = [
+aws-smithy-types-convert = { version = "0.60.11", features = [
   "convert-chrono",
   "convert-streams",
 ] }
@@ -72,7 +72,7 @@ urlencoding = "2.1.3"
 # reqwest's default-features enables default-tls which ultimately leads to an openssl dependencies
 # which we are not including as it is not included in manylinux wheels. Instead depend on rustls-tls only
 # https://github.com/earth-mover/icechunk/issues/1400
-reqwest = { version = "0.12.24", default-features = false, features = [
+reqwest = { version = "0.12.26", default-features = false, features = [
   "rustls-tls",
   # defaults we rely on. Add explicitly because we set default-features to false
   "charset",

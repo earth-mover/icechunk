@@ -582,6 +582,7 @@ class ManifestPreloadConfig:
         self,
         max_total_refs: int | None = None,
         preload_if: ManifestPreloadCondition | None = None,
+        max_arrays_to_scan: int | None = None,
     ) -> None:
         """
         Create a new `ManifestPreloadConfig` object
@@ -592,6 +593,9 @@ class ManifestPreloadConfig:
             The maximum number of references to preload.
         preload_if: ManifestPreloadCondition | None
             The condition under which manifests will be preloaded.
+        max_arrays_to_scan: int | None
+            The maximum number of arrays to scan when looking for manifests to preload.
+            Default is 50. Increase for repositories with many nested groups.
         """
         ...
     @property
@@ -636,6 +640,28 @@ class ManifestPreloadConfig:
         ----------
         value: ManifestPreloadCondition | None
             The condition under which manifests will be preloaded.
+        """
+        ...
+    @property
+    def max_arrays_to_scan(self) -> int | None:
+        """
+        The maximum number of arrays to scan when looking for manifests to preload.
+
+        Returns
+        -------
+        int | None
+            The maximum number of arrays to scan. Default is 50.
+        """
+        ...
+    @max_arrays_to_scan.setter
+    def max_arrays_to_scan(self, value: int | None) -> None:
+        """
+        Set the maximum number of arrays to scan when looking for manifests to preload.
+
+        Parameters
+        ----------
+        value: int | None
+            The maximum number of arrays to scan.
         """
         ...
 

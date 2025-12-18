@@ -91,10 +91,12 @@ pub struct UpdateInfo<I> {
 type UpdateTuple<'a> = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>;
 
 impl RepoInfo {
+    #[allow(clippy::too_many_arguments)]
     pub fn new<
         'a,
         I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
     >(
+        spec_version: SpecVersionBin,
         tags: impl IntoIterator<Item = (&'a str, SnapshotId)>,
         branches: impl IntoIterator<Item = (&'a str, SnapshotId)>,
         deleted_tags: impl IntoIterator<Item = &'a str>,
@@ -110,6 +112,7 @@ impl RepoInfo {
         let mut deleted_tags: Vec<_> = deleted_tags.into_iter().collect();
         deleted_tags.sort();
         Self::from_parts(
+            spec_version,
             tags,
             branches,
             deleted_tags,
@@ -120,10 +123,12 @@ impl RepoInfo {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn from_parts<
         'a,
         I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
     >(
+        spec_version: SpecVersionBin,
         sorted_tags: impl IntoIterator<Item = (&'a str, u32)>,
         sorted_branches: impl IntoIterator<Item = (&'a str, u32)>,
         sorted_deleted_tags: impl IntoIterator<Item = &'a str>,
@@ -263,7 +268,7 @@ impl RepoInfo {
             branches: Some(branches),
             deleted_tags: Some(deleted_tags),
             snapshots: Some(snapshots),
-            spec_version: SpecVersionBin::current() as u8,
+            spec_version: spec_version as u8,
             status: Some(status),
             metadata: Some(metadata),
             latest_updates: Some(latest_updates),
@@ -362,11 +367,12 @@ impl RepoInfo {
         Ok((updates, repo_before_updates))
     }
 
-    pub fn initial(snapshot: SnapshotInfo) -> Self {
+    pub fn initial(spec_version: SpecVersionBin, snapshot: SnapshotInfo) -> Self {
         let last_updated_at = snapshot.flushed_at;
         #[allow(clippy::expect_used)]
         // This method is basically constant, so it's OK to unwrap in it
         Self::from_parts(
+            spec_version,
             [],
             [("main", 0)],
             [],
@@ -417,6 +423,7 @@ impl RepoInfo {
 
     pub fn add_snapshot(
         &self,
+        spec_version: SpecVersionBin,
         snap: SnapshotInfo,
         branch: Option<&str>,
         update_type: UpdateType,
@@ -449,6 +456,7 @@ impl RepoInfo {
         });
 
         let res = Self::from_parts(
+            spec_version,
             tags,
             branches,
             self.deleted_tags()?,
@@ -466,6 +474,7 @@ impl RepoInfo {
 
     pub fn add_branch(
         &self,
+        spec_version: SpecVersionBin,
         name: &str,
         snap: &SnapshotId,
         previous_file: &str,
@@ -485,6 +494,7 @@ impl RepoInfo {
                 branches.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
                 Ok(Self::from_parts(
+                    spec_version,
                     self.all_tags()?,
                     branches,
                     self.deleted_tags()?,
@@ -507,7 +517,12 @@ impl RepoInfo {
         }
     }
 
-    pub fn delete_branch(&self, name: &str, previous_file: &str) -> IcechunkResult<Self> {
+    pub fn delete_branch(
+        &self,
+        spec_version: SpecVersionBin,
+        name: &str,
+        previous_file: &str,
+    ) -> IcechunkResult<Self> {
         match self.resolve_branch(name) {
             Ok(previous_snap_id) => {
                 let mut branches: Vec<_> = self.all_branches()?.collect();
@@ -515,6 +530,7 @@ impl RepoInfo {
                 branches.retain(|(n, _)| n != &name);
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
                 Self::from_parts(
+                    spec_version,
                     self.all_tags()?,
                     branches,
                     self.deleted_tags()?,
@@ -544,6 +560,7 @@ impl RepoInfo {
 
     pub fn update_branch(
         &self,
+        spec_version: SpecVersionBin,
         name: &str,
         new_snap: &SnapshotId,
         previous_file: &str,
@@ -556,6 +573,7 @@ impl RepoInfo {
                 });
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
                 Ok(Self::from_parts(
+                    spec_version,
                     self.all_tags()?,
                     branches,
                     self.deleted_tags()?,
@@ -581,6 +599,7 @@ impl RepoInfo {
 
     pub fn add_tag(
         &self,
+        spec_version: SpecVersionBin,
         name: &str,
         snap: &SnapshotId,
         previous_file: &str,
@@ -600,6 +619,7 @@ impl RepoInfo {
                 tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
                 Ok(Self::from_parts(
+                    spec_version,
                     tags,
                     self.all_branches()?,
                     self.deleted_tags()?,
@@ -622,7 +642,12 @@ impl RepoInfo {
         }
     }
 
-    pub fn delete_tag(&self, name: &str, previous_file: &str) -> IcechunkResult<Self> {
+    pub fn delete_tag(
+        &self,
+        spec_version: SpecVersionBin,
+        name: &str,
+        previous_file: &str,
+    ) -> IcechunkResult<Self> {
         match self.resolve_tag(name) {
             Ok(previous_snap_id) => {
                 let mut tags: Vec<_> = self.all_tags()?.collect();
@@ -634,6 +659,7 @@ impl RepoInfo {
 
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
                 Self::from_parts(
+                    spec_version,
                     tags,
                     self.all_branches()?,
                     deleted_tags,
@@ -662,11 +688,13 @@ impl RepoInfo {
 
     pub fn set_metadata(
         &self,
+        spec_version: SpecVersionBin,
         metadata: &SnapshotProperties,
         previous_file: &str,
     ) -> IcechunkResult<Self> {
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
         Self::from_parts(
+            spec_version,
             self.all_tags()?,
             self.all_branches()?,
             self.deleted_tags()?,
@@ -1168,7 +1196,7 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(snap1.clone());
+        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1.clone());
         assert_eq!(repo.all_snapshots()?.next().unwrap().unwrap(), snap1);
 
         let id2 = SnapshotId::random();
@@ -1179,6 +1207,7 @@ mod tests {
             ..snap1.clone()
         };
         let repo = repo.add_snapshot(
+            SpecVersionBin::current(),
             snap2.clone(),
             Some("main"),
             UpdateType::NewCommitUpdate { branch: "main".to_string() },
@@ -1206,6 +1235,7 @@ mod tests {
             ..snap2.clone()
         };
         let repo = repo.add_snapshot(
+            SpecVersionBin::current(),
             snap3.clone(),
             Some("main"),
             UpdateType::NewCommitUpdate { branch: "main".to_string() },
@@ -1240,11 +1270,16 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(snap1.clone());
-        let repo = repo.add_branch("foo", &id1, "foo")?;
-        let repo = repo.add_branch("bar", &id1, "bar")?;
+        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1.clone());
+        let repo = repo.add_branch(SpecVersionBin::current(), "foo", &id1, "foo")?;
+        let repo = repo.add_branch(SpecVersionBin::current(), "bar", &id1, "bar")?;
         assert!(matches!(
-            repo.add_branch("bad-snap", &SnapshotId::random(), "bad"),
+            repo.add_branch(
+                SpecVersionBin::current(),
+                "bad-snap",
+                &SnapshotId::random(),
+                "bad"
+            ),
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::SnapshotIdNotFound { .. },
                 ..
@@ -1252,7 +1287,7 @@ mod tests {
         ));
         // cannot add existing
         assert!(matches!(
-            repo.add_branch("bar", &id1, "/foo/bar"),
+            repo.add_branch(SpecVersionBin::current(), "bar", &id1, "/foo/bar"),
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::BranchAlreadyExists { .. },
                 ..
@@ -1272,31 +1307,44 @@ mod tests {
             ..snap1.clone()
         };
         let repo = repo.add_snapshot(
+            SpecVersionBin::current(),
             snap2,
             Some("main"),
             UpdateType::NewCommitUpdate { branch: "main".to_string() },
             "foo",
         )?;
-        let repo = repo.add_branch("baz", &id2, "/foo/bar")?;
+        let repo = repo.add_branch(SpecVersionBin::current(), "baz", &id2, "/foo/bar")?;
         assert_eq!(repo.resolve_branch("main")?, id2.clone());
         assert_eq!(repo.resolve_branch("foo")?, id1.clone());
         assert_eq!(repo.resolve_branch("bar")?, id1.clone());
         assert_eq!(repo.resolve_branch("baz")?, id2.clone());
 
-        let repo = repo.delete_branch("bar", "bar")?;
+        let repo = repo.delete_branch(SpecVersionBin::current(), "bar", "bar")?;
         assert!(repo.resolve_branch("bar").is_err());
         assert_eq!(
             repo.all_branches()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["main", "foo", "baz"].into()
         );
 
-        assert!(repo.delete_branch("bad-branch", "bad").is_err());
+        assert!(
+            repo.delete_branch(SpecVersionBin::current(), "bad-branch", "bad").is_err()
+        );
 
         // tags
-        let repo = repo.add_tag("tag1", &id1, "tag1")?;
-        let repo = repo.add_tag("tag2", &id2, "tag2")?;
-        assert!(repo.add_tag("bad-snap", &SnapshotId::random(), "bad").is_err());
-        assert!(repo.add_tag("tag1", &id1, "tag1-again").is_err());
+        let repo = repo.add_tag(SpecVersionBin::current(), "tag1", &id1, "tag1")?;
+        let repo = repo.add_tag(SpecVersionBin::current(), "tag2", &id2, "tag2")?;
+        assert!(
+            repo.add_tag(
+                SpecVersionBin::current(),
+                "bad-snap",
+                &SnapshotId::random(),
+                "bad"
+            )
+            .is_err()
+        );
+        assert!(
+            repo.add_tag(SpecVersionBin::current(), "tag1", &id1, "tag1-again").is_err()
+        );
         assert_eq!(repo.resolve_tag("tag1")?, id1.clone());
         assert_eq!(repo.resolve_tag("tag2")?, id2.clone());
         assert_eq!(
@@ -1305,16 +1353,21 @@ mod tests {
         );
 
         // delete tags
-        let repo = repo.add_tag("tag3", &id1, "tag3")?;
-        let repo = repo.delete_tag("tag3", "delete-tag3")?;
+        let repo = repo.add_tag(SpecVersionBin::current(), "tag3", &id1, "tag3")?;
+        let repo = repo.delete_tag(SpecVersionBin::current(), "tag3", "delete-tag3")?;
         assert_eq!(
             repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["tag1", "tag2"].into()
         );
         // cannot add deleted
-        assert!(repo.add_tag("tag3", &id1, "tag3-again").is_err());
+        assert!(
+            repo.add_tag(SpecVersionBin::current(), "tag3", &id1, "tag3-again").is_err()
+        );
         // cannot delete deleted
-        assert!(repo.delete_tag("tag3", "delete-tag3-again").is_err());
+        assert!(
+            repo.delete_tag(SpecVersionBin::current(), "tag3", "delete-tag3-again")
+                .is_err()
+        );
         assert_eq!(
             repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["tag1", "tag2"].into()
@@ -1335,7 +1388,7 @@ mod tests {
         };
 
         // check updates for a new repo
-        let mut repo = RepoInfo::initial(snap1);
+        let mut repo = RepoInfo::initial(SpecVersionBin::current(), snap1);
         assert_eq!(repo.latest_updates()?.count(), 1);
         let (last_update, _, file) = repo.latest_updates()?.next().unwrap()?;
         assert!(file.is_none());
@@ -1346,6 +1399,7 @@ mod tests {
         // fill the first page of updates by adding branches
         for i in 1..=(UPDATES_PER_FILE - 1) {
             repo = repo.add_branch(
+                SpecVersionBin::current(),
                 i.to_string().as_str(),
                 &id1,
                 (i - 1).to_string().as_str(),
@@ -1381,7 +1435,7 @@ mod tests {
         assert!(repo.repo_before_updates()?.is_none());
 
         // Now, if we add another change, it won't fit in the first "page" of repo updates
-        repo = repo.add_tag("tag", &id1, "first-branches")?;
+        repo = repo.add_tag(SpecVersionBin::current(), "tag", &id1, "first-branches")?;
         // the file only contains the first "page" worth of updates
         assert_eq!(repo.latest_updates()?.count(), UPDATES_PER_FILE);
         // next file is the oldest change
