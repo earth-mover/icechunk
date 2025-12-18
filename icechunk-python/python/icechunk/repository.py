@@ -1683,6 +1683,7 @@ class Repository:
             "You can still access just the total native bytes: to keep your existing behaviour using API that will not be removed in a future version, "
             "please replace your existing ``.total_chunks_storage(**kwargs)`` method call with ``.chunk_storage_stats(**same_kwargs).native_bytes``.",
             DeprecationWarning,
+            stacklevel=2,
         )
 
         stats = self._repository.chunk_storage_stats(
@@ -1725,6 +1726,7 @@ class Repository:
             "You can still access just the total native bytes: to keep your existing behaviour using API that will not be removed in a future version, "
             "please replace your existing ``.total_chunks_storage_async(**kwargs)`` method call with ``.chunk_storage_stats_async(**same_kwargs).native_bytes``.",
             DeprecationWarning,
+            stacklevel=2,
         )
 
         stats = await self._repository.chunk_storage_stats_async(
