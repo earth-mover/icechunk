@@ -2306,6 +2306,7 @@ impl PyRepository {
         })
     }
 
+    #[getter]
     fn spec_version(&self) -> u8 {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let repo = self.0.read().await;
