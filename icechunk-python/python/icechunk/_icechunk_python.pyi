@@ -1814,6 +1814,7 @@ class PyRepository:
     async def inspect_snapshot_async(
         self, snapshot_id: str, *, pretty: bool = True
     ) -> str: ...
+    @property
     def spec_version(self) -> int: ...
 
 class PySession:
