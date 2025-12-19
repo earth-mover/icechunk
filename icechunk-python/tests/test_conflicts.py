@@ -260,3 +260,26 @@ async def test_rebase_async(any_spec_version: int | None) -> None:
     # Should have session_b's values due to UseOurs selection
     assert array_final[0, 0] == 2
     assert array_final.attrs["repo"] == 1
+
+
+def test_conflict_repr_and_str() -> None:
+    """Test that Conflict types have correct string representations."""
+    conflict = icechunk.Conflict(
+        icechunk.ConflictType.ChunkDoubleUpdate,
+        "/my/array",
+        [[0, 0]],
+    )
+
+    # Test __repr__
+    repr_str = repr(conflict)
+    assert "ChunkDoubleUpdate" in repr_str
+    assert "/my/array" in repr_str
+
+    # Test __str__
+    str_str = str(conflict)
+    assert "/my/array" in str_str
+
+    # Test ConflictType repr and str
+    conflict_type = icechunk.ConflictType.ZarrMetadataDoubleUpdate
+    assert "ZarrMetadataDoubleUpdate" in repr(conflict_type)
+    assert "metadata" in str(conflict_type).lower()
