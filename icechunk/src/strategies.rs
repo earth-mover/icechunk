@@ -551,8 +551,26 @@ fn checksum() -> BoxedStrategy<manifest::Checksum> {
         etag().prop_map(ETag)].boxed()
 }
 
+fn non_empty_string() -> impl Strategy<Value=String> {
+   any::<String>().prop_filter("An empty string was provided",
+                               |data| !data.is_empty())
+}
+
 prop_compose! {
-    fn virtual_chunk_ref()(location in any::<String>().prop_map(VirtualChunkLocation),
+    fn url_with_host_and_path()(protocol in transfer_protocol(),
+        host in non_empty_string(),
+        path in non_empty_string()) -> String {
+        format!("{}://{}/{}", protocol, host, path)
+    }
+}
+
+fn virtual_chunk_location() -> impl Strategy<Value=VirtualChunkLocation> {
+    url_with_host_and_path().prop_filter_map("Could not generate url with valid host and path",
+                                             |url| VirtualChunkLocation::from_absolute_path(&url).ok())
+}
+
+prop_compose! {
+    fn virtual_chunk_ref()(location in virtual_chunk_location(),
         offset in any::<u64>(),
         length in any::<u64>(),
        checksum in option::of(checksum())) -> VirtualChunkRef {
