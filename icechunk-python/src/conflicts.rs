@@ -126,7 +126,7 @@ pub(crate) struct PyConflict {
 impl PyConflict {
     #[new]
     #[pyo3(signature = (conflict_type, path, conflicted_chunks=None))]
-    pub fn new(
+    fn new(
         conflict_type: PyConflictType,
         path: String,
         conflicted_chunks: Option<Vec<Vec<u32>>>,
