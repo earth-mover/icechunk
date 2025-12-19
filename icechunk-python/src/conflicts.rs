@@ -88,10 +88,7 @@ impl PyConflictType {
         format!("{self}")
     }
 
-    fn __reduce__(
-        &self,
-        py: Python<'_>,
-    ) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
         use pyo3::IntoPyObjectExt;
         let cls = py.get_type::<PyConflictType>().into_py_any(py)?;
         let value: i32 = match self {
@@ -145,10 +142,7 @@ impl PyConflict {
         format!("{}: {}", self.path, self.conflict_type)
     }
 
-    fn __reduce__(
-        &self,
-        py: Python<'_>,
-    ) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
         use pyo3::IntoPyObjectExt;
         let cls = py.get_type::<PyConflict>().into_py_any(py)?;
         let args = (
