@@ -2423,6 +2423,23 @@ class IcechunkError(Exception):
 class ConflictError(Exception):
     """An error that occurs when a conflict is detected"""
 
+    def __init__(
+        self,
+        expected_parent: str | None = None,
+        actual_parent: str | None = None,
+    ) -> None:
+        """
+        Create a new ConflictError.
+
+        Parameters
+        ----------
+        expected_parent: str | None
+            The expected parent snapshot ID.
+        actual_parent: str | None
+            The actual parent snapshot ID of the branch.
+        """
+        ...
+
     @property
     def expected_parent(self) -> str:
         """The expected parent snapshot ID.
@@ -2484,6 +2501,26 @@ class ConflictType(Enum):
 class Conflict:
     """A conflict detected between snapshots"""
 
+    def __init__(
+        self,
+        conflict_type: ConflictType,
+        path: str,
+        conflicted_chunks: list[list[int]] | None = None,
+    ) -> None:
+        """
+        Create a new Conflict.
+
+        Parameters
+        ----------
+        conflict_type: ConflictType
+            The type of conflict.
+        path: str
+            The path of the node that caused the conflict.
+        conflicted_chunks: list[list[int]] | None
+            If the conflict is a chunk conflict, the list of chunk indices in conflict.
+        """
+        ...
+
     @property
     def conflict_type(self) -> ConflictType:
         """The type of conflict detected
@@ -2513,6 +2550,19 @@ class Conflict:
 
 class RebaseFailedError(IcechunkError):
     """An error that occurs when a rebase operation fails"""
+
+    def __init__(self, snapshot: str, conflicts: list[Conflict]) -> None:
+        """
+        Create a new RebaseFailedError.
+
+        Parameters
+        ----------
+        snapshot: str
+            The snapshot ID that the session was rebased to.
+        conflicts: list[Conflict]
+            The conflicts that occurred during the rebase operation.
+        """
+        ...
 
     @property
     def snapshot(self) -> str:
