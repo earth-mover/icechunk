@@ -7,29 +7,32 @@ use crate::config::{
     S3StaticCredentials,
 };
 use crate::format::format_constants::SpecVersionBin;
-use crate::format::manifest::{ManifestExtents, ChunkPayload, VirtualChunkRef, ChunkRef, VirtualChunkLocation, SecondsSinceEpoch };
+use crate::format::manifest::{
+    ChunkPayload, ChunkRef, ManifestExtents, SecondsSinceEpoch, VirtualChunkLocation,
+    VirtualChunkRef,
+};
 use crate::format::snapshot::{ArrayShape, DimensionName};
-use crate::format::{manifest, ChunkId, ChunkIndices, NodeId, Path};
+use crate::format::{ChunkId, ChunkIndices, NodeId, Path, manifest};
 use crate::session::Session;
 use crate::storage::{
-    ConcurrencySettings, RetriesSettings, Settings, new_in_memory_storage, ETag
+    ConcurrencySettings, ETag, RetriesSettings, Settings, new_in_memory_storage,
 };
 use crate::virtual_chunks::VirtualChunkContainer;
 use crate::{ObjectStoreConfig, Repository, RepositoryConfig};
+use aws_sdk_s3::types::Checksum;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use prop::string::string_regex;
+use proptest::collection::{btree_map, hash_map, vec};
 use proptest::prelude::*;
-use proptest::collection::{vec, hash_map, btree_map};
 use proptest::{option, strategy::Strategy};
-use std::collections::HashMap;
-use std::num::{NonZeroU16, NonZeroU64};
+use std::collections::{HashMap, BTreeMap};
+use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
-use aws_sdk_s3::types::Checksum;
 use tempfile::NamedTempFile;
 
-use crate::change_set::ArrayData;
+use crate::change_set::{ArrayData};
 
 const MAX_NDIM: usize = 4;
 
@@ -526,8 +529,10 @@ fn start_and_end_range() -> BoxedStrategy<(u32, u32)> {
 // never is bigger than b elementwise
 fn start_and_end_ranges() -> BoxedStrategy<ManifestExtents> {
     vec(start_and_end_range(), 3..7)
-        .prop_map(|coll: Vec::<(u32, u32)>| coll.into_iter().unzip())
-        .prop_map(|(to, from): (Vec<u32>, Vec<u32>)| ManifestExtents::new(&to[..], &from[..]))
+        .prop_map(|coll: Vec<(u32, u32)>| coll.into_iter().unzip())
+        .prop_map(|(to, from): (Vec<u32>, Vec<u32>)| {
+            ManifestExtents::new(&to[..], &from[..])
+        })
         .boxed()
 }
 
@@ -548,12 +553,13 @@ fn checksum() -> BoxedStrategy<manifest::Checksum> {
     use manifest::Checksum::*;
     prop_oneof![
         any::<u32>().prop_map(SecondsSinceEpoch).prop_map(LastModified),
-        etag().prop_map(ETag)].boxed()
+        etag().prop_map(ETag)
+    ]
+    .boxed()
 }
 
-fn non_empty_string() -> impl Strategy<Value=String> {
-   any::<String>().prop_filter("An empty string was provided",
-                               |data| !data.is_empty())
+fn non_empty_string() -> impl Strategy<Value = String> {
+    any::<String>().prop_filter("An empty string was provided", |data| !data.is_empty())
 }
 
 prop_compose! {
@@ -564,9 +570,11 @@ prop_compose! {
     }
 }
 
-fn virtual_chunk_location() -> impl Strategy<Value=VirtualChunkLocation> {
-    url_with_host_and_path().prop_filter_map("Could not generate url with valid host and path",
-                                             |url| VirtualChunkLocation::from_absolute_path(&url).ok())
+fn virtual_chunk_location() -> impl Strategy<Value = VirtualChunkLocation> {
+    url_with_host_and_path()
+        .prop_filter_map("Could not generate url with valid host and path", |url| {
+            VirtualChunkLocation::from_absolute_path(&url).ok()
+        })
 }
 
 prop_compose! {
@@ -578,15 +586,40 @@ prop_compose! {
     }
 }
 
+fn chunk_payload() -> BoxedStrategy<ChunkPayload> {
+    use ChunkPayload::*;
+    prop_oneof![
+        bytes().prop_map(Inline),
+        virtual_chunk_ref().prop_map(Virtual),
+        chunk_ref().prop_map(Ref)
+    ]
+    .boxed()
+}
+
+type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
+
+fn split_manifest() -> BoxedStrategy<SplitManifest> {
+    (any::<usize>(), any::<NonZeroU32>()).prop_flat_map(|(dim, end_idx)|
+    btree_map(chunk_indices(dim, 0..end_idx.get()),
+    option::of(chunk_payload()),
+    3..10)).boxed()
+}
+
 
 
 // prop_compose! {
-// fn chunk_ref()()
+// fn split_manifest()(dim in any::<usize>(), end in any::<NonZeroU32>()) -> BTreeMap<ChunkIndices, Option<ChunkPayload>> {
+//         btree_map(chunk_indices(dim, (0..end.get()).into()),
+//         option::of(chunk_payload()),
+//         3..10)
+//
+// }
+//
 // }
 
 // prop_compose! {
-//     fn edit_changes()(new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
-//     new_arrays in hash_map(path(),(node_id(), bytes()), 3..7),
+//     fn edit_changes()(new_groups in hash_map(path(),(node_id(), bytes()), 3..7), new_arrays in
+//     hash_map(path(),(node_id(), bytes()), 3..7),
 //        updated_arrays in hash_map(node_id(), array_data(), 3..7),
 //        updated_groups in hash_map(node_id(), bytes(), 3..7),
 //        set_chunks in btree_map(node_id(),
