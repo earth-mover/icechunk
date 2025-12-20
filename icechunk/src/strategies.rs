@@ -23,7 +23,7 @@ use aws_sdk_s3::types::Checksum;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use prop::string::string_regex;
-use proptest::collection::{btree_map, hash_map, vec, hash_set};
+use proptest::collection::{btree_map, hash_map, hash_set, vec};
 use proptest::prelude::*;
 use proptest::{option, strategy::Strategy};
 use std::collections::{BTreeMap, HashMap};
@@ -32,7 +32,7 @@ use std::ops::{Bound, Range};
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
-use crate::change_set::{ArrayData, EditChanges};
+use crate::change_set::{ArrayData, Move, MoveTracker};
 
 const MAX_NDIM: usize = 4;
 
@@ -498,20 +498,20 @@ fn dimension_name() -> BoxedStrategy<DimensionName> {
 }
 
 prop_compose! {
-    fn bytes()(random_data in any::<Vec<u8>>()) -> Bytes {
+pub fn bytes()(random_data in any::<Vec<u8>>()) -> Bytes {
         Bytes::from(random_data)
     }
 }
 
 prop_compose! {
-    fn array_data()(shape in array_shape(),
+pub    fn array_data()(shape in array_shape(),
         dimension_names in option::of(vec(dimension_name(), 10)),
     user_data in bytes()) -> ArrayData {
         ArrayData{shape, dimension_names, user_data}
     }
 }
 
-fn node_id() -> BoxedStrategy<NodeId> {
+pub fn node_id() -> BoxedStrategy<NodeId> {
     Just(NodeId::random()).boxed()
 }
 
@@ -598,31 +598,23 @@ fn chunk_payload() -> BoxedStrategy<ChunkPayload> {
 
 type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 
-fn chunk_indices2() -> BoxedStrategy<ChunkIndices> {
+pub fn chunk_indices2() -> BoxedStrategy<ChunkIndices> {
     (any::<usize>(), any::<NonZeroU32>())
         .prop_flat_map(|(dim, end_idx)| chunk_indices(dim, 0..end_idx.get()))
         .boxed()
 }
 
-fn split_manifest() -> BoxedStrategy<SplitManifest> {
+pub fn split_manifest() -> BoxedStrategy<SplitManifest> {
     btree_map(chunk_indices2(), option::of(chunk_payload()), 3..10).boxed()
 }
 
-
-
 prop_compose! {
-    fn edit_changes()(num_of_dims in any::<usize>())(new_groups in hash_map(path(),(node_id(), bytes()), 3..7), new_arrays in
-    hash_map(path(),(node_id(), bytes()), 3..7),
-       updated_arrays in hash_map(node_id(), array_data(), 3..7),
-       updated_groups in hash_map(node_id(), bytes(), 3..7),
-       set_chunks in btree_map(node_id(),
-            hash_map(manifest_extents(num_of_dims), split_manifest(), 3..7),
-        3..7),
-deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(chunk_indices2(), 3..8), 3..7),
-        deleted_groups in hash_set((path(), node_id()), 3..7),
-        deleted_arrays in hash_set((path(), node_id()), 3..7)
-
-    ) -> EditChanges {
-        EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups}
+    fn gen_move()(to in path(), from in path()) -> Move {
+        Move{to, from}
     }
 }
+
+pub fn move_tracker() -> BoxedStrategy<MoveTracker> {
+    vec(gen_move(), 1..5).prop_map(MoveTracker).boxed()
+}
+
