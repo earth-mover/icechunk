@@ -707,6 +707,23 @@ impl ChangeSet {
     }
 }
 
+// prop_compose! {
+//     fn edit_changes()(num_of_dims in any::<usize>())(new_groups in hash_map(path(),(node_id(), bytes()), 3..7), new_arrays in
+//     hash_map(path(),(node_id(), bytes()), 3..7),
+//        updated_arrays in hash_map(node_id(), array_data(), 3..7),
+//        updated_groups in hash_map(node_id(), bytes(), 3..7),
+//        set_chunks in btree_map(node_id(),
+//             hash_map(manifest_extents(num_of_dims), split_manifest(), 3..7),
+//         3..7),
+// deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(chunk_indices2(), 3..8), 3..7),
+//         deleted_groups in hash_set((path(), node_id()), 3..7),
+//         deleted_arrays in hash_set((path(), node_id()), 3..7)
+//
+//     ) -> EditChanges {
+//         EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups}
+//     }
+// }
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -716,7 +733,7 @@ mod tests {
     use super::ChangeSet;
 
     use crate::{
-        change_set::{ArrayData, MoveTracker},
+        change_set::{ArrayData, EditChanges, MoveTracker},
         format::{
             ChunkIndices, NodeId, Path,
             manifest::{ChunkInfo, ChunkPayload, ManifestSplits},
@@ -724,7 +741,6 @@ mod tests {
         },
         roundtrip_serialization_tests,
     };
-    use proptest::prelude::*;
 
     #[icechunk_macros::test]
     fn test_new_arrays_chunk_iterator() -> Result<(), Box<dyn std::error::Error>> {
@@ -968,5 +984,37 @@ mod tests {
         );
     }
 
-    // roundtrip_serialization_tests!(serialize_and_deserialize_change_sets - change_sets);
+    use crate::strategies::{
+        array_data, bytes, chunk_indices2, manifest_extents, node_id, path,
+        split_manifest, move_tracker
+    };
+    use proptest::collection::{btree_map, hash_map, hash_set};
+    use proptest::prelude::*;
+
+    prop_compose! {
+        fn edit_changes()(num_of_dims in any::<usize>())(new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
+                new_arrays in hash_map(path(),(node_id(), array_data()), 3..7),
+           updated_arrays in hash_map(node_id(), array_data(), 3..7),
+           updated_groups in hash_map(node_id(), bytes(), 3..7),
+           set_chunks in btree_map(node_id(),
+                hash_map(manifest_extents(num_of_dims), split_manifest(), 3..7),
+            3..7),
+    deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(chunk_indices2(), 3..8), 3..7),
+            deleted_groups in hash_set((path(), node_id()), 3..7),
+            deleted_arrays in hash_set((path(), node_id()), 3..7)
+
+        ) -> EditChanges {
+            EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups, new_arrays}
+        }
+    }
+
+    fn change_set() -> BoxedStrategy<ChangeSet> {
+        use ChangeSet::*;
+        prop_oneof![
+            edit_changes().prop_map(Edit),
+            move_tracker().prop_map(Rearrange),
+        ].boxed()
+    }
+
+    roundtrip_serialization_tests!(serialize_and_deserialize_change_sets - change_sets);
 }
