@@ -1744,5 +1744,6 @@ class Repository:
     ) -> str:
         return await self._repository.inspect_snapshot_async(snapshot_id, pretty=pretty)
 
+    @property
     def spec_version(self) -> int:
-        return self._repository.spec_version()
+        return self._repository.spec_version

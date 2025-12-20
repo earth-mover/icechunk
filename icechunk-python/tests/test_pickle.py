@@ -6,7 +6,11 @@ import pytest
 
 import zarr
 from icechunk import (
+    Conflict,
+    ConflictError,
+    ConflictType,
     IcechunkError,
+    RebaseFailedError,
     Repository,
     RepositoryConfig,
     S3StaticCredentials,
@@ -123,3 +127,55 @@ def test_pickle_error() -> None:
     pickled = pickle.dumps(error)
     roundtripped = pickle.loads(pickled)
     assert error.message == roundtripped.message
+
+
+def test_pickle_conflict_types() -> None:
+    """Test that Conflict types can be constructed and pickled correctly."""
+    # Test Conflict with conflicted_chunks
+    conflict = Conflict(
+        ConflictType.ChunkDoubleUpdate,
+        "/some/array",
+        [[0, 0], [1, 1]],
+    )
+    assert conflict.conflict_type == ConflictType.ChunkDoubleUpdate
+    assert conflict.path == "/some/array"
+    assert conflict.conflicted_chunks == [[0, 0], [1, 1]]
+
+    # Test pickle roundtrip
+    roundtripped = pickle.loads(pickle.dumps(conflict))
+    assert roundtripped.conflict_type == conflict.conflict_type
+    assert roundtripped.path == conflict.path
+    assert roundtripped.conflicted_chunks == conflict.conflicted_chunks
+
+    # Test Conflict without conflicted_chunks
+    conflict_no_chunks = Conflict(
+        ConflictType.ZarrMetadataDoubleUpdate,
+        "/another/array",
+    )
+    assert conflict_no_chunks.conflicted_chunks is None
+
+    roundtripped_no_chunks = pickle.loads(pickle.dumps(conflict_no_chunks))
+    assert roundtripped_no_chunks.conflict_type == conflict_no_chunks.conflict_type
+    assert roundtripped_no_chunks.path == conflict_no_chunks.path
+    assert roundtripped_no_chunks.conflicted_chunks is None
+
+    # Test RebaseFailedError construction and pickle
+    error = RebaseFailedError("snapshot_123", [conflict, conflict_no_chunks])
+    assert error.snapshot == "snapshot_123"
+    assert len(error.conflicts) == 2
+    assert error.conflicts[0].path == "/some/array"
+    assert error.conflicts[1].path == "/another/array"
+
+    roundtripped_error = pickle.loads(pickle.dumps(error))
+    assert roundtripped_error.snapshot == error.snapshot
+    assert len(roundtripped_error.conflicts) == len(error.conflicts)
+    assert roundtripped_error.conflicts[0].path == error.conflicts[0].path
+
+    # Test ConflictError construction and pickle
+    conflict_error = ConflictError("expected_snap", "actual_snap")
+    assert conflict_error.expected_parent == "expected_snap"
+    assert conflict_error.actual_parent == "actual_snap"
+
+    roundtripped_conflict_error = pickle.loads(pickle.dumps(conflict_error))
+    assert roundtripped_conflict_error.expected_parent == conflict_error.expected_parent
+    assert roundtripped_conflict_error.actual_parent == conflict_error.actual_parent

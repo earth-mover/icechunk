@@ -304,6 +304,36 @@ Icechunk can also be used on a [local filesystem](./reference.md#icechunk.local_
 
 - Icechunk currently does not work with a local filesystem storage backend on Windows. See [this issue](https://github.com/earth-mover/icechunk/issues/665) for more discussion. To work around, try using [WSL](https://learn.microsoft.com/en-us/windows/wsl/about) or a cloud storage backend.
 
+### HTTP Storage
+
+Icechunk can read repositories served over HTTP or HTTPS. This is useful for accessing publicly available datasets or repositories hosted on static file servers. [See the API](./reference.md#icechunk.http_storage)
+
+```python
+icechunk.http_storage("https://example.com/path/to/repo")
+```
+
+You can also pass optional configuration options to customize the HTTP client behavior:
+
+```python
+icechunk.http_storage(
+    "https://example.com/path/to/repo",
+    opts={
+        "timeout": "30s",
+        "connect_timeout": "5s",
+    }
+)
+```
+
+See the [object_store ClientConfigKey documentation](https://docs.rs/object_store/latest/object_store/client/enum.ClientConfigKey.html#variants) for a list of possible configuration keys (use snake_case format).
+
+#### Limitations
+
+!!! warning
+    HTTP Storage is read-only. You cannot create new repositories or commit changes to repositories accessed via HTTP storage. Use this backend only for reading existing data.
+
+- HTTP storage does not support write operations. Attempting to commit changes to a repository opened with HTTP storage will fail.
+- The HTTP server must serve the repository files as static content at the expected paths.
+
 ### In Memory Storage
 
 While it should never be used for production data, Icechunk can also be used with an in-memory storage backend. This is useful for testing and development purposes. This is volatile and when the Python process ends, all data is lost.
