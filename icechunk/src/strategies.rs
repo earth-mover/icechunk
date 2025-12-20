@@ -23,16 +23,16 @@ use aws_sdk_s3::types::Checksum;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use prop::string::string_regex;
-use proptest::collection::{btree_map, hash_map, vec};
+use proptest::collection::{btree_map, hash_map, vec, hash_set};
 use proptest::prelude::*;
 use proptest::{option, strategy::Strategy};
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{BTreeMap, HashMap};
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
-use crate::change_set::{ArrayData};
+use crate::change_set::{ArrayData, EditChanges};
 
 const MAX_NDIM: usize = 4;
 
@@ -598,35 +598,31 @@ fn chunk_payload() -> BoxedStrategy<ChunkPayload> {
 
 type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 
+fn chunk_indices2() -> BoxedStrategy<ChunkIndices> {
+    (any::<usize>(), any::<NonZeroU32>())
+        .prop_flat_map(|(dim, end_idx)| chunk_indices(dim, 0..end_idx.get()))
+        .boxed()
+}
+
 fn split_manifest() -> BoxedStrategy<SplitManifest> {
-    (any::<usize>(), any::<NonZeroU32>()).prop_flat_map(|(dim, end_idx)|
-    btree_map(chunk_indices(dim, 0..end_idx.get()),
-    option::of(chunk_payload()),
-    3..10)).boxed()
+    btree_map(chunk_indices2(), option::of(chunk_payload()), 3..10).boxed()
 }
 
 
 
-// prop_compose! {
-// fn split_manifest()(dim in any::<usize>(), end in any::<NonZeroU32>()) -> BTreeMap<ChunkIndices, Option<ChunkPayload>> {
-//         btree_map(chunk_indices(dim, (0..end.get()).into()),
-//         option::of(chunk_payload()),
-//         3..10)
-//
-// }
-//
-// }
+prop_compose! {
+    fn edit_changes()(num_of_dims in any::<usize>())(new_groups in hash_map(path(),(node_id(), bytes()), 3..7), new_arrays in
+    hash_map(path(),(node_id(), bytes()), 3..7),
+       updated_arrays in hash_map(node_id(), array_data(), 3..7),
+       updated_groups in hash_map(node_id(), bytes(), 3..7),
+       set_chunks in btree_map(node_id(),
+            hash_map(manifest_extents(num_of_dims), split_manifest(), 3..7),
+        3..7),
+deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(chunk_indices2(), 3..8), 3..7),
+        deleted_groups in hash_set((path(), node_id()), 3..7),
+        deleted_arrays in hash_set((path(), node_id()), 3..7)
 
-// prop_compose! {
-//     fn edit_changes()(new_groups in hash_map(path(),(node_id(), bytes()), 3..7), new_arrays in
-//     hash_map(path(),(node_id(), bytes()), 3..7),
-//        updated_arrays in hash_map(node_id(), array_data(), 3..7),
-//        updated_groups in hash_map(node_id(), bytes(), 3..7),
-//        set_chunks in btree_map(node_id(),
-//             hash_map(manifest_extents(), split_manifest(), 3..7),
-//         3..7),
-//
-//     ) -> EditChanges {
-//         EditChanges{}
-//     }
-// }
+    ) -> EditChanges {
+        EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups}
+    }
+}
