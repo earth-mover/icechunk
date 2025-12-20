@@ -515,27 +515,6 @@ pub fn node_id() -> BoxedStrategy<NodeId> {
     Just(NodeId::random()).boxed()
 }
 
-// Generates two collections of numbers, a, b, such that a is
-// never is bigger than b elementwise
-fn start_and_end_range() -> BoxedStrategy<(u32, u32)> {
-    (any::<u32>(), any::<u32>())
-        .prop_filter("Beginning of range cannot exceed end of range", |(start, end)| {
-            start <= end
-        })
-        .boxed()
-}
-
-// Generates two collections of numbers, a, b, such that a is
-// never is bigger than b elementwise
-fn start_and_end_ranges() -> BoxedStrategy<ManifestExtents> {
-    vec(start_and_end_range(), 3..7)
-        .prop_map(|coll: Vec<(u32, u32)>| coll.into_iter().unzip())
-        .prop_map(|(to, from): (Vec<u32>, Vec<u32>)| {
-            ManifestExtents::new(&to[..], &from[..])
-        })
-        .boxed()
-}
-
 fn chunk_id() -> BoxedStrategy<ChunkId> {
     Just(ChunkId::random()).boxed()
 }
@@ -609,12 +588,9 @@ pub fn split_manifest() -> BoxedStrategy<SplitManifest> {
 }
 
 prop_compose! {
-    fn gen_move()(to in path(), from in path()) -> Move {
+    pub fn gen_move()(to in path(), from in path()) -> Move {
         Move{to, from}
     }
 }
 
-pub fn move_tracker() -> BoxedStrategy<MoveTracker> {
-    vec(gen_move(), 1..5).prop_map(MoveTracker).boxed()
-}
 
