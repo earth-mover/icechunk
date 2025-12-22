@@ -32,7 +32,7 @@ pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
 async-stream = "0.3.6"
 thiserror = "2.0.17"
 tokio = "1.48"
-serde_json = "1.0.145"
+serde_json = "1.0.146"
 async-trait = "0.1.89"
 typetag = "0.2.21"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
