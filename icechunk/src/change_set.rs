@@ -707,23 +707,6 @@ impl ChangeSet {
     }
 }
 
-// prop_compose! {
-//     fn edit_changes()(num_of_dims in any::<usize>())(new_groups in hash_map(path(),(node_id(), bytes()), 3..7), new_arrays in
-//     hash_map(path(),(node_id(), bytes()), 3..7),
-//        updated_arrays in hash_map(node_id(), array_data(), 3..7),
-//        updated_groups in hash_map(node_id(), bytes(), 3..7),
-//        set_chunks in btree_map(node_id(),
-//             hash_map(manifest_extents(num_of_dims), split_manifest(), 3..7),
-//         3..7),
-// deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(chunk_indices2(), 3..8), 3..7),
-//         deleted_groups in hash_set((path(), node_id()), 3..7),
-//         deleted_arrays in hash_set((path(), node_id()), 3..7)
-//
-//     ) -> EditChanges {
-//         EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups}
-//     }
-// }
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -1019,5 +1002,5 @@ mod tests {
         ].boxed()
     }
 
-    // roundtrip_serialization_tests!(serialize_and_deserialize_change_sets - change_set);
+    roundtrip_serialization_tests!(serialize_and_deserialize_change_sets - change_set);
 }
