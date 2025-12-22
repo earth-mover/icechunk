@@ -945,7 +945,8 @@ impl Session {
         if self.read_only() {
             return Err(SessionErrorKind::ReadOnlySession.into());
         }
-        let Session { splits: other_splits, change_set, .. } = other;
+        let Session { splits: other_splits, change_set, config: other_config, .. } =
+            other;
 
         if self.splits.iter().any(|(node, our_splits)| {
             other_splits
@@ -953,7 +954,7 @@ impl Session {
                 .is_some_and(|their_splits| !our_splits.compatible_with(their_splits))
         }) {
             let ours = self.config().manifest().splitting().clone();
-            let theirs = self.config().manifest().splitting().clone();
+            let theirs = other_config.manifest().splitting().clone();
             return Err(
                 SessionErrorKind::IncompatibleSplittingConfig { ours, theirs }.into()
             );
