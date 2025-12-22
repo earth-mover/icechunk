@@ -465,20 +465,32 @@ pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
     prop_oneof![Just(FromEnv), azure_static_credentials().prop_map(Static)].boxed()
 }
 
-fn suffix() -> impl Strategy<Value = String> {
-    string_regex("nonrandom .{20}").expect("Could not generate a suffix")
-}
+// fn suffix() -> impl Strategy<Value = String> {
+//     string_regex("nonrandom .{20}").expect("Could not generate a suffix")
+// }
+//
+// fn dir_name() -> impl Strategy<Value = String> {
+//     string_regex("[a-zA-Z0-9]{15}").expect("Could not generate a directory name")
+// }
 
-fn dir_name() -> impl Strategy<Value = String> {
-    string_regex("[a-zA-Z0-9]{15}").expect("Could not generate a directory name")
-}
+static mut TIMES_RUN: usize = 0;
 
 fn path_component() -> impl Strategy<Value = String> {
-    string_regex("[a-zA-Z0-9]{10}").expect("Could not generate a valid path component")
+
+    unsafe {
+        let val = TIMES_RUN;
+        TIMES_RUN += 1;
+        string_regex(&format!("{}_[a-zA-Z]{{20}}", val)).expect("Could not generate a valid path component")
+    }
+
+    // string_regex("[a-zA-Z0-9]{20}").expect("Could not generate a valid path component")
+    //     .prop_flat_map(|comp| any::<usize>().prop_map(move |id| format!("{}_{}",id, comp )))
+
+
 }
 
 fn file_path_components() -> impl Strategy<Value = Vec<String>> {
-    vec(path_component(), 8..13)
+    vec(path_component(), 8..20)
 }
 
 fn to_abs_unix_path(path_components: Vec<String>) -> String {
@@ -552,6 +564,8 @@ pub    fn array_data()(shape in array_shape(),
         ArrayData{shape, dimension_names, user_data}
     }
 }
+
+
 
 pub fn node_id() -> BoxedStrategy<NodeId> {
     Just(NodeId::random()).boxed()
