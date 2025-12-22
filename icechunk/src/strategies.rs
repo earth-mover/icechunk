@@ -19,20 +19,19 @@ use crate::storage::{
 };
 use crate::virtual_chunks::VirtualChunkContainer;
 use crate::{ObjectStoreConfig, Repository, RepositoryConfig};
-use aws_sdk_s3::types::Checksum;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use prop::string::string_regex;
-use proptest::collection::{btree_map, hash_map, hash_set, vec};
+use proptest::collection::{btree_map, vec};
 use proptest::prelude::*;
 use proptest::{option, strategy::Strategy};
 use std::collections::{BTreeMap, HashMap};
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, Builder};
 
-use crate::change_set::{ArrayData, Move, MoveTracker};
+use crate::change_set::{ArrayData, Move};
 
 const MAX_NDIM: usize = 4;
 
@@ -466,16 +465,59 @@ pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
     prop_oneof![Just(FromEnv), azure_static_credentials().prop_map(Static)].boxed()
 }
 
-pub fn path() -> BoxedStrategy<Path> {
-    Just(())
-        .prop_filter_map("Could not generate a valid file path", |_| {
-            let canon_file_path = NamedTempFile::new()
-                .ok()
-                .and_then(|file| file.path().canonicalize().ok())?;
+fn suffix() -> impl Strategy<Value = String> {
+    string_regex("nonrandom .{20}").expect("Could not generate a suffix")
+}
 
-            canon_file_path.to_str().and_then(|file_name| Path::new(file_name).ok())
-        })
-        .boxed()
+fn dir_name() -> impl Strategy<Value = String> {
+    string_regex("[a-zA-Z0-9]{15}").expect("Could not generate a directory name")
+}
+
+fn path_component() -> impl Strategy<Value = String> {
+    string_regex("[a-zA-Z0-9]{10}").expect("Could not generate a valid path component")
+}
+
+fn file_path_components() -> impl Strategy<Value = Vec<String>> {
+    vec(path_component(), 8..13)
+}
+
+fn to_abs_unix_path(path_components: Vec<String>) -> String {
+    format!("/{}", path_components.join("/"))
+}
+
+fn to_abs_window_path(path_components: Vec<String>) -> String {
+    format!("c:\\windows\\{}", path_components.join("\\"))
+}
+
+fn absolute_path() -> BoxedStrategy<String> {
+    file_path_components().prop_map(|components|
+        match std::env::consts::OS {
+            "windows"  => to_abs_window_path(components),
+            _ => to_abs_unix_path(components)
+        }
+    ).boxed()
+}
+
+pub fn path() -> BoxedStrategy<Path> {
+        // (suffix(), dir_name())
+        // .prop_filter_map("Could not generate a valid file path", |(suffix, dir)| {
+        //     let _res = Builder::new().tempdir_in("./").ok().expect("Could not create a directory");
+        //
+        //     let canon_file_path = Builder::new()
+        //         .suffix(&suffix)
+        //         .tempfile_in(&_res)
+        //         .ok()
+        //         .and_then(|file| file.path().canonicalize().ok())?;
+        //
+        //     println!("The file path is {:?}", canon_file_path);
+        //
+        //     canon_file_path.to_str().and_then(|file_name| Path::new(file_name).ok())
+        // })
+        // .boxed()
+
+    absolute_path()
+        .prop_filter_map("Could not generate a valid path",
+                         |abs_path| Path::new(&abs_path).ok()).boxed()
 }
 
 type DimensionShapeInfo = (u64, u64);
