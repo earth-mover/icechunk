@@ -9,7 +9,7 @@ env:
   RUSTUP_MAX_RETRIES: 10
   # update RUST_CHANNEL and CARGO_DENY in sync
   RUST_CHANNEL: '1.91.0'
-  CARGO_DENY_VERSION: '0.18.4'
+  CARGO_DENY_VERSION: '0.18.9'
 
 on:
   workflow_dispatch:
