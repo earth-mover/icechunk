@@ -15,8 +15,9 @@ use futures::{
 };
 use object_store::{
     Attribute, AttributeValue, Attributes, BackoffConfig, ClientConfigKey,
-    CredentialProvider, GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions,
-    PutPayload, RetryConfig, StaticCredentialProvider, UpdateVersion,
+    CredentialProvider, GetOptions, ObjectMeta, ObjectStore, ObjectStoreExt as _,
+    PutMode, PutOptions, PutPayload, RetryConfig, StaticCredentialProvider,
+    UpdateVersion,
     aws::AmazonS3Builder,
     azure::{AzureConfigKey, MicrosoftAzureBuilder},
     gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey},
