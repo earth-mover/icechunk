@@ -22,7 +22,7 @@ env:
   RUST_BACKTRACE: short
   RUSTUP_MAX_RETRIES: 10
   RUST_CHANNEL: '1.91.0'
-  CARGO_DENY_VERSION: '0.18.4'
+  CARGO_DENY_VERSION: '0.18.9'
 
 jobs:
   check-dependencies:
