@@ -24,12 +24,11 @@ use chrono::{DateTime, Utc};
 use prop::string::string_regex;
 use proptest::collection::{btree_map, vec};
 use proptest::prelude::*;
-use proptest::{option, strategy::Strategy};
+use proptest::{option, strategy::Strategy, array::{uniform8, uniform12}};
 use std::collections::{BTreeMap, HashMap};
-use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
+use std::num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
-use tempfile::{NamedTempFile, Builder};
 
 use crate::change_set::{ArrayData, Move};
 
@@ -566,13 +565,16 @@ pub    fn array_data()(shape in array_shape(),
 }
 
 
+fn gen_n_copies<T: Clone>(to_copy: T, num_of_copies: NonZeroU8) -> Vec<T> {
+    (0..num_of_copies.get()).map(|_| to_copy.clone()).collect()
+}
 
 pub fn node_id() -> BoxedStrategy<NodeId> {
-    Just(NodeId::random()).boxed()
+   uniform8(any::<u8>()).prop_map(NodeId::new).boxed()
 }
 
 fn chunk_id() -> BoxedStrategy<ChunkId> {
-    Just(ChunkId::random()).boxed()
+    uniform12(any::<u8>()).prop_map(ChunkId::new).boxed()
 }
 
 prop_compose! {
