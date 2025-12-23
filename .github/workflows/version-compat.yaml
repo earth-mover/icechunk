@@ -48,6 +48,7 @@ jobs:
             -u https://pypi.anaconda.org/scientific-python-nightly-wheels/simple \
             -r "icechunk=icechunk_v1:<2" \
             --port 8123 &
+          echo $! > /tmp/proxy.pid
 
           # Wait for server to start
           echo "Waiting for proxy server to start..."
@@ -89,6 +90,14 @@ jobs:
       - name: Run version compatibility tests
         run: |
           uv run pytest -v --tb=short
+
+      - name: Stop proxy server
+        if: always()
+        run: |
+          if [ -f /tmp/proxy.pid ]; then
+            kill "$(cat /tmp/proxy.pid)" 2>/dev/null || true
+            rm /tmp/proxy.pid
+          fi
 
       - name: Test summary
         if: always()
