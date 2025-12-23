@@ -1,0 +1,36 @@
+[project]
+name = "icechunk-version-compat-tests"
+version = "0.1.0"
+description = "Version compatibility tests for icechunk v1/v2 format"
+requires-python = ">=3.11"
+dependencies = [
+    "icechunk>=2.0.0.dev0",   # v2 from nightly
+    "icechunk_v1",             # v1 renamed, from proxy server
+    "zarr>=3",
+    "pytest>=8",
+    "numpy",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+# This is a test-only project, include just the tests directory
+packages = ["tests"]
+
+[tool.uv]
+# PyPI for most deps, nightly for icechunk v2, proxy for icechunk_v1
+extra-index-url = [
+    "https://pypi.anaconda.org/scientific-python-nightly-wheels/simple",
+    "http://127.0.0.1:8123/simple/",
+]
+# Allow pre-release versions
+prerelease = "allow"
+# Consider all versions from all indexes (needed for nightly builds)
+index-strategy = "unsafe-best-match"
+# Use highest available versions
+resolution = "highest"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,0 +1,104 @@
+name: Version Compatibility Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  workflow_dispatch:
+  schedule:
+    # Run daily at 6am UTC to catch any issues with nightly wheels
+    - cron: '0 6 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+defaults:
+  run:
+    working-directory: ./version-compat-tests
+
+jobs:
+  version-compat:
+    runs-on: ubuntu-latest
+    name: Test v1/v2 format compatibility
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Start wheel-rename proxy server
+        run: |
+          # Install wheel-rename with server extras and start proxy in background
+          uvx --from "wheel-rename[server] @ git+https://github.com/earth-mover/rename-wheel" \
+            wheel-rename serve \
+            -u https://pypi.anaconda.org/scientific-python-nightly-wheels/simple \
+            -r "icechunk=icechunk_v1:<2" \
+            --port 8123 &
+
+          # Wait for server to start
+          echo "Waiting for proxy server to start..."
+          for _ in {1..30}; do
+            if curl -s http://127.0.0.1:8123/simple/ > /dev/null 2>&1; then
+              echo "Proxy server is ready!"
+              break
+            fi
+            sleep 1
+          done
+
+          # Verify server is serving icechunk_v1
+          curl -s http://127.0.0.1:8123/simple/ | grep -q icechunk || echo "Warning: icechunk not found in index"
+
+      - name: Install dependencies with uv sync
+        run: |
+          uv sync --python ${{ env.PYTHON_VERSION }}
+
+          # Show installed icechunk packages
+          echo "Installed icechunk packages:"
+          uv pip list | grep -i icechunk
+
+      - name: Verify both versions are installed
+        run: |
+          uv run python -c "
+          import icechunk
+          import icechunk_v1
+
+          print(f'icechunk (v2) version: {icechunk.__version__}')
+          print(f'icechunk_v1 version: {icechunk_v1.__version__}')
+
+          # Basic sanity checks
+          assert 'icechunk_v1' in icechunk_v1.__file__, 'v1 module path issue'
+          assert icechunk_v1 is not icechunk, 'Modules should be different'
+
+          print('Both versions installed correctly!')
+          "
+
+      - name: Run version compatibility tests
+        run: |
+          uv run pytest -v --tb=short
+
+      - name: Test summary
+        if: always()
+        run: |
+          echo "## Version Compatibility Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Tests verify that:" >> $GITHUB_STEP_SUMMARY
+          echo "- v2 library can write v1 format (spec_version=1)" >> $GITHUB_STEP_SUMMARY
+          echo "- v1 library can read v1 format written by v2" >> $GITHUB_STEP_SUMMARY
+          echo "- v1 library fails gracefully after upgrade to v2 format" >> $GITHUB_STEP_SUMMARY
+          echo "- v2 library can read upgraded repositories" >> $GITHUB_STEP_SUMMARY
