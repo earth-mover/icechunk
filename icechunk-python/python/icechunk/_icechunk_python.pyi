@@ -1796,6 +1796,20 @@ class PyRepository:
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> GCSummary: ...
+    def chunk_storage_stats(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> ChunkStorageStats: ...
+    async def chunk_storage_stats_async(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> ChunkStorageStats: ...
     def total_chunks_storage(
         self,
         *,
@@ -2635,3 +2649,52 @@ def _upgrade_icechunk_repository(
     large version history (thousands of snapshots).
     """
     ...
+
+class ChunkStorageStats:
+    """Statistics about chunk storage across different chunk types."""
+
+    @property
+    def native_bytes(self) -> int:
+        """Total bytes stored in native chunks (stored in icechunk's chunk storage)"""
+        ...
+
+    @property
+    def virtual_bytes(self) -> int:
+        """Total bytes stored in virtual chunks (references to external data)"""
+        ...
+
+    @property
+    def inlined_bytes(self) -> int:
+        """Total bytes stored in inline chunks (stored directly in manifests)"""
+        ...
+
+    @property
+    def non_virtual_bytes(self) -> int:
+        """
+        Total bytes excluding virtual chunks.
+
+        This represents the approximate size of all objects stored in the
+        icechunk repository itself (native chunks plus inline chunks).
+        Virtual chunks are not included since they reference external data.
+
+        Returns:
+            int: The sum of native_bytes and inlined_bytes
+        """
+        ...
+
+    @property
+    def total_bytes(self) -> int:
+        """
+        Total bytes across all chunk types.
+
+        Returns the sum of native_bytes, virtual_bytes, and inlined_bytes.
+        This represents the total size of all data referenced by the repository,
+        including both data stored in icechunk and external virtual references.
+
+        Returns:
+            int: The sum of all chunk storage bytes
+        """
+        ...
+
+    def __repr__(self) -> str: ...
+    def __add__(self, other: ChunkStorageStats) -> ChunkStorageStats: ...
