@@ -563,9 +563,6 @@ impl Session {
     where
         F: Fn(&ChunkIndices) -> ReindexOperationResult,
     {
-        // Itechunk 1 doesn't allow reindex, upgrade to IC2
-        self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
-
         let node = self.get_array(array_path).await?;
         #[allow(clippy::panic)]
         let (shape, splits) = if let NodeData::Array { shape, dimension_names, .. } =
