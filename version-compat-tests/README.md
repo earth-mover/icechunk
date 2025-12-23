@@ -4,12 +4,11 @@ This directory contains regression tests to ensure compatibility between icechun
 
 ## Purpose
 
-These tests verify that:
+These tests verify format compatibility between icechunk v1 and v2 libraries, including:
 
-1. **v2 can write v1 format**: The v2 library can create repositories using `spec_version=1`
-2. **v1 can read v1 format from v2**: Repositories written in v1 format by the v2 library can be read by the actual v1 library
-3. **Graceful upgrade errors**: After upgrading a repository to v2 format, the v1 library fails gracefully
-4. **v2 can read upgraded repos**: The v2 library can read repositories after upgrading from v1 to v2
+- Cross-version read/write compatibility
+- Format upgrades and migrations
+- Graceful error handling when versions are incompatible
 
 ## Setup
 
@@ -64,16 +63,6 @@ This allows the tests to import both versions and verify cross-version compatibi
 import icechunk      # v2 library
 import icechunk_v1   # v1 library (renamed)
 ```
-
-## Test Scenarios
-
-| Test | Description |
-|------|-------------|
-| `test_v1_can_read_v1_format_written_by_v2` | Create repo with v2 using spec_version=1, verify v1 can read |
-| `test_v1_cannot_read_after_upgrade_to_v2` | Upgrade repo to v2 format, verify v1 fails gracefully |
-| `test_v2_can_read_after_upgrade` | Verify v2 can read data after upgrade |
-| `test_v2_can_write_and_read_v1_format` | Verify v2 can write and read v1 format repos |
-| `test_version_info` | Print and verify version information |
 
 ## pyproject.toml Configuration
 

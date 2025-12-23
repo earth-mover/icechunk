@@ -42,7 +42,6 @@ jobs:
 
       - name: Start wheel-rename proxy server
         run: |
-          # Install wheel-rename with server extras and start proxy in background
           uvx --from "wheel-rename[server] @ git+https://github.com/earth-mover/rename-wheel" \
             wheel-rename serve \
             -u https://pypi.anaconda.org/scientific-python-nightly-wheels/simple \
@@ -51,45 +50,27 @@ jobs:
           echo $! > /tmp/proxy.pid
 
           # Wait for server to start
-          echo "Waiting for proxy server to start..."
           for _ in {1..30}; do
-            if curl -s http://127.0.0.1:8123/simple/ > /dev/null 2>&1; then
-              echo "Proxy server is ready!"
-              break
-            fi
+            curl -s http://127.0.0.1:8123/simple/ > /dev/null 2>&1 && break
             sleep 1
           done
 
-          # Verify server is serving icechunk_v1
-          curl -s http://127.0.0.1:8123/simple/ | grep -q icechunk || echo "Warning: icechunk not found in index"
-
-      - name: Install dependencies with uv sync
-        run: |
-          uv sync --python ${{ env.PYTHON_VERSION }}
-
-          # Show installed icechunk packages
-          echo "Installed icechunk packages:"
-          uv pip list | grep -i icechunk
+      - name: Install dependencies
+        run: uv sync
 
       - name: Verify both versions are installed
         run: |
           uv run python -c "
           import icechunk
           import icechunk_v1
-
-          print(f'icechunk (v2) version: {icechunk.__version__}')
-          print(f'icechunk_v1 version: {icechunk_v1.__version__}')
-
-          # Basic sanity checks
-          assert 'icechunk_v1' in icechunk_v1.__file__, 'v1 module path issue'
-          assert icechunk_v1 is not icechunk, 'Modules should be different'
-
-          print('Both versions installed correctly!')
+          print(f'icechunk v2: {icechunk.__version__}')
+          print(f'icechunk v1: {icechunk_v1.__version__}')
+          assert 'icechunk_v1' in icechunk_v1.__file__
+          assert icechunk_v1 is not icechunk
           "
 
       - name: Run version compatibility tests
-        run: |
-          uv run pytest -v --tb=short
+        run: uv run pytest -v --tb=short
 
       - name: Stop proxy server
         if: always()
@@ -98,14 +79,3 @@ jobs:
             kill "$(cat /tmp/proxy.pid)" 2>/dev/null || true
             rm /tmp/proxy.pid
           fi
-
-      - name: Test summary
-        if: always()
-        run: |
-          echo "## Version Compatibility Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Tests verify that:" >> $GITHUB_STEP_SUMMARY
-          echo "- v2 library can write v1 format (spec_version=1)" >> $GITHUB_STEP_SUMMARY
-          echo "- v1 library can read v1 format written by v2" >> $GITHUB_STEP_SUMMARY
-          echo "- v1 library fails gracefully after upgrade to v2 format" >> $GITHUB_STEP_SUMMARY
-          echo "- v2 library can read upgraded repositories" >> $GITHUB_STEP_SUMMARY
