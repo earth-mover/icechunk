@@ -8,11 +8,12 @@ import textwrap
 from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Self, cast
+from typing import Any, Literal, Self, cast
 
 import numpy as np
 import pytest
 
+import icechunk
 from zarr.core.buffer import Buffer, default_buffer_prototype
 
 pytest.importorskip("hypothesis")
@@ -120,6 +121,7 @@ class Model:
 
         # a tag once created, can never be recreated even after expiration
         self.created_tags: set[str] = set()
+        self.spec_version: Literal[1, 2] | None = None
 
     def __repr__(self) -> str:
         return textwrap.dedent(f"""
@@ -304,11 +306,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @initialize(data=st.data(), target=branches)
     def initialize(self, data: st.DataObject) -> str:
-        # FIXME: currently this test is IC2 only
-        spec_version = data.draw(
-            st.one_of(st.integers(min_value=2, max_value=2), st.none())
-        )
-        self.repo = Repository.create(in_memory_storage(), spec_version=spec_version)
+        self.repo = Repository.create(in_memory_storage(), spec_version=1)
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         snap = next(iter(self.repo.ancestry(branch=DEFAULT_BRANCH)))
@@ -321,6 +319,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model.HEAD = HEAD
         self.model.create_branch(DEFAULT_BRANCH, HEAD)
         self.model.checkout_branch(DEFAULT_BRANCH)
+        self.model.spec_version = 1
 
         # initialize with some data always
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
@@ -347,6 +346,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             # not at branch head, modifications not possible.
             with pytest.raises(IcechunkError, match="read-only store"):
                 self.sync_store.set(path, value)
+
+    @rule()
+    @precondition(lambda self: len(self.model.commits) > 5)
+    def upgrade_spec_version(self):
+        icechunk.upgrade_icechunk_repository(self.repo)
+        self.model.spec_version = 2
 
     @rule(message=st.text(max_size=MAX_TEXT_SIZE), target=commits)
     @precondition(lambda self: self.model.changes_made)
@@ -524,12 +529,24 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         note(
             f"Expiring snapshots {older_than=!r}, ({commit_time=!r}, {delta=!r}), {delete_expired_branches=!r}, {delete_expired_tags=!r}"
         )
+
+        # Track branches and tags before expiration
+        branches_before = set(self.repo.list_branches())
+        tags_before = set(self.repo.list_tags())
+
         actual = self.repo.expire_snapshots(
             older_than,
             delete_expired_branches=delete_expired_branches,
             delete_expired_tags=delete_expired_tags,
         )
         note(f"repo  expired snaps={actual!r}")
+
+        # Track branches and tags after expiration
+        branches_after = set(self.repo.list_branches())
+        tags_after = set(self.repo.list_tags())
+        actual_deleted_branches = branches_before - branches_after
+        actual_deleted_tags = tags_before - tags_after
+
         expected = self.model.expire_snapshots(
             older_than,
             delete_expired_branches=delete_expired_branches,
@@ -537,8 +554,17 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         )
         note(f"from model: {expected}")
         note(f"actual: {actual}")
+        note(f"actual_deleted_branches: {actual_deleted_branches}")
+        note(f"actual_deleted_tags: {actual_deleted_tags}")
+
         assert self.initial_snapshot.id not in actual
         assert actual == expected.expired_snapshots, (actual, expected)
+        assert (
+            actual_deleted_branches == expected.deleted_branches
+        ), f"deleted branches mismatch: actual={actual_deleted_branches}, expected={expected.deleted_branches}"
+        assert (
+            actual_deleted_tags == expected.deleted_tags
+        ), f"deleted tags mismatch: actual={actual_deleted_tags}, expected={expected.deleted_tags}"
 
         for branch in expected.deleted_branches:
             self.maybe_checkout_branch(branch)
