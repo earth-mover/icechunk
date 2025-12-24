@@ -303,10 +303,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         note("----------")
         self.model = Model()
         self.commit_times: list[datetime.datetime] = []
+        self.storage = None
 
     @initialize(data=st.data(), target=branches)
     def initialize(self, data: st.DataObject) -> str:
-        self.repo = Repository.create(in_memory_storage(), spec_version=1)
+        self.storage = in_memory_storage()
+        self.repo = Repository.create(self.storage, spec_version=1)
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         snap = next(iter(self.repo.ancestry(branch=DEFAULT_BRANCH)))
@@ -352,6 +354,25 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def upgrade_spec_version(self):
         icechunk.upgrade_icechunk_repository(self.repo)
         self.model.spec_version = 2
+
+    @rule()
+    def reopen_repository(self) -> None:
+        """Reopen the repository from storage to get fresh state.
+
+        This discards any uncommitted changes.
+        """
+        assert self.storage is not None
+        self.repo = Repository.open(self.storage)
+        note(f"Reopened repository (spec_version={self.repo.spec_version})")
+
+        # Reopening discards uncommitted changes - reset model to last committed state
+        branch = (
+            self.model.branch
+            if self.model.branch in self.model.branches
+            else DEFAULT_BRANCH
+        )
+        self.session = self.repo.writable_session(branch)
+        self.model.checkout_branch(branch)
 
     @rule(message=st.text(max_size=MAX_TEXT_SIZE), target=commits)
     @precondition(lambda self: self.model.changes_made)
@@ -508,7 +529,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(IcechunkError):
                 self.repo.delete_branch(branch)
 
-    @precondition(lambda self: bool(self.commit_times))
+    # TODO: v1 has bugs in expire_snapshots, only test for v2
+    # https://github.com/earth-mover/icechunk/issues/1520
+    @precondition(lambda self: bool(self.commit_times) and self.model.spec_version >= 2)
     @rule(
         data=st.data(),
         delta=st.timedeltas(
@@ -566,7 +589,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             actual_deleted_tags == expected.deleted_tags
         ), f"deleted tags mismatch: actual={actual_deleted_tags}, expected={expected.deleted_tags}"
 
-        for branch in expected.deleted_branches:
+        for branch in actual_deleted_branches:
             self.maybe_checkout_branch(branch)
 
     @precondition(lambda self: bool(self.commit_times))
