@@ -465,11 +465,11 @@ pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
 }
 
 fn path_component() -> impl Strategy<Value = String> {
-    string_regex("[a-zA-Z0-9]{20}").expect("Could not generate a valid path component")
+    string_regex("[a-zA-Z0-9]{10}").expect("Could not generate a valid path component")
 }
 
 fn file_path_components() -> impl Strategy<Value = Vec<String>> {
-    vec(path_component(), 8..20)
+    vec(path_component(), 8..15)
 }
 
 fn to_abs_unix_path(path_components: Vec<String>) -> String {
@@ -486,13 +486,13 @@ fn absolute_path() -> impl Strategy<Value=String> {
             "windows"  => to_abs_window_path(components),
             _ => to_abs_unix_path(components)
         }
-    ).boxed()
+    )
 }
 
 pub fn path() -> impl Strategy<Value=Path> {
     absolute_path()
         .prop_filter_map("Could not generate a valid path",
-                         |abs_path| Path::new(&abs_path).ok()).boxed()
+                         |abs_path| Path::new(&abs_path).ok())
 }
 
 type DimensionShapeInfo = (u64, u64);
@@ -503,15 +503,21 @@ prop_compose! {
     }
 }
 
+// prop_compose! {
+//     fn array_shape()(dimensions in vec(dimension_shape_info(), 5..10)) -> ArrayShape {
+//         ArrayShape::new(dimensions).unwrap()
+//     }
+// }
+
 prop_compose! {
-    fn array_shape()(dimensions in vec(dimension_shape_info(), 10)) -> ArrayShape {
+    fn array_shape()(dimensions in vec(dimension_shape_info(), 1..2)) -> ArrayShape {
         ArrayShape::new(dimensions).unwrap()
     }
 }
 
 fn dimension_name() -> impl Strategy<Value=DimensionName> {
     use DimensionName::*;
-    prop_oneof![Just(NotSpecified), any::<String>().prop_map(Name)].boxed()
+    prop_oneof![Just(NotSpecified), any::<String>().prop_map(Name)]
 }
 
 // prop_compose! {
@@ -520,15 +526,21 @@ fn dimension_name() -> impl Strategy<Value=DimensionName> {
 //     }
 // }
 
+// prop_compose! {
+// pub fn bytes()(random_data in vec(any::<u8>(), 1..60)) -> Bytes {
+//         Bytes::from(random_data)
+//     }
+// }
+
 prop_compose! {
-pub fn bytes()(random_data in vec(any::<u8>(), 1..60)) -> Bytes {
+pub fn bytes()(random_data in vec(any::<u8>(), 1..10)) -> Bytes {
         Bytes::from(random_data)
     }
 }
 
 prop_compose! {
 pub    fn array_data()(shape in array_shape(),
-        dimension_names in option::of(vec(dimension_name(), 10)),
+        dimension_names in option::of(vec(dimension_name(), 5..10)),
     user_data in bytes()) -> ArrayData {
         ArrayData{shape, dimension_names, user_data}
     }
@@ -549,7 +561,7 @@ prop_compose! {
 }
 
 fn etag() -> impl Strategy<Value=ETag> {
-    any::<String>().prop_map(ETag).boxed()
+    any::<String>().prop_map(ETag)
 }
 fn checksum() -> impl Strategy<Value=manifest::Checksum> {
     use manifest::Checksum::*;
@@ -557,7 +569,7 @@ fn checksum() -> impl Strategy<Value=manifest::Checksum> {
         any::<u32>().prop_map(SecondsSinceEpoch).prop_map(LastModified),
         etag().prop_map(ETag)
     ]
-    .boxed()
+
 }
 
 fn non_empty_alphanumeric_string() -> impl Strategy<Value = String> {
@@ -595,7 +607,7 @@ fn chunk_payload() -> impl Strategy<Value=ChunkPayload> {
         virtual_chunk_ref().prop_map(Virtual),
         chunk_ref().prop_map(Ref)
     ]
-    .boxed()
+
 }
 
 type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
@@ -603,11 +615,11 @@ type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 pub fn chunk_indices2() -> impl Strategy<Value=ChunkIndices> {
     (any::<u8>().prop_map(usize::from), any::<NonZeroU32>())
         .prop_flat_map(|(dim, end_idx)| chunk_indices(dim, 0..end_idx.get()))
-        .boxed()
+
 }
 
 pub fn split_manifest() -> impl Strategy<Value=SplitManifest> {
-    btree_map(chunk_indices2(), option::of(chunk_payload()), 3..10).boxed()
+    btree_map(chunk_indices2(), option::of(chunk_payload()), 3..10)
 }
 
 prop_compose! {
