@@ -1,0 +1,81 @@
+name: Version Compatibility Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  workflow_dispatch:
+  schedule:
+    # Run daily at 6am UTC to catch any issues with nightly wheels
+    - cron: '0 6 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+defaults:
+  run:
+    working-directory: ./version-compat-tests
+
+jobs:
+  version-compat:
+    runs-on: ubuntu-latest
+    name: Test v1/v2 format compatibility
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          # Don't cache - we want fresh nightly wheels each run
+          enable-cache: false
+
+      - name: Start wheel-rename proxy server
+        run: |
+          uvx --from "wheel-rename[server] @ git+https://github.com/earth-mover/rename-wheel" \
+            wheel-rename serve \
+            -u https://pypi.anaconda.org/scientific-python-nightly-wheels/simple \
+            -r "icechunk=icechunk_v1:<2" \
+            --port 8123 &
+          echo $! > /tmp/proxy.pid
+
+          # Wait for server to start
+          for _ in {1..30}; do
+            curl -s http://127.0.0.1:8123/simple/ > /dev/null 2>&1 && break
+            sleep 1
+          done
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Verify both versions are installed
+        run: |
+          uv run python -c "
+          import icechunk
+          import icechunk_v1
+          print(f'icechunk v2: {icechunk.__version__}')
+          print(f'icechunk v1: {icechunk_v1.__version__}')
+          assert 'icechunk_v1' in icechunk_v1.__file__
+          assert icechunk_v1 is not icechunk
+          "
+
+      - name: Run version compatibility tests
+        run: uv run pytest -v --tb=short
+
+      - name: Stop proxy server
+        if: always()
+        run: |
+          if [ -f /tmp/proxy.pid ]; then
+            kill "$(cat /tmp/proxy.pid)" 2>/dev/null || true
+            rm /tmp/proxy.pid
+          fi

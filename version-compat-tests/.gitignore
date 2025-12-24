@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environment
+.venv/
+
+# pytest
+.pytest_cache/
+
+# Downloaded wheels
+wheels/
+
+# uv
+uv.lock

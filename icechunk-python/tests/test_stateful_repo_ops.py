@@ -8,11 +8,12 @@ import textwrap
 from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Self, cast
+from typing import Any, Literal, Self, cast
 
 import numpy as np
 import pytest
 
+import icechunk
 from zarr.core.buffer import Buffer, default_buffer_prototype
 
 pytest.importorskip("hypothesis")
@@ -120,6 +121,7 @@ class Model:
 
         # a tag once created, can never be recreated even after expiration
         self.created_tags: set[str] = set()
+        self.spec_version: Literal[1, 2] | None = None
 
     def __repr__(self) -> str:
         return textwrap.dedent(f"""
@@ -301,14 +303,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         note("----------")
         self.model = Model()
         self.commit_times: list[datetime.datetime] = []
+        self.storage = None
 
     @initialize(data=st.data(), target=branches)
     def initialize(self, data: st.DataObject) -> str:
-        # FIXME: currently this test is IC2 only
-        spec_version = data.draw(
-            st.one_of(st.integers(min_value=2, max_value=2), st.none())
-        )
-        self.repo = Repository.create(in_memory_storage(), spec_version=spec_version)
+        self.storage = in_memory_storage()
+        self.repo = Repository.create(self.storage, spec_version=1)
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         snap = next(iter(self.repo.ancestry(branch=DEFAULT_BRANCH)))
@@ -321,6 +321,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model.HEAD = HEAD
         self.model.create_branch(DEFAULT_BRANCH, HEAD)
         self.model.checkout_branch(DEFAULT_BRANCH)
+        self.model.spec_version = 1
 
         # initialize with some data always
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
@@ -348,6 +349,31 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(IcechunkError, match="read-only store"):
                 self.sync_store.set(path, value)
 
+    @rule()
+    @precondition(lambda self: len(self.model.commits) > 5)
+    def upgrade_spec_version(self):
+        icechunk.upgrade_icechunk_repository(self.repo)
+        self.model.spec_version = 2
+
+    @rule()
+    def reopen_repository(self) -> None:
+        """Reopen the repository from storage to get fresh state.
+
+        This discards any uncommitted changes.
+        """
+        assert self.storage is not None
+        self.repo = Repository.open(self.storage)
+        note(f"Reopened repository (spec_version={self.repo.spec_version})")
+
+        # Reopening discards uncommitted changes - reset model to last committed state
+        branch = (
+            self.model.branch
+            if self.model.branch in self.model.branches
+            else DEFAULT_BRANCH
+        )
+        self.session = self.repo.writable_session(branch)
+        self.model.checkout_branch(branch)
+
     @rule(message=st.text(max_size=MAX_TEXT_SIZE), target=commits)
     @precondition(lambda self: self.model.changes_made)
     def commit(self, message: str) -> str:
@@ -359,6 +385,63 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.session = self.repo.writable_session(branch)
         note(f"Created commit: {snapinfo!r}")
         self.model.commit(snapinfo)
+        self.commit_times.append(snapinfo.written_at)
+        return commit_id
+
+    @rule(message=st.text(max_size=MAX_TEXT_SIZE), target=commits)
+    @precondition(lambda self: self.model.changes_made)
+    def amend_commit(self, message: str) -> str:
+        """Amend the last commit.
+
+        Amend requires spec_version >= 2. For spec_version=1, it raises an error.
+        """
+        branch = self.session.branch
+        assert branch is not None
+        note(
+            f"Amending commit on branch {branch!r} (spec_version={self.model.spec_version})"
+        )
+
+        # Amend is only supported on spec_version >= 2
+        if self.model.spec_version == 1:
+            with pytest.raises(
+                IcechunkError,
+                match="repository version error.*requires.*version 2",
+            ):
+                self.session.amend(message)
+            note("Amend correctly rejected for spec_version=1")
+            # Return existing HEAD since amend failed
+            return self.model.branches[branch]
+
+        # spec_version >= 2: amend should succeed
+        commit_id = self.session.amend(message)
+        snapinfo = next(iter(self.repo.ancestry(branch=branch)))
+        assert snapinfo.id == commit_id
+        self.session = self.repo.writable_session(branch)
+        note(f"Amended commit: {snapinfo!r}")
+
+        # For model: amend replaces the previous HEAD commit on this branch
+        old_head = self.model.branches[branch]
+        old_commit = self.model.commits.get(old_head)
+        parent_id = old_commit.parent_id if old_commit else None
+
+        # Only remove old commit from model if no other branch references it
+        other_refs = [
+            b for b, c in self.model.branches.items() if c == old_head and b != branch
+        ]
+        if not other_refs and old_head in self.model.commits:
+            del self.model.commits[old_head]
+            # Update commit times - remove old
+            if old_commit and old_commit.written_at in self.commit_times:
+                self.commit_times.remove(old_commit.written_at)
+
+        # Add new commit
+        self.model.commits[commit_id] = CommitModel.from_snapshot_and_store(
+            snapinfo, copy.deepcopy(self.model.store)
+        )
+        self.model.commits[commit_id].parent_id = parent_id
+        self.model.branches[branch] = commit_id
+        self.model.HEAD = commit_id
+        self.model.changes_made = False
         self.commit_times.append(snapinfo.written_at)
         return commit_id
 
@@ -503,7 +586,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(IcechunkError):
                 self.repo.delete_branch(branch)
 
-    @precondition(lambda self: bool(self.commit_times))
+    # TODO: v1 has bugs in expire_snapshots, only test for v2
+    # https://github.com/earth-mover/icechunk/issues/1520
+    @precondition(lambda self: bool(self.commit_times) and self.model.spec_version >= 2)
     @rule(
         data=st.data(),
         delta=st.timedeltas(
@@ -524,12 +609,24 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         note(
             f"Expiring snapshots {older_than=!r}, ({commit_time=!r}, {delta=!r}), {delete_expired_branches=!r}, {delete_expired_tags=!r}"
         )
+
+        # Track branches and tags before expiration
+        branches_before = set(self.repo.list_branches())
+        tags_before = set(self.repo.list_tags())
+
         actual = self.repo.expire_snapshots(
             older_than,
             delete_expired_branches=delete_expired_branches,
             delete_expired_tags=delete_expired_tags,
         )
         note(f"repo  expired snaps={actual!r}")
+
+        # Track branches and tags after expiration
+        branches_after = set(self.repo.list_branches())
+        tags_after = set(self.repo.list_tags())
+        actual_deleted_branches = branches_before - branches_after
+        actual_deleted_tags = tags_before - tags_after
+
         expected = self.model.expire_snapshots(
             older_than,
             delete_expired_branches=delete_expired_branches,
@@ -537,10 +634,19 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         )
         note(f"from model: {expected}")
         note(f"actual: {actual}")
+        note(f"actual_deleted_branches: {actual_deleted_branches}")
+        note(f"actual_deleted_tags: {actual_deleted_tags}")
+
         assert self.initial_snapshot.id not in actual
         assert actual == expected.expired_snapshots, (actual, expected)
+        assert (
+            actual_deleted_branches == expected.deleted_branches
+        ), f"deleted branches mismatch: actual={actual_deleted_branches}, expected={expected.deleted_branches}"
+        assert (
+            actual_deleted_tags == expected.deleted_tags
+        ), f"deleted tags mismatch: actual={actual_deleted_tags}, expected={expected.deleted_tags}"
 
-        for branch in expected.deleted_branches:
+        for branch in actual_deleted_branches:
             self.maybe_checkout_branch(branch)
 
     @precondition(lambda self: bool(self.commit_times))
