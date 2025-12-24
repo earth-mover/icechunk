@@ -26,7 +26,7 @@ use proptest::collection::{btree_map, vec};
 use proptest::prelude::*;
 use proptest::{option, strategy::Strategy, array::{uniform8, uniform12}};
 use std::collections::{BTreeMap, HashMap};
-use std::num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8};
+use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
 
@@ -312,7 +312,7 @@ prop_compose! {
 
 prop_compose! {
     pub fn split_sizes()
-        (condition in manifest_split_condition(), dims in proptest::collection::vec(manifest_split_dim(), 1..5))
+        (condition in manifest_split_condition(), dims in vec(manifest_split_dim(), 1..5))
     -> (ManifestSplitCondition, Vec<ManifestSplitDim>) {
     (condition, dims)
     }
@@ -320,7 +320,7 @@ prop_compose! {
 
 prop_compose! {
     pub fn manifest_splitting_config()
-        (sizes in option::of(proptest::collection::vec(split_sizes(), 1..5)))
+        (sizes in option::of(vec(split_sizes(), 1..5)))
     -> ManifestSplittingConfig {
         ManifestSplittingConfig{split_sizes: sizes}
     }
@@ -336,7 +336,7 @@ prop_compose! {
 
 prop_compose! {
     pub fn virtual_chunk_containers()
-        (containers in proptest::collection::vec(virtual_chunk_container(), 0..10))
+        (containers in vec(virtual_chunk_container(), 0..10))
     -> HashMap<String, VirtualChunkContainer> {
         containers.into_iter().map(|cont| (cont.url_prefix().to_string(), cont)).collect()
     }
@@ -489,8 +489,7 @@ fn absolute_path() -> impl Strategy<Value=String> {
     ).boxed()
 }
 
-pub fn path() -> BoxedStrategy<Path> {
-
+pub fn path() -> impl Strategy<Value=Path> {
     absolute_path()
         .prop_filter_map("Could not generate a valid path",
                          |abs_path| Path::new(&abs_path).ok()).boxed()
@@ -510,7 +509,7 @@ prop_compose! {
     }
 }
 
-fn dimension_name() -> BoxedStrategy<DimensionName> {
+fn dimension_name() -> impl Strategy<Value=DimensionName> {
     use DimensionName::*;
     prop_oneof![Just(NotSpecified), any::<String>().prop_map(Name)].boxed()
 }
@@ -549,10 +548,10 @@ prop_compose! {
     }
 }
 
-fn etag() -> BoxedStrategy<ETag> {
+fn etag() -> impl Strategy<Value=ETag> {
     any::<String>().prop_map(ETag).boxed()
 }
-fn checksum() -> BoxedStrategy<manifest::Checksum> {
+fn checksum() -> impl Strategy<Value=manifest::Checksum> {
     use manifest::Checksum::*;
     prop_oneof![
         any::<u32>().prop_map(SecondsSinceEpoch).prop_map(LastModified),
@@ -589,7 +588,7 @@ prop_compose! {
     }
 }
 
-fn chunk_payload() -> BoxedStrategy<ChunkPayload> {
+fn chunk_payload() -> impl Strategy<Value=ChunkPayload> {
     use ChunkPayload::*;
     prop_oneof![
         bytes().prop_map(Inline),
@@ -601,13 +600,13 @@ fn chunk_payload() -> BoxedStrategy<ChunkPayload> {
 
 type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 
-pub fn chunk_indices2() -> BoxedStrategy<ChunkIndices> {
+pub fn chunk_indices2() -> impl Strategy<Value=ChunkIndices> {
     (any::<usize>(), any::<NonZeroU32>())
         .prop_flat_map(|(dim, end_idx)| chunk_indices(dim, 0..end_idx.get()))
         .boxed()
 }
 
-pub fn split_manifest() -> BoxedStrategy<SplitManifest> {
+pub fn split_manifest() -> impl Strategy<Value=SplitManifest> {
     btree_map(chunk_indices2(), option::of(chunk_payload()), 3..10).boxed()
 }
 

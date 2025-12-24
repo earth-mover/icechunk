@@ -992,10 +992,10 @@ mod tests {
         }
     }
 
-    fn move_tracker() -> BoxedStrategy<MoveTracker> {
+    fn move_tracker() -> impl Strategy<Value=MoveTracker> {
         vec(gen_move(), 1..5).prop_map(MoveTracker).boxed()
     }
-    fn change_set() -> BoxedStrategy<ChangeSet> {
+    fn change_set() -> impl Strategy<Value=ChangeSet> {
         use ChangeSet::*;
         prop_oneof![
             edit_changes().prop_map(Edit),
