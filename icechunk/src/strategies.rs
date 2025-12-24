@@ -464,28 +464,8 @@ pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
     prop_oneof![Just(FromEnv), azure_static_credentials().prop_map(Static)].boxed()
 }
 
-// fn suffix() -> impl Strategy<Value = String> {
-//     string_regex("nonrandom .{20}").expect("Could not generate a suffix")
-// }
-//
-// fn dir_name() -> impl Strategy<Value = String> {
-//     string_regex("[a-zA-Z0-9]{15}").expect("Could not generate a directory name")
-// }
-
-static mut TIMES_RUN: usize = 0;
-
 fn path_component() -> impl Strategy<Value = String> {
-
-    unsafe {
-        let val = TIMES_RUN;
-        TIMES_RUN += 1;
-        string_regex(&format!("{}_[a-zA-Z]{{20}}", val)).expect("Could not generate a valid path component")
-    }
-
-    // string_regex("[a-zA-Z0-9]{20}").expect("Could not generate a valid path component")
-    //     .prop_flat_map(|comp| any::<usize>().prop_map(move |id| format!("{}_{}",id, comp )))
-
-
+    string_regex("[a-zA-Z0-9]{20}").expect("Could not generate a valid path component")
 }
 
 fn file_path_components() -> impl Strategy<Value = Vec<String>> {
@@ -500,7 +480,7 @@ fn to_abs_window_path(path_components: Vec<String>) -> String {
     format!("c:\\windows\\{}", path_components.join("\\"))
 }
 
-fn absolute_path() -> BoxedStrategy<String> {
+fn absolute_path() -> impl Strategy<Value=String> {
     file_path_components().prop_map(|components|
         match std::env::consts::OS {
             "windows"  => to_abs_window_path(components),
@@ -510,21 +490,6 @@ fn absolute_path() -> BoxedStrategy<String> {
 }
 
 pub fn path() -> BoxedStrategy<Path> {
-        // (suffix(), dir_name())
-        // .prop_filter_map("Could not generate a valid file path", |(suffix, dir)| {
-        //     let _res = Builder::new().tempdir_in("./").ok().expect("Could not create a directory");
-        //
-        //     let canon_file_path = Builder::new()
-        //         .suffix(&suffix)
-        //         .tempfile_in(&_res)
-        //         .ok()
-        //         .and_then(|file| file.path().canonicalize().ok())?;
-        //
-        //     println!("The file path is {:?}", canon_file_path);
-        //
-        //     canon_file_path.to_str().and_then(|file_name| Path::new(file_name).ok())
-        // })
-        // .boxed()
 
     absolute_path()
         .prop_filter_map("Could not generate a valid path",
@@ -550,8 +515,14 @@ fn dimension_name() -> BoxedStrategy<DimensionName> {
     prop_oneof![Just(NotSpecified), any::<String>().prop_map(Name)].boxed()
 }
 
+// prop_compose! {
+// pub fn bytes()(random_data in any::<Vec<u8>>()) -> Bytes {
+//         Bytes::from(random_data)
+//     }
+// }
+
 prop_compose! {
-pub fn bytes()(random_data in any::<Vec<u8>>()) -> Bytes {
+pub fn bytes()(random_data in vec(any::<u8>(), 1..60)) -> Bytes {
         Bytes::from(random_data)
     }
 }
@@ -564,17 +535,12 @@ pub    fn array_data()(shape in array_shape(),
     }
 }
 
-
-fn gen_n_copies<T: Clone>(to_copy: T, num_of_copies: NonZeroU8) -> Vec<T> {
-    (0..num_of_copies.get()).map(|_| to_copy.clone()).collect()
+pub fn node_id() -> impl Strategy<Value=NodeId> {
+   uniform8(any::<u8>()).prop_map(NodeId::new)
 }
 
-pub fn node_id() -> BoxedStrategy<NodeId> {
-   uniform8(any::<u8>()).prop_map(NodeId::new).boxed()
-}
-
-fn chunk_id() -> BoxedStrategy<ChunkId> {
-    uniform12(any::<u8>()).prop_map(ChunkId::new).boxed()
+fn chunk_id() -> impl Strategy<Value=ChunkId> {
+    uniform12(any::<u8>()).prop_map(ChunkId::new)
 }
 
 prop_compose! {

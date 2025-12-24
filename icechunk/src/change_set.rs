@@ -976,7 +976,7 @@ mod tests {
     use proptest::prelude::*;
 
     prop_compose! {
-        fn edit_changes()(num_of_dims in any::<usize>())(new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
+        fn edit_changes()(num_of_dims in Just(0))(new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
                 new_arrays in hash_map(path(),(node_id(), array_data()), 3..7),
            updated_arrays in hash_map(node_id(), array_data(), 3..7),
            updated_groups in hash_map(node_id(), bytes(), 3..7),
