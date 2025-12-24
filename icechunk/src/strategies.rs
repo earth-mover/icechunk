@@ -560,14 +560,14 @@ fn checksum() -> impl Strategy<Value=manifest::Checksum> {
     .boxed()
 }
 
-fn non_empty_string() -> impl Strategy<Value = String> {
-    any::<String>().prop_filter("An empty string was provided", |data| !data.is_empty())
+fn non_empty_alphanumeric_string() -> impl Strategy<Value = String> {
+    string_regex("[a-zA-Z0-9]{1,}").expect("Could not generate a valid nonempty alphanumeric string")
 }
 
 prop_compose! {
     fn url_with_host_and_path()(protocol in transfer_protocol(),
-        host in non_empty_string(),
-        path in non_empty_string()) -> String {
+        host in non_empty_alphanumeric_string(),
+        path in non_empty_alphanumeric_string()) -> String {
         format!("{}://{}/{}", protocol, host, path)
     }
 }
@@ -601,7 +601,7 @@ fn chunk_payload() -> impl Strategy<Value=ChunkPayload> {
 type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 
 pub fn chunk_indices2() -> impl Strategy<Value=ChunkIndices> {
-    (any::<usize>(), any::<NonZeroU32>())
+    (any::<u8>().prop_map(usize::from), any::<NonZeroU32>())
         .prop_flat_map(|(dim, end_idx)| chunk_indices(dim, 0..end_idx.get()))
         .boxed()
 }
