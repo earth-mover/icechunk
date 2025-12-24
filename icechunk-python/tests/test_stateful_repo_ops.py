@@ -388,6 +388,63 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.commit_times.append(snapinfo.written_at)
         return commit_id
 
+    @rule(message=st.text(max_size=MAX_TEXT_SIZE), target=commits)
+    @precondition(lambda self: self.model.changes_made)
+    def amend_commit(self, message: str) -> str:
+        """Amend the last commit.
+
+        Amend requires spec_version >= 2. For spec_version=1, it raises an error.
+        """
+        branch = self.session.branch
+        assert branch is not None
+        note(
+            f"Amending commit on branch {branch!r} (spec_version={self.model.spec_version})"
+        )
+
+        # Amend is only supported on spec_version >= 2
+        if self.model.spec_version == 1:
+            with pytest.raises(
+                IcechunkError,
+                match="repository version error.*requires.*version 2",
+            ):
+                self.session.amend(message)
+            note("Amend correctly rejected for spec_version=1")
+            # Return existing HEAD since amend failed
+            return self.model.branches[branch]
+
+        # spec_version >= 2: amend should succeed
+        commit_id = self.session.amend(message)
+        snapinfo = next(iter(self.repo.ancestry(branch=branch)))
+        assert snapinfo.id == commit_id
+        self.session = self.repo.writable_session(branch)
+        note(f"Amended commit: {snapinfo!r}")
+
+        # For model: amend replaces the previous HEAD commit on this branch
+        old_head = self.model.branches[branch]
+        old_commit = self.model.commits.get(old_head)
+        parent_id = old_commit.parent_id if old_commit else None
+
+        # Only remove old commit from model if no other branch references it
+        other_refs = [
+            b for b, c in self.model.branches.items() if c == old_head and b != branch
+        ]
+        if not other_refs and old_head in self.model.commits:
+            del self.model.commits[old_head]
+            # Update commit times - remove old
+            if old_commit and old_commit.written_at in self.commit_times:
+                self.commit_times.remove(old_commit.written_at)
+
+        # Add new commit
+        self.model.commits[commit_id] = CommitModel.from_snapshot_and_store(
+            snapinfo, copy.deepcopy(self.model.store)
+        )
+        self.model.commits[commit_id].parent_id = parent_id
+        self.model.branches[branch] = commit_id
+        self.model.HEAD = commit_id
+        self.model.changes_made = False
+        self.commit_times.append(snapinfo.written_at)
+        return commit_id
+
     @rule(ref=commits)
     def checkout_commit(self, ref: str) -> None:
         if ref not in self.model.commits:
