@@ -493,21 +493,6 @@ fn to_abs_unix_path(path_components: Vec<String>) -> String {
     format!("/{}", path_components.join("/"))
 }
 
-// // Given a collection of directory names, an absolute Windows style path
-// // using the directory names in order is generated
-// fn to_abs_window_path(path_components: Vec<String>) -> String {
-//     format!("c:\\windows\\{}", path_components.join("\\"))
-// }
-
-// // Generates Windows or Unix style absolute file paths, depending on the
-// // operating system in use
-// fn absolute_path() -> impl Strategy<Value = String> {
-//     file_path_components().prop_map(|components| match std::env::consts::OS {
-//         "windows" => to_abs_window_path(components),
-//         _ => to_abs_unix_path(components),
-//     })
-// }
-
 // Generates Unix style absolute file paths
 fn absolute_path() -> impl Strategy<Value = String> {
     file_path_components().prop_map(to_abs_unix_path)
