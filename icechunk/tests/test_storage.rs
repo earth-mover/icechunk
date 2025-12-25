@@ -933,13 +933,9 @@ pub async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
 
     let join = tokio::task::spawn(server.run());
     let url = format!("http://localhost:{port}");
-    println!("Have not errored before reaching this point");
     let storage = new_redirect_storage(url.as_str())?;
-    println!("The value is {storage:?}");
     let mut data = Vec::with_capacity(1_024);
-    println!("Have not errored before reaching the second point");
     let settings = storage.default_settings().await?;
-    println!("Have not errored before reaching the third point");
     let mut read =
         storage.get_object(&settings, "refs/branch.main/ref.json", None).await?.0;
 
