@@ -707,7 +707,6 @@ impl ChangeSet {
     }
 }
 
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -969,14 +968,14 @@ mod tests {
     }
 
     use crate::strategies::{
-        array_data, bytes, chunk_indices2, manifest_extents, node_id, path,
-        split_manifest, gen_move
+        array_data, bytes, chunk_indices2, gen_move, manifest_extents, node_id, path,
+        split_manifest,
     };
     use proptest::collection::{btree_map, hash_map, hash_set, vec};
     use proptest::prelude::*;
 
     prop_compose! {
-        fn edit_changes()(num_of_dims in any::<u16>().prop_map(usize::from))(new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
+        fn edit_changes()(num_of_dims in any::<u8>().prop_map(usize::from))(new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
                 new_arrays in hash_map(path(),(node_id(), array_data()), 3..7),
            updated_arrays in hash_map(node_id(), array_data(), 3..7),
            updated_groups in hash_map(node_id(), bytes(), 3..7),
@@ -992,15 +991,13 @@ mod tests {
         }
     }
 
-    fn move_tracker() -> impl Strategy<Value=MoveTracker> {
+    fn move_tracker() -> impl Strategy<Value = MoveTracker> {
         vec(gen_move(), 1..5).prop_map(MoveTracker).boxed()
     }
-    fn change_set() -> impl Strategy<Value=ChangeSet> {
+    fn change_set() -> impl Strategy<Value = ChangeSet> {
         use ChangeSet::*;
-        prop_oneof![
-            edit_changes().prop_map(Edit),
-            move_tracker().prop_map(Rearrange),
-        ].boxed()
+        prop_oneof![edit_changes().prop_map(Edit), move_tracker().prop_map(Rearrange),]
+            .boxed()
     }
 
     roundtrip_serialization_tests!(serialize_and_deserialize_change_sets - change_set);

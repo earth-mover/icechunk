@@ -636,7 +636,9 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::strategies::{ShapeDim, manifest_extents, shapes_and_dims};
+    use crate::strategies::{
+        ShapeDim, manifest_extents, manifest_extents2, shapes_and_dims,
+    };
     use icechunk_macros;
     use itertools::{all, multizip};
     use proptest::collection::vec;
