@@ -34,7 +34,7 @@ use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
 
-use crate::change_set::{ArrayData, Move};
+use crate::change_set::{ArrayData, EditChanges, Move};
 
 const MAX_NDIM: usize = 4;
 
@@ -140,7 +140,7 @@ pub fn manifest_extents(ndim: usize) -> impl Strategy<Value = ManifestExtents> {
 }
 
 prop_compose! {
-    pub fn chunk_indices(dim: usize, values_in: Range<u32>)(v in proptest::collection::vec(values_in, dim..(dim+1))) -> ChunkIndices {
+    pub fn chunk_indices(dim: usize, values_in: Range<u32>)(v in vec(values_in, dim..(dim+1))) -> ChunkIndices {
         ChunkIndices(v)
     }
 }
@@ -241,7 +241,7 @@ pub fn object_store_config() -> BoxedStrategy<ObjectStoreConfig> {
     use ObjectStoreConfig::*;
     prop_oneof![
         Just(InMemory),
-        proptest::collection::vec(string_regex("[a-zA-Z0-9\\-_]+").unwrap(), 1..4)
+        vec(string_regex("[a-zA-Z0-9\\-_]+").unwrap(), 1..4)
             .prop_map(|s| LocalFileSystem(PathBuf::from(s.join("/")))),
         s3_options().prop_map(S3),
         s3_options().prop_map(S3Compatible),
@@ -277,8 +277,8 @@ pub fn manifest_preload_condition() -> BoxedStrategy<ManifestPreloadCondition> {
     ];
     leaf.prop_recursive(4, 20, 5, |inner| {
         prop_oneof![
-            proptest::collection::vec(inner.clone(), 1..4).prop_map(Or),
-            proptest::collection::vec(inner.clone(), 1..4).prop_map(And),
+            vec(inner.clone(), 1..4).prop_map(Or),
+            vec(inner.clone(), 1..4).prop_map(And),
         ]
     })
     .boxed()
@@ -487,14 +487,20 @@ fn file_path_components() -> impl Strategy<Value = Vec<String>> {
     vec(path_component(), 8..15)
 }
 
+// Given a collection of directory names, an absolute Unix style path
+// using the directory names in order is generated
 fn to_abs_unix_path(path_components: Vec<String>) -> String {
     format!("/{}", path_components.join("/"))
 }
 
+// Given a collection of directory names, an absolute Windows style path
+// using the directory names in order is generated
 fn to_abs_window_path(path_components: Vec<String>) -> String {
     format!("c:\\windows\\{}", path_components.join("\\"))
 }
 
+// Generates Windows or Unix style absolute file paths, depending on the
+// operating system in use
 fn absolute_path() -> impl Strategy<Value = String> {
     file_path_components().prop_map(|components| match std::env::consts::OS {
         "windows" => to_abs_window_path(components),
@@ -516,14 +522,8 @@ prop_compose! {
     }
 }
 
-// prop_compose! {
-//     fn array_shape()(dimensions in vec(dimension_shape_info(), 5..10)) -> ArrayShape {
-//         ArrayShape::new(dimensions).unwrap()
-//     }
-// }
-
 prop_compose! {
-    fn array_shape()(dimensions in vec(dimension_shape_info(), 1..2)) -> ArrayShape {
+    fn array_shape()(dimensions in vec(dimension_shape_info(), 5..30)) -> ArrayShape {
         ArrayShape::new(dimensions).unwrap()
     }
 }
@@ -533,20 +533,8 @@ fn dimension_name() -> impl Strategy<Value = DimensionName> {
     prop_oneof![Just(NotSpecified), any::<String>().prop_map(Name)]
 }
 
-// prop_compose! {
-// pub fn bytes()(random_data in any::<Vec<u8>>()) -> Bytes {
-//         Bytes::from(random_data)
-//     }
-// }
-
-// prop_compose! {
-// pub fn bytes()(random_data in vec(any::<u8>(), 1..60)) -> Bytes {
-//         Bytes::from(random_data)
-//     }
-// }
-
 prop_compose! {
-pub fn bytes()(random_data in vec(any::<u8>(), 1..10)) -> Bytes {
+pub fn bytes()(random_data in any::<Vec<u8>>()) -> Bytes {
         Bytes::from(random_data)
     }
 }
@@ -637,4 +625,9 @@ prop_compose! {
     pub fn gen_move()(to in path(), from in path()) -> Move {
         Move{to, from}
     }
+}
+
+#[cfg(test)]
+fn edit_changes() -> impl Strategy<Value = EditChanges> {
+   Just(EditChanges::new())
 }
