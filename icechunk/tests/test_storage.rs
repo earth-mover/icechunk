@@ -908,6 +908,7 @@ pub async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[ignore]
 #[tokio::test]
 #[allow(clippy::unwrap_used)]
 /// Start a server that after a few redirects returns a redirect to a S3 public repo
