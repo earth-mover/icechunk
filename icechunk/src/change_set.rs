@@ -715,10 +715,8 @@ mod tests {
 
     use super::ChangeSet;
 
-    use proptest::prelude::*;
     use crate::{
         change_set::{ArrayData, MoveTracker},
-        roundtrip_serialization_tests,
         format::{
             ChunkIndices, NodeId, Path,
             manifest::{ChunkInfo, ChunkPayload, ManifestSplits},
