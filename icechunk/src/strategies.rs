@@ -626,8 +626,3 @@ prop_compose! {
         Move{to, from}
     }
 }
-
-#[cfg(test)]
-pub fn move_tracker() -> impl Strategy<Value = MoveTracker> {
-    vec(gen_move(), 1..5).prop_map(MoveTracker::new).boxed()
-}
