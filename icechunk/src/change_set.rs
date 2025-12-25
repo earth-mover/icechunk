@@ -47,11 +47,6 @@ impl EditChanges {
         self == &Default::default()
     }
 
-    #[cfg(test)]
-    pub fn new() -> EditChanges {
-        EditChanges::default()
-    }
-    
     fn merge(&mut self, other: EditChanges) {
         // FIXME: this should detect conflict, for example, if different writers added on the same
         // path, different objects, or if the same path is added and deleted, etc.
@@ -94,6 +89,11 @@ pub static EMPTY_MOVE_TRACKER: LazyLock<MoveTracker> = LazyLock::new(Default::de
 impl MoveTracker {
     pub fn record(&mut self, from: Path, to: Path) {
         self.0.push(Move { from, to })
+    }
+
+    #[cfg(test)]
+    pub fn new(moves: Vec<Move>) -> Self {
+        MoveTracker(moves)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -975,7 +975,7 @@ mod tests {
 
     use crate::strategies::{
         array_data, bytes, chunk_indices2, gen_move, manifest_extents, node_id, path,
-        split_manifest,
+        split_manifest, move_tracker
     };
     use proptest::collection::{btree_map, hash_map, hash_set, vec};
     use proptest::prelude::*;
@@ -996,10 +996,13 @@ mod tests {
             EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups, new_arrays}
         }
     }
+    // fn move_tracker() -> impl Strategy<Value = MoveTracker> {
+    //     vec(gen_move(), 1..5).prop_map(MoveTracker).boxed()
+    // }
 
-    fn move_tracker() -> impl Strategy<Value = MoveTracker> {
-        vec(gen_move(), 1..5).prop_map(MoveTracker).boxed()
-    }
+    // fn move_tracker() -> impl Strategy<Value = MoveTracker> {
+    //     vec(gen_move(), 1..5).prop_map(MoveTracker).boxed()
+    // }
     fn change_set() -> impl Strategy<Value = ChangeSet> {
         use ChangeSet::*;
         prop_oneof![edit_changes().prop_map(Edit), move_tracker().prop_map(Rearrange),]

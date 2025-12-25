@@ -34,7 +34,7 @@ use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
 
-use crate::change_set::{ArrayData, EditChanges, Move};
+use crate::change_set::{ArrayData, EditChanges, Move, MoveTracker};
 
 const MAX_NDIM: usize = 4;
 
@@ -613,8 +613,8 @@ fn chunk_payload() -> impl Strategy<Value = ChunkPayload> {
 type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 
 pub fn chunk_indices2() -> impl Strategy<Value = ChunkIndices> {
-    (any::<u8>().prop_map(usize::from), any::<NonZeroU32>())
-        .prop_flat_map(|(dim, end_idx)| chunk_indices(dim, 0..end_idx.get()))
+    (any::<u8>().prop_map(usize::from), any::<Range<u32>>())
+        .prop_flat_map(|(dim, data)| chunk_indices(dim, data))
 }
 
 pub fn split_manifest() -> impl Strategy<Value = SplitManifest> {
@@ -628,6 +628,6 @@ prop_compose! {
 }
 
 #[cfg(test)]
-fn edit_changes() -> impl Strategy<Value = EditChanges> {
-   Just(EditChanges::new())
+pub fn move_tracker() -> impl Strategy<Value = MoveTracker> {
+    vec(gen_move(), 1..5).prop_map(MoveTracker::new).boxed()
 }
