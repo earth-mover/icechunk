@@ -30,11 +30,11 @@ use proptest::{
     strategy::Strategy,
 };
 use std::collections::{BTreeMap, HashMap};
-use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
+use std::num::{NonZeroU16, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
 
-use crate::change_set::{ArrayData, EditChanges, Move, MoveTracker};
+use crate::change_set::{ArrayData,Move};
 
 const MAX_NDIM: usize = 4;
 
