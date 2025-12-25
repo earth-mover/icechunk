@@ -6,7 +6,6 @@ use crate::config::{
     ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3Options,
     S3StaticCredentials,
 };
-use bytes::Bytes;
 use crate::format::format_constants::SpecVersionBin;
 use crate::format::manifest::ManifestExtents;
 use crate::format::snapshot::{ArrayShape, DimensionName};
