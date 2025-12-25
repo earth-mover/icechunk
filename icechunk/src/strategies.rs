@@ -24,7 +24,11 @@ use chrono::{DateTime, Utc};
 use prop::string::string_regex;
 use proptest::collection::{btree_map, vec};
 use proptest::prelude::*;
-use proptest::{option, strategy::Strategy, array::{uniform8, uniform12}};
+use proptest::{
+    array::{uniform8, uniform12},
+    option,
+    strategy::Strategy,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 use std::ops::{Bound, Range};
@@ -115,13 +119,24 @@ pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDi
         })
 }
 
-pub fn manifest_extents(ndim: usize) -> impl Strategy<Value = ManifestExtents> {
+pub fn manifest_extents2(ndim: usize) -> impl Strategy<Value = ManifestExtents> {
     (vec(0u32..1000u32, ndim), vec(1u32..1000u32, ndim)).prop_map(|(start, delta)| {
         let stop = std::iter::zip(start.iter(), delta.iter())
             .map(|(s, d)| s + d)
             .collect::<Vec<_>>();
         ManifestExtents::new(start.as_slice(), stop.as_slice())
     })
+}
+
+pub fn manifest_extents(ndim: usize) -> impl Strategy<Value = ManifestExtents> {
+    vec(
+        any::<Range<u32>>()
+            .prop_filter("Could not construct a nonempty range", |range| {
+                !range.is_empty()
+            }),
+        ndim,
+    )
+    .prop_map(ManifestExtents::from_ranges_iter)
 }
 
 prop_compose! {
@@ -480,19 +495,17 @@ fn to_abs_window_path(path_components: Vec<String>) -> String {
     format!("c:\\windows\\{}", path_components.join("\\"))
 }
 
-fn absolute_path() -> impl Strategy<Value=String> {
-    file_path_components().prop_map(|components|
-        match std::env::consts::OS {
-            "windows"  => to_abs_window_path(components),
-            _ => to_abs_unix_path(components)
-        }
-    )
+fn absolute_path() -> impl Strategy<Value = String> {
+    file_path_components().prop_map(|components| match std::env::consts::OS {
+        "windows" => to_abs_window_path(components),
+        _ => to_abs_unix_path(components),
+    })
 }
 
-pub fn path() -> impl Strategy<Value=Path> {
-    absolute_path()
-        .prop_filter_map("Could not generate a valid path",
-                         |abs_path| Path::new(&abs_path).ok())
+pub fn path() -> impl Strategy<Value = Path> {
+    absolute_path().prop_filter_map("Could not generate a valid path", |abs_path| {
+        Path::new(&abs_path).ok()
+    })
 }
 
 type DimensionShapeInfo = (u64, u64);
@@ -515,7 +528,7 @@ prop_compose! {
     }
 }
 
-fn dimension_name() -> impl Strategy<Value=DimensionName> {
+fn dimension_name() -> impl Strategy<Value = DimensionName> {
     use DimensionName::*;
     prop_oneof![Just(NotSpecified), any::<String>().prop_map(Name)]
 }
@@ -546,11 +559,11 @@ pub    fn array_data()(shape in array_shape(),
     }
 }
 
-pub fn node_id() -> impl Strategy<Value=NodeId> {
-   uniform8(any::<u8>()).prop_map(NodeId::new)
+pub fn node_id() -> impl Strategy<Value = NodeId> {
+    uniform8(any::<u8>()).prop_map(NodeId::new)
 }
 
-fn chunk_id() -> impl Strategy<Value=ChunkId> {
+fn chunk_id() -> impl Strategy<Value = ChunkId> {
     uniform12(any::<u8>()).prop_map(ChunkId::new)
 }
 
@@ -560,20 +573,20 @@ prop_compose! {
     }
 }
 
-fn etag() -> impl Strategy<Value=ETag> {
+fn etag() -> impl Strategy<Value = ETag> {
     any::<String>().prop_map(ETag)
 }
-fn checksum() -> impl Strategy<Value=manifest::Checksum> {
+fn checksum() -> impl Strategy<Value = manifest::Checksum> {
     use manifest::Checksum::*;
     prop_oneof![
         any::<u32>().prop_map(SecondsSinceEpoch).prop_map(LastModified),
         etag().prop_map(ETag)
     ]
-
 }
 
 fn non_empty_alphanumeric_string() -> impl Strategy<Value = String> {
-    string_regex("[a-zA-Z0-9]{1,}").expect("Could not generate a valid nonempty alphanumeric string")
+    string_regex("[a-zA-Z0-9]{1,}")
+        .expect("Could not generate a valid nonempty alphanumeric string")
 }
 
 prop_compose! {
@@ -600,25 +613,23 @@ prop_compose! {
     }
 }
 
-fn chunk_payload() -> impl Strategy<Value=ChunkPayload> {
+fn chunk_payload() -> impl Strategy<Value = ChunkPayload> {
     use ChunkPayload::*;
     prop_oneof![
         bytes().prop_map(Inline),
         virtual_chunk_ref().prop_map(Virtual),
         chunk_ref().prop_map(Ref)
     ]
-
 }
 
 type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 
-pub fn chunk_indices2() -> impl Strategy<Value=ChunkIndices> {
+pub fn chunk_indices2() -> impl Strategy<Value = ChunkIndices> {
     (any::<u8>().prop_map(usize::from), any::<NonZeroU32>())
         .prop_flat_map(|(dim, end_idx)| chunk_indices(dim, 0..end_idx.get()))
-
 }
 
-pub fn split_manifest() -> impl Strategy<Value=SplitManifest> {
+pub fn split_manifest() -> impl Strategy<Value = SplitManifest> {
     btree_map(chunk_indices2(), option::of(chunk_payload()), 3..10)
 }
 
@@ -627,5 +638,3 @@ prop_compose! {
         Move{to, from}
     }
 }
-
-
