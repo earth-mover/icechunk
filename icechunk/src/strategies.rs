@@ -493,11 +493,11 @@ fn to_abs_unix_path(path_components: Vec<String>) -> String {
     format!("/{}", path_components.join("/"))
 }
 
-// Given a collection of directory names, an absolute Windows style path
-// using the directory names in order is generated
-fn to_abs_window_path(path_components: Vec<String>) -> String {
-    format!("c:\\windows\\{}", path_components.join("\\"))
-}
+// // Given a collection of directory names, an absolute Windows style path
+// // using the directory names in order is generated
+// fn to_abs_window_path(path_components: Vec<String>) -> String {
+//     format!("c:\\windows\\{}", path_components.join("\\"))
+// }
 
 // // Generates Windows or Unix style absolute file paths, depending on the
 // // operating system in use
