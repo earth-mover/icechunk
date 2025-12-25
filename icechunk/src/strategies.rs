@@ -9,7 +9,7 @@ use crate::config::{
 use crate::format::format_constants::SpecVersionBin;
 use crate::format::manifest::ManifestExtents;
 use crate::format::snapshot::{ArrayShape, DimensionName};
-use crate::format::{ChunkIndices,  Path};
+use crate::format::{ChunkIndices, Path};
 use crate::session::Session;
 use crate::storage::{
     ConcurrencySettings, RetriesSettings, Settings, new_in_memory_storage,
