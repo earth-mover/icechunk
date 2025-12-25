@@ -47,6 +47,11 @@ impl EditChanges {
         self == &Default::default()
     }
 
+    #[cfg(test)]
+    pub fn new() -> EditChanges {
+        EditChanges::default()
+    }
+    
     fn merge(&mut self, other: EditChanges) {
         // FIXME: this should detect conflict, for example, if different writers added on the same
         // path, different objects, or if the same path is added and deleted, etc.
@@ -152,6 +157,7 @@ impl ChangeSet {
     pub fn for_rearranging() -> Self {
         ChangeSet::Rearrange(Default::default())
     }
+
 
     fn edits(&self) -> &EditChanges {
         match self {
@@ -975,7 +981,7 @@ mod tests {
     use proptest::prelude::*;
 
     prop_compose! {
-        fn edit_changes()(num_of_dims in any::<u8>().prop_map(usize::from))(new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
+        fn edit_changes()(num_of_dims in any::<u16>().prop_map(usize::from))(new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
                 new_arrays in hash_map(path(),(node_id(), array_data()), 3..7),
            updated_arrays in hash_map(node_id(), array_data(), 3..7),
            updated_groups in hash_map(node_id(), bytes(), 3..7),
