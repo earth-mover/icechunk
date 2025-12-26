@@ -975,7 +975,7 @@ mod tests {
     use proptest::prelude::*;
 
     prop_compose! {
-        fn edit_changes()(num_of_dims in any::<u16>().prop_map(usize::from))(
+        fn edit_changes()(num_of_dims in 1..=20usize)(
             new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
                 new_arrays in hash_map(path(),(node_id(), array_data()), 3..7),
            updated_arrays in hash_map(node_id(), array_data(), 3..7),
@@ -983,7 +983,7 @@ mod tests {
            set_chunks in btree_map(node_id(),
                 hash_map(manifest_extents(num_of_dims), split_manifest(), 3..7),
             3..7),
-    deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(chunk_indices2(), 3..8), 3..7),
+    deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(chunk_indices2(num_of_dims), 3..8), 3..7),
             deleted_groups in hash_set((path(), node_id()), 3..7),
             deleted_arrays in hash_set((path(), node_id()), 3..7)
         ) -> EditChanges {
