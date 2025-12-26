@@ -608,13 +608,13 @@ type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 // }
 
 pub fn chunk_indices2(dim: usize) -> impl Strategy<Value = ChunkIndices> {
-    any::<Range<u32>>()
-        .prop_flat_map(move |data| chunk_indices(dim, data))
+    any::<Range<u32>>().prop_flat_map(move |data| chunk_indices(dim, data))
 }
 
 pub fn split_manifest() -> impl Strategy<Value = SplitManifest> {
-    any::<u16>().prop_map(usize::from).prop_flat_map(|dim|
-    btree_map(chunk_indices2(dim), option::of(chunk_payload()), 3..10))
+    any::<u16>().prop_map(usize::from).prop_flat_map(|dim| {
+        btree_map(chunk_indices2(dim), option::of(chunk_payload()), 3..10)
+    })
 }
 
 prop_compose! {
