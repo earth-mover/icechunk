@@ -350,8 +350,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 self.sync_store.set(path, value)
 
     @rule()
-    @precondition(lambda self: len(self.model.commits) > 5)
+    @precondition(lambda self: self.model.spec_version == 1)
     def upgrade_spec_version(self):
+        # don't test simple cases of catching error upgradging a v2 spec
+        # that should be covered in unit tests
         icechunk.upgrade_icechunk_repository(self.repo)
         self.model.spec_version = 2
 
