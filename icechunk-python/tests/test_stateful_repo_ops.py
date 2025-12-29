@@ -369,7 +369,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @initialize(data=st.data(), target=branches)
     def initialize(self, data: st.DataObject) -> str:
         self.storage = in_memory_storage()
-        self.repo = Repository.create(self.storage, spec_version=1)
+        spec_version = cast(Literal[1, 2], data.draw(st.sampled_from([1, 2])))
+        self.repo = Repository.create(self.storage, spec_version=spec_version)
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         snap = next(iter(self.repo.ancestry(branch=DEFAULT_BRANCH)))
@@ -382,7 +383,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model.HEAD = HEAD
         self.model.create_branch(DEFAULT_BRANCH, HEAD)
         self.model.checkout_branch(DEFAULT_BRANCH)
-        self.model.spec_version = 1
+        self.model.spec_version = spec_version
 
         # initialize with some data always
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
