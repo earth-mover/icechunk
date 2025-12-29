@@ -2418,26 +2418,6 @@ def spec_version() -> int:
         int: The version of the Icechunk specification that the library is compatible with
     """
     ...
-<<<<<<< HEAD
-=======
-
-def _upgrade_icechunk_repository(
-    repo: PyRepository, *, dry_run: bool = True, delete_unused_v1_files: bool = False
-) -> None:
-    """
-    Migrate a repository to the latest version of Icechunk.
-
-    This is an administrative operation, and must be executed in isolation from
-    other readers and writers. Other processes running concurrently on the same
-    repo may see undefined behavior.
-
-    At this time, this function supports only migration from Icechunk spec version 1
-    to Icechunk spec version 2. This means Icechunk versions 1.x to 2.x.
-
-    The operation is usually fast, but it can take several minutes if there is a very
-    large version history (thousands of snapshots).
-    """
-    ...
 
 class ChunkStorageStats:
     """Statistics about chunk storage across different chunk types."""
@@ -2487,4 +2467,3 @@ class ChunkStorageStats:
 
     def __repr__(self) -> str: ...
     def __add__(self, other: ChunkStorageStats) -> ChunkStorageStats: ...
->>>>>>> 7843d66 (Extend storage stats calculation to include virtual and inline chunks (#1483))
