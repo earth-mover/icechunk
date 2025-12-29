@@ -125,13 +125,9 @@ pub async fn do_test_repo_chunks_storage(
             .await?;
     }
 
-<<<<<<< HEAD
-    let size = repo_chunks_storage(
+    let stats = repo_chunks_storage(
         storage.as_ref(),
         &storage_settings,
-=======
-    let stats = repo_chunks_storage(
->>>>>>> 7843d66 (Extend storage stats calculation to include virtual and inline chunks (#1483))
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MIN,
@@ -145,13 +141,9 @@ pub async fn do_test_repo_chunks_storage(
     assert_eq!(stats.inlined_bytes, 0);
 
     let _ = session.commit("first", None).await?;
-<<<<<<< HEAD
-    let size = repo_chunks_storage(
+    let stats = repo_chunks_storage(
         storage.as_ref(),
         &storage_settings,
-=======
-    let stats = repo_chunks_storage(
->>>>>>> 7843d66 (Extend storage stats calculation to include virtual and inline chunks (#1483))
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MAX,
@@ -177,13 +169,9 @@ pub async fn do_test_repo_chunks_storage(
     }
 
     let second_commit = session.commit("second", None).await?;
-<<<<<<< HEAD
-    let size = repo_chunks_storage(
+    let stats = repo_chunks_storage(
         storage.as_ref(),
         &storage_settings,
-=======
-    let stats = repo_chunks_storage(
->>>>>>> 7843d66 (Extend storage stats calculation to include virtual and inline chunks (#1483))
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MIN,
@@ -218,13 +206,9 @@ pub async fn do_test_repo_chunks_storage(
             .await?;
     }
     let _ = session.commit("third", None).await?;
-<<<<<<< HEAD
-    let size = repo_chunks_storage(
+    let stats = repo_chunks_storage(
         storage.as_ref(),
         &storage_settings,
-=======
-    let stats = repo_chunks_storage(
->>>>>>> 7843d66 (Extend storage stats calculation to include virtual and inline chunks (#1483))
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MAX,
@@ -245,11 +229,10 @@ pub async fn do_test_repo_chunks_storage(
 pub async fn test_virtual_chunk_deduplication() -> Result<(), Box<dyn std::error::Error>>
 {
     let storage = new_in_memory_storage().await?;
-    let storage_settings = storage.default_settings().await?;
+    let storage_settings = storage.default_settings();
     let asset_manager = Arc::new(AssetManager::new_no_cache(
         storage.clone(),
         storage_settings.clone(),
-        SpecVersionBin::current(),
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
@@ -259,9 +242,8 @@ pub async fn test_virtual_chunk_deduplication() -> Result<(), Box<dyn std::error
             inline_chunk_threshold_bytes: Some(5),
             ..Default::default()
         }),
-        storage,
+        storage.clone(),
         Default::default(),
-        None,
     )
     .await?;
 
@@ -303,6 +285,8 @@ pub async fn test_virtual_chunk_deduplication() -> Result<(), Box<dyn std::error
     session.commit("first", None).await?;
 
     let stats = repo_chunks_storage(
+        storage.as_ref(),
+        &storage_settings,
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
         NonZeroUsize::MAX,
