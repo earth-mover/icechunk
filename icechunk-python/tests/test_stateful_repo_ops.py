@@ -416,7 +416,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # don't test simple cases of catching error upgradging a v2 spec
         # that should be covered in unit tests
         icechunk.upgrade_icechunk_repository(self.repo)
-        self.model.spec_version = 2
         # TODO: remove the reopen after https://github.com/earth-mover/icechunk/issues/1521
         self.reopen_repository()
 
@@ -429,6 +428,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert self.storage is not None
         self.repo = Repository.open(self.storage)
         note(f"Reopened repository (spec_version={self.repo.spec_version})")
+
+        # Sync model's spec_version with actual repo
+        self.model.spec_version = self.repo.spec_version
 
         # Reopening discards uncommitted changes - reset model to last committed state
         branch = (
@@ -455,8 +457,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(message=st.text(max_size=MAX_TEXT_SIZE), target=commits)
     # TODO: update changes made rule depending on result of
     # https://github.com/earth-mover/icechunk/issues/1532
-    @precondition(lambda self: self.model.changes_made)
-    @precondition(lambda self: self.model.spec_version >= 2)
+    @precondition(
+        lambda self: (self.model.changes_made) and (self.model.spec_version >= 2)
+    )
     def amend_commit(self, message: str) -> str:
         branch = self.session.branch
         assert branch is not None
