@@ -1620,13 +1620,9 @@ impl PyRepository {
                             Arc::clone(lock.asset_manager()),
                         )
                     };
-<<<<<<< HEAD
-                    let result = repo_chunks_storage(
+                    let stats = repo_chunks_storage(
                         storage.as_ref(),
                         &storage_settings,
-=======
-                    let stats = repo_chunks_storage(
->>>>>>> 7843d66 (Extend storage stats calculation to include virtual and inline chunks (#1483))
                         asset_manager,
                         max_snapshots_in_memory,
                         max_compressed_manifest_mem_bytes,
@@ -1649,37 +1645,20 @@ impl PyRepository {
         max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
-<<<<<<< HEAD
-        pyo3_async_runtimes::tokio::future_into_py::<_, u64>(py, async move {
-            let (storage, storage_settings, asset_manager) = {
-                let lock = repository.read().await;
-                (
-                    Arc::clone(lock.storage()),
-                    lock.storage_settings().clone(),
-                    Arc::clone(lock.asset_manager()),
-                )
-            };
-            let result = repo_chunks_storage(
-                storage.as_ref(),
-                &storage_settings,
-                asset_manager,
-                max_snapshots_in_memory,
-                max_compressed_manifest_mem_bytes,
-                max_concurrent_manifest_fetches,
-            )
-            .await
-            .map_err(PyIcechunkStoreError::RepositoryError)?;
-            Ok(result)
-        })
-=======
         pyo3_async_runtimes::tokio::future_into_py::<_, PyChunkStorageStats>(
             py,
             async move {
-                let asset_manager = {
+                let (storage, storage_settings, asset_manager) = {
                     let lock = repository.read().await;
-                    Arc::clone(lock.asset_manager())
+                    (
+                        Arc::clone(lock.storage()),
+                        lock.storage_settings().clone(),
+                        Arc::clone(lock.asset_manager()),
+                    )
                 };
                 let stats = repo_chunks_storage(
+                    storage.as_ref(),
+                    &storage_settings,
                     asset_manager,
                     max_snapshots_in_memory,
                     max_compressed_manifest_mem_bytes,
@@ -1690,7 +1669,6 @@ impl PyRepository {
                 Ok(stats.into())
             },
         )
->>>>>>> 7843d66 (Extend storage stats calculation to include virtual and inline chunks (#1483))
     }
 
     #[pyo3(signature = (snapshot_id, *, pretty = true))]
