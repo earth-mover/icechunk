@@ -115,6 +115,7 @@
                 fenix.packages.x86_64-linux.stable.toolchain
                 pkgs.cargo-nextest # test runner
                 pkgs.cargo-deny
+                pkgs.cargo-edit
 
                 pkgs.mold
                 pkgs.taplo # toml lsp server
