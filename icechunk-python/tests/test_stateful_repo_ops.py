@@ -619,7 +619,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     # TODO: v1 has bugs in expire_snapshots, only test for v2
     # https://github.com/earth-mover/icechunk/issues/1520
-    @precondition(lambda self: bool(self.model.commits) and self.model.spec_version >= 2)
+    # https://github.com/earth-mover/icechunk/issues/1534
+    @precondition(lambda self: bool(self.model.commits))
     @rule(
         data=st.data(),
         delta=st.timedeltas(
@@ -670,6 +671,20 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         assert self.initial_snapshot.id not in actual
         assert actual == expected.expired_snapshots, (actual, expected)
+
+        # Check that expired snapshots are actually removed from ancestry
+        # TODO: this should have failed earlier on the model step. the model to
+        # need to fix the model here as well
+        remaining_snapshot_ids = set()
+        for branch in branches_after:
+            for snap in self.repo.ancestry(branch=branch):
+                remaining_snapshot_ids.add(snap.id)
+        expired_but_remaining = actual & remaining_snapshot_ids
+        note(expired_but_remaining)
+        assert (
+            not expired_but_remaining
+        ), f"Snapshots marked as expired but still in ancestry: {expired_but_remaining}"
+
         assert (
             actual_deleted_branches == expected.deleted_branches
         ), f"deleted branches mismatch: actual={actual_deleted_branches}, expected={expected.deleted_branches}"
