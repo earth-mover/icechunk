@@ -190,14 +190,12 @@ class Model:
         parent_id = old_commit.parent_id
 
         # Only remove old commit if no other branch references it in their history
-        if old_head in self.commits:
-            other_refs = any(
-                old_head in branch_model
-                for b, branch_model in self.branches.items()
-                if b != branch
-            )
-            if not other_refs:
-                del self.commits[old_head]
+        if not any(
+            old_head in other_model
+            for other_branch, other_model in self.branches.items()
+            if other_branch != branch
+        ):
+            self.commits.pop(old_head)
 
         # Add new commit with same parent
         new_commit_id = snap.id
