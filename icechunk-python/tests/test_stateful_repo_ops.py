@@ -4,7 +4,6 @@ import datetime
 import itertools
 import json
 import operator
-import tempfile
 import textwrap
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -37,13 +36,11 @@ from hypothesis.stateful import (
 )
 
 import zarr.testing.strategies as zrst
-from icechunk import IcechunkError, Repository, SnapshotInfo
+from icechunk import IcechunkError, Repository, SnapshotInfo, in_memory_storage
 from zarr.testing.stateful import SyncStoreWrapper
 
 # JSON file contents, keep it simple
-# Normalize to lowercase to avoid case collisions on case-insensitive filesystems (macOS APFS)
-# when using local_filesystem_storage. See tests/test_case_sensitivity.py for details.
-simple_text = st.text(zrst.zarr_key_chars, min_size=1, max_size=5).map(str.lower)
+simple_text = st.text(zrst.zarr_key_chars, min_size=1, max_size=5)
 simple_attrs = st.dictionaries(
     simple_text,
     st.integers(min_value=-10_000, max_value=10_000),
@@ -306,35 +303,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         note("----------")
         self.model = Model()
         self.commit_times: list[datetime.datetime] = []
-        self.tmpdir: str | None = None
-        self.repos: dict[str, Repository] = {}
-        self.active_repo: str | None = None
-
-    def storage(self):
-        """Create storage pointing at shared tmpdir."""
-        assert self.tmpdir is not None
-        return icechunk.local_filesystem_storage(self.tmpdir)
-
-    @property
-    def repo(self) -> Repository:
-        """Get the active repository."""
-        assert self.active_repo is not None
-        return self.repos[self.active_repo]
-
-    @repo.setter
-    def repo(self, value: Repository) -> None:
-        """Set the active repository."""
-        assert self.active_repo is not None
-        self.repos[self.active_repo] = value
+        self.storage = None
 
     @initialize(data=st.data(), target=branches)
     def initialize(self, data: st.DataObject) -> str:
-        # Suppress storage warnings
-        icechunk.set_logs_filter("icechunk::storage::object_store=error")
-
-        self.tmpdir = tempfile.mkdtemp()
-        self.repos["repo_0"] = Repository.create(self.storage(), spec_version=1)
-        self.active_repo = "repo_0"
+        self.storage = in_memory_storage()
+        self.repo = Repository.create(self.storage, spec_version=1)
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         snap = next(iter(self.repo.ancestry(branch=DEFAULT_BRANCH)))
@@ -376,58 +350,20 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 self.sync_store.set(path, value)
 
     @rule()
-    @precondition(
-        lambda self: len(self.model.commits) > 5 and self.model.spec_version == 1
-    )
+    @precondition(lambda self: len(self.model.commits) > 5)
     def upgrade_spec_version(self):
         icechunk.upgrade_icechunk_repository(self.repo)
         self.model.spec_version = 2
 
-        # Reopen repo to get the upgraded version in memory
-        self.repo = Repository.open(self.storage())
-        note("Upgraded to spec_version=2, reopened repo")
-
-        # Get new session on current branch
-        branch = self.model.branch if self.model.branch else DEFAULT_BRANCH
-        self.session = self.repo.writable_session(branch)
-        self.model.checkout_branch(branch)
-
-    @rule()
-    def create_repo(self) -> None:
-        """Open a new repo object on same storage location."""
-        repo_id = f"repo_{len(self.repos)}"
-        self.repos[repo_id] = Repository.open(self.storage())
-        note(f"Created {repo_id} (total repos: {len(self.repos)})")
-
-    @rule(data=st.data())
-    @precondition(lambda self: len(self.repos) > 1)
-    def switch_repo(self, data: st.DataObject) -> None:
-        """Switch active repo, discarding uncommitted changes."""
-        repo_id = data.draw(st.sampled_from(list(self.repos.keys())))
-        if repo_id == self.active_repo:
-            return
-
-        old_repo = self.active_repo
-        self.active_repo = repo_id
-        note(f"Switched from {old_repo} to {repo_id}")
-
-        # Get new session from new repo, discard uncommitted changes
-        branch = (
-            self.model.branch
-            if self.model.branch in self.model.branches
-            else DEFAULT_BRANCH
-        )
-        self.session = self.repo.writable_session(branch)
-        self.model.checkout_branch(branch)
-
     @rule()
     def reopen_repository(self) -> None:
-        """Reopen the active repository from storage to get fresh state.
+        """Reopen the repository from storage to get fresh state.
 
         This discards any uncommitted changes.
         """
-        self.repos[self.active_repo] = Repository.open(self.storage())
-        note(f"Reopened {self.active_repo} (spec_version={self.repo.spec_version})")
+        assert self.storage is not None
+        self.repo = Repository.open(self.storage)
+        note(f"Reopened repository (spec_version={self.repo.spec_version})")
 
         # Reopening discards uncommitted changes - reset model to last committed state
         branch = (
