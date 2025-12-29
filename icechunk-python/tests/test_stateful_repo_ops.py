@@ -102,6 +102,25 @@ class TagModel:
     # message: str | None
 
 
+@dataclass
+class BranchModel:
+    commits: list[str]
+
+    @property
+    def head(self) -> str:
+        """Get the HEAD commit of the branch."""
+        return self.commits[-1]
+
+    def append(self, commit_id: str) -> None:
+        self.commits.append(commit_id)
+
+    def pop(self) -> str:
+        return self.commits.pop()
+
+    def __contains__(self, commit_id: str) -> bool:
+        return commit_id in self.commits
+
+
 class Model:
     def __init__(self, **kwargs: Any) -> None:
         self.store: dict[str, Any] = {}  #
@@ -115,9 +134,7 @@ class Model:
         self.commits: dict[str, CommitModel] = {}
         self.ondisk_snaps: dict[str, CommitModel] = {}
         self.tags: dict[str, TagModel] = {}
-        # TODO: This is only tracking the HEAD,
-        # Should we model the branch as an ordered list of commits?
-        self.branches: dict[str, str] = {}
+        self.branches: dict[str, BranchModel] = {}
 
         # a tag once created, can never be recreated even after expiration
         self.created_tags: set[str] = set()
@@ -149,6 +166,11 @@ class Model:
     def has_commits(self) -> bool:
         return bool(self.commits)
 
+    @property
+    def commit_times(self) -> list[datetime.datetime]:
+        """Return sorted list of all commit times."""
+        return sorted(c.written_at for c in self.commits.values())
+
     def commit(self, snap: SnapshotInfo) -> None:
         ref = snap.id
         self.commits[ref] = CommitModel.from_snapshot_and_store(
@@ -159,7 +181,37 @@ class Model:
         self.HEAD = ref
 
         assert self.branch is not None
-        self.branches[self.branch] = ref
+        self.branches[self.branch].append(ref)
+
+    def amend(self, branch: str, snap: SnapshotInfo) -> None:
+        """Amend the HEAD commit on the given branch."""
+        old_head = self.branches[branch].head
+        old_commit = self.commits[old_head]
+        parent_id = old_commit.parent_id
+
+        # Only remove old commit if no other branch references it in their history
+        if old_head in self.commits:
+            other_refs = any(
+                old_head in branch_model
+                for b, branch_model in self.branches.items()
+                if b != branch
+            )
+            if not other_refs:
+                del self.commits[old_head]
+
+        # Add new commit with same parent
+        new_commit_id = snap.id
+        self.commits[new_commit_id] = CommitModel.from_snapshot_and_store(
+            snap, copy.deepcopy(self.store)
+        )
+        self.commits[new_commit_id].parent_id = parent_id
+
+        # Replace HEAD in branch history
+        self.branches[branch].pop()
+        self.branches[branch].append(new_commit_id)
+
+        self.HEAD = new_commit_id
+        self.changes_made = False
 
     def checkout_commit(self, ref: str) -> None:
         assert str(ref) in self.commits
@@ -172,15 +224,24 @@ class Model:
 
     def create_branch(self, name: str, commit: str) -> None:
         assert commit in self.commits
-        self.branches[name] = commit
+        self.branches[name] = BranchModel(commits=[commit])
 
     def checkout_branch(self, ref: str) -> None:
-        self.checkout_commit(self.branches[ref])
+        self.checkout_commit(self.branches[ref].head)
         self.branch = ref
 
+    # TODO: add `from_snapshot_id` to this
     def reset_branch(self, branch: str, commit: str) -> None:
         assert commit in self.commits
-        self.branches[branch] = commit
+        # Keep history up to the specified commit
+        if commit in self.branches[branch]:
+            idx = self.branches[branch].commits.index(commit)
+            self.branches[branch] = BranchModel(
+                commits=self.branches[branch].commits[: idx + 1]
+            )
+        else:
+            # If commit not in current branch history, set it as new HEAD
+            self.branches[branch] = BranchModel(commits=[commit])
 
     def delete_branch(self, branch_name: str) -> None:
         del self.branches[branch_name]
@@ -202,7 +263,8 @@ class Model:
 
     def refs_iter(self) -> Iterator[str]:
         tag_iter = map(operator.attrgetter("commit_id"), self.tags.values())
-        return itertools.chain(self.branches.values(), tag_iter)
+        branch_heads = (branch.head for branch in self.branches.values())
+        return itertools.chain(branch_heads, tag_iter)
 
     def expire_snapshots(
         self,
@@ -213,7 +275,7 @@ class Model:
     ) -> ExpireInfo:
         # model this exactly like icechunk does.
         expired_snaps = set()
-        branch_pointees = set(self.branches.values())
+        branch_pointees = {branch.head for branch in self.branches.values()}
         tag_pointees = set(map(operator.attrgetter("commit_id"), self.tags.values()))
         for snap in self.commits.values():
             if (
@@ -221,7 +283,7 @@ class Model:
                 and snap.parent_id is not None
                 and (delete_expired_tags or snap.id not in tag_pointees)
                 and (
-                    (delete_expired_branches and self.branches["main"] != snap.id)
+                    (delete_expired_branches and self.branches["main"].head != snap.id)
                     or snap.id not in branch_pointees
                 )
             ):
@@ -251,7 +313,7 @@ class Model:
             branches_to_delete = {
                 k
                 for k, v in self.branches.items()
-                if k != DEFAULT_BRANCH and v in expired_snaps
+                if k != DEFAULT_BRANCH and v.head in expired_snaps
             }
             note(f"deleting branches {branches_to_delete=!r}")
             for branch in branches_to_delete:
@@ -302,7 +364,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         note("----------")
         self.model = Model()
-        self.commit_times: list[datetime.datetime] = []
         self.storage = None
 
     @initialize(data=st.data(), target=branches)
@@ -356,6 +417,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # that should be covered in unit tests
         icechunk.upgrade_icechunk_repository(self.repo)
         self.model.spec_version = 2
+        # TODO: remove the reopen after https://github.com/earth-mover/icechunk/issues/1521
+        self.reopen_repository()
 
     @rule()
     def reopen_repository(self) -> None:
@@ -387,64 +450,26 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.session = self.repo.writable_session(branch)
         note(f"Created commit: {snapinfo!r}")
         self.model.commit(snapinfo)
-        self.commit_times.append(snapinfo.written_at)
         return commit_id
 
     @rule(message=st.text(max_size=MAX_TEXT_SIZE), target=commits)
+    # TODO: update changes made rule depending on result of
+    # https://github.com/earth-mover/icechunk/issues/1532
     @precondition(lambda self: self.model.changes_made)
+    @precondition(lambda self: self.model.spec_version >= 2)
     def amend_commit(self, message: str) -> str:
-        """Amend the last commit.
-
-        Amend requires spec_version >= 2. For spec_version=1, it raises an error.
-        """
         branch = self.session.branch
         assert branch is not None
-        note(
-            f"Amending commit on branch {branch!r} (spec_version={self.model.spec_version})"
-        )
+        note(f"Amending commit on branch {branch!r}")
 
-        # Amend is only supported on spec_version >= 2
-        if self.model.spec_version == 1:
-            with pytest.raises(
-                IcechunkError,
-                match="repository version error.*requires.*version 2",
-            ):
-                self.session.amend(message)
-            note("Amend correctly rejected for spec_version=1")
-            # Return existing HEAD since amend failed
-            return self.model.branches[branch]
-
-        # spec_version >= 2: amend should succeed
         commit_id = self.session.amend(message)
         snapinfo = next(iter(self.repo.ancestry(branch=branch)))
         assert snapinfo.id == commit_id
-        self.session = self.repo.writable_session(branch)
         note(f"Amended commit: {snapinfo!r}")
+        self.session = self.repo.writable_session(branch)
 
-        # For model: amend replaces the previous HEAD commit on this branch
-        old_head = self.model.branches[branch]
-        old_commit = self.model.commits.get(old_head)
-        parent_id = old_commit.parent_id if old_commit else None
-
-        # Only remove old commit from model if no other branch references it
-        other_refs = [
-            b for b, c in self.model.branches.items() if c == old_head and b != branch
-        ]
-        if not other_refs and old_head in self.model.commits:
-            del self.model.commits[old_head]
-            # Update commit times - remove old
-            if old_commit and old_commit.written_at in self.commit_times:
-                self.commit_times.remove(old_commit.written_at)
-
-        # Add new commit
-        self.model.commits[commit_id] = CommitModel.from_snapshot_and_store(
-            snapinfo, copy.deepcopy(self.model.store)
-        )
-        self.model.commits[commit_id].parent_id = parent_id
-        self.model.branches[branch] = commit_id
-        self.model.HEAD = commit_id
-        self.model.changes_made = False
-        self.commit_times.append(snapinfo.written_at)
+        # Update model
+        self.model.amend(branch, snapinfo)
         return commit_id
 
     @rule(ref=commits)
@@ -480,7 +505,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(ref=branches)
     def checkout_branch(self, ref: str) -> None:
         # TODO: sometimes readonly?
-        if self.model.branches.get(ref) in self.model.commits:
+        branch_model = self.model.branches.get(ref)
+        if branch_model is not None and branch_model.head in self.model.commits:
             note(f"Checking out branch {ref!r}")
             self.session = self.repo.writable_session(ref)
             assert not self.session.read_only
@@ -553,7 +579,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 self.repo.reset_branch(branch, commit)
         else:
             note(
-                f"resetting branch {branch} from {self.model.branches[branch]} to {commit}"
+                f"resetting branch {branch} from {self.model.branches[branch].head} to {commit}"
             )
             self.repo.reset_branch(branch, commit)
             self.model.reset_branch(branch, commit)
@@ -590,7 +616,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     # TODO: v1 has bugs in expire_snapshots, only test for v2
     # https://github.com/earth-mover/icechunk/issues/1520
-    @precondition(lambda self: bool(self.commit_times) and self.model.spec_version >= 2)
+    @precondition(lambda self: bool(self.model.commits) and self.model.spec_version >= 2)
     @rule(
         data=st.data(),
         delta=st.timedeltas(
@@ -606,7 +632,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         delete_expired_branches: bool,
         delete_expired_tags: bool,
     ) -> None:
-        commit_time = data.draw(st.sampled_from(self.commit_times))
+        commit_time = data.draw(st.sampled_from(self.model.commit_times))
         older_than = commit_time + delta
         note(
             f"Expiring snapshots {older_than=!r}, ({commit_time=!r}, {delta=!r}), {delete_expired_branches=!r}, {delete_expired_tags=!r}"
@@ -651,7 +677,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         for branch in actual_deleted_branches:
             self.maybe_checkout_branch(branch)
 
-    @precondition(lambda self: bool(self.commit_times))
+    @precondition(lambda self: bool(self.model.commit_times))
     @rule(
         data=st.data(),
         # we delete based on snapshot created_at time, not flushed_at time
@@ -660,7 +686,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         delta=st.integers(min_value=-86400, max_value=86400).filter(lambda x: x != 0),
     )
     def garbage_collect(self, data: st.DataObject, delta: int) -> None:
-        commit_time = data.draw(st.sampled_from(self.commit_times))
+        commit_time = data.draw(st.sampled_from(self.model.commit_times))
         older_than = commit_time + datetime.timedelta(seconds=delta)
         note(
             f"running garbage_collect for {older_than=!r}, ({commit_time=!r}, {delta=!r})"
@@ -722,7 +748,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @invariant()
     def check_branches(self) -> None:
         repo_branches = {k: self.repo.lookup_branch(k) for k in self.repo.list_branches()}
-        assert self.model.branches == repo_branches
+        model_branch_heads = {k: v.head for k, v in self.model.branches.items()}
+        assert model_branch_heads == repo_branches
 
     @invariant()
     def check_ancestry(self) -> None:
