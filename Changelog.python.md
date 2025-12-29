@@ -1,5 +1,15 @@
 # Changelog
 
+## Python Icechunk Library 1.1.15
+
+### Features
+
+- Increase the maximum allowed size of manifests and snapshot files.
+
+### Fixes
+
+- Retry with backoff on `429 - Too many requests` from GCS.
+
 ## Python Icechunk Library 1.1.14
 
 ### Fixes
