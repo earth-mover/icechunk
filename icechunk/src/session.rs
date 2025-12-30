@@ -1197,8 +1197,8 @@ impl Session {
         self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
         // Cannot amend the initial commit (which has no parent and no transaction log)
-        let current_snapshot_info =
-            self.asset_manager.fetch_snapshot_info(self.snapshot_id()).await?;
+        let (repo_info, _) = self.asset_manager.fetch_repo_info().await?;
+        let current_snapshot_info = repo_info.find_snapshot(self.snapshot_id())?;
         if current_snapshot_info.is_initial() {
             return Err(SessionErrorKind::NoAmendForInitialCommit.into());
         }
