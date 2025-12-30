@@ -76,7 +76,7 @@ pub enum UpdateType {
 
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     max_depth: 10,
-    max_tables: 500_000,
+    max_tables: 5_000_000,
     max_apparent_size: 1 << 31, // taken from the default
     ignore_missing_null_terminator: true,
 };
