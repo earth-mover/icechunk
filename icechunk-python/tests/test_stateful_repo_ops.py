@@ -36,7 +36,12 @@ from hypothesis.stateful import (
 )
 
 import zarr.testing.strategies as zrst
-from icechunk import IcechunkError, Repository, SnapshotInfo, in_memory_storage
+from icechunk import (
+    IcechunkError,
+    Repository,
+    SnapshotInfo,
+    in_memory_storage,
+)
 from zarr.testing.stateful import SyncStoreWrapper
 
 # JSON file contents, keep it simple
@@ -431,7 +436,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # TODO: update changes made rule depending on result of
     # https://github.com/earth-mover/icechunk/issues/1532
     @precondition(
-        lambda self: (self.model.changes_made) and (self.repo.spec_version >= 2)
+        lambda self: (self.model.changes_made)
+        and (self.repo.spec_version >= 2)
+        and len(self.model.commits) > 1
     )
     def amend_commit(self, message: str) -> str:
         branch = self.session.branch
