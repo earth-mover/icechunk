@@ -58,6 +58,7 @@ cd icechunk-python
 
     # Build the Rust extension
     maturin develop
+    ```
 
 === "Conda / Mamba"
 
