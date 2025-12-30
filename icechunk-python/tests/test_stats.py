@@ -60,9 +60,7 @@ async def test_total_chunks_storage_async() -> None:
         assert await repo.total_chunks_storage_async() == 100 * 4
 
 
-@pytest.mark.parametrize(
-    "dir", ["./tests/data/test-repo-v2", "./tests/data/test-repo-v1"]
-)
+@pytest.mark.parametrize("dir", ["./tests/data/test-repo"])
 def test_chunk_storage_on_filesystem(dir: str) -> None:
     repo = ic.Repository.open(
         storage=ic.local_filesystem_storage(dir),
