@@ -46,6 +46,26 @@ cd icechunk-python
     uv run ruff check python
     ```
 
+    **Faster Rust Development with maturin-import-hook** (Recommended for contributors)
+
+    By default, `uv run` will rebuild the entire Rust extension in release mode on every invocation, which can take 5+ minutes. For faster iteration during development:
+
+    ```bash
+    # One-time setup: Configure maturin-import-hook (already in dev dependencies)
+    uv run -m maturin_import_hook site install
+
+    # Do an initial build
+    maturin develop
+
+    # Now uv run will use incremental compilation (2-20 seconds instead of 5+ minutes)
+    uv run pytest
+    ```
+
+    This works because:
+    - `pyproject.toml` sets `package = false` to disable uv's auto-rebuild
+    - maturin-import-hook (already in dev dependencies) intercepts imports and does incremental Rust compilation
+    - You get much faster feedback when iterating on Rust code
+
 === "Venv"
 
     ```bash
@@ -197,14 +217,13 @@ The documentation is built with [MkDocs](https://www.mkdocs.org/) using [Materia
     sudo dnf install cairo-devel
     ```
 
-From the `icechunk-python` directory:
+From the `docs` directory:
 
 ```bash
-# Install icechunk with docs dependencies
-uv sync --group docs
+# Install dependencies (including icechunk with docs extras)
+uv sync
 
 # Start the MkDocs development server
-cd ../docs
 uv run mkdocs serve
 ```
 
@@ -213,7 +232,6 @@ The development server will start at `http://127.0.0.1:8000` with live reload en
 **Build static site**:
 
 ```bash
-cd docs
 uv run mkdocs build
 ```
 
@@ -221,6 +239,7 @@ This builds the site to `docs/.site` directory.
 
 **Tips**:
 
+- The server automatically watches and reloads when you edit markdown files in `docs/docs/`
 - Use `mkdocs serve --dirty` to only rebuild changed files (faster for iterative development)
 - You may need to restart if you make changes to `mkdocs.yml`
 
