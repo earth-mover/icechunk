@@ -343,10 +343,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model = Model()
         self.storage = None
 
-    @initialize(data=st.data(), target=branches)
-    def initialize(self, data: st.DataObject) -> str:
+    @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
+    def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
         self.storage = in_memory_storage()
-        spec_version = cast(Literal[1, 2], data.draw(st.sampled_from([1, 2])))
         self.repo = Repository.create(self.storage, spec_version=spec_version)
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
@@ -360,7 +359,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model.HEAD = HEAD
         self.model.create_branch(DEFAULT_BRANCH, HEAD)
         self.model.checkout_branch(DEFAULT_BRANCH)
-        self.model.spec_version = spec_version
 
         # initialize with some data always
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
@@ -406,9 +404,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert self.storage is not None
         self.repo = Repository.open(self.storage)
         note(f"Reopened repository (spec_version={self.repo.spec_version})")
-
-        # Sync model's spec_version with actual repo
-        self.model.spec_version = self.repo.spec_version
 
         # Reopening discards uncommitted changes - reset model to last committed state
         branch = (
