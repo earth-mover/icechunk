@@ -40,6 +40,7 @@ from icechunk import (
     IcechunkError,
     Repository,
     SnapshotInfo,
+    Storage,
     in_memory_storage,
 )
 from zarr.testing.stateful import SyncStoreWrapper
@@ -346,7 +347,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         note("----------")
         self.model = Model()
-        self.storage = None
+        self.storage: Storage | None = None
 
     @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
     def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
@@ -393,7 +394,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @rule()
     @precondition(lambda self: self.repo.spec_version == 1)
-    def upgrade_spec_version(self):
+    def upgrade_spec_version(self) -> None:
         # don't test simple cases of catching error upgradging a v2 spec
         # that should be covered in unit tests
         icechunk.upgrade_icechunk_repository(self.repo)
@@ -406,7 +407,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         This discards any uncommitted changes.
         """
-        assert self.storage is not None
+        assert self.storage is not None, "storage must be initialized"
         self.repo = Repository.open(self.storage)
         note(f"Reopened repository (spec_version={self.repo.spec_version})")
 
