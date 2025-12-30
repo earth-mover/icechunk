@@ -102,25 +102,6 @@ class TagModel:
     # message: str | None
 
 
-@dataclass
-class BranchModel:
-    commits: list[str]
-
-    @property
-    def head(self) -> str:
-        """Get the HEAD commit of the branch."""
-        return self.commits[-1]
-
-    def append(self, commit_id: str) -> None:
-        self.commits.append(commit_id)
-
-    def pop(self) -> str:
-        return self.commits.pop()
-
-    def __contains__(self, commit_id: str) -> bool:
-        return commit_id in self.commits
-
-
 class Model:
     def __init__(self, **kwargs: Any) -> None:
         self.store: dict[str, Any] = {}  #
@@ -134,7 +115,7 @@ class Model:
         self.commits: dict[str, CommitModel] = {}
         self.ondisk_snaps: dict[str, CommitModel] = {}
         self.tags: dict[str, TagModel] = {}
-        self.branches: dict[str, BranchModel] = {}
+        self.branch_heads: dict[str, str] = {}
 
         # a tag once created, can never be recreated even after expiration
         self.created_tags: set[str] = set()
@@ -142,7 +123,7 @@ class Model:
     def __repr__(self) -> str:
         return textwrap.dedent(f"""
         <Model branch: {self.branch!r}, HEAD: {self.HEAD!r}, changes_made: {self.changes_made!r}>
-        Branches: {tuple(self.branches.keys())!r}
+        Branches: {tuple(self.branch_heads.keys())!r}
         Tags: {tuple(self.tags.keys())!r}""").strip("\n")
 
     def __setitem__(self, key: str, value: Buffer) -> None:
@@ -180,20 +161,29 @@ class Model:
         self.HEAD = ref
 
         assert self.branch is not None
-        self.branches[self.branch].append(ref)
+        self.branch_heads[self.branch] = ref
 
     def amend(self, branch: str, snap: SnapshotInfo) -> None:
         """Amend the HEAD commit on the given branch."""
-        old_head = self.branches[branch].head
+        old_head = self.branch_heads[branch]
         old_commit = self.commits[old_head]
         parent_id = old_commit.parent_id
 
-        # Only remove old commit if no other branch references it in their history
-        if not any(
-            old_head in other_model
-            for other_branch, other_model in self.branches.items()
+        # Only remove old commit if no other branch or tag references it
+        # Check if it is another branch's HEAD
+        is_other_branch_head = any(
+            old_head == other_model
+            for other_branch, other_model in self.branch_heads.items()
             if other_branch != branch
-        ):
+        )
+        # Check if it is in another branches' history by searching if it is the parent
+        # of any other commits. This is a valid check because we can only amend the HEAD
+        # commit, so if it is the parent of a commit, that commit is on a different branch
+        is_parent = any(old_head == commit.parent_id for commit in self.commits.values())
+        # check if the commit has been tagged
+        has_tag = any(tag.commit_id == old_head for tag in self.tags.values())
+        # if none of the above then delete the commit
+        if not is_other_branch_head and not is_parent and not has_tag:
             self.commits.pop(old_head)
 
         # Add new commit with same parent
@@ -203,9 +193,8 @@ class Model:
         )
         self.commits[new_commit_id].parent_id = parent_id
 
-        # Replace HEAD in branch history
-        self.branches[branch].pop()
-        self.branches[branch].append(new_commit_id)
+        # Update branch HEAD
+        self.branch_heads[branch] = new_commit_id
 
         self.HEAD = new_commit_id
         self.changes_made = False
@@ -221,27 +210,19 @@ class Model:
 
     def create_branch(self, name: str, commit: str) -> None:
         assert commit in self.commits
-        self.branches[name] = BranchModel(commits=[commit])
+        self.branch_heads[name] = commit
 
     def checkout_branch(self, ref: str) -> None:
-        self.checkout_commit(self.branches[ref].head)
+        self.checkout_commit(self.branch_heads[ref])
         self.branch = ref
 
     # TODO: add `from_snapshot_id` to this
     def reset_branch(self, branch: str, commit: str) -> None:
         assert commit in self.commits
-        # Keep history up to the specified commit
-        if commit in self.branches[branch]:
-            idx = self.branches[branch].commits.index(commit)
-            self.branches[branch] = BranchModel(
-                commits=self.branches[branch].commits[: idx + 1]
-            )
-        else:
-            # If commit not in current branch history, set it as new HEAD
-            self.branches[branch] = BranchModel(commits=[commit])
+        self.branch_heads[branch] = commit
 
     def delete_branch(self, branch_name: str) -> None:
-        del self.branches[branch_name]
+        del self.branch_heads[branch_name]
 
     def delete_tag(self, tag: str) -> None:
         del self.tags[tag]
@@ -260,8 +241,7 @@ class Model:
 
     def refs_iter(self) -> Iterator[str]:
         tag_iter = map(operator.attrgetter("commit_id"), self.tags.values())
-        branch_heads = (branch.head for branch in self.branches.values())
-        return itertools.chain(branch_heads, tag_iter)
+        return itertools.chain(self.branch_heads.values(), tag_iter)
 
     def expire_snapshots(
         self,
@@ -272,7 +252,7 @@ class Model:
     ) -> ExpireInfo:
         # model this exactly like icechunk does.
         expired_snaps = set()
-        branch_pointees = {branch.head for branch in self.branches.values()}
+        branch_pointees = set(self.branch_heads.values())
         tag_pointees = set(map(operator.attrgetter("commit_id"), self.tags.values()))
         for snap in self.commits.values():
             if (
@@ -280,7 +260,7 @@ class Model:
                 and snap.parent_id is not None
                 and (delete_expired_tags or snap.id not in tag_pointees)
                 and (
-                    (delete_expired_branches and self.branches["main"].head != snap.id)
+                    (delete_expired_branches and self.branch_heads["main"] != snap.id)
                     or snap.id not in branch_pointees
                 )
             ):
@@ -309,12 +289,12 @@ class Model:
         if delete_expired_branches:
             branches_to_delete = {
                 k
-                for k, v in self.branches.items()
-                if k != DEFAULT_BRANCH and v.head in expired_snaps
+                for k, v in self.branch_heads.items()
+                if k != DEFAULT_BRANCH and v in expired_snaps
             }
             note(f"deleting branches {branches_to_delete=!r}")
             for branch in branches_to_delete:
-                note(f"deleting {branch=!r}, {self.branches[branch]=!r}")
+                note(f"deleting {branch=!r}, {self.branch_heads[branch]=!r}")
                 self.delete_branch(branch)
         else:
             branches_to_delete = set()
@@ -433,7 +413,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # Reopening discards uncommitted changes - reset model to last committed state
         branch = (
             self.model.branch
-            if self.model.branch in self.model.branches
+            if self.model.branch in self.model.branch_heads
             else DEFAULT_BRANCH
         )
         self.session = self.repo.writable_session(branch)
@@ -506,8 +486,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(ref=branches)
     def checkout_branch(self, ref: str) -> None:
         # TODO: sometimes readonly?
-        branch_model = self.model.branches.get(ref)
-        if branch_model is not None and branch_model.head in self.model.commits:
+        branch_head = self.model.branch_heads.get(ref)
+        if branch_head is not None and branch_head in self.model.commits:
             note(f"Checking out branch {ref!r}")
             self.session = self.repo.writable_session(ref)
             assert not self.session.read_only
@@ -522,7 +502,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         note(f"Creating branch {name!r}")
 
         # we can create a tag and branch with the same name
-        if name not in self.model.branches and commit in self.model.commits:
+        if name not in self.model.branch_heads and commit in self.model.commits:
             self.repo.create_branch(name, commit)
             self.model.create_branch(name, commit)
         else:
@@ -574,13 +554,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @precondition(lambda self: not self.model.changes_made)
     @rule(branch=branches, commit=commits)
     def reset_branch(self, branch: str, commit: str) -> None:
-        if branch not in self.model.branches or commit not in self.model.commits:
+        if branch not in self.model.branch_heads or commit not in self.model.commits:
             note(f"resetting branch {branch}, expecting error.")
             with pytest.raises(IcechunkError):
                 self.repo.reset_branch(branch, commit)
         else:
             note(
-                f"resetting branch {branch} from {self.model.branches[branch].head} to {commit}"
+                f"resetting branch {branch} from {self.model.branch_heads[branch]} to {commit}"
             )
             self.repo.reset_branch(branch, commit)
             self.model.reset_branch(branch, commit)
@@ -598,7 +578,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(branch=consumes(branches))
     def delete_branch(self, branch: str) -> None:
         note(f"Deleting branch {branch!r}")
-        if branch in self.model.branches:
+        if branch in self.model.branch_heads:
             if branch == DEFAULT_BRANCH:
                 note("Expecting error.")
                 with pytest.raises(
@@ -764,8 +744,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @invariant()
     def check_branches(self) -> None:
         repo_branches = {k: self.repo.lookup_branch(k) for k in self.repo.list_branches()}
-        model_branch_heads = {k: v.head for k, v in self.model.branches.items()}
-        assert model_branch_heads == repo_branches
+        assert self.model.branch_heads == repo_branches
 
     @invariant()
     def check_ancestry(self) -> None:
