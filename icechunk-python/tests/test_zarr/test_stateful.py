@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from hypothesis import assume, note, settings
 from hypothesis.stateful import (
+    initialize,
     invariant,
     precondition,
     rule,
@@ -105,9 +106,26 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     def __init__(self, storage: Storage) -> None:
         self.storage = storage
-        self.repo = Repository.create(self.storage)
-        store = self.repo.writable_session("main").store
-        super().__init__(store)
+        # Create a temporary repository with spec_version=1 in a separate storage
+        # This will be replaced in init_store with the Hypothesis-sampled version
+        # we need this in order to properly initialize the superclass MemoryStore
+        # model
+        temp_repo = Repository.create(in_memory_storage(), spec_version=1)
+        temp_store = temp_repo.writable_session("main").store
+        super().__init__(temp_store)
+
+    @initialize(spec_version=st.sampled_from([1, 2]))
+    def init_store(self, spec_version: int) -> None:
+        """Override parent's init_store to sample spec_version and create repository."""
+        # necessary to control the order of calling. if multiple intiliazes they will be
+        # called by hypothesis in a random order
+        note(f"Creating repository with spec_version={spec_version}")
+
+        # Create repository with the drawn spec version
+        self.repo = Repository.create(self.storage, spec_version=spec_version)
+        self.store = self.repo.writable_session("main").store
+
+        super().init_store()
 
     @precondition(
         lambda self: not self.store.session.has_uncommitted_changes
@@ -198,6 +216,28 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                 f"After: {get_after_cmp!r}, \n\n "
                 f"Expected: {get_expect.to_bytes()!r}"
             )
+
+    @rule()
+    @precondition(lambda self: self.repo.spec_version == 1)
+    @precondition(lambda self: not self.store.session.has_uncommitted_changes)
+    def upgrade_spec_version(self) -> None:
+        """Upgrade repository from spec version 1 to version 2."""
+        note("upgrading spec version from 1 to 2")
+        ic.upgrade_icechunk_repository(self.repo)
+        # Reopen to pick up the upgraded spec version
+        note("reopening after upgrade")
+        self.repo = Repository.open(self.storage)
+        self.store = self.repo.writable_session("main").store
+        note(f"reopened repository with spec_version={self.repo.spec_version}")
+
+    @rule()
+    @precondition(lambda self: not self.store.session.has_uncommitted_changes)
+    def reopen_repository(self) -> None:
+        """Reopen the repository from storage to get fresh state."""
+        note(f"reopening repository (current spec_version={self.repo.spec_version})")
+        self.repo = Repository.open(self.storage)
+        self.store = self.repo.writable_session("main").store
+        note(f"reopened repository (spec_version={self.repo.spec_version})")
 
     @rule(
         data=st.data(),
