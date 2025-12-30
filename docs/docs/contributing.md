@@ -206,13 +206,14 @@ The documentation is built with [MkDocs](https://www.mkdocs.org/) using [Materia
     sudo dnf install cairo-devel
     ```
 
-From the `docs` directory:
+From the `icechunk-python` directory:
 
 ```bash
-# Install dependencies (including icechunk with docs extras)
-uv sync
+# Install icechunk with docs dependencies
+uv sync --group docs
 
 # Start the MkDocs development server
+cd ../docs
 uv run mkdocs serve
 ```
 
@@ -221,6 +222,7 @@ The development server will start at `http://127.0.0.1:8000` with live reload en
 **Build static site**:
 
 ```bash
+cd docs
 uv run mkdocs build
 ```
 
@@ -228,7 +230,6 @@ This builds the site to `docs/.site` directory.
 
 **Tips**:
 
-- The server automatically watches and reloads when you edit markdown files in `docs/docs/`
 - Use `mkdocs serve --dirty` to only rebuild changed files (faster for iterative development)
 - You may need to restart if you make changes to `mkdocs.yml`
 
