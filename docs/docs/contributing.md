@@ -27,16 +27,25 @@ cd icechunk-python
 
 === "uv (Recommended)"
 
-    The easiest way to get started is with [uv](https://docs.astral.sh/uv/), which handles virtual environments, dependencies, and building automatically:
+    The easiest way to get started is with [uv](https://docs.astral.sh/uv/), which handles virtual environments and dependencies:
 
     ```bash
     # Install all development dependencies (includes test dependencies, mypy, ruff, maturin)
     uv sync
 
-    # Activate the virtual environment
-    source .venv/bin/activate
+    # Configure maturin-import-hook for fast incremental Rust compilation
+    uv run -m maturin_import_hook site install
 
-    # Run tests
+    # Build the Rust extension
+    maturin develop --uv
+    ```
+
+    **Why these steps?** Icechunk is a mixed Python/Rust project. The `maturin-import-hook` enables incremental Rust compilation (7-20 seconds) instead of full rebuilds (5+ minutes) every time you run tests or import the module. This makes development significantly faster.
+
+    Now you can run tests and other commands:
+
+    ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
     uv run pytest
 
     # Run type checking
@@ -45,26 +54,6 @@ cd icechunk-python
     # Run linting
     uv run ruff check python
     ```
-
-    **Faster Rust Development with maturin-import-hook** (Recommended for contributors)
-
-    By default, `uv run` will rebuild the entire Rust extension in release mode on every invocation, which can take 5+ minutes. For faster iteration during development:
-
-    ```bash
-    # One-time setup: Configure maturin-import-hook (already in dev dependencies)
-    uv run -m maturin_import_hook site install
-
-    # Do an initial build
-    maturin develop
-
-    # Now uv run will use incremental compilation (2-20 seconds instead of 5+ minutes)
-    uv run pytest
-    ```
-
-    This works because:
-    - `pyproject.toml` sets `package = false` to disable uv's auto-rebuild
-    - maturin-import-hook (already in dev dependencies) intercepts imports and does incremental Rust compilation
-    - You get much faster feedback when iterating on Rust code
 
 === "Venv"
 
