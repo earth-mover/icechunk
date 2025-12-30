@@ -225,16 +225,13 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         note("upgrading spec version from 1 to 2")
         ic.upgrade_icechunk_repository(self.repo)
         # Reopen to pick up the upgraded spec version
-        note("reopening after upgrade")
         self.repo = Repository.open(self.storage)
         self.store = self.repo.writable_session("main").store
-        note(f"reopened repository with spec_version={self.repo.spec_version}")
 
     @rule()
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     def reopen_repository(self) -> None:
         """Reopen the repository from storage to get fresh state."""
-        note(f"reopening repository (current spec_version={self.repo.spec_version})")
         self.repo = Repository.open(self.storage)
         self.store = self.repo.writable_session("main").store
         note(f"reopened repository (spec_version={self.repo.spec_version})")
