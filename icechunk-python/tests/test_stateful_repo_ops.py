@@ -138,7 +138,6 @@ class Model:
 
         # a tag once created, can never be recreated even after expiration
         self.created_tags: set[str] = set()
-        self.spec_version: Literal[1, 2] | None = None
 
     def __repr__(self) -> str:
         return textwrap.dedent(f"""
@@ -457,7 +456,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # TODO: update changes made rule depending on result of
     # https://github.com/earth-mover/icechunk/issues/1532
     @precondition(
-        lambda self: (self.model.changes_made) and (self.model.spec_version >= 2)
+        lambda self: (self.model.changes_made) and (self.repo.spec_version >= 2)
     )
     def amend_commit(self, message: str) -> str:
         branch = self.session.branch
