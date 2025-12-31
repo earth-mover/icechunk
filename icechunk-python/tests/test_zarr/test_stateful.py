@@ -228,14 +228,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self.repo = Repository.open(self.storage)
         self.store = self.repo.writable_session("main").store
 
-    @rule()
-    @precondition(lambda self: not self.store.session.has_uncommitted_changes)
-    def reopen_repository(self) -> None:
-        """Reopen the repository from storage to get fresh state."""
-        self.repo = Repository.open(self.storage)
-        self.store = self.repo.writable_session("main").store
-        note(f"reopened repository (spec_version={self.repo.spec_version})")
-
     @rule(
         data=st.data(),
         name=node_names,
