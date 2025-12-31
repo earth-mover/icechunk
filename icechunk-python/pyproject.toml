@@ -24,7 +24,13 @@ authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 dependencies = ["zarr>=3,!=3.0.3"]
 
 [dependency-groups]
-dev = [{ include-group = "test" }, "mypy", "ruff", "maturin>=1.7,<2.0"]
+dev = [
+    { include-group = "test" },
+    "mypy",
+    "ruff",
+    "maturin>=1.7,<2.0",
+    "maturin-import-hook>=0.3.0",
+]
 test = [
   "boto3",
   "coverage",
@@ -97,14 +103,8 @@ python-source = "python"
 exclude = ["README.md"]
 
 [tool.uv]
-# Rebuild package when any Rust files change
-cache-keys = [
-  { file = "pyproject.toml" },
-  { file = "Cargo.toml" },
-  { file = "src/**/*.rs" },
-  { file = "../icechunk/Cargo.toml" },
-  { file = "../icechunk/src/**/*.rs" },
-]
+# Disable automatic package building - we use maturin-import-hook for faster dev cycles
+package = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
