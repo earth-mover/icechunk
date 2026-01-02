@@ -77,6 +77,7 @@ impl RedirectStorage {
                     "Cannot build http client for redirect Storage instance: {e}"
                 )))
             })?;
+
         let req = client.get(self.url.clone()).build().map_err(|e| {
             StorageError::from(StorageErrorKind::BadRedirect(format!(
                 "Cannot build http request for redirect Storage instance: {e}"
