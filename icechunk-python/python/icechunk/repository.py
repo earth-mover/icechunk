@@ -1,10 +1,12 @@
 import datetime
+import warnings
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from typing import Any, Self, cast
 
 from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
+    ChunkStorageStats,
     Diff,
     GCSummary,
     ManifestFileInfo,
@@ -1582,6 +1584,72 @@ class Repository:
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
 
+    def chunk_storage_stats(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> ChunkStorageStats:
+        """Calculate the total storage used for chunks, in bytes.
+
+        It reports the storage needed to store all snapshots in the repository that
+        are reachable from any branches or tags. Unreachable snapshots can be generated
+        by using `reset_branch` or `expire_snapshots`. The chunks for these snapshots
+        are not included in the result, and they should probably be deleted using
+        `garbage_collection`.
+
+        The result is a dataclass with attributes for storage consumed by different
+        types of chunks (e.g. `native_bytes`, `virtual_bytes`, `total_bytes`).
+
+        Parameters
+        ----------
+        max_snapshots_in_memory: int
+            Don't prefetch more than this many Snapshots to memory.
+        max_compressed_manifest_mem_bytes : int
+            Don't use more than this memory to store compressed in-flight manifests.
+        max_concurrent_manifest_fetches : int
+            Don't run more than this many concurrent manifest fetches.
+        """
+        return self._repository.chunk_storage_stats(
+            max_snapshots_in_memory=max_snapshots_in_memory,
+            max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
+        )
+
+    async def chunk_storage_stats_async(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> ChunkStorageStats:
+        """Calculate the total storage used for chunks, in bytes (async version).
+
+        It reports the storage needed to store all snapshots in the repository that
+        are reachable from any branches or tags. Unreachable snapshots can be generated
+        by using `reset_branch` or `expire_snapshots`. The chunks for these snapshots
+        are not included in the result, and they should probably be deleted using
+        `garbage_collection`.
+
+        The result is a dataclass with attributes for storage consumed by different
+        types of chunks (e.g. `native_bytes`, `virtual_bytes`, `total_bytes`).
+
+        Parameters
+        ----------
+        max_snapshots_in_memory: int
+            Don't prefetch more than this many Snapshots to memory.
+        max_compressed_manifest_mem_bytes : int
+            Don't use more than this memory to store compressed in-flight manifests.
+        max_concurrent_manifest_fetches : int
+            Don't run more than this many concurrent manifest fetches.
+        """
+        return await self._repository.chunk_storage_stats_async(
+            max_snapshots_in_memory=max_snapshots_in_memory,
+            max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
+        )
+
     def total_chunks_storage(
         self,
         *,
@@ -1589,7 +1657,7 @@ class Repository:
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> int:
-        """Calculate the total storage used for chunks, in bytes .
+        """Calculate the total storage used for chunks, in bytes.
 
         It reports the storage needed to store all snapshots in the repository that
         are reachable from any branches or tags. Unreachable snapshots can be generated
@@ -1609,11 +1677,21 @@ class Repository:
             Don't run more than this many concurrent manifest fetches.
         """
 
-        return self._repository.total_chunks_storage(
+        warnings.warn(
+            "The ``total_chunks_storage`` method has been deprecated in favour of the ``chunk_storage_stats`` method. "
+            "The new method is superior, as it actually calculates storage size occupied by inlined and virtual chunks in addition to native chunks. "
+            "You can still access just the total native bytes: to keep your existing behaviour using API that will not be removed in a future version, "
+            "please replace your existing ``.total_chunks_storage(**kwargs)`` method call with ``.chunk_storage_stats(**same_kwargs).native_bytes``.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+        stats = self._repository.chunk_storage_stats(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
+        return stats.native_bytes
 
     async def total_chunks_storage_async(
         self,
@@ -1642,11 +1720,21 @@ class Repository:
             Don't run more than this many concurrent manifest fetches.
         """
 
-        return await self._repository.total_chunks_storage_async(
+        warnings.warn(
+            "The ``total_chunks_storage_async`` method has been deprecated in favour of the ``chunk_storage_stats_async`` method. "
+            "The new method is superior, as it actually calculates storage size occupied by inlined and virtual chunks in addition to native chunks. "
+            "You can still access just the total native bytes: to keep your existing behaviour using API that will not be removed in a future version, "
+            "please replace your existing ``.total_chunks_storage_async(**kwargs)`` method call with ``.chunk_storage_stats_async(**same_kwargs).native_bytes``.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+        stats = await self._repository.chunk_storage_stats_async(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
+        return stats.native_bytes
 
     def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str:
         return self._repository.inspect_snapshot(snapshot_id, pretty=pretty)

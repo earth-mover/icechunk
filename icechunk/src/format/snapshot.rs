@@ -337,7 +337,7 @@ impl SnapshotInfo {
 
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     max_depth: 64,
-    max_tables: 500_000,
+    max_tables: 50_000_000,
     max_apparent_size: 1 << 31, // taken from the default
     ignore_missing_null_terminator: true,
 };
