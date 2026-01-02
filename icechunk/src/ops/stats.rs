@@ -11,7 +11,7 @@ use tracing::trace;
 use crate::{
     asset_manager::AssetManager,
     format::{
-        ChunkId, ChunkLength, ChunkOffset, SnapshotId,
+        ChunkId, ChunkLength, ChunkOffset, SnapshotId, CHUNKS_FILE_PATH,
         manifest::{ChunkPayload, Manifest, VirtualChunkLocation},
         snapshot::ManifestFileInfo,
     },
@@ -237,4 +237,34 @@ pub async fn repo_chunks_storage(
     debug_assert_eq!(limiter.current_usage(), 0);
 
     Ok(res)
+}
+
+/// Compute the total size in bytes of native chunks by listing storage directly.
+/// This is a memory-efficient alternative to `repo_chunks_storage` that avoids
+/// loading manifests and building large HashSets. It only counts native chunks
+/// by listing the "chunks/" prefix in storage.
+///
+/// This is significantly more memory efficient but only returns native_bytes.
+/// Virtual and inline chunk statistics will be zero.
+pub async fn repo_chunks_storage_by_prefix(
+    asset_manager: Arc<AssetManager>,
+) -> RepositoryResult<ChunkStorageStats> {
+    let storage = asset_manager.storage();
+    let settings = asset_manager.storage_settings();
+
+    // List all objects under the "chunks/" prefix
+    let chunks_stream = storage.list_objects(settings, CHUNKS_FILE_PATH).await?;
+
+    // Sum up the sizes
+    let native_bytes = chunks_stream
+        .try_fold(0u64, |total, list_info| {
+            ready(Ok(total.saturating_add(list_info.size_bytes)))
+        })
+        .await?;
+
+    Ok(ChunkStorageStats {
+        native_bytes,
+        virtual_bytes: 0,
+        inlined_bytes: 0,
+    })
 }

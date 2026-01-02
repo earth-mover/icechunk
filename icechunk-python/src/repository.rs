@@ -24,7 +24,7 @@ use icechunk::{
     ops::{
         gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
         manifests::rewrite_manifests,
-        stats::repo_chunks_storage,
+        stats::{repo_chunks_storage, repo_chunks_storage_by_prefix},
     },
     repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
 };
@@ -2269,6 +2269,26 @@ impl PyRepository {
                 )
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(stats.into())
+            },
+        )
+    }
+
+    pub(crate) fn chunk_storage_stats_by_prefix_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, PyChunkStorageStats>(
+            py,
+            async move {
+                let asset_manager = {
+                    let lock = repository.read().await;
+                    Arc::clone(lock.asset_manager())
+                };
+                let stats = repo_chunks_storage_by_prefix(asset_manager)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(stats.into())
             },
         )

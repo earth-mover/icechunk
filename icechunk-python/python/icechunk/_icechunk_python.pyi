@@ -1810,6 +1810,7 @@ class PyRepository:
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> ChunkStorageStats: ...
+    async def chunk_storage_stats_by_prefix_async(self) -> ChunkStorageStats: ...
     def total_chunks_storage(
         self,
         *,
