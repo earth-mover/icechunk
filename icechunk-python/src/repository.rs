@@ -42,6 +42,7 @@ use crate::{
     errors::PyIcechunkStoreError,
     impl_pickle,
     session::PySession,
+    stats::PyChunkStorageStats,
     streams::PyAsyncGenerator,
 };
 
@@ -1600,16 +1601,16 @@ impl PyRepository {
         })
     }
 
-    pub(crate) fn total_chunks_storage(
+    pub(crate) fn chunk_storage_stats(
         &self,
         py: Python<'_>,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
         max_concurrent_manifest_fetches: NonZeroU16,
-    ) -> PyResult<u64> {
+    ) -> PyResult<PyChunkStorageStats> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
-            let result =
+            let stats =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let (storage, storage_settings, asset_manager) = {
                         let lock = self.0.read().await;
@@ -1619,7 +1620,7 @@ impl PyRepository {
                             Arc::clone(lock.asset_manager()),
                         )
                     };
-                    let result = repo_chunks_storage(
+                    let stats = repo_chunks_storage(
                         storage.as_ref(),
                         &storage_settings,
                         asset_manager,
@@ -1629,14 +1630,14 @@ impl PyRepository {
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
-                    Ok::<_, PyIcechunkStoreError>(result)
+                    Ok::<_, PyIcechunkStoreError>(stats)
                 })?;
 
-            Ok(result)
+            Ok(stats.into())
         })
     }
 
-    fn total_chunks_storage_async<'py>(
+    pub(crate) fn chunk_storage_stats_async<'py>(
         &'py self,
         py: Python<'py>,
         max_snapshots_in_memory: NonZeroU16,
@@ -1644,27 +1645,30 @@ impl PyRepository {
         max_concurrent_manifest_fetches: NonZeroU16,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py::<_, u64>(py, async move {
-            let (storage, storage_settings, asset_manager) = {
-                let lock = repository.read().await;
-                (
-                    Arc::clone(lock.storage()),
-                    lock.storage_settings().clone(),
-                    Arc::clone(lock.asset_manager()),
+        pyo3_async_runtimes::tokio::future_into_py::<_, PyChunkStorageStats>(
+            py,
+            async move {
+                let (storage, storage_settings, asset_manager) = {
+                    let lock = repository.read().await;
+                    (
+                        Arc::clone(lock.storage()),
+                        lock.storage_settings().clone(),
+                        Arc::clone(lock.asset_manager()),
+                    )
+                };
+                let stats = repo_chunks_storage(
+                    storage.as_ref(),
+                    &storage_settings,
+                    asset_manager,
+                    max_snapshots_in_memory,
+                    max_compressed_manifest_mem_bytes,
+                    max_concurrent_manifest_fetches,
                 )
-            };
-            let result = repo_chunks_storage(
-                storage.as_ref(),
-                &storage_settings,
-                asset_manager,
-                max_snapshots_in_memory,
-                max_compressed_manifest_mem_bytes,
-                max_concurrent_manifest_fetches,
-            )
-            .await
-            .map_err(PyIcechunkStoreError::RepositoryError)?;
-            Ok(result)
-        })
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(stats.into())
+            },
+        )
     }
 
     #[pyo3(signature = (snapshot_id, *, pretty = true))]
