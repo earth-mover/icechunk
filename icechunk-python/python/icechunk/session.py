@@ -22,6 +22,15 @@ class Session:
         self._session = session
         self._allow_changes = False
 
+    def __repr__(self) -> str:
+        return repr(self._session)
+
+    def __str__(self) -> str:
+        return str(self._session)
+
+    def _repr_html_(self) -> str:
+        return self._session._repr_html_()
+
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Session):
             return False

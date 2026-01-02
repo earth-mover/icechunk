@@ -29,6 +29,15 @@ class Repository:
     def __init__(self, repository: PyRepository):
         self._repository = repository
 
+    def __repr__(self) -> str:
+        return repr(self._repository)
+
+    def __str__(self) -> str:
+        return str(self._repository)
+
+    def _repr_html_(self) -> str:
+        return self._repository._repr_html_()
+
     @classmethod
     def create(
         cls,

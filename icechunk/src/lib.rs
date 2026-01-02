@@ -22,6 +22,7 @@ pub mod change_set;
 pub mod cli;
 pub mod config;
 pub mod conflicts;
+pub mod display;
 pub mod error;
 pub mod format;
 pub mod inspect;
