@@ -246,3 +246,11 @@ Currently, Icechunk supports `HDF5`, `netcdf4`, and `netcdf3` files for use in v
 - [Support for GRIB2 files](https://github.com/zarr-developers/VirtualiZarr/issues/312)
 - [Support for GRIB2 files with datatree](https://github.com/zarr-developers/VirtualiZarr/issues/11)
 - [Support for TIFF files](https://github.com/zarr-developers/VirtualiZarr/issues/291)
+
+### Estimating number of files 
+
+If you store zarr or icechunk stores on filesystems instead of cloud object storage, you might encounter constraints on the *number of files* you are able to create. Particularly in the context of large distributed HPC filesystems users are limited to a certain number of *inodes* (each directory or file corresponds to exactly one inode). When saving native zarr or icechunk stores, usually each chunk creates one file which can easily get you in trouble for large datasets. 
+But virtual icechunk stores create significantly less files if saved on a filesystem. 
+
+!!! note
+    You can use this simple heuristic to estimate the number of files created: If you are using Icechunk default configuration, you should expect one snapshot file per commit + 1, one transaction log file per commit + 1, one manifest per array modified in each commit, one file per branch, one file per tag
