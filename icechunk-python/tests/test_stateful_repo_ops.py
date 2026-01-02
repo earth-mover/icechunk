@@ -118,6 +118,9 @@ class Model:
         self.HEAD: None | str = None
         self.branch: None | str = None
 
+        # we maintain a list of `commits` == snapshots in repo object file
+        # and `ondisk_snaps` = commits + expired_snaphsots
+        # expired snapshots are removed from the repo object file and can be garbage collected
         self.commits: dict[str, CommitModel] = {}
         self.ondisk_snaps: dict[str, CommitModel] = {}
         self.tags: dict[str, TagModel] = {}
@@ -169,41 +172,10 @@ class Model:
         assert self.branch is not None
         self.branch_heads[self.branch] = ref
 
-    def amend(self, branch: str, snap: SnapshotInfo) -> None:
-        """Amend the HEAD commit on the given branch."""
-        old_head = self.branch_heads[branch]
-        old_commit = self.commits[old_head]
-        parent_id = old_commit.parent_id
-
-        # Only remove old commit if no other branch or tag references it
-        # Check if it is another branch's HEAD
-        is_other_branch_head = any(
-            old_head == other_model
-            for other_branch, other_model in self.branch_heads.items()
-            if other_branch != branch
-        )
-        # Check if it is in another branches' history by searching if it is the parent
-        # of any other commits. This is a valid check because we can only amend the HEAD
-        # commit, so if it is the parent of a commit, that commit is on a different branch
-        is_parent = any(old_head == commit.parent_id for commit in self.commits.values())
-        # check if the commit has been tagged
-        has_tag = any(tag.commit_id == old_head for tag in self.tags.values())
-        # if none of the above then delete the commit
-        if not is_other_branch_head and not is_parent and not has_tag:
-            self.commits.pop(old_head)
-
-        # Add new commit with same parent
-        new_commit_id = snap.id
-        self.commits[new_commit_id] = CommitModel.from_snapshot_and_store(
-            snap, copy.deepcopy(self.store)
-        )
-        self.commits[new_commit_id].parent_id = parent_id
-
-        # Update branch HEAD
-        self.branch_heads[branch] = new_commit_id
-
-        self.HEAD = new_commit_id
-        self.changes_made = False
+    def amend(self, snap: SnapshotInfo) -> None:
+        """Amend the HEAD commit."""
+        # this is simpe because we aren't modeling the branch as a list of commits
+        self.commit(snap)
 
     def checkout_commit(self, ref: str) -> None:
         assert str(ref) in self.commits
@@ -276,6 +248,7 @@ class Model:
 
         for id in expired_snaps:
             # notice we don't delete from self.ondisk_snaps, those can still be deleted by GC
+            # however we do pop from `commits` since that is a list of unexpired snaps
             self.commits.pop(id, None)
 
         for c in self.commits.values():
@@ -441,10 +414,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         and (self.repo.spec_version >= 2)
         and len(self.model.commits) > 1
     )
-    def amend_commit(self, message: str) -> str:
+    def amend(self, message: str) -> str:
         branch = self.session.branch
         assert branch is not None
-        note(f"Amending commit on branch {branch!r}")
+        old_head = next(iter(self.repo.ancestry(branch=branch)))
+        note(f"Amending commit on branch {branch!r} with id {old_head!r}")
 
         commit_id = self.session.amend(message)
         snapinfo = next(iter(self.repo.ancestry(branch=branch)))
@@ -453,7 +427,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.session = self.repo.writable_session(branch)
 
         # Update model
-        self.model.amend(branch, snapinfo)
+        self.model.amend(snapinfo)
         return commit_id
 
     @rule(ref=commits)
@@ -704,6 +678,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 self.model.checkout_branch(DEFAULT_BRANCH)
 
     def check_commit(self, commit: str) -> None:
+        # utility function, not an invariant
         assume(commit in self.model.commits)
         note(f"Checking {commit=!r}")
         expected = self.model.commits[commit]
@@ -714,6 +689,15 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert actual.written_at == expected.written_at
 
     @invariant()
+    def checks(self) -> None:
+        # this method only exists to reduce verbosity of hypothesis output
+        # It cannot be called `check_invariants` because that clashes
+        # with an existing method on the superclass
+        self.check_list_prefix_from_root()
+        self.check_tags()
+        self.check_branches()
+        self.check_ancestry()
+
     def check_list_prefix_from_root(self) -> None:
         model_list = self.model.list_prefix("")
         ice_list = self.sync_store.list_prefix("")
@@ -733,7 +717,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 np.testing.assert_allclose(actual_fv, expected_fv)
             assert actual == expected
 
-    @invariant()
     def check_tags(self) -> None:
         expected_tags = self.model.tags
         actual_tags = {
@@ -742,12 +725,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         }
         assert actual_tags == expected_tags
 
-    @invariant()
     def check_branches(self) -> None:
         repo_branches = {k: self.repo.lookup_branch(k) for k in self.repo.list_branches()}
         assert self.model.branch_heads == repo_branches
 
-    @invariant()
     def check_ancestry(self) -> None:
         for branch in self.repo.list_branches():
             ancestry = list(self.repo.ancestry(branch=branch))
