@@ -129,6 +129,10 @@
                 # necessary for reqwest
                 pkgs.openssl
                 pkgs.pkg-config
+
+                # icechunk-python depends on netcdf4
+                pkgs.netcdf
+                pkgs.hdf5
               ];
 
               env = {
