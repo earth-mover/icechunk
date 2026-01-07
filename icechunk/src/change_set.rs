@@ -968,7 +968,7 @@ mod tests {
     }
 
     use crate::strategies::{
-        array_data, bytes, chunk_indices2, gen_move, manifest_extents, node_id, path,
+        array_data, bytes, large_chunk_indices, gen_move, manifest_extents, node_id, path,
         split_manifest,
     };
     use proptest::collection::{btree_map, hash_map, hash_set, vec};
@@ -983,7 +983,7 @@ mod tests {
            set_chunks in btree_map(node_id(),
                 hash_map(manifest_extents(num_of_dims), split_manifest(), 3..7),
             3..7),
-    deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(chunk_indices2(num_of_dims), 3..8), 3..7),
+    deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(large_chunk_indices(num_of_dims), 3..8), 3..7),
             deleted_groups in hash_set((path(), node_id()), 3..7),
             deleted_arrays in hash_set((path(), node_id()), 3..7)
         ) -> EditChanges {
