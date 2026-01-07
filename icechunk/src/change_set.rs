@@ -968,8 +968,8 @@ mod tests {
     }
 
     use crate::strategies::{
-        array_data, bytes, large_chunk_indices, gen_move, manifest_extents, node_id, path,
-        split_manifest,
+        array_data, bytes, gen_move, large_chunk_indices, manifest_extents, node_id,
+        path, split_manifest,
     };
     use proptest::collection::{btree_map, hash_map, hash_set, vec};
     use proptest::prelude::*;
