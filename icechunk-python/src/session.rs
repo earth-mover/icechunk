@@ -4,7 +4,7 @@ use async_stream::try_stream;
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Store,
-    format::{ChunkIndices, Path},
+    format::{ChunkIndices, Path, manifest::ChunkPayload},
     session::{Session, SessionErrorKind},
     store::{StoreError, StoreErrorKind},
 };
@@ -26,6 +26,15 @@ use crate::{
 #[pyclass]
 #[derive(Clone)]
 pub struct PySession(pub Arc<RwLock<Session>>);
+
+#[pyclass(eq, eq_int)]
+#[derive(PartialEq)]
+pub enum ChunkType {
+    UNINITIALIZED = 0,
+    NATIVE = 1,
+    VIRTUAL = 2,
+    INLINE = 3,
+}
 
 #[pymethods]
 /// Most functions in this class block, so they need to `detach` so other
@@ -316,6 +325,33 @@ impl PySession {
 
         let prepared_list = Arc::new(Mutex::new(res.boxed()));
         Ok(PyAsyncGenerator::new(prepared_list))
+    }
+
+    pub fn chunk_type<'py>(
+        &'py self,
+        py: Python<'py>,
+        array_path: String,
+        coords: Vec<u32>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, ChunkType>(py, async move {
+            let session = session.read().await;
+            let array_path = Path::new(array_path.as_str())
+                .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+                .map_err(PyIcechunkStoreError::StoreError)?;
+            let res = session
+                .get_chunk_ref(&array_path, &ChunkIndices(coords))
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+
+            Ok(match res {
+                None => ChunkType::UNINITIALIZED,
+                Some(ChunkPayload::Inline(_)) => ChunkType::INLINE,
+                Some(ChunkPayload::Virtual(_)) => ChunkType::VIRTUAL,
+                Some(ChunkPayload::Ref(_)) => ChunkType::NATIVE,
+                Some(_) => todo!("raise error"),
+            })
+        })
     }
 
     pub fn merge(&self, other: &PySession, py: Python<'_>) -> PyResult<()> {

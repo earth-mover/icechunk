@@ -8,7 +8,7 @@ from icechunk import (
     Diff,
     RepositoryConfig,
 )
-from icechunk._icechunk_python import PySession
+from icechunk._icechunk_python import PySession, ChunkType
 from icechunk.store import IcechunkStore
 
 
@@ -205,6 +205,19 @@ class Session:
         async for batch in self._session.chunk_coordinates(array_path, batch_size):
             for coord in batch:
                 yield tuple(coord)
+
+    async def chunk_type(
+        self, array_path: str, chunk_coordinates: tuple[int, ...]
+    ) -> ChunkType:
+        """
+        Return the chunk type for the specified coordinates
+
+        Returns
+        -------
+        the chunk type
+        """
+        ...
+        return await self._session.chunk_type(array_path, chunk_coordinates)
 
     def merge(self, *others: "ForkSession") -> None:
         """
