@@ -5,8 +5,16 @@ from typing import cast
 import pytest
 
 import zarr
-from icechunk import ForkSession, IcechunkError, Repository, local_filesystem_storage
+from icechunk import (
+    ForkSession,
+    IcechunkError,
+    Repository,
+    RepositoryConfig,
+    local_filesystem_storage,
+    in_memory_storage,
+)
 from icechunk.distributed import merge_sessions
+from icechunk.session import ChunkType
 
 
 @pytest.mark.parametrize("use_async", [True, False])
@@ -96,3 +104,22 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
             name for name, _ in zarr.open_group(session.store, mode="r").groups()
         )
         assert groups == {"foo", "foo1", "foo2", "foo3", "foo4"}
+
+
+def test_chunk_type(any_spec_version: int | None) -> None:
+    config = RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 1_000
+    repo = Repository.create(
+        storage=in_memory_storage(),
+        config=config,
+        spec_version=any_spec_version,
+    )
+
+    session = repo.writable_session("main")
+    group = zarr.group(store=session.store, overwrite=True)
+    air_temp = group.create_array("air_temp", shape=(9, 9), chunks=(3, 3), dtype="i4")
+
+    air_temp[:, :] = 42
+    assert air_temp[0, 0] == 42
+
+    assert session.chunk_type("/air_temp", [0, 0]) == ChunkType.INLINE

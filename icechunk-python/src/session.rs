@@ -27,13 +27,13 @@ use crate::{
 #[derive(Clone)]
 pub struct PySession(pub Arc<RwLock<Session>>);
 
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, rename_all = "UPPERCASE")]
 #[derive(PartialEq)]
 pub enum ChunkType {
-    UNINITIALIZED = 0,
-    NATIVE = 1,
-    VIRTUAL = 2,
-    INLINE = 3,
+    Uninitialized = 0,
+    Native = 1,
+    Virtual = 2,
+    Inline = 3,
 }
 
 #[pymethods]
@@ -327,14 +327,13 @@ impl PySession {
         Ok(PyAsyncGenerator::new(prepared_list))
     }
 
-    pub fn chunk_type<'py>(
-        &'py self,
-        py: Python<'py>,
+    pub fn chunk_type(
+        &self,
         array_path: String,
         coords: Vec<u32>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<ChunkType> {
         let session = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py::<_, ChunkType>(py, async move {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let session = session.read().await;
             let array_path = Path::new(array_path.as_str())
                 .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
@@ -344,13 +343,15 @@ impl PySession {
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
 
-            Ok(match res {
-                None => ChunkType::UNINITIALIZED,
-                Some(ChunkPayload::Inline(_)) => ChunkType::INLINE,
-                Some(ChunkPayload::Virtual(_)) => ChunkType::VIRTUAL,
-                Some(ChunkPayload::Ref(_)) => ChunkType::NATIVE,
-                Some(_) => todo!("raise error"),
-            })
+            match res {
+                None => Ok(ChunkType::Uninitialized),
+                Some(ChunkPayload::Inline(_)) => Ok(ChunkType::Inline),
+                Some(ChunkPayload::Virtual(_)) => Ok(ChunkType::Virtual),
+                Some(ChunkPayload::Ref(_)) => Ok(ChunkType::Native),
+                Some(_) => {
+                    Err(PyIcechunkStoreError::PyValueError("Invalid Chunk Type".into()))?
+                }
+            }
         })
     }
 

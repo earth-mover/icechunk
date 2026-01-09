@@ -206,7 +206,7 @@ class Session:
             for coord in batch:
                 yield tuple(coord)
 
-    async def chunk_type(
+    def chunk_type(
         self, array_path: str, chunk_coordinates: tuple[int, ...]
     ) -> ChunkType:
         """
@@ -217,7 +217,7 @@ class Session:
         the chunk type
         """
         ...
-        return await self._session.chunk_type(array_path, chunk_coordinates)
+        return self._session.chunk_type(array_path, chunk_coordinates)
 
     def merge(self, *others: "ForkSession") -> None:
         """

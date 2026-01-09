@@ -1070,22 +1070,3 @@ async def test_long_ops_log(spec_version: int | None) -> None:
         assert t == ic.BranchCreatedUpdate
 
     # TODO: add check for next updates page path
-
-
-async def test_chunk_type_async(any_spec_version: int | None) -> None:
-    config = ic.RepositoryConfig.default()
-    config.inline_chunk_threshold_bytes = 1_000
-    repo = await ic.Repository.create_async(
-        storage=ic.in_memory_storage(),
-        config=config,
-        spec_version=any_spec_version,
-    )
-
-    session = await repo.writable_session_async("main")
-    group = zarr.group(store=session.store, overwrite=True)
-    air_temp = group.create_array("air_temp", shape=(9, 9), chunks=(3, 3), dtype="i4")
-
-    air_temp[:, :] = 42
-    assert air_temp[0, 0] == 42
-
-    assert await session.chunk_type("/air_temp", [0, 0]) == ic.session.ChunkType.INLINE
