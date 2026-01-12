@@ -65,6 +65,15 @@ class IcechunkStore(Store, SyncMixin):
             return False
         return self._store == value._store
 
+    def __repr__(self) -> str:
+        return repr(self._store)
+
+    def __str__(self) -> str:
+        return str(self._store)
+
+    def _repr_html_(self) -> str:
+        return self._store._repr_html_()
+
     def __getstate__(self) -> object:
         # for read_only sessions we allow pickling, this allows distributed reads without forking
         writable = not self.session.read_only

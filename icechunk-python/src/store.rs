@@ -4,6 +4,7 @@ use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Store,
+    display::{dataclass_html_repr, dataclass_repr, dataclass_str},
     format::{
         ChunkIndices, ChunkLength, ChunkOffset, Path,
         manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef},
@@ -123,6 +124,57 @@ impl PyStore {
     fn __eq__(&self, other: &PyStore) -> bool {
         // If the stores were created from the same session they are equal
         Arc::ptr_eq(&self.0.session(), &other.0.session())
+    }
+
+    pub(crate) fn __repr__(&self) -> String {
+        let session = self.0.session();
+        let session_guard = session.blocking_read();
+        let branch_repr = match session_guard.branch() {
+            Some(b) => format!("\"{}\"", b),
+            None => "None".to_string(),
+        };
+        dataclass_repr(
+            "IcechunkStore",
+            &[
+                ("read_only", session_guard.read_only().to_string()),
+                ("snapshot_id", format!("\"{}\"", session_guard.snapshot_id())),
+                ("branch", branch_repr),
+            ],
+        )
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        let session = self.0.session();
+        let session_guard = session.blocking_read();
+        let branch_str = match session_guard.branch() {
+            Some(b) => b.to_string(),
+            None => "None".to_string(),
+        };
+        dataclass_str(
+            "IcechunkStore",
+            &[
+                ("read_only", session_guard.read_only().to_string()),
+                ("snapshot_id", session_guard.snapshot_id().to_string()),
+                ("branch", branch_str),
+            ],
+        )
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        let session = self.0.session();
+        let session_guard = session.blocking_read();
+        let branch_str = match session_guard.branch() {
+            Some(b) => b.to_string(),
+            None => "None".to_string(),
+        };
+        dataclass_html_repr(
+            "IcechunkStore",
+            &[
+                ("read_only", session_guard.read_only().to_string()),
+                ("snapshot_id", session_guard.snapshot_id().to_string()),
+                ("branch", branch_str),
+            ],
+        )
     }
 
     #[getter]

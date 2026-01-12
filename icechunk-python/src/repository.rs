@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use icechunk::display::{dataclass_html_repr, dataclass_repr, dataclass_str};
 use itertools::Itertools;
 
 use chrono::{DateTime, Utc};
@@ -215,11 +216,13 @@ impl From<SnapshotInfo> for PySnapshotInfo {
 #[pymethods]
 impl PyManifestFileInfo {
     pub(crate) fn __repr__(&self) -> String {
-        format!(
-            r#"ManifestFileInfo(id="{id}", size_bytes={size}, num_chunk_refs={chunks})"#,
-            id = self.id,
-            size = self.size_bytes,
-            chunks = self.num_chunk_refs,
+        dataclass_repr(
+            "ManifestFileInfo",
+            &[
+                ("id", format!("\"{}\"", self.id)),
+                ("size_bytes", self.size_bytes.to_string()),
+                ("num_chunk_refs", self.num_chunk_refs.to_string()),
+            ],
         )
     }
 }
@@ -806,6 +809,21 @@ impl PyRepository {
 /// Most functions in this class call `Runtime.block_on` so they need to `detach` so other
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
+    pub(crate) fn __repr__(&self) -> String {
+        let storage_repr = format!("{}", self.0.blocking_read().storage());
+        dataclass_repr("Repository", &[("storage", storage_repr)])
+    }
+
+    pub(crate) fn __str__(&self) -> String {
+        let storage_str = format!("{}", self.0.blocking_read().storage());
+        dataclass_str("Repository", &[("storage", storage_str)])
+    }
+
+    pub(crate) fn _repr_html_(&self) -> String {
+        let storage_str = format!("{}", self.0.blocking_read().storage());
+        dataclass_html_repr("Repository", &[("storage", storage_str)])
+    }
+
     #[classmethod]
     #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None))]
     fn create(
