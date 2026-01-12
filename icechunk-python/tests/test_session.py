@@ -10,8 +10,8 @@ from icechunk import (
     IcechunkError,
     Repository,
     RepositoryConfig,
-    local_filesystem_storage,
     in_memory_storage,
+    local_filesystem_storage,
 )
 from icechunk.distributed import merge_sessions
 from icechunk.session import ChunkType

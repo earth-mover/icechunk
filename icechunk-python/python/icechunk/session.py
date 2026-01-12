@@ -4,14 +4,13 @@ from collections.abc import AsyncIterator, Callable, Generator, Iterable, Sequen
 from typing import Any, NoReturn, Self
 
 from icechunk import (
+    ChunkType,
     ConflictSolver,
     Diff,
     RepositoryConfig,
 )
-from icechunk._icechunk_python import PySession, ChunkType
+from icechunk._icechunk_python import PySession
 from icechunk.store import IcechunkStore
-
-__all__ = ["Session", "ForkSession", "ChunkType"]
 
 
 class Session:
