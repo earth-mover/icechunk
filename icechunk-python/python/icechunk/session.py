@@ -1,6 +1,6 @@
 import contextlib
 import warnings
-from collections.abc import AsyncIterator, Callable, Generator, Iterable
+from collections.abc import AsyncIterator, Callable, Generator, Iterable, Sequence
 from typing import Any, NoReturn, Self
 
 from icechunk import (
@@ -10,6 +10,8 @@ from icechunk import (
 )
 from icechunk._icechunk_python import PySession, ChunkType
 from icechunk.store import IcechunkStore
+
+__all__ = ["Session", "ForkSession", "ChunkType"]
 
 
 class Session:
@@ -207,7 +209,9 @@ class Session:
                 yield tuple(coord)
 
     def chunk_type(
-        self, array_path: str, chunk_coordinates: tuple[int, ...]
+        self,
+        array_path: str,
+        chunk_coordinates: Sequence[int],
     ) -> ChunkType:
         """
         Return the chunk type for the specified coordinates
@@ -218,6 +222,21 @@ class Session:
         """
         ...
         return self._session.chunk_type(array_path, chunk_coordinates)
+
+    async def chunk_type_async(
+        self,
+        array_path: str,
+        chunk_coordinates: Sequence[int],
+    ) -> ChunkType:
+        """
+        Return the chunk type for the specified coordinates
+
+        Returns
+        -------
+        the chunk type
+        """
+        ...
+        return await self._session.chunk_type_async(array_path, chunk_coordinates)
 
     def merge(self, *others: "ForkSession") -> None:
         """

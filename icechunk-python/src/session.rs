@@ -333,26 +333,21 @@ impl PySession {
         coords: Vec<u32>,
     ) -> PyResult<ChunkType> {
         let session = self.0.clone();
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let session = session.read().await;
-            let array_path = Path::new(array_path.as_str())
-                .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
-                .map_err(PyIcechunkStoreError::StoreError)?;
-            let res = session
-                .get_chunk_ref(&array_path, &ChunkIndices(coords))
-                .await
-                .map_err(PyIcechunkStoreError::SessionError)?;
+        pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(Self::chunk_type_inner(session, array_path, coords))
+    }
 
-            match res {
-                None => Ok(ChunkType::Uninitialized),
-                Some(ChunkPayload::Inline(_)) => Ok(ChunkType::Inline),
-                Some(ChunkPayload::Virtual(_)) => Ok(ChunkType::Virtual),
-                Some(ChunkPayload::Ref(_)) => Ok(ChunkType::Native),
-                Some(_) => {
-                    Err(PyIcechunkStoreError::PyValueError("Invalid Chunk Type".into()))?
-                }
-            }
-        })
+    pub fn chunk_type_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        array_path: String,
+        coords: Vec<u32>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, ChunkType>(
+            py,
+            Self::chunk_type_inner(session, array_path, coords),
+        )
     }
 
     pub fn merge(&self, other: &PySession, py: Python<'_>) -> PyResult<()> {
@@ -566,5 +561,32 @@ impl PySession {
             session.rebase(solver).await.map_err(PyIcechunkStoreError::SessionError)?;
             Ok(())
         })
+    }
+}
+
+impl PySession {
+    async fn chunk_type_inner(
+        session: Arc<RwLock<Session>>,
+        array_path: String,
+        coords: Vec<u32>,
+    ) -> PyResult<ChunkType> {
+        let session = session.read().await;
+        let array_path = Path::new(array_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let res = session
+            .get_chunk_ref(&array_path, &ChunkIndices(coords))
+            .await
+            .map_err(PyIcechunkStoreError::SessionError)?;
+
+        match res {
+            None => Ok(ChunkType::Uninitialized),
+            Some(ChunkPayload::Inline(_)) => Ok(ChunkType::Inline),
+            Some(ChunkPayload::Virtual(_)) => Ok(ChunkType::Virtual),
+            Some(ChunkPayload::Ref(_)) => Ok(ChunkType::Native),
+            Some(_) => {
+                Err(PyIcechunkStoreError::PyValueError("Invalid Chunk Type".into()))?
+            }
+        }
     }
 }
