@@ -215,9 +215,17 @@ class Session:
         """
         Return the chunk type for the specified coordinates
 
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store. Example: "/groupA/groupB/outputs/my-array".
+        chunk_coordinates: Sequence[int]
+            A sequence of integers (list or tuple) used to locate the chunk. Example: [0, 1, 5].
+
         Returns
         -------
-        the chunk type
+        ChunkType
+            One of the supported chunk types.
         """
         ...
         return self._session.chunk_type(array_path, chunk_coordinates)
@@ -230,9 +238,17 @@ class Session:
         """
         Return the chunk type for the specified coordinates
 
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store. Example: "/groupA/groupB/outputs/my-array".
+        chunk_coordinates: Sequence[int]
+            A sequence of integers (list or tuple) used to locate the chunk. Example: [0, 1, 5].
+
         Returns
         -------
-        the chunk type
+        ChunkType
+            One of the supported chunk types.
         """
         ...
         return await self._session.chunk_type_async(array_path, chunk_coordinates)

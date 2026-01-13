@@ -183,6 +183,8 @@ async def test_chunk_type_async(
     group = zarr.group(store=store, overwrite=True)
     air_temp = group.create_array("air_temp", shape=(1, 4), chunks=(1, 1), dtype="i4")
 
+    # set index [0, 0] to be a virtual chunk
+    # note: we can't ACCESS it, since the file `foo` is never instantiated
     store.set_virtual_refs(
         array_path="/air_temp",
         validate_containers=False,
@@ -196,6 +198,7 @@ async def test_chunk_type_async(
         ],
     )
 
+    # This forces the chunk to be initialized, either to inline or native chunks
     air_temp[0, 2] = 42
     assert air_temp[0, 2] == 42
 
