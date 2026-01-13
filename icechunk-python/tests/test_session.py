@@ -6,6 +6,7 @@ import pytest
 
 import zarr
 from icechunk import (
+    ChunkType,
     ForkSession,
     IcechunkError,
     Repository,
@@ -17,7 +18,6 @@ from icechunk import (
     local_filesystem_store,
 )
 from icechunk.distributed import merge_sessions
-from icechunk.session import ChunkType
 
 
 @pytest.mark.parametrize("use_async", [True, False])
@@ -114,7 +114,9 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
     [(10_000, ChunkType.INLINE), (1, ChunkType.NATIVE)],
     ids=["inline", "native"],
 )
-def test_chunk_type(inline_threshold, chunk_type, any_spec_version: int | None) -> None:
+def test_chunk_type(
+    inline_threshold: int, chunk_type: ChunkType, any_spec_version: int | None
+) -> None:
     config = RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = inline_threshold
     store_config = local_filesystem_store("/foo")
@@ -162,7 +164,7 @@ def test_chunk_type(inline_threshold, chunk_type, any_spec_version: int | None) 
     ids=["inline", "native"],
 )
 async def test_chunk_type_async(
-    inline_threshold, chunk_type, any_spec_version: int | None
+    inline_threshold: int, chunk_type: ChunkType, any_spec_version: int | None
 ) -> None:
     config = RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = inline_threshold
