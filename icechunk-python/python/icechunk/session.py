@@ -227,7 +227,6 @@ class Session:
         ChunkType
             One of the supported chunk types.
         """
-        ...
         return self._session.chunk_type(array_path, chunk_coordinates)
 
     async def chunk_type_async(
@@ -250,7 +249,6 @@ class Session:
         ChunkType
             One of the supported chunk types.
         """
-        ...
         return await self._session.chunk_type_async(array_path, chunk_coordinates)
 
     def merge(self, *others: "ForkSession") -> None:
