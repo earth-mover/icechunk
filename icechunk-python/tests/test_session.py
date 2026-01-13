@@ -10,8 +10,11 @@ from icechunk import (
     IcechunkError,
     Repository,
     RepositoryConfig,
+    VirtualChunkSpec,
+    VirtualChunkContainer,
     in_memory_storage,
     local_filesystem_storage,
+    local_filesystem_store,
 )
 from icechunk.distributed import merge_sessions
 from icechunk.session import ChunkType
@@ -106,9 +109,18 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         assert groups == {"foo", "foo1", "foo2", "foo3", "foo4"}
 
 
-def test_chunk_type(any_spec_version: int | None) -> None:
+@pytest.mark.parametrize(
+    "inline_threshold,chunk_type",
+    [(10_000, ChunkType.INLINE), (1, ChunkType.NATIVE)],
+    ids=["inline", "native"],
+)
+def test_chunk_type(inline_threshold, chunk_type, any_spec_version: int | None) -> None:
     config = RepositoryConfig.default()
-    config.inline_chunk_threshold_bytes = 1_000
+    config.inline_chunk_threshold_bytes = inline_threshold
+    store_config = local_filesystem_store("/foo")
+    container = VirtualChunkContainer("file:///foo/", store_config)
+    config.set_virtual_chunk_container(container)
+
     repo = Repository.create(
         storage=in_memory_storage(),
         config=config,
@@ -116,18 +128,48 @@ def test_chunk_type(any_spec_version: int | None) -> None:
     )
 
     session = repo.writable_session("main")
-    group = zarr.group(store=session.store, overwrite=True)
-    air_temp = group.create_array("air_temp", shape=(9, 9), chunks=(3, 3), dtype="i4")
+    store = session.store
+    group = zarr.group(store=store, overwrite=True)
+    air_temp = group.create_array("air_temp", shape=(1, 4), chunks=(1, 1), dtype="i4")
 
-    air_temp[:, :] = 42
-    assert air_temp[0, 0] == 42
+    # set index [0, 0] to be a virtual chunk
+    # note: we can't ACCESS it, since the file `foo` is never instantiated
+    store.set_virtual_refs(
+        array_path="/air_temp",
+        validate_containers=False,
+        chunks=[
+            VirtualChunkSpec(
+                index=[0, 0],
+                location="file:///foo",
+                offset=0,
+                length=1_000,
+            ),
+        ],
+    )
 
-    assert session.chunk_type("/air_temp", [0, 0]) == ChunkType.INLINE
+    # This forces the chunk to be initialized, either to inline or native chunks
+    air_temp[0, 2] = 42
+    assert air_temp[0, 2] == 42
+
+    assert session.chunk_type("/air_temp", [0, 0]) == ChunkType.VIRTUAL
+    assert session.chunk_type("/air_temp", [0, 2]) == chunk_type
+    assert session.chunk_type("/air_temp", [0, 3]) == ChunkType.UNINITIALIZED
 
 
-async def test_chunk_type_async(any_spec_version: int | None) -> None:
+@pytest.mark.parametrize(
+    "inline_threshold,chunk_type",
+    [(10_000, ChunkType.INLINE), (1, ChunkType.NATIVE)],
+    ids=["inline", "native"],
+)
+async def test_chunk_type_async(
+    inline_threshold, chunk_type, any_spec_version: int | None
+) -> None:
     config = RepositoryConfig.default()
-    config.inline_chunk_threshold_bytes = 1_000
+    config.inline_chunk_threshold_bytes = inline_threshold
+    store_config = local_filesystem_store("/foo")
+    container = VirtualChunkContainer("file:///foo/", store_config)
+    config.set_virtual_chunk_container(container)
+
     repo = await Repository.create_async(
         storage=in_memory_storage(),
         config=config,
@@ -135,10 +177,26 @@ async def test_chunk_type_async(any_spec_version: int | None) -> None:
     )
 
     session = await repo.writable_session_async("main")
-    group = zarr.group(store=session.store, overwrite=True)
-    air_temp = group.create_array("air_temp", shape=(9, 9), chunks=(3, 3), dtype="i4")
+    store = session.store
+    group = zarr.group(store=store, overwrite=True)
+    air_temp = group.create_array("air_temp", shape=(1, 4), chunks=(1, 1), dtype="i4")
 
-    air_temp[:, :] = 42
-    assert air_temp[0, 0] == 42
+    store.set_virtual_refs(
+        array_path="/air_temp",
+        validate_containers=False,
+        chunks=[
+            VirtualChunkSpec(
+                index=[0, 0],
+                location="file:///foo",
+                offset=0,
+                length=1_000,
+            ),
+        ],
+    )
 
-    assert await session.chunk_type_async("/air_temp", [0, 0]) == ChunkType.INLINE
+    air_temp[0, 2] = 42
+    assert air_temp[0, 2] == 42
+
+    assert await session.chunk_type_async("/air_temp", [0, 0]) == ChunkType.VIRTUAL
+    assert await session.chunk_type_async("/air_temp", [0, 2]) == chunk_type
+    assert await session.chunk_type_async("/air_temp", [0, 3]) == ChunkType.UNINITIALIZED
