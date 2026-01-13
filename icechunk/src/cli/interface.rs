@@ -127,11 +127,11 @@ struct BranchDeleteArgs {
 
 #[derive(Debug, Subcommand)]
 enum TagCommand {
-    #[clap(name = "list", about = "List branches")]
+    #[clap(name = "list", about = "List tags")]
     List(TagListArgs),
-    #[clap(name = "create", about = "Create branch")]
+    #[clap(name = "create", about = "Create tag")]
     Create(TagCreateArgs),
-    #[clap(name = "delete", about = "Delete branch")]
+    #[clap(name = "delete", about = "Delete tag")]
     Delete(TagDeleteArgs),
 }
 
