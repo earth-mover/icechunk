@@ -1736,6 +1736,24 @@ class Repository:
         )
         return stats.native_bytes
 
+    async def chunk_storage_stats_by_prefix_async(self) -> ChunkStorageStats:
+        """Calculate storage stats by listing the chunks prefix directly (async version).
+
+        This is a memory-efficient alternative to chunk_storage_stats_async that lists
+        objects in storage directly instead of fetching and parsing manifests. This
+        dramatically reduces memory usage for large repositories.
+
+        Note: This method only calculates native_bytes. Virtual and inline chunk
+        statistics will be zero since they cannot be determined from storage listings alone.
+
+        Returns
+        -------
+        ChunkStorageStats
+            Storage statistics with native_bytes populated from storage listing.
+            virtual_bytes and inlined_bytes will be 0.
+        """
+        return await self._repository.chunk_storage_stats_by_prefix_async()
+
     def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str:
         return self._repository.inspect_snapshot(snapshot_id, pretty=pretty)
 
