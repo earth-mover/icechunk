@@ -1,9 +1,10 @@
 import contextlib
 import warnings
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator, Generator, Sequence
 from typing import Any, NoReturn, Self
 
 from icechunk import (
+    ChunkType,
     ConflictSolver,
     Diff,
     RepositoryConfig,
@@ -189,6 +190,50 @@ class Session:
         async for batch in self._session.chunk_coordinates(array_path, batch_size):
             for coord in batch:
                 yield tuple(coord)
+
+    def chunk_type(
+        self,
+        array_path: str,
+        chunk_coordinates: Sequence[int],
+    ) -> ChunkType:
+        """
+        Return the chunk type for the specified coordinates
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store. Example: "/groupA/groupB/outputs/my-array".
+        chunk_coordinates: Sequence[int]
+            A sequence of integers (list or tuple) used to locate the chunk. Example: [0, 1, 5].
+
+        Returns
+        -------
+        ChunkType
+            One of the supported chunk types.
+        """
+        return self._session.chunk_type(array_path, chunk_coordinates)
+
+    async def chunk_type_async(
+        self,
+        array_path: str,
+        chunk_coordinates: Sequence[int],
+    ) -> ChunkType:
+        """
+        Return the chunk type for the specified coordinates
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store. Example: "/groupA/groupB/outputs/my-array".
+        chunk_coordinates: Sequence[int]
+            A sequence of integers (list or tuple) used to locate the chunk. Example: [0, 1, 5].
+
+        Returns
+        -------
+        ChunkType
+            One of the supported chunk types.
+        """
+        return await self._session.chunk_type_async(array_path, chunk_coordinates)
 
     def merge(self, *others: "ForkSession") -> None:
         """

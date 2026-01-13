@@ -32,7 +32,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
 use repository::{PyDiff, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo};
-use session::PySession;
+use session::{ChunkType, PySession};
 use stats::PyChunkStorageStats;
 use store::{PyStore, VirtualChunkSpec};
 
@@ -148,6 +148,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRepository>()?;
     m.add_class::<PyRepositoryConfig>()?;
     m.add_class::<PySession>()?;
+    m.add_class::<ChunkType>()?;
     m.add_class::<PyStore>()?;
     m.add_class::<PySnapshotInfo>()?;
     m.add_class::<PyManifestFileInfo>()?;
