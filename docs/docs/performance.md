@@ -19,7 +19,7 @@ print(zarr.config.get("async.concurrency"))
 Large machines in close proximity to object storage can benefit from much more concurrency. For high-performance configuration, we recommend much higher values, e.g.
 
 ```python
-zarr.config.get({"async.concurrency": 128})
+zarr.config.set({"async.concurrency": 128})
 ```
 
 Note that this concurrency limit is _per individual Zarr Array read/write operation_
@@ -112,15 +112,6 @@ But if this is not the case for you, you can tune the retry configuration using 
 To learn more about how Icechunk manages object store prefixes, read our
 [blog post](https://earthmover.io/blog/exploring-icechunk-scalability)
 on Icechunk scalability.
-
-!!! warning
-
-    Currently, Icechunk implementation of retry logic during resharding is not
-    [working properly](https://github.com/earth-mover/icechunk/issues/954) on GCS.
-    We have a [pull request open](https://github.com/apache/arrow-rs-object-store/pull/410) to
-    one of Icechunk's dependencies that will solve this.
-    In the meantime, if you get 429 errors from your Google bucket, please lower concurrency and try
-    again. Increase concurrency slowly until errors disappear.
 
 ## Splitting manifests
 
@@ -280,10 +271,10 @@ And commit
 snap = session.commit("Add 5 chunks")
 ```
 
-Use [`repo.lookup_snapshot`](./reference.md#icechunk.Repository.lookup_snapshot) to examine the manifests associated with a Snapshot
+Use [`repo.list_manifest_files`](./reference.md#icechunk.Repository.list_manifest_files) to examine the manifests associated with a Snapshot
 
 ```python exec="on" session="perf" source="material-block"
-print(repo.lookup_snapshot(snap).manifests)
+print(repo.list_manifest_files(snap))
 ```
 
 Let's open the Repository again with a different splitting config --- where 5 chunk references are in a single manifest.
@@ -308,7 +299,7 @@ print(session.status())
 
 ```python  exec="on" session="perf" source="material-block"
 snap2 = session.commit("appended data")
-repo.lookup_snapshot(snap2).manifests
+repo.list_manifest_files(snap2)
 ```
 
 Look carefully, only one new manifest with the 3 new chunk refs has been written.
@@ -328,7 +319,7 @@ print(session.status())
 
 ```python  exec="on" session="perf" source="material-block"
 snap3 = session.commit("rewrite [3,7)")
-print(repo.lookup_snapshot(snap3).manifests)
+print(repo.list_manifest_files(snap3))
 ```
 
 This ends up rewriting all refs to two new manifests.
@@ -361,7 +352,7 @@ snap4 = new_repo.rewrite_manifests(
 `rewrite_snapshots` will create a new commit on `branch` with the provided `message`.
 
 ```python exec="on" session="perf" source="material-block"
-print(repo.lookup_snapshot(snap4).manifests)
+print(repo.list_manifest_files(snap4))
 ```
 
 The splitting configuration is saved in the snapshot metadata.
@@ -397,7 +388,7 @@ repo.create_branch("split-experiment-1", repo.lookup_branch("main"))
 snap = repo.rewrite_manifests(
     f"rewrite_manifests with new config", branch="split-experiment-1"
 )
-print(repo.lookup_snapshot(snap).manifests)
+print(repo.list_manifest_files(snap))
 ```
 
 Now benchmark reads on `main` vs `split-experiment-1`

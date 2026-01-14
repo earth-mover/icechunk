@@ -1,6 +1,7 @@
 use icechunk::{
     StorageError,
     format::{IcechunkFormatError, manifest::VirtualReferenceError},
+    migrations::MigrationError,
     ops::{gc::GCError, manifests::ManifestOpsError},
     repository::RepositoryError,
     session::{SessionError, SessionErrorKind},
@@ -8,7 +9,8 @@ use icechunk::{
 };
 use miette::{Diagnostic, GraphicalReportHandler};
 use pyo3::{
-    IntoPyObjectExt, PyErr,
+    PyErr,
+    conversion::IntoPyObjectExt,
     exceptions::{PyException, PyKeyError, PyValueError},
     prelude::*,
 };
@@ -32,6 +34,8 @@ pub(crate) enum PyIcechunkStoreError {
     StoreError(StoreError),
     #[error(transparent)]
     RepositoryError(#[from] RepositoryError),
+    #[error(transparent)]
+    MigrationError(#[from] MigrationError),
     #[error("session error: {0}")]
     SessionError(SessionError),
     #[error(transparent)]
@@ -122,7 +126,7 @@ pub(crate) type PyIcechunkStoreResult<T> = Result<T, PyIcechunkStoreError>;
 
 #[pyclass(extends=PyException, subclass, module = "icechunk")]
 #[derive(Serialize, Deserialize)]
-pub struct IcechunkError {
+pub(crate) struct IcechunkError {
     #[pyo3(get)]
     message: String,
 }
@@ -136,8 +140,7 @@ impl IcechunkError {
 #[pymethods]
 impl IcechunkError {
     #[new]
-    #[pyo3(signature = (message = String::new()))]
-    pub fn new(message: String) -> Self {
+    pub(crate) fn new(message: String) -> Self {
         Self { message }
     }
 
@@ -149,13 +152,11 @@ impl IcechunkError {
         self.message.clone()
     }
 
-    fn __reduce__<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-        let cls = py.get_type::<Self>();
-        let args = (self.message.clone(),).into_py_any(py)?.into_bound(py);
-        Ok((cls.into_any(), args))
+    // Control pickling to work with tblib
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let cls = py.get_type::<IcechunkError>().into_py_any(py)?;
+        let args = (self.message.clone(),).into_py_any(py)?;
+        Ok((cls, args))
     }
 }
 
@@ -163,7 +164,7 @@ impl_pickle!(IcechunkError);
 
 #[pyclass(extends=PyException, name = "ConflictError", module = "icechunk")]
 #[derive(Serialize, Deserialize)]
-pub struct PyConflictError {
+pub(crate) struct PyConflictError {
     #[pyo3(get)]
     expected_parent: Option<String>,
     #[pyo3(get)]
@@ -182,8 +183,10 @@ impl PyConflictError {
 #[pymethods]
 impl PyConflictError {
     #[new]
-    #[pyo3(signature = (expected_parent = None, actual_parent = None))]
-    pub fn new(expected_parent: Option<String>, actual_parent: Option<String>) -> Self {
+    pub(crate) fn new(
+        expected_parent: Option<String>,
+        actual_parent: Option<String>,
+    ) -> Self {
         Self { expected_parent, actual_parent }
     }
 
@@ -202,15 +205,13 @@ impl PyConflictError {
         )
     }
 
-    fn __reduce__<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-        let cls = py.get_type::<Self>();
-        let args = (self.expected_parent.clone(), self.actual_parent.clone())
-            .into_py_any(py)?
-            .into_bound(py);
-        Ok((cls.into_any(), args))
+
+    // Control pickling to work with tblib
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let cls = py.get_type::<PyConflictError>().into_py_any(py)?;
+        let args =
+            (self.expected_parent.clone(), self.actual_parent.clone()).into_py_any(py)?;
+        Ok((cls, args))
     }
 }
 
@@ -218,7 +219,7 @@ impl_pickle!(PyConflictError);
 
 #[pyclass(extends=PyException, name = "RebaseFailedError", module = "icechunk")]
 #[derive(Serialize, Deserialize)]
-pub struct PyRebaseFailedError {
+pub(crate) struct PyRebaseFailedError {
     #[pyo3(get)]
     snapshot: String,
     #[pyo3(get)]
@@ -236,8 +237,7 @@ impl PyRebaseFailedError {
 #[pymethods]
 impl PyRebaseFailedError {
     #[new]
-    #[pyo3(signature = (snapshot = String::new(), conflicts = Vec::new()))]
-    pub fn new(snapshot: String, conflicts: Vec<PyConflict>) -> Self {
+    pub(crate) fn new(snapshot: String, conflicts: Vec<PyConflict>) -> Self {
         Self { snapshot, conflicts }
     }
 
@@ -256,15 +256,11 @@ impl PyRebaseFailedError {
         )
     }
 
-    fn __reduce__<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-        let cls = py.get_type::<Self>();
-        let args = (self.snapshot.clone(), self.conflicts.clone())
-            .into_py_any(py)?
-            .into_bound(py);
-        Ok((cls.into_any(), args))
+    // Control pickling to work with tblib
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let cls = py.get_type::<PyRebaseFailedError>().into_py_any(py)?;
+        let args = (self.snapshot.clone(), self.conflicts.clone()).into_py_any(py)?;
+        Ok((cls, args))
     }
 }
 

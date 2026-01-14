@@ -13,6 +13,8 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
 ]
 readme = "../README.md"
 license = { file = "LICENSE" }
@@ -21,17 +23,23 @@ authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
 dependencies = ["zarr>=3,!=3.0.3"]
 
-[project.optional-dependencies]
+[dependency-groups]
+dev = [
+    { include-group = "test" },
+    "mypy",
+    "ruff",
+    "maturin>=1.7,<2.0",
+    "maturin-import-hook>=0.3.0",
+]
 test = [
   "boto3",
   "coverage",
-  "mypy",
   "object-store-python",
   "pytest",
   "pytest-cov",
   "pytest-asyncio",
   "pytest-xdist",
-  "ruff",
+  "pytest-reportlog",
   "dask>=2024.11.0",
   "distributed>=2024.11.0",
   "xarray>=2025.01.2",
@@ -41,6 +49,7 @@ test = [
   "termcolor",
   "pooch",
   "netcdf4",
+  "matplotlib",
 ]
 benchmark = [
   "pytest-benchmark[histogram]",
@@ -52,8 +61,8 @@ benchmark = [
   "tqdm",
   "humanize",
   "platformdirs",
-  "ipdb",
   "coiled",
+  "toolz",
 ]
 docs = [
   "scipy",
@@ -87,32 +96,6 @@ docs = [
   "sphinx-autodoc-typehints",
 ]
 
-[dependency-groups]
-upstream = [
-  "boto3",
-  "coverage",
-  "mypy",
-  "pytest",
-  "pytest-cov",
-  "pytest-asyncio",
-  "pytest-xdist",
-  "pytest-reportlog",
-  "ruff",
-  "hypothesis",
-  "pandas-stubs",
-  "boto3-stubs[s3]",
-  "termcolor",
-  # "object-store-python @ git+https://github.com/roeap/object-store-python.git", # doesn't work with uv
-  "object-store-python",
-  "dask @ git+https://github.com/dask/dask.git",
-  "distributed @ git+https://github.com/dask/distributed.git",
-  "xarray @ git+https://github.com/pydata/xarray.git",
-  "zarr @ git+https://github.com/zarr-developers/zarr.git",
-]
-dev = [
-  { include-group = "upstream" }
-]
-
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "icechunk._icechunk_python"
@@ -120,14 +103,8 @@ python-source = "python"
 exclude = ["README.md"]
 
 [tool.uv]
-# Rebuild package when any Rust files change
-cache-keys = [
-  {file = "pyproject.toml"},
-  {file = "Cargo.toml"},
-  {file = "src/**/*.rs"},
-  {file = "../icechunk/Cargo.toml"},
-  {file = "../icechunk/src/**/*.rs"},
-]
+# Disable automatic package building - we use maturin-import-hook for faster dev cycles
+package = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -160,10 +137,6 @@ python_version = "3.11"
 strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
-
-[[tool.mypy.overrides]]
-ignore_missing_imports = true
-module = ["toolz.*"]
 
 [tool.ruff]
 line-length = 90

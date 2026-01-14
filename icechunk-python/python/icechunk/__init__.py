@@ -6,9 +6,15 @@ from icechunk._icechunk_python import (
     AzureCredentials,
     AzureStaticCredentials,
     BasicConflictSolver,
+    BranchCreatedUpdate,
+    BranchDeletedUpdate,
+    BranchResetUpdate,
     CachingConfig,
+    ChunkType,
+    CommitAmendedUpdate,
     CompressionAlgorithm,
     CompressionConfig,
+    ConfigChangedUpdate,
     Conflict,
     ConflictDetector,
     ConflictError,
@@ -16,6 +22,8 @@ from icechunk._icechunk_python import (
     ConflictType,
     Credentials,
     Diff,
+    ExpirationRanUpdate,
+    GCRanUpdate,
     GcsBearerCredential,
     GcsCredentials,
     GcsStaticCredentials,
@@ -28,8 +36,13 @@ from icechunk._icechunk_python import (
     ManifestSplitCondition,
     ManifestSplitDimCondition,
     ManifestSplittingConfig,
+    MetadataChangedUpdate,
+    NewCommitUpdate,
+    NewDetachedSnapshotUpdate,
     ObjectStoreConfig,
     RebaseFailedError,
+    RepoInitializedUpdate,
+    RepoMigratedUpdate,
     RepositoryConfig,
     S3Credentials,
     S3Options,
@@ -39,10 +52,14 @@ from icechunk._icechunk_python import (
     StorageConcurrencySettings,
     StorageRetriesSettings,
     StorageSettings,
+    TagCreatedUpdate,
+    TagDeletedUpdate,
+    UpdateType,
     VersionSelection,
     VirtualChunkContainer,
     VirtualChunkSpec,
     __version__,
+    _upgrade_icechunk_repository,
     initialize_logs,
     set_logs_filter,
     spec_version,
@@ -75,11 +92,13 @@ from icechunk.storage import (
     azure_storage,
     gcs_storage,
     gcs_store,
+    http_storage,
     http_store,
     in_memory_storage,
     local_filesystem_storage,
     local_filesystem_store,
     r2_storage,
+    redirect_storage,
     s3_storage,
     s3_store,
     tigris_storage,
@@ -97,9 +116,15 @@ __all__ = [
     "AzureCredentials",
     "AzureStaticCredentials",
     "BasicConflictSolver",
+    "BranchCreatedUpdate",
+    "BranchDeletedUpdate",
+    "BranchResetUpdate",
     "CachingConfig",
+    "ChunkType",
+    "CommitAmendedUpdate",
     "CompressionAlgorithm",
     "CompressionConfig",
+    "ConfigChangedUpdate",
     "Conflict",
     "ConflictDetector",
     "ConflictError",
@@ -107,7 +132,9 @@ __all__ = [
     "ConflictType",
     "Credentials",
     "Diff",
+    "ExpirationRanUpdate",
     "ForkSession",
+    "GCRanUpdate",
     "GCSummary",
     "GcsBearerCredential",
     "GcsCredentials",
@@ -121,8 +148,13 @@ __all__ = [
     "ManifestSplitCondition",
     "ManifestSplitDimCondition",
     "ManifestSplittingConfig",
+    "MetadataChangedUpdate",
+    "NewCommitUpdate",
+    "NewDetachedSnapshotUpdate",
     "ObjectStoreConfig",
     "RebaseFailedError",
+    "RepoInitializedUpdate",
+    "RepoMigratedUpdate",
     "Repository",
     "RepositoryConfig",
     "S3Credentials",
@@ -134,10 +166,14 @@ __all__ = [
     "StorageConcurrencySettings",
     "StorageRetriesSettings",
     "StorageSettings",
+    "TagCreatedUpdate",
+    "TagDeletedUpdate",
+    "UpdateType",
     "VersionSelection",
     "VirtualChunkContainer",
     "VirtualChunkSpec",
     "__version__",
+    "_upgrade_icechunk_repository",
     "azure_credentials",
     "azure_from_env_credentials",
     "azure_static_credentials",
@@ -149,6 +185,7 @@ __all__ = [
     "gcs_static_credentials",
     "gcs_storage",
     "gcs_store",
+    "http_storage",
     "http_store",
     "in_memory_storage",
     "initialize_logs",
@@ -156,6 +193,7 @@ __all__ = [
     "local_filesystem_store",
     "print_debug_info",
     "r2_storage",
+    "redirect_storage",
     "s3_anonymous_credentials",
     "s3_credentials",
     "s3_from_env_credentials",
@@ -188,14 +226,15 @@ def print_debug_info() -> None:
 # So on the python side, we can accept a dict as a nicer API, and immediately
 # convert it to tuples that preserve order, and pass those to Rust
 
+ManifestSplitValues: TypeAlias = dict[
+    ManifestSplitDimCondition.Axis
+    | ManifestSplitDimCondition.DimensionName
+    | ManifestSplitDimCondition.Any,
+    int,
+]
 SplitSizesDict: TypeAlias = dict[
     ManifestSplitCondition,
-    dict[
-        ManifestSplitDimCondition.Axis
-        | ManifestSplitDimCondition.DimensionName
-        | ManifestSplitDimCondition.Any,
-        int,
-    ],
+    ManifestSplitValues,
 ]
 
 
@@ -211,7 +250,28 @@ def to_dict(config: ManifestSplittingConfig) -> SplitSizesDict:
     }
 
 
+def upgrade_icechunk_repository(
+    repo: Repository, *, dry_run: bool = True, delete_unused_v1_files: bool = True
+) -> None:
+    """
+    Migrate a repository to the latest version of Icechunk.
+
+    This is an administrative operation, and must be executed in isolation from
+    other readers and writers. Other processes running concurrently on the same
+    repo may see undefined behavior.
+
+    At this time, this function supports only migration from Icechunk spec version 1
+    to Icechunk spec version 2. This means Icechunk versions 1.x to 2.x.
+
+    The operation is usually fast, but it can take several minutes if there is a very
+    large version history (thousands of snapshots).
+    """
+    _upgrade_icechunk_repository(
+        repo._repository, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
+    )
+
+
 ManifestSplittingConfig.from_dict = from_dict  # type: ignore[method-assign]
-ManifestSplittingConfig.to_dict = to_dict  # type: ignore[attr-defined]
+ManifestSplittingConfig.to_dict = to_dict  # type: ignore[method-assign]
 
 initialize_logs()

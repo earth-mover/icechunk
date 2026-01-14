@@ -1,15 +1,16 @@
 import functools
 import json
 import pickle
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar, cast
 
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import assume, note
+from hypothesis import assume, note, settings
 from hypothesis.stateful import (
-    Settings,
+    initialize,
     invariant,
     precondition,
     rule,
@@ -32,6 +33,8 @@ from zarr.testing.strategies import (
 
 PROTOTYPE = default_buffer_prototype()
 
+Frequency = TypeVar("Frequency", bound=Callable[..., Any])
+
 # pytestmark = [
 #     pytest.mark.filterwarnings(
 #         "ignore::zarr.core.dtype.common.UnstableSpecificationWarning"
@@ -39,7 +42,7 @@ PROTOTYPE = default_buffer_prototype()
 # ]
 
 
-def with_frequency(frequency):
+def with_frequency(frequency: float) -> Callable[[Frequency], Frequency]:
     """
     Decorator to control how frequently a rule runs in Hypothesis stateful tests.
 
@@ -54,23 +57,23 @@ def with_frequency(frequency):
             pass
     """
 
-    def decorator(func):
+    def decorator(func: Frequency) -> Frequency:
         # Create a counter attribute name specific to this function
         counter_attr = f"__{func.__name__}_counter"
 
         @functools.wraps(func)
-        def wrapper(self, *args, **kwargs):
+        def wrapper(self: object, *args: Any, **kwargs: Any) -> Any:
             return func(self, *args, **kwargs)
 
         # Add precondition that checks frequency
         @precondition
-        def frequency_check(self):
+        def frequency_check(self: object) -> bool:
             # Initialize counter if it doesn't exist
             if not hasattr(self, counter_attr):
                 setattr(self, counter_attr, 0)
 
             # Increment counter
-            current_count = getattr(self, counter_attr) + 1
+            current_count = cast(int, getattr(self, counter_attr)) + 1
             setattr(self, counter_attr, current_count)
 
             # Check if we should run based on frequency
@@ -78,7 +81,7 @@ def with_frequency(frequency):
             return (current_count * frequency) % 1.0 >= (1.0 - frequency)
 
         # Apply the precondition to the wrapped function
-        return frequency_check(wrapper)
+        return frequency_check(wrapper)  # type: ignore [return-value]
 
     return decorator
 
@@ -99,18 +102,37 @@ def chunk_paths(
 # TODO: more before/after commit invariants?
 # TODO: add "/" to self.all_groups, deleting "/" seems to be problematic
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
+    store: ic.IcechunkStore  # Override parent class type annotation
+
     def __init__(self, storage: Storage) -> None:
         self.storage = storage
-        self.repo = Repository.create(self.storage)
-        store = self.repo.writable_session("main").store
-        super().__init__(store)
+        # Create a temporary repository with spec_version=1 in a separate storage
+        # This will be replaced in init_store with the Hypothesis-sampled version
+        # we need this in order to properly initialize the superclass MemoryStore
+        # model
+        temp_repo = Repository.create(in_memory_storage(), spec_version=1)
+        temp_store = temp_repo.writable_session("main").store
+        super().__init__(temp_store)
+
+    @initialize(spec_version=st.sampled_from([1, 2]))
+    def init_store(self, spec_version: int) -> None:
+        """Override parent's init_store to sample spec_version and create repository."""
+        # necessary to control the order of calling. if multiple intiliazes they will be
+        # called by hypothesis in a random order
+        note(f"Creating repository with spec_version={spec_version}")
+
+        # Create repository with the drawn spec version
+        self.repo = Repository.create(self.storage, spec_version=spec_version)
+        self.store = self.repo.writable_session("main").store
+
+        super().init_store()
 
     @precondition(
         lambda self: not self.store.session.has_uncommitted_changes
         and bool(self.all_arrays)
     )
     @rule(data=st.data())
-    def reopen_with_config(self, data):
+    def reopen_with_config(self, data: st.DataObject) -> None:
         array_paths = data.draw(
             st.lists(st.sampled_from(sorted(self.all_arrays)), max_size=3, unique=True)
         )
@@ -127,15 +149,16 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
-    def rewrite_manifests(self, data):
-        config_dict = {
-            ic.ManifestSplitCondition.AnyArray(): {
-                ic.ManifestSplitDimCondition.Any(): data.draw(
-                    st.integers(min_value=1, max_value=10)
-                )
+    def rewrite_manifests(self, data: st.DataObject) -> None:
+        sconfig = ic.ManifestSplittingConfig.from_dict(
+            {
+                ic.ManifestSplitCondition.AnyArray(): {
+                    ic.ManifestSplitDimCondition.Any(): data.draw(
+                        st.integers(min_value=1, max_value=10)
+                    )
+                }
             }
-        }
-        sconfig = ic.ManifestSplittingConfig.from_dict(config_dict)
+        )
 
         config = ic.RepositoryConfig(
             inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)
@@ -151,7 +174,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     @precondition(lambda self: self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
-    def commit_with_check(self, data) -> None:
+    def commit_with_check(self, data: st.DataObject) -> None:
         note("committing and checking list_prefix")
 
         lsbefore = sorted(self._sync_iter(self.store.list_prefix("")))
@@ -174,23 +197,36 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                 f" \n\n Before : {lsbefore!r} \n\n After: {lsafter!r}, \n\n Expected: {lsexpect!r}"
             )
 
+        get_after_cmp: Any
+        get_before_cmp: Any
         # if it's metadata, we need to compare the data parsed, not raw (because of map ordering)
         if path.endswith(".json"):
-            get_after = json.loads(get_after.to_bytes())
-            get_before = json.loads(get_before.to_bytes())
+            get_after_cmp = json.loads(get_after.to_bytes())
+            get_before_cmp = json.loads(get_before.to_bytes())
         else:
-            get_after = get_after.to_bytes()
-            get_before = get_before.to_bytes()
+            get_after_cmp = get_after.to_bytes()
+            get_before_cmp = get_before.to_bytes()
 
-        if get_before != get_after:
+        if get_before_cmp != get_after_cmp:
             get_expect = self._sync(self.model.get(path, prototype=PROTOTYPE))
             assert get_expect
             raise ValueError(
                 f"Value changed before and after commit for path {path}"
-                f" \n\n Before : {get_before!r} \n\n "
-                f"After: {get_after!r}, \n\n "
+                f" \n\n Before : {get_before_cmp!r} \n\n "
+                f"After: {get_after_cmp!r}, \n\n "
                 f"Expected: {get_expect.to_bytes()!r}"
             )
+
+    @rule()
+    @precondition(lambda self: self.repo.spec_version == 1)
+    @precondition(lambda self: not self.store.session.has_uncommitted_changes)
+    def upgrade_spec_version(self) -> None:
+        """Upgrade repository from spec version 1 to version 2."""
+        note("upgrading spec version from 1 to 2")
+        ic.upgrade_icechunk_repository(self.repo)
+        # Reopen to pick up the upgraded spec version
+        self.repo = Repository.open(self.storage)
+        self.store = self.repo.writable_session("main").store
 
     @rule(
         data=st.data(),
@@ -246,9 +282,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         store_array = zarr.open_array(path=array, store=self.store)
         indexer, _ = data.draw(orthogonal_indices(shape=model_array.shape))
         note(f"overwriting array orthogonal {indexer=}")
-        new_data = data.draw(
-            npst.arrays(shape=model_array.oindex[indexer].shape, dtype=model_array.dtype)
-        )
+        shape = model_array.oindex[indexer].shape  # type: ignore[union-attr]
+        new_data = data.draw(npst.arrays(shape=shape, dtype=model_array.dtype))
         model_array.oindex[indexer] = new_data
         store_array.oindex[indexer] = new_data
 
@@ -275,7 +310,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # TODO: MemoryStore is broken?
         # assert not self._sync(self.model.is_empty("/"))
 
-    def draw_directory(self, data) -> str:
+    def draw_directory(self, data: st.DataObject) -> str:
         group_st = (
             st.sampled_from(sorted(self.all_groups)) if self.all_groups else st.nothing()
         )
@@ -299,7 +334,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     @precondition(lambda self: bool(self.all_arrays))
     @rule(data=st.data())
-    def delete_chunk(self, data) -> None:
+    def delete_chunk(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
         arr = zarr.open_array(path=array, store=self.model)
         chunk_path = data.draw(
@@ -312,21 +347,20 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     @precondition(lambda self: bool(self.all_arrays))
     @rule(data=st.data())
-    def overwrite_array_basic_indexing(self, data) -> None:
+    def overwrite_array_basic_indexing(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
         model_array = zarr.open_array(path=array, store=self.model)
         store_array = zarr.open_array(path=array, store=self.store)
         slicer = data.draw(basic_indices(shape=model_array.shape))
         note(f"overwriting array basic {slicer=}")
-        new_data = data.draw(
-            npst.arrays(shape=model_array[slicer].shape, dtype=model_array.dtype)
-        )
+        shape = model_array[slicer].shape  # type: ignore [union-attr]
+        new_data = data.draw(npst.arrays(shape=shape, dtype=model_array.dtype))
         model_array[slicer] = new_data
         store_array[slicer] = new_data
 
     @precondition(lambda self: bool(self.all_arrays))
     @rule(data=st.data())
-    def resize_array(self, data) -> None:
+    def resize_array(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
         model_array = zarr.open_array(path=array, store=self.model)
         store_array = zarr.open_array(path=array, store=self.store)
@@ -338,7 +372,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
     @rule(data=st.data())
-    def delete_dir(self, data) -> None:
+    def delete_dir(self, data: st.DataObject) -> None:
         path = self.draw_directory(data)
         note(f"delete_dir with {path=!r}")
         self._sync(self.model.delete_dir(path))
@@ -384,8 +418,8 @@ def test_zarr_hierarchy() -> None:
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(in_memory_storage())
 
-    run_state_machine_as_test(
-        mk_test_instance_sync, settings=Settings(report_multiple_bugs=False)
+    run_state_machine_as_test(  # type: ignore[no-untyped-call]
+        mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
     )
 
 
@@ -398,5 +432,5 @@ def test_zarr_store() -> None:
     #     return ZarrStoreStateMachine(store)
 
     # run_state_machine_as_test(
-    #     mk_test_instance_sync, settings=Settings(report_multiple_bugs=False)
+    #     mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
     # )

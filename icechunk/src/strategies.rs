@@ -1,18 +1,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-use std::collections::HashMap;
-use std::num::{NonZeroU16, NonZeroU64};
-use std::ops::{Bound, Range};
-use std::path::PathBuf;
-
-use prop::string::string_regex;
-use proptest::prelude::*;
-use proptest::{collection::vec, option, strategy::Strategy};
-
 use crate::config::{
-    CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig,
+    AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
+    CompressionConfig, GcsBearerCredential, GcsStaticCredentials, ManifestConfig,
     ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
     ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3Options,
+    S3StaticCredentials,
 };
+use crate::format::format_constants::SpecVersionBin;
 use crate::format::manifest::ManifestExtents;
 use crate::format::snapshot::{ArrayShape, DimensionName};
 use crate::format::{ChunkIndices, Path};
@@ -22,6 +16,14 @@ use crate::storage::{
 };
 use crate::virtual_chunks::VirtualChunkContainer;
 use crate::{ObjectStoreConfig, Repository, RepositoryConfig};
+use chrono::{DateTime, Utc};
+use prop::string::string_regex;
+use proptest::prelude::*;
+use proptest::{collection::vec, option, strategy::Strategy};
+use std::collections::HashMap;
+use std::num::{NonZeroU16, NonZeroU64};
+use std::ops::{Bound, Range};
+use std::path::PathBuf;
 
 const MAX_NDIM: usize = 4;
 
@@ -32,35 +34,36 @@ pub fn node_paths() -> impl Strategy<Value = Path> {
     })
 }
 
+pub fn spec_version() -> BoxedStrategy<SpecVersionBin> {
+    prop_oneof![Just(SpecVersionBin::V2dot0), Just(SpecVersionBin::V1dot0)].boxed()
+}
+
 prop_compose! {
-    pub fn empty_repositories()(_id in any::<u32>()) -> Repository {
+    pub fn empty_repositories()(version in spec_version()) -> Repository {
+        // FIXME: add storages strategy
+        let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+
+        runtime.block_on(async {
+            let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
+            Repository::create(None, storage, HashMap::new(), Some(version))
+                .await
+                .expect("Failed to initialize repository")
+        })
+    }
+}
+
+prop_compose! {
+    pub fn empty_writable_session()(version in spec_version()) -> Session {
     // _id is used as a hack to avoid using prop_oneof![Just(repository)]
     // Using Just requires Repository impl Clone, which we do not want
 
     // FIXME: add storages strategy
-    let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-
-    runtime.block_on(async {
-        let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
-        Repository::create(None, storage, HashMap::new())
-            .await
-            .expect("Failed to initialize repository")
-    })
-}
-}
-
-prop_compose! {
-    pub fn empty_writable_session()(_id in any::<u32>()) -> Session {
-    // _id is used as a hack to avoid using prop_oneof![Just(repository)]
-    // Using Just requires Repository impl Clone, which we do not want
-
-    // FIXME: add storages strategy
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     runtime.block_on(async {
         let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
-        let repository = Repository::create(None, storage, HashMap::new())
+        let repository = Repository::create(None, storage, HashMap::new(), Some(version))
             .await
             .expect("Failed to initialize repository");
         repository.writable_session("main").await.expect("Failed to create session")
@@ -120,20 +123,46 @@ prop_compose! {
     }
 }
 
+fn transfer_protocol() -> BoxedStrategy<String> {
+    prop_oneof!["https", "http"].boxed()
+}
+
+prop_compose! {
+    pub fn url() (protocol in transfer_protocol(),
+    remaining_url in "[a-zA-Z0-9\\-_/]*") -> String {
+        format!("{protocol}://{remaining_url}")
+    }
+}
+
 prop_compose! {
     pub fn s3_options()
     (region in option::of(string_regex("[a-zA-Z0-9\\-_]*").unwrap()),
-     endpoint_url in option::of(string_regex("[a-zA-Z0-9\\-_/]*").unwrap().prop_map(|s| format!("https://{s}"))),
-     network_stream_timeout_seconds in option::of(0..120u32)
-    ) -> S3Options {
+     endpoint_url in option::of(url()),
+       is_anonymous in any::<bool>(),
+       should_path_style_be_forced in any::<bool>(),
+       network_stream_timeout_seconds in option::of(0..120u32),
+       requester_pays in any::<bool>(),
+    ) ->S3Options {
+        let cpy = endpoint_url.clone();
         S3Options{
             region,
             endpoint_url,
-            anonymous: false,
-            allow_http: false,
-            force_path_style: false,
-            network_stream_timeout_seconds
+            anonymous: is_anonymous,
+            allow_http: cpy.is_none_or(|link| !link.starts_with("https")),
+            force_path_style: should_path_style_be_forced,
+            network_stream_timeout_seconds,
+            requester_pays,
         }
+    }
+}
+
+prop_compose! {
+    pub fn azure_options()
+    (account in string_regex("[a-zA-Z0-9\\-_]+").unwrap(),
+     mut config in any::<HashMap<String, String>>()
+    ) -> HashMap<String, String> {
+        config.insert("account".to_string(), account.clone());
+        config
     }
 }
 
@@ -197,7 +226,7 @@ pub fn object_store_config() -> BoxedStrategy<ObjectStoreConfig> {
         s3_options().prop_map(Tigris),
         any::<HashMap<String, String>>().prop_map(Gcs),
         any::<HashMap<String, String>>().prop_map(Http),
-        any::<HashMap<String, String>>().prop_map(Azure),
+        azure_options().prop_map(Azure),
     ]
     .boxed()
 }
@@ -252,9 +281,10 @@ pub fn manifest_split_condition() -> BoxedStrategy<ManifestSplitCondition> {
 prop_compose! {
     pub fn manifest_preload_config()
         (max_total_refs in option::of(any::<u32>()),
-        preload_if in option::of(manifest_preload_condition())
+        preload_if in option::of(manifest_preload_condition()),
+            max_arrays_to_scan in option::of(any::<u32>())
     ) -> ManifestPreloadConfig {
-        ManifestPreloadConfig { max_total_refs, preload_if }
+        ManifestPreloadConfig { max_total_refs, preload_if, max_arrays_to_scan}
     }
 }
 
@@ -361,7 +391,7 @@ prop_compose! {
         virtual_chunk_containers in option::of(virtual_chunk_containers()),
         manifest in option::of(manifest_config()),
         storage in option::of(storage_settings()),
-
+        previous_file in option::of(any::<PathBuf>().prop_map(|path| path.to_string_lossy().to_string())),
         )
     -> RepositoryConfig {
         RepositoryConfig{
@@ -373,6 +403,56 @@ prop_compose! {
             manifest,
             virtual_chunk_containers,
             storage,
+            previous_file,
         }
     }
+}
+
+prop_compose! {
+    pub fn expiration_date() (seconds in any::<i64>()) -> Option<DateTime<Utc>> {
+        DateTime::from_timestamp_secs(seconds)
+    }
+}
+
+prop_compose! {
+    pub fn s3_static_credentials()
+    (access_key_id in any::<String>(),
+        secret_access_key in any::<String>(),
+    expires_after in expiration_date(),
+    session_token in option::of(any::<String>())) -> S3StaticCredentials {
+        S3StaticCredentials{access_key_id, secret_access_key, session_token, expires_after}
+    }
+}
+
+prop_compose! {
+pub fn gcs_bearer_credential()
+    (bearer in any::<String>(),expires_after in  expiration_date()) -> GcsBearerCredential {
+        GcsBearerCredential{bearer,expires_after}
+    }
+}
+
+pub fn gcs_static_credentials() -> BoxedStrategy<GcsStaticCredentials> {
+    use GcsStaticCredentials::*;
+    prop_oneof![
+        any::<PathBuf>().prop_map(ServiceAccount),
+        any::<String>().prop_map(ServiceAccountKey),
+        any::<PathBuf>().prop_map(ApplicationCredentials),
+        gcs_bearer_credential().prop_map(BearerToken)
+    ]
+    .boxed()
+}
+
+pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
+    use AzureStaticCredentials::*;
+    prop_oneof![
+        any::<String>().prop_map(AccessKey),
+        any::<String>().prop_map(SASToken),
+        any::<String>().prop_map(BearerToken),
+    ]
+    .boxed()
+}
+
+pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
+    use AzureCredentials::*;
+    prop_oneof![Just(FromEnv), azure_static_credentials().prop_map(Static)].boxed()
 }

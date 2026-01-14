@@ -51,10 +51,15 @@ def create_test_data(
 
 @contextlib.contextmanager
 def roundtrip(
-    data: xr.Dataset, *, commit: bool = False
+    data: xr.Dataset,
+    *,
+    commit: bool = False,
+    spec_version: int | None,
 ) -> Generator[xr.Dataset, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
-        repo = Repository.create(local_filesystem_storage(tmpdir))
+        repo = Repository.create(
+            local_filesystem_storage(tmpdir), spec_version=spec_version
+        )
         session = repo.writable_session("main")
         to_icechunk(data, session=session, mode="w")
         session.commit("write")
@@ -62,15 +67,18 @@ def roundtrip(
             yield ds
 
 
-def test_xarray_to_icechunk() -> None:
+def test_xarray_to_icechunk(any_spec_version: int | None) -> None:
     ds = create_test_data()
-    with roundtrip(ds) as actual:
+    with roundtrip(ds, spec_version=any_spec_version) as actual:
         assert_identical(actual, ds)
 
 
-def test_repeated_to_icechunk_serial() -> None:
+def test_repeated_to_icechunk_serial(any_spec_version: int | None) -> None:
     ds = create_test_data()
-    repo = Repository.create(in_memory_storage())
+    repo = Repository.create(
+        in_memory_storage(),
+        spec_version=any_spec_version,
+    )
     session = repo.writable_session("main")
     to_icechunk(ds, session)
     to_icechunk(ds, session, mode="w")

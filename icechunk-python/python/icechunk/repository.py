@@ -1,16 +1,20 @@
 import datetime
+import warnings
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from typing import Any, Self, cast
 
 from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
+    ChunkStorageStats,
     Diff,
     GCSummary,
+    ManifestFileInfo,
     PyRepository,
     RepositoryConfig,
     SnapshotInfo,
     Storage,
+    UpdateType,
 )
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
@@ -31,6 +35,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        spec_version: int | None = None,
     ) -> Self:
         """
         Create a new Icechunk repository.
@@ -53,6 +58,9 @@ class Repository:
             environment, or anonymous credentials will be used if the container allows it.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
+        spec_version : int, optional
+            Use this version of the spec for the new repository. If not passed, the latest version
+            of the spec that was available before the library version release will be used.
 
         Returns
         -------
@@ -64,6 +72,7 @@ class Repository:
                 storage,
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+                spec_version=spec_version,
             )
         )
 
@@ -73,6 +82,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        spec_version: int | None = None,
     ) -> Self:
         """
         Create a new Icechunk repository asynchronously.
@@ -95,6 +105,9 @@ class Repository:
             environment, or anonymous credentials will be used if the container allows it.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
+        spec_version : int, optional
+            Use this version of the spec for the new repository. If not passed, the latest version
+            of the spec that was available before the library version release will be used.
 
         Returns
         -------
@@ -106,6 +119,7 @@ class Repository:
                 storage,
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+                spec_version=spec_version,
             )
         )
 
@@ -203,6 +217,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        create_version: int | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist.
@@ -228,6 +243,11 @@ class Repository:
             environment, or anonymous credentials will be used if the container allows it.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
+        create_version : int, optional
+            Use this version of the spec for the new repository, if it needs to be created.
+            If not passed, the latest version of the spec that was available before the
+            library version release will be used.
+
 
         Returns
         -------
@@ -239,6 +259,7 @@ class Repository:
                 storage,
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+                create_version=create_version,
             )
         )
 
@@ -248,6 +269,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        create_version: int | None = None,
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist (async version).
@@ -273,6 +295,10 @@ class Repository:
             environment, or anonymous credentials will be used if the container allows it.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
+        create_version : int, optional
+            Use this version of the spec for the new repository, if it needs to be created.
+            If not passed, the latest version of the spec that was available before the
+            library version release will be used.
 
         Returns
         -------
@@ -284,6 +310,7 @@ class Repository:
                 storage,
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
+                create_version=create_version,
             )
         )
 
@@ -505,6 +532,92 @@ class Repository:
         """
         return self._repository.default_commit_metadata()
 
+    def get_metadata(self) -> dict[str, Any]:
+        """
+        Get the current configured repository metadata.
+
+        Returns
+        -------
+        dict[str, Any]
+            The repository level metadata.
+        """
+        return self._repository.get_metadata()
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """
+        Get the current configured repository metadata.
+
+        Returns
+        -------
+        dict[str, Any]
+            The repository level metadata.
+        """
+        return self._repository.get_metadata()
+
+    async def get_metadata_async(self) -> dict[str, Any]:
+        """
+        Get the current configured repository metadata.
+
+        Returns
+        -------
+        dict[str, Any]
+            The repository level metadata.
+        """
+        return await self._repository.get_metadata_async()
+
+    def set_metadata(self, metadata: dict[str, Any]) -> None:
+        """
+        Set the repository metadata, the passed dict will replace the complete metadata.
+
+        If you prefer to only update some metadata values, use Repository.update_metadata
+
+        Parameters
+        ----------
+        metadata : dict[str, Any]
+            The value to use as repository metadata.
+        """
+        self._repository.set_metadata(metadata)
+
+    async def set_metadata_async(self, metadata: dict[str, Any]) -> None:
+        """
+        Set the repository metadata, the passed dict will replace the complete metadata.
+
+        If you prefer to only update some metadata values, use Repository.update_metadata
+
+        Parameters
+        ----------
+        metadata : dict[str, Any]
+            The value to use as repository metadata.
+        """
+        await self._repository.set_metadata_async(metadata)
+
+    def update_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        """
+        Update the repository metadata.
+
+        The passed dict will be merged with the current metadata, overriding existing keys.
+
+        Parameters
+        ----------
+        metadata : dict[str, Any]
+            The dict to merge into the repository metadata.
+        """
+        return self._repository.update_metadata(metadata)
+
+    async def update_metadata_async(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        """
+        Update the repository metadata.
+
+        The passed dict will be merged with the current metadata, overriding existing keys.
+
+        Parameters
+        ----------
+        metadata : dict[str, Any]
+            The dict to merge into the repository metadata.
+        """
+        return await self._repository.update_metadata_async(metadata)
+
     def ancestry(
         self,
         *,
@@ -574,6 +687,26 @@ class Repository:
         return self._repository.async_ancestry(
             branch=branch, tag=tag, snapshot_id=snapshot_id
         )
+
+    def ops_log(self) -> Iterator[UpdateType]:
+        """
+        Get a summary of changes to the repository
+        """
+
+        # the returned object is both an Async and Sync iterator
+        res = cast(
+            Iterator[UpdateType],
+            self._repository.async_ops_log(),
+        )
+        return res
+
+    def ops_log_async(self) -> AsyncIterator[UpdateType]:
+        """
+        Get a summary of changes to the repository
+        """
+
+        # the returned object is both an Async and Sync iterator
+        return self._repository.async_ops_log()
 
     def create_branch(self, branch: str, snapshot_id: str) -> None:
         """
@@ -692,6 +825,36 @@ class Repository:
         SnapshotInfo
         """
         return await self._repository.lookup_snapshot_async(snapshot_id)
+
+    def list_manifest_files(self, snapshot_id: str) -> list[ManifestFileInfo]:
+        """
+        Get the manifest files used by the given snapshot ID
+
+        Parameters
+        ----------
+        snapshot_id : str
+            The id of the snapshot to get information for
+
+        Returns
+        -------
+        list[ManifestFileInfo]
+        """
+        return self._repository.list_manifest_files(snapshot_id)
+
+    async def list_manifest_files_async(self, snapshot_id: str) -> list[ManifestFileInfo]:
+        """
+        Get the manifest files used by the given snapshot ID
+
+        Parameters
+        ----------
+        snapshot_id : str
+            The id of the snapshot to get information for
+
+        Returns
+        -------
+        list[ManifestFileInfo]
+        """
+        return await self._repository.list_manifest_files_async(snapshot_id)
 
     def reset_branch(
         self, branch: str, snapshot_id: str, *, from_snapshot_id: str | None = None
@@ -1081,6 +1244,54 @@ class Repository:
         """
         return Session(await self._repository.writable_session_async(branch))
 
+    def rearrange_session(self, branch: str) -> Session:
+        """
+        Create a session to move/rename nodes in the Zarr hierarchy.
+
+        Like the read-only session, this can be thought of as a checkout of the repository at the
+        tip of the branch. However, this session is writable and can be used to make changes to the
+        repository. When ready, the changes can be committed to the branch, after which the session will
+        become a read-only session on the new snapshot.
+
+        This session only allows to make changes through `Session.move`. If you want to modify data, and
+        not only move nodes, use `Session.writable_session` instead.
+
+        Parameters
+        ----------
+        branch : str
+            The branch to create the session on.
+
+        Returns
+        -------
+        Session
+            The writable session on the branch.
+        """
+        return Session(self._repository.rearrange_session(branch))
+
+    async def rearrange_session_async(self, branch: str) -> Session:
+        """
+        Create a session to move/rename nodes in the Zarr hierarchy.
+
+        Like the read-only session, this can be thought of as a checkout of the repository at the
+        tip of the branch. However, this session is writable and can be used to make changes to the
+        repository. When ready, the changes can be committed to the branch, after which the session will
+        become a read-only session on the new snapshot.
+
+        This session only allows to make changes through `Session.move`. If you want to modify data, and
+        not only move nodes, use `Session.writable_session` instead.
+
+        Parameters
+        ----------
+        branch : str
+            The branch to create the session on.
+
+        Returns
+        -------
+        Session
+            The writable session on the branch.
+        """
+        return Session(await self._repository.rearrange_session_async(branch))
+
     @contextmanager
     def transaction(
         self,
@@ -1373,6 +1584,72 @@ class Repository:
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
 
+    def chunk_storage_stats(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> ChunkStorageStats:
+        """Calculate the total storage used for chunks, in bytes.
+
+        It reports the storage needed to store all snapshots in the repository that
+        are reachable from any branches or tags. Unreachable snapshots can be generated
+        by using `reset_branch` or `expire_snapshots`. The chunks for these snapshots
+        are not included in the result, and they should probably be deleted using
+        `garbage_collection`.
+
+        The result is a dataclass with attributes for storage consumed by different
+        types of chunks (e.g. `native_bytes`, `virtual_bytes`, `total_bytes`).
+
+        Parameters
+        ----------
+        max_snapshots_in_memory: int
+            Don't prefetch more than this many Snapshots to memory.
+        max_compressed_manifest_mem_bytes : int
+            Don't use more than this memory to store compressed in-flight manifests.
+        max_concurrent_manifest_fetches : int
+            Don't run more than this many concurrent manifest fetches.
+        """
+        return self._repository.chunk_storage_stats(
+            max_snapshots_in_memory=max_snapshots_in_memory,
+            max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
+        )
+
+    async def chunk_storage_stats_async(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> ChunkStorageStats:
+        """Calculate the total storage used for chunks, in bytes (async version).
+
+        It reports the storage needed to store all snapshots in the repository that
+        are reachable from any branches or tags. Unreachable snapshots can be generated
+        by using `reset_branch` or `expire_snapshots`. The chunks for these snapshots
+        are not included in the result, and they should probably be deleted using
+        `garbage_collection`.
+
+        The result is a dataclass with attributes for storage consumed by different
+        types of chunks (e.g. `native_bytes`, `virtual_bytes`, `total_bytes`).
+
+        Parameters
+        ----------
+        max_snapshots_in_memory: int
+            Don't prefetch more than this many Snapshots to memory.
+        max_compressed_manifest_mem_bytes : int
+            Don't use more than this memory to store compressed in-flight manifests.
+        max_concurrent_manifest_fetches : int
+            Don't run more than this many concurrent manifest fetches.
+        """
+        return await self._repository.chunk_storage_stats_async(
+            max_snapshots_in_memory=max_snapshots_in_memory,
+            max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
+            max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
+        )
+
     def total_chunks_storage(
         self,
         *,
@@ -1380,7 +1657,7 @@ class Repository:
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> int:
-        """Calculate the total storage used for chunks, in bytes .
+        """Calculate the total storage used for chunks, in bytes.
 
         It reports the storage needed to store all snapshots in the repository that
         are reachable from any branches or tags. Unreachable snapshots can be generated
@@ -1400,11 +1677,21 @@ class Repository:
             Don't run more than this many concurrent manifest fetches.
         """
 
-        return self._repository.total_chunks_storage(
+        warnings.warn(
+            "The ``total_chunks_storage`` method has been deprecated in favour of the ``chunk_storage_stats`` method. "
+            "The new method is superior, as it actually calculates storage size occupied by inlined and virtual chunks in addition to native chunks. "
+            "You can still access just the total native bytes: to keep your existing behaviour using API that will not be removed in a future version, "
+            "please replace your existing ``.total_chunks_storage(**kwargs)`` method call with ``.chunk_storage_stats(**same_kwargs).native_bytes``.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+        stats = self._repository.chunk_storage_stats(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
+        return stats.native_bytes
 
     async def total_chunks_storage_async(
         self,
@@ -1433,11 +1720,21 @@ class Repository:
             Don't run more than this many concurrent manifest fetches.
         """
 
-        return await self._repository.total_chunks_storage_async(
+        warnings.warn(
+            "The ``total_chunks_storage_async`` method has been deprecated in favour of the ``chunk_storage_stats_async`` method. "
+            "The new method is superior, as it actually calculates storage size occupied by inlined and virtual chunks in addition to native chunks. "
+            "You can still access just the total native bytes: to keep your existing behaviour using API that will not be removed in a future version, "
+            "please replace your existing ``.total_chunks_storage_async(**kwargs)`` method call with ``.chunk_storage_stats_async(**same_kwargs).native_bytes``.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+        stats = await self._repository.chunk_storage_stats_async(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
             max_concurrent_manifest_fetches=max_concurrent_manifest_fetches,
         )
+        return stats.native_bytes
 
     def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str:
         return self._repository.inspect_snapshot(snapshot_id, pretty=pretty)
@@ -1446,3 +1743,7 @@ class Repository:
         self, snapshot_id: str, *, pretty: bool = True
     ) -> str:
         return await self._repository.inspect_snapshot_async(snapshot_id, pretty=pretty)
+
+    @property
+    def spec_version(self) -> int:
+        return self._repository.spec_version

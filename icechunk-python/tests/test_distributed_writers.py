@@ -1,6 +1,6 @@
 import time
 import warnings
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -22,7 +22,9 @@ CHUNK_DIM_SIZE = 10
 CHUNKS_PER_TASK = 2
 
 
-def mk_repo(use_object_store: bool = False) -> icechunk.Repository:
+def mk_repo(
+    spec_version: int | None, use_object_store: bool = False
+) -> icechunk.Repository:
     if use_object_store:
         storage = s3_object_store_storage(
             endpoint_url="http://localhost:9000",
@@ -50,13 +52,16 @@ def mk_repo(use_object_store: bool = False) -> icechunk.Repository:
     repo = icechunk.Repository.open_or_create(
         storage=storage,
         config=repo_config,
+        create_version=spec_version,
     )
 
     return repo
 
 
 @pytest.mark.parametrize("use_object_store", [False, True])
-async def test_distributed_writers(use_object_store: bool) -> None:
+async def test_distributed_writers(
+    use_object_store: bool, any_spec_version: int | None
+) -> None:
     """Write to an array using uncoordinated writers, distributed via Dask.
 
     We create a big array, and then we split into workers, each worker gets
@@ -65,7 +70,7 @@ async def test_distributed_writers(use_object_store: bool) -> None:
     does a distributed commit. When done, we open the store again and verify
     we can write everything we have written.
     """
-    repo = mk_repo(use_object_store)
+    repo = mk_repo(any_spec_version, use_object_store)
     session = repo.writable_session(branch="main")
     store = session.store
 
@@ -88,7 +93,7 @@ async def test_distributed_writers(use_object_store: bool) -> None:
         session = repo.writable_session(branch=branch_name)
         fork = session.fork()
         group = zarr.open_group(store=fork.store)
-        zarray = cast(zarr.Array, group["array"])
+        zarray = cast("zarr.Array[Any]", group["array"])
         merged_session = store_dask(sources=[dask_array], targets=[zarray])
         session.merge(merged_session)
         commit_res = session.commit("distributed commit")
@@ -105,7 +110,7 @@ async def test_distributed_writers(use_object_store: bool) -> None:
 
         group = zarr.open_group(store=store, mode="r")
 
-        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)  # type: ignore [no-untyped-call, attr-defined]
+        roundtripped = dask.array.from_array(group["array"], chunks=dask_chunks)  # type: ignore [no-untyped-call]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=UserWarning)
             assert_eq(roundtripped, dask_array)  # type: ignore [no-untyped-call]
@@ -114,6 +119,6 @@ async def test_distributed_writers(use_object_store: bool) -> None:
         do_writes("with-processes")
         await verify("with-processes")
 
-    with dask.config.set(scheduler="threads"):  # type: ignore[no-untyped-call]
+    with dask.config.set(scheduler="threads"):
         do_writes("with-threads")
         await verify("with-threads")

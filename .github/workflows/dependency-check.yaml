@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - main
+      - 'support/**'
   schedule:
     # Run weekly on Sundays to check for new advisories
     - cron: '0 0 * * 0'
@@ -20,8 +21,8 @@ env:
   CI: 1
   RUST_BACKTRACE: short
   RUSTUP_MAX_RETRIES: 10
-  RUST_CHANNEL: '1.89.0'
-  CARGO_DENY_VERSION: '0.18.4'
+  RUST_CHANNEL: '1.91.0'
+  CARGO_DENY_VERSION: '0.18.9'
 
 jobs:
   check-dependencies:
@@ -31,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -41,7 +42,7 @@ jobs:
           rustup default ${{ env.RUST_CHANNEL }}
 
       - name: Cache cargo-deny
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: cargo_deny_cache
         with:
           path: ~/.cargo/bin/cargo-deny

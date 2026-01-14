@@ -1,16 +1,6 @@
-include "object_ids.fbs";
+include "common.fbs";
 
-namespace gen;
-
-// a single key-value of snapshot metadata
-table MetadataItem {
-  // the name of the attribute
-  name: string (required);
-
-  // the value, serialized as rmp_serde of the json value
-  // TODO: better serialization format
-  value: [uint8] (required);
-}
+namespace generated;
 
 // a pointer to a manifest file
 struct ManifestFileInfo {
@@ -96,6 +86,7 @@ table Snapshot {
   // the id of the parent snapshot, can be null for a root snapshot
   parent_id: ObjectId12;
 
+  // sorted by ascending order of NodeSnapshot.path
   nodes: [NodeSnapshot] (required);
 
   // time at which this snapshot was generated

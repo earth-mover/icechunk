@@ -73,12 +73,12 @@ impl PyAsyncGenerator {
     fn __next__<'py>(
         slf: PyRefMut<'py, Self>,
         py: Python<'py>,
-    ) -> PyResult<Option<PyObject>> {
+    ) -> PyResult<Option<Py<PyAny>>> {
         // Arc::clone is cheap, so we can clone the Arc here because we move into the
         // future block
         let stream = slf.stream.clone();
 
-        py.allow_threads(move || {
+        py.detach(move || {
             let next = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let mut unlocked = stream.lock().await;
                 unlocked.next().await

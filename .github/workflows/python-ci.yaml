@@ -18,6 +18,13 @@ on:
         required: true
         default: true
         type: boolean
+      branch:
+        description: 'Branch to build/release (for manual builds only)'
+        type: choice
+        options:
+          - main
+          - support/v1.x
+        default: support/v1.x
   schedule:
     # run every day at 4am
     - cron: '0 4 * * *'
@@ -37,40 +44,78 @@ jobs:
   version:
     name: Generate dynamic version
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
     outputs:
-      version: ${{ steps.version.outputs.version }}
+      version-main: ${{ steps.version-main.outputs.version }}
+      version-v1: ${{ steps.version-v1.outputs.version }}
+    # Note: The version generation logic is duplicated below for main and support/v1.x branches.
+    # This is intentional because:
+    # 1. GitHub Actions doesn't support reusable bash script blocks within a workflow
+    # 2. Each branch needs its own checkout step to access its specific git history
+    # 3. Alternatives would be:
+    #    - Extract to .github/scripts/generate-version.sh (more complex, needs git checkout action first)
+    #    - Create composite action in .github/actions/generate-version/ (overkill for simple logic)
+    # If updating the logic, ensure BOTH steps are updated identically.
     steps:
-      - uses: actions/checkout@v5
+      # Checkout main branch (skip if only building support/v1.x)
+      - name: Checkout main
+        if: ${{ github.event_name == 'schedule' || inputs.branch != 'support/v1.x' }}
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 0  # Need full history for git describe
+          ref: main
+          fetch-depth: 0
 
-      - name: Generate version
-        id: version
+      - name: Generate version for main
+        if: ${{ github.event_name == 'schedule' || inputs.branch != 'support/v1.x' }}
+        id: version-main
         run: |
+          # Version generation logic for main (v2.x)
           if [[ "${{ github.event_name }}" == "schedule" ]] || [[ "${{ inputs.use_git_version }}" == "true" ]]; then
-            # For nightly builds, use component-based git describe approach
-
-            # Verify we have proper git tags
-            if ! git describe --tags --match "v*" >/dev/null 2>&1; then
-              echo "❌ ERROR: No version tags found. Please create a tag like 'v1.0.0' first."
+            # Match only v2.* tags to avoid confusion with v1.x tags
+            if ! git describe --tags --match "v2.*" >/dev/null 2>&1; then
+              echo "❌ ERROR: No v2.* tags found. Please create v2.0.0-alpha.0 tag first."
               exit 1
             fi
-
-            # Get components from git (much simpler than parsing)
-            TAG=$(git describe --tags --match 'v*' --abbrev=0 | sed 's/^v//')
-            DISTANCE=$(git rev-list $(git describe --tags --match 'v*' --abbrev=0)..HEAD --count)
+            TAG=$(git describe --tags --match 'v2.*' --abbrev=0 | sed 's/^v//')
+            DISTANCE=$(git rev-list $(git describe --tags --match 'v2.*' --abbrev=0)..HEAD --count)
             HASH=$(git rev-parse --short HEAD)
-
-            # Build SemVer compliant version for Cargo.toml (use -dev instead of .dev)
-            # maturin will normalize the - to a .
-            # prepend HASH with g to follow convention from git describe
             VERSION="${TAG}-dev${DISTANCE}+g${HASH}"
-            echo "Git version: ${TAG}, distance: ${DISTANCE}, hash: ${HASH}"
-            echo "Using git-based version: $VERSION"
+            echo "main: $VERSION (${TAG}, +${DISTANCE}, ${HASH})"
           else
-            # For regular releases, use version from Cargo.toml
             VERSION=$(grep '^version = ' icechunk-python/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-            echo "Using Cargo.toml version: $VERSION"
+            echo "main: $VERSION (from Cargo.toml)"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      # Checkout support/v1.x branch (skip if only building main)
+      - name: Checkout support/v1.x
+        if: ${{ github.event_name == 'schedule' || inputs.branch == 'support/v1.x' }}
+        uses: actions/checkout@v6
+        with:
+          ref: support/v1.x
+          fetch-depth: 0
+
+      - name: Generate version for support/v1.x
+        if: ${{ github.event_name == 'schedule' || inputs.branch == 'support/v1.x' }}
+        id: version-v1
+        run: |
+          # Version generation logic for support/v1.x (v1.x)
+          if [[ "${{ github.event_name }}" == "schedule" ]] || [[ "${{ inputs.use_git_version }}" == "true" ]]; then
+            # Match only v1.* tags to avoid confusion with v2.x tags
+            if ! git describe --tags --match "v1.*" >/dev/null 2>&1; then
+              echo "❌ ERROR: No v1.* tags found"
+              exit 1
+            fi
+            TAG=$(git describe --tags --match 'v1.*' --abbrev=0 | sed 's/^v//')
+            DISTANCE=$(git rev-list $(git describe --tags --match 'v1.*' --abbrev=0)..HEAD --count)
+            HASH=$(git rev-parse --short HEAD)
+            VERSION="${TAG}-dev${DISTANCE}+g${HASH}"
+            echo "v1.x: $VERSION (${TAG}, +${DISTANCE}, ${HASH})"
+          else
+            VERSION=$(grep '^version = ' icechunk-python/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+            echo "v1.x: $VERSION (from Cargo.toml)"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
@@ -79,6 +124,11 @@ jobs:
     needs: version
     strategy:
       matrix:
+        # Dynamic branch selection:
+        # - schedule: Build both main and support/v1.x for nightly releases
+        # - manual: Build only the selected branch (main or support/v1.x)
+        # Note: fromJSON converts JSON string to array since GH Actions doesn't support array literals in expressions
+        branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
           - runner: ubuntu-latest
             target: x86_64
@@ -92,14 +142,17 @@ jobs:
             target: armv7
             manylinux: 2_28
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
       - name: Stand up docker services
         run: |
           docker compose up -d
       - name: Wait for MinIO to be ready
         run: |
           for _ in {1..10}; do
-              if curl --silent --fail http://minio:9000/minio/health/live; then
+              if curl --silent --fail http://localhost:9000/minio/health/live; then
               break
               fi
               sleep 3
@@ -111,7 +164,9 @@ jobs:
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         run: |
-          sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml
+          VERSION="${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}"
+          echo "Using version: $VERSION for branch ${{ matrix.branch }}"
+          sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -120,9 +175,9 @@ jobs:
           args: --release --out dist --find-interpreter
           manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: wheels-linux-${{ matrix.platform.target }}
+          name: wheels-linux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
           path: icechunk-python/dist
 
   musllinux:
@@ -130,6 +185,7 @@ jobs:
     needs: version
     strategy:
       matrix:
+        branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
           - runner: ubuntu-latest
             target: x86_64
@@ -140,14 +196,19 @@ jobs:
           - runner: ubuntu-latest
             target: armv7
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: 3.x
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         run: |
-          sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml
+          VERSION="${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}"
+          echo "Using version: $VERSION for branch ${{ matrix.branch }}"
+          sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -156,9 +217,9 @@ jobs:
           args: --release --out dist --find-interpreter
           manylinux: musllinux_1_2
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: wheels-musllinux-${{ matrix.platform.target }}
+          name: wheels-musllinux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
           path: icechunk-python/dist
 
   windows:
@@ -166,11 +227,15 @@ jobs:
     needs: version
     strategy:
       matrix:
+        branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
           - runner: windows-latest
             target: x64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: 3.x
@@ -178,7 +243,9 @@ jobs:
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         run: |
-          (Get-Content Cargo.toml) -replace '^version = ".*"', 'version = "${{ needs.version.outputs.version }}"' | Set-Content Cargo.toml
+          $VERSION = "${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}"
+          Write-Host "Using version: $VERSION for branch ${{ matrix.branch }}"
+          (Get-Content Cargo.toml) -replace '^version = ".*"', "version = `"$VERSION`"" | Set-Content Cargo.toml
         shell: powershell
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -187,9 +254,9 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: wheels-windows-${{ matrix.platform.target }}
+          name: wheels-windows-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
           path: icechunk-python/dist
 
   macos:
@@ -197,20 +264,26 @@ jobs:
     needs: version
     strategy:
       matrix:
+        branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
         platform:
-          - runner: macos-13
+          - runner: macos-15-intel
             target: x86_64
           - runner: macos-14
             target: aarch64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: 3.x
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         run: |
-          sed -i '' 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml
+          VERSION="${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}"
+          echo "Using version: $VERSION for branch ${{ matrix.branch }}"
+          sed -i '' 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -218,20 +291,28 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: wheels-macos-${{ matrix.platform.target }}
+          name: wheels-macos-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}
           path: icechunk-python/dist
 
   sdist:
     runs-on: ubuntu-latest
     needs: version
+    strategy:
+      matrix:
+        branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
       - name: Update version in Cargo.toml
         if: ${{ github.event_name == 'schedule' || inputs.use_git_version == true }}
         run: |
-          sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml
+          VERSION="${{ matrix.branch == 'main' && needs.version.outputs.version-main || needs.version.outputs.version-v1 }}"
+          echo "Using version: $VERSION for branch ${{ matrix.branch }}"
+          sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
@@ -239,9 +320,9 @@ jobs:
           command: sdist
           args: --out dist
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: wheels-sdist
+          name: wheels-sdist-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}
           path: icechunk-python/dist
 
   release:
@@ -252,7 +333,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.pypi_release }}
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v7
       - name: Publish to PyPI
         uses: PyO3/maturin-action@v1
         with:
@@ -265,13 +346,13 @@ jobs:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
 
       - name: Upload nightly wheels
-        uses: scientific-python/upload-nightly-action@b36e8c0c10dbcfd2e05bf95f17ef8c14fd708dbf
+        uses: scientific-python/upload-nightly-action@5748273c71e2d8d3a61f3a11a16421c8954f9ecf
         with:
           artifacts_path: dist
           anaconda_nightly_upload_token: ${{ secrets.ANACONDA_ORG_UPLOAD_TOKEN }}

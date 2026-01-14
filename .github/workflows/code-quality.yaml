@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - main
+      - 'support/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -18,7 +19,7 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
   RUSTUP_MAX_RETRIES: 10
-  RUST_CHANNEL: '1.89.0'
+  RUST_CHANNEL: '1.91.0'
 
 jobs:
   code-quality:
@@ -28,7 +29,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -67,7 +68,7 @@ jobs:
         shell: bash
         working-directory: icechunk-python
         run: |
-          uvx --with mypy --with zarr --with hypothesis --with xarray --with dask mypy python
+          uv run --all-groups mypy python tests
 
       - name: Run pre-commit checks (skip Rust)
         uses: pre-commit/action@v3.0.1

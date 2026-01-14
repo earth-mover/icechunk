@@ -23,13 +23,50 @@ The Python code is developed in the `icechunk-python` subdirectory. To make chan
 cd icechunk-python
 ```
 
-Create / activate a virtual environment:
+#### Setting up your development environment
+
+=== "uv (Recommended)"
+
+    The easiest way to get started is with [uv](https://docs.astral.sh/uv/), which handles virtual environments and dependencies:
+
+    ```bash
+    # Install all development dependencies (includes test dependencies, mypy, ruff, maturin)
+    uv sync
+
+    # Configure maturin-import-hook for fast incremental Rust compilation
+    uv run -m maturin_import_hook site install
+
+    # Build the Rust extension
+    maturin develop --uv
+    ```
+
+    **Why these steps?** Icechunk is a mixed Python/Rust project. The `maturin-import-hook` enables incremental Rust compilation (7-20 seconds) instead of full rebuilds (5+ minutes) every time you run tests or import the module. This makes development significantly faster.
+
+    Now you can run tests and other commands:
+
+    ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
+    uv run pytest
+
+    # Run type checking
+    uv run mypy python tests
+
+    # Run linting
+    uv run ruff check python
+    ```
 
 === "Venv"
 
     ```bash
     python3 -m venv .venv
     source .venv/bin/activate
+
+    # Install maturin and dependencies
+    pip install maturin
+    pip install --group dev
+
+    # Build the Rust extension
+    maturin develop
     ```
 
 === "Conda / Mamba"
@@ -37,51 +74,13 @@ Create / activate a virtual environment:
     ```bash
     mamba create -n icechunk python=3.12 rust zarr
     mamba activate icechunk
-    ```
 
-=== "uv"
-
-    ```bash
-    uv sync
-    ```
-
-Install `maturin`:
-
-=== "Venv"
-
-    ```bash
+    # Install maturin and dependencies
     pip install maturin
-    ```
+    pip install --group dev
 
-    Build the project in dev mode:
-
-    ```bash
+    # Build the Rust extension
     maturin develop
-
-    # or with the optional dependencies
-    maturin develop --extras=test,benchmark
-    ```
-
-    or build the project in editable mode:
-
-    ```bash
-    pip install -e icechunk@.
-    ```
-
-=== "uv"
-
-    uv manages rebuilding as needed, so it will run the Maturin build when using `uv run`.
-
-    To explicitly use Maturin, install it globally.
-
-    ```bash
-    uv tool install maturin
-    ```
-
-    Maturin may need to know it should work with uv, so add `--uv` to the CLI.
-
-    ```bash
-    maturin develop --uv --extras=test,benchmark
     ```
 
 #### Testing
@@ -95,6 +94,27 @@ They can be run from the root of the repo with `docker compose up` (`ctrl-c` the
     ```bash
     uv run pytest
     ```
+=== "Venv/Conda"
+
+    ```bash
+    pytest
+    ```
+
+#### Testing with Upstream Dependencies
+
+To test Icechunk against development versions of upstream packages (zarr, xarray, dask, distributed), use the nightly wheels from the scientific-python-nightly-wheels repository:
+
+```bash
+# Install with nightly wheels
+export UV_INDEX="https://pypi.anaconda.org/scientific-python-nightly-wheels/simple/"
+export UV_PRERELEASE=allow
+uv sync --group test \
+  --resolution highest \
+  --index-strategy unsafe-best-match
+
+# Run tests
+uv run pytest
+```
 
 #### Running Xarray Backend Tests
 
@@ -154,9 +174,70 @@ uv run scripts/check_xarray_docs_sync.py --update-known-diffs
 
 **CI Integration**: The script returns exit code 0 if only known differences exist, allowing CI to pass while still displaying diffs for review.
 
+### Building Documentation
+
+The documentation is built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/).
+
+**System dependencies**: Install Cairo graphics library for image processing:
+
+=== "macOS"
+
+    ```bash
+    brew install cairo
+    ```
+
+    If `mkdocs` fails to find Cairo, set the library path:
+
+    ```bash
+    export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
+    ```
+
+    You can add this to your `~/.zshrc` to make it permanent.
+
+=== "Ubuntu/Debian"
+
+    ```bash
+    sudo apt-get install libcairo2-dev
+    ```
+
+=== "Fedora/RHEL"
+
+    ```bash
+    sudo dnf install cairo-devel
+    ```
+
+From the `icechunk-python` directory:
+
+```bash
+# Install icechunk with docs dependencies
+uv sync --group docs
+
+# Start the MkDocs development server
+cd ../docs
+uv run mkdocs serve
+```
+
+The development server will start at `http://127.0.0.1:8000` with live reload enabled.
+
+**Build static site**:
+
+```bash
+cd docs
+uv run mkdocs build
+```
+
+This builds the site to `docs/.site` directory.
+
+**Tips**:
+
+- Use `mkdocs serve --dirty` to only rebuild changed files (faster for iterative development)
+- You may need to restart if you make changes to `mkdocs.yml`
+
 ### Rust Development Workflow
 
 #### Prerequisites
+
+You need to have already created and activated a virtual environment ([see above](#python-development-workflow)), because the full rust build will also compile the python bindings.
 
 Install the `just` command runner (used for build tasks and pre-commit hooks):
 
@@ -168,6 +249,8 @@ Or using other package managers:
 
 - **macOS**: `brew install just`
 - **Ubuntu**: `snap install --edge --classic just`
+
+Ensure you have navigated to the root directory of the cloned repo (i.e. not the `icechunk-python` subdirectory).
 
 #### Building
 
@@ -198,6 +281,12 @@ cargo test test_name
 ```
 
 #### Code Quality
+
+To run all code quality checks you will also need `cargo-deny`:
+
+```bash
+cargo install cargo-deny
+```
 
 We use a tiered pre-commit system for fast development:
 

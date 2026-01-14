@@ -1,9 +1,10 @@
-use ::object_store::{azure::AzureConfigKey, gcp::GoogleConfigKey};
+use ::object_store::{ClientConfigKey, azure::AzureConfigKey, gcp::GoogleConfigKey};
 use aws_sdk_s3::{
     config::http::HttpResponse,
     error::SdkError,
     operation::{
         complete_multipart_upload::CompleteMultipartUploadError,
+        copy_object::CopyObjectError,
         create_multipart_upload::CreateMultipartUploadError,
         delete_objects::DeleteObjectsError, get_object::GetObjectError,
         head_object::HeadObjectError, list_objects_v2::ListObjectsV2Error,
@@ -15,7 +16,7 @@ use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{
     Stream, StreamExt, TryStreamExt,
-    stream::{BoxStream, FuturesOrdered},
+    stream::{self, BoxStream, FuturesOrdered},
 };
 use itertools::Itertools;
 use s3::S3Storage;
@@ -24,25 +25,28 @@ use std::{
     cmp::{max, min},
     collections::HashMap,
     ffi::OsString,
-    io::Read,
     iter,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::Path,
+    pin::Pin,
+    str::FromStr as _,
     sync::{Arc, Mutex, OnceLock},
 };
-use tokio::io::AsyncRead;
-use tokio_util::io::SyncIoBridge;
+use tokio::io::AsyncBufRead;
+use tokio_util::io::StreamReader;
 use tracing::{instrument, warn};
+use url::Url;
 
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use thiserror::Error;
 
 #[cfg(test)]
 pub mod logging;
 
 pub mod object_store;
+pub mod redirect;
 pub mod s3;
 
 pub use object_store::ObjectStorage;
@@ -50,12 +54,14 @@ pub use object_store::ObjectStorage;
 use crate::{
     config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options},
     error::ICError,
-    format::{ChunkId, ChunkOffset, ManifestId, SnapshotId},
     private,
+    storage::redirect::RedirectStorage,
 };
 
 #[derive(Debug, Error)]
 pub enum StorageErrorKind {
+    #[error("object not found")]
+    ObjectNotFound,
     #[error("object store error {0}")]
     ObjectStore(#[from] Box<::object_store::Error>),
     #[error("bad object store prefix {0:?}")]
@@ -74,6 +80,8 @@ pub enum StorageErrorKind {
     S3CompleteMultipartUploadError(
         #[from] Box<SdkError<CompleteMultipartUploadError, HttpResponse>>,
     ),
+    #[error("error copying object in object store {0}")]
+    S3CopyObjectError(#[from] Box<SdkError<CopyObjectError, HttpResponse>>),
     #[error("error getting object metadata from object store {0}")]
     S3HeadObjectError(#[from] Box<SdkError<HeadObjectError, HttpResponse>>),
     #[error("error listing objects in object store {0}")]
@@ -86,6 +94,14 @@ pub enum StorageErrorKind {
     IOError(#[from] std::io::Error),
     #[error("storage configuration error: {0}")]
     R2ConfigurationError(String),
+    #[error("error parsing URL: {url:?}")]
+    CannotParseUrl {
+        #[source]
+        cause: url::ParseError,
+        url: String,
+    },
+    #[error("Redirect Storage error: {0}")]
+    BadRedirect(String),
     #[error("storage error: {0}")]
     Other(String),
 }
@@ -105,19 +121,11 @@ where
 pub type StorageResult<A> = Result<A, StorageError>;
 
 #[derive(Debug)]
-pub struct ListInfo<Id> {
-    pub id: Id,
+pub struct ListInfo<A> {
+    pub id: A,
     pub created_at: DateTime<Utc>,
     pub size_bytes: u64,
 }
-
-const SNAPSHOT_PREFIX: &str = "snapshots/";
-const MANIFEST_PREFIX: &str = "manifests/";
-// const ATTRIBUTES_PREFIX: &str = "attributes/";
-const CHUNK_PREFIX: &str = "chunks/";
-const REF_PREFIX: &str = "refs";
-const TRANSACTION_PREFIX: &str = "transactions/";
-const CONFIG_PATH: &str = "config.yaml";
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash, PartialOrd, Ord)]
 pub struct ETag(pub String);
@@ -217,17 +225,30 @@ impl ConcurrencySettings {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
+    #[serde(default)]
     pub concurrency: Option<ConcurrencySettings>,
+
+    #[serde(default)]
     pub retries: Option<RetriesSettings>,
+
+    #[serde(default)]
     pub unsafe_use_conditional_update: Option<bool>,
+
+    #[serde(default)]
     pub unsafe_use_conditional_create: Option<bool>,
+
+    #[serde(default)]
     pub unsafe_use_metadata: Option<bool>,
+
     #[serde(default)]
     pub storage_class: Option<String>,
+
     #[serde(default)]
     pub metadata_storage_class: Option<String>,
+
     #[serde(default)]
     pub chunks_storage_class: Option<String>,
+
     #[serde(default)]
     pub minimum_size_for_multipart_upload: Option<u64>,
 }
@@ -262,6 +283,10 @@ impl Settings {
 
     pub fn metadata_storage_class(&self) -> Option<&String> {
         self.metadata_storage_class.as_ref().or(self.storage_class.as_ref())
+    }
+
+    pub fn storage_class(&self) -> Option<&String> {
+        self.storage_class.as_ref()
     }
 
     pub fn chunks_storage_class(&self) -> Option<&String> {
@@ -351,57 +376,21 @@ impl Settings {
     }
 }
 
-pub enum Reader {
-    Asynchronous(Box<dyn AsyncRead + Unpin + Send>),
-    Synchronous(Box<dyn Buf + Unpin + Send>),
-}
-
-impl Reader {
-    pub async fn to_bytes(self, expected_size: usize) -> StorageResult<Bytes> {
-        match self {
-            Reader::Asynchronous(mut read) => {
-                // add some extra space to the buffer to optimize conversion to bytes
-                let mut buffer = Vec::with_capacity(expected_size + 16);
-                tokio::io::copy(&mut read, &mut buffer)
-                    .await
-                    .map_err(StorageErrorKind::IOError)?;
-                Ok(buffer.into())
-            }
-            Reader::Synchronous(mut buf) => Ok(buf.copy_to_bytes(buf.remaining())),
-        }
-    }
-
-    /// Notice this Read can only be used in non async contexts, for example, calling tokio::task::spawn_blocking
-    pub fn into_read(self) -> Box<dyn Read + Unpin + Send> {
-        match self {
-            Reader::Asynchronous(read) => Box::new(SyncIoBridge::new(read)),
-            Reader::Synchronous(buf) => Box::new(buf.reader()),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FetchConfigResult {
-    Found { bytes: Bytes, version: VersionInfo },
-    NotFound,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UpdateConfigResult {
+pub enum VersionedUpdateResult {
     Updated { new_version: VersionInfo },
     NotOnLatestVersion,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GetRefResult {
-    Found { bytes: Bytes, version: VersionInfo },
-    NotFound,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WriteRefResult {
-    Written,
-    WontOverwrite,
+impl VersionedUpdateResult {
+    pub fn must_write(self) -> StorageResult<VersionInfo> {
+        match self {
+            VersionedUpdateResult::Updated { new_version } => Ok(new_version),
+            VersionedUpdateResult::NotOnLatestVersion => {
+                Err(StorageErrorKind::ObjectNotFound.into())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -424,94 +413,64 @@ impl DeleteObjectsResult {
 #[async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
-    fn default_settings(&self) -> Settings {
-        Default::default()
+    async fn default_settings(&self) -> StorageResult<Settings> {
+        Ok(Default::default())
     }
 
-    fn can_write(&self) -> bool;
+    async fn can_write(&self) -> StorageResult<bool>;
 
-    async fn fetch_config(&self, settings: &Settings)
-    -> StorageResult<FetchConfigResult>;
-    async fn update_config(
+    async fn get_object(
         &self,
         settings: &Settings,
-        config: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<UpdateConfigResult>;
-    async fn fetch_snapshot(
-        &self,
-        settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
-    /// Returns whatever reader is more efficient.
-    ///
-    /// For example, if processed with multiple requests, it will return a synchronous `Buf`
-    /// instance pointing the different parts. If it was executed in a single request, it's more
-    /// efficient to return the network `AsyncRead` directly
-    async fn fetch_manifest_known_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-        size: u64,
-    ) -> StorageResult<Reader>;
-    async fn fetch_manifest_unknown_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
-    async fn fetch_chunk(
-        &self,
-        settings: &Settings,
-        id: &ChunkId,
-        range: &Range<ChunkOffset>,
-    ) -> StorageResult<Bytes>; // FIXME: format flags
-    async fn fetch_transaction_log(
-        &self,
-        settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
+        path: &str,
+        range: Option<&Range<u64>>,
+    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+        if let Some(range) = range {
+            self.get_object_concurrently(settings, path, range).await
+        } else {
+            self.get_object_range_read(settings, path, range).await
+        }
+    }
 
-    async fn write_snapshot(
+    async fn get_object_range_read(
         &self,
         settings: &Settings,
-        id: SnapshotId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()>;
-    async fn write_manifest(
-        &self,
-        settings: &Settings,
-        id: ManifestId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()>;
-    async fn write_chunk(
-        &self,
-        settings: &Settings,
-        id: ChunkId,
-        bytes: Bytes,
-    ) -> StorageResult<()>;
-    async fn write_transaction_log(
-        &self,
-        settings: &Settings,
-        id: SnapshotId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()>;
+        path: &str,
+        range: Option<&Range<u64>>,
+    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+        let (stream, version) = self.get_object_range(settings, path, range).await?;
+        let reader = StreamReader::new(stream.map_err(std::io::Error::other));
+        Ok((Box::pin(reader), version))
+    }
 
-    async fn get_ref(
+    async fn get_object_range(
         &self,
         settings: &Settings,
-        ref_key: &str,
-    ) -> StorageResult<GetRefResult>;
-    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>>;
-    async fn write_ref(
+        path: &str,
+        range: Option<&Range<u64>>,
+    ) -> StorageResult<(
+        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+        VersionInfo,
+    )>;
+
+    async fn put_object(
         &self,
         settings: &Settings,
-        ref_key: &str,
+        path: &str,
         bytes: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<WriteRefResult>;
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult>;
+
+    async fn copy_object(
+        &self,
+        settings: &Settings,
+        from: &str,
+        to: &str,
+        content_type: Option<&str>,
+        version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult>;
 
     async fn list_objects<'a>(
         &'a self,
@@ -525,6 +484,12 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult>;
+
+    async fn get_object_last_modified(
+        &self,
+        path: &str,
+        settings: &Settings,
+    ) -> StorageResult<DateTime<Utc>>;
 
     /// Delete a stream of objects, by their id string representations
     /// Input stream includes sizes to get as result the total number of bytes deleted
@@ -559,12 +524,6 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         Ok(res.clone())
     }
 
-    async fn get_snapshot_last_modified(
-        &self,
-        settings: &Settings,
-        snapshot: &SnapshotId,
-    ) -> StorageResult<DateTime<Utc>>;
-
     async fn root_is_clean(&self) -> StorageResult<bool> {
         match self.list_objects(&Settings::default(), "").await?.next().await {
             None => Ok(true),
@@ -573,132 +532,44 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         }
     }
 
-    async fn list_chunks(
-        &self,
-        settings: &Settings,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ChunkId>>>> {
-        Ok(translate_list_infos(self.list_objects(settings, CHUNK_PREFIX).await?))
-    }
-
-    async fn list_manifests(
-        &self,
-        settings: &Settings,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<ManifestId>>>> {
-        Ok(translate_list_infos(self.list_objects(settings, MANIFEST_PREFIX).await?))
-    }
-
-    async fn list_snapshots(
-        &self,
-        settings: &Settings,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
-        Ok(translate_list_infos(self.list_objects(settings, SNAPSHOT_PREFIX).await?))
-    }
-
-    async fn list_transaction_logs(
-        &self,
-        settings: &Settings,
-    ) -> StorageResult<BoxStream<StorageResult<ListInfo<SnapshotId>>>> {
-        Ok(translate_list_infos(self.list_objects(settings, TRANSACTION_PREFIX).await?))
-    }
-
-    async fn delete_chunks(
-        &self,
-        settings: &Settings,
-        chunks: BoxStream<'_, (ChunkId, u64)>,
-    ) -> StorageResult<DeleteObjectsResult> {
-        self.delete_objects(
-            settings,
-            CHUNK_PREFIX,
-            chunks.map(|(id, size)| (id.to_string(), size)).boxed(),
-        )
-        .await
-    }
-
-    async fn delete_manifests(
-        &self,
-        settings: &Settings,
-        manifests: BoxStream<'_, (ManifestId, u64)>,
-    ) -> StorageResult<DeleteObjectsResult> {
-        self.delete_objects(
-            settings,
-            MANIFEST_PREFIX,
-            manifests.map(|(id, size)| (id.to_string(), size)).boxed(),
-        )
-        .await
-    }
-
-    async fn delete_snapshots(
-        &self,
-        settings: &Settings,
-        snapshots: BoxStream<'_, (SnapshotId, u64)>,
-    ) -> StorageResult<DeleteObjectsResult> {
-        self.delete_objects(
-            settings,
-            SNAPSHOT_PREFIX,
-            snapshots.map(|(id, size)| (id.to_string(), size)).boxed(),
-        )
-        .await
-    }
-
-    async fn delete_transaction_logs(
-        &self,
-        settings: &Settings,
-        transaction_logs: BoxStream<'_, (SnapshotId, u64)>,
-    ) -> StorageResult<DeleteObjectsResult> {
-        self.delete_objects(
-            settings,
-            TRANSACTION_PREFIX,
-            transaction_logs.map(|(id, size)| (id.to_string(), size)).boxed(),
-        )
-        .await
-    }
-
-    async fn delete_refs(
-        &self,
-        settings: &Settings,
-        refs: BoxStream<'_, String>,
-    ) -> StorageResult<u64> {
-        let refs = refs.map(|s| (s, 0)).boxed();
-        Ok(self.delete_objects(settings, REF_PREFIX, refs).await?.deleted_objects)
-    }
-
-    async fn get_object_range_buf(
-        &self,
-        settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn Buf + Unpin + Send>>;
-
-    async fn get_object_range_read(
-        &self,
-        settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>>;
-
     async fn get_object_concurrently_multiple(
         &self,
         settings: &Settings,
         key: &str,
         parts: Vec<Range<u64>>,
-    ) -> StorageResult<Box<dyn Buf + Send + Unpin>> {
-        let results =
-            parts
-                .into_iter()
-                .map(|range| async move {
-                    self.get_object_range_buf(settings, key, &range).await
-                })
-                .collect::<FuturesOrdered<_>>();
-
-        let init: Box<dyn Buf + Unpin + Send> = Box::new(&[][..]);
-        let buf = results
-            .try_fold(init, |prev, buf| async {
-                let res: Box<dyn Buf + Unpin + Send> = Box::new(prev.chain(buf));
-                Ok(res)
+    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+        let settings2 = settings.clone();
+        let key2 = key.to_string();
+        let results = parts
+            .into_iter()
+            .map(move |range| {
+                let key = key2.clone();
+                let settings = settings2.clone();
+                async move {
+                    let (stream, version) = self
+                        .get_object_range(&settings, key.as_ref(), Some(&range))
+                        .await?;
+                    let all_bytes: Vec<_> = stream.try_collect().await?;
+                    Ok::<_, StorageError>((all_bytes, version))
+                }
             })
+            .collect::<FuturesOrdered<_>>();
+
+        let results = results.peekable();
+        tokio::pin!(results);
+        let version = match results.as_mut().peek().await {
+            Some(Ok((_, version))) => version.clone(),
+            _ => VersionInfo::for_creation(),
+        };
+        let all_bytes = results
+            .map_ok(|(all_bytes, _)| stream::iter(all_bytes).map(Ok::<_, StorageError>))
+            .try_flatten()
+            .map_err(std::io::Error::other)
+            .try_collect::<Vec<_>>()
             .await?;
 
-        Ok(Box::new(buf))
+        let res = StreamReader::new(stream::iter(all_bytes).map(Ok::<_, std::io::Error>));
+        Ok((Box::pin(res), version))
     }
 
     async fn get_object_concurrently(
@@ -706,7 +577,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
         key: &str,
         range: &Range<u64>,
-    ) -> StorageResult<Reader> {
+    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
         let parts = split_in_multiple_requests(
             range,
             settings.concurrency().ideal_concurrent_request_size().get(),
@@ -714,42 +585,13 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         )
         .collect::<Vec<_>>();
 
-        let res = match parts.len() {
-            0 => Reader::Asynchronous(Box::new(tokio::io::empty())),
-            1 => Reader::Asynchronous(
-                self.get_object_range_read(settings, key, range).await?,
-            ),
-            _ => Reader::Synchronous(
-                self.get_object_concurrently_multiple(settings, key, parts).await?,
-            ),
+        let res: (Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo) = match parts.len() {
+            0 => (Box::pin(tokio::io::empty()), VersionInfo::for_creation()),
+            1 => self.get_object_range_read(settings, key, Some(range)).await?,
+            _ => self.get_object_concurrently_multiple(settings, key, parts).await?,
         };
         Ok(res)
     }
-}
-
-fn convert_list_item<Id>(item: ListInfo<String>) -> Option<ListInfo<Id>>
-where
-    Id: for<'b> TryFrom<&'b str>,
-{
-    let id = Id::try_from(item.id.as_str()).ok()?;
-    let created_at = item.created_at;
-    Some(ListInfo { created_at, id, size_bytes: item.size_bytes })
-}
-
-fn translate_list_infos<'a, Id>(
-    s: impl Stream<Item = StorageResult<ListInfo<String>>> + Send + 'a,
-) -> BoxStream<'a, StorageResult<ListInfo<Id>>>
-where
-    Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'a,
-{
-    s.try_filter_map(|info| async move {
-        let info = convert_list_item(info);
-        if info.is_none() {
-            tracing::error!(list_info=?info, "Error processing list item metadata");
-        }
-        Ok(info)
-    })
-    .boxed()
 }
 
 /// Split an object request into multiple byte range requests
@@ -951,6 +793,31 @@ pub async fn new_local_filesystem_storage(
     Ok(Arc::new(st))
 }
 
+pub fn new_http_storage(
+    base_url: &str,
+    config: Option<HashMap<String, String>>,
+) -> StorageResult<Arc<dyn Storage>> {
+    let base_url = Url::parse(base_url).map_err(|e| {
+        StorageErrorKind::CannotParseUrl { cause: e, url: base_url.to_string() }
+    })?;
+    let config = config
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|(k, v)| {
+            ClientConfigKey::from_str(k).ok().map(|key| (key, v.clone()))
+        })
+        .collect();
+    let st = ObjectStorage::new_http(base_url, Some(config))?;
+    Ok(Arc::new(st))
+}
+
+pub fn new_redirect_storage(base_url: &str) -> StorageResult<Arc<dyn Storage>> {
+    let base_url = Url::parse(base_url).map_err(|e| {
+        StorageErrorKind::CannotParseUrl { cause: e, url: base_url.to_string() }
+    })?;
+    Ok(Arc::new(RedirectStorage::new(base_url)))
+}
+
 pub async fn new_s3_object_store_storage(
     config: S3Options,
     bucket: String,
@@ -986,7 +853,7 @@ pub async fn new_azure_blob_storage(
     Ok(Arc::new(storage))
 }
 
-pub async fn new_gcs_storage(
+pub fn new_gcs_storage(
     bucket: String,
     prefix: Option<String>,
     credentials: Option<GcsCredentials>,
@@ -999,8 +866,7 @@ pub async fn new_gcs_storage(
             key.parse::<GoogleConfigKey>().map(|k| (k, value)).ok()
         })
         .collect();
-    let storage =
-        ObjectStorage::new_gcs(bucket, prefix, credentials, Some(config)).await?;
+    let storage = ObjectStorage::new_gcs(bucket, prefix, credentials, Some(config))?;
     Ok(Arc::new(storage))
 }
 
@@ -1047,7 +913,6 @@ mod tests {
             ))),
             None,
         )
-        .await
         .unwrap();
         let bytes = rmp_serde::to_vec(&storage).unwrap();
         let dese: Result<Arc<dyn Storage>, _> = rmp_serde::from_slice(&bytes);
@@ -1074,7 +939,7 @@ mod tests {
             // the request sizes add up to total size
             prop_assert_eq!(res.iter().map(|range| range.end - range.start).sum::<u64>(), size);
 
-            let sizes: Vec<_> = res.iter().map(|range| (range.end - range.start)).collect();
+            let sizes: Vec<_> = res.iter().map(|range| range.end - range.start).collect();
             if sizes.len() > 1 {
                 // all but last request have the same size
                 assert_eq!(sizes.iter().rev().skip(1).unique().count(), 1);
@@ -1114,7 +979,7 @@ mod tests {
             prop_assert_eq!(res.iter().map(|range| range.end - range.start).sum::<u64>(), size);
 
             // there are only two request sizes
-            let sizes: HashSet<_> = res.iter().map(|range| (range.end - range.start)).collect();
+            let sizes: HashSet<_> = res.iter().map(|range| range.end - range.start).collect();
             prop_assert!(sizes.len() <= 2); // only last element is smaller
             if sizes.len() > 1 {
                 // the smaller request size is one less than the big ones

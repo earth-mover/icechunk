@@ -31,7 +31,7 @@ The number of concurrent requests to make when getting partial values from stora
 ### [`max_concurrent_requests`](./reference.md#icechunk.RepositoryConfig.max_concurrent_requests)
 
 The maximum total number of concurrent requests this repo will allow.
-See [Performance | Concurrency](../performance#Concurrency) for details.
+See [Performance | Concurrency](performance#Concurrency) for details.
 
 ### [`compression`](./reference.md#icechunk.RepositoryConfig.compression)
 
@@ -116,6 +116,12 @@ This will add a second `VirtualChunkContainer` but not overwrite the first one t
 
 The manifest configuration for the repository. [`ManifestConfig`](./reference.md#icechunk.ManifestConfig) allows you to configure behavior for how manifests are loaded. In particular, the `preload` parameter allows you to configure the preload behavior of the manifest using a [`ManifestPreloadConfig`](./reference.md#icechunk.ManifestPreloadConfig). This allows you to control the number of references that are loaded into memory when a session is created, along with which manifests are available to be preloaded.
 
+The `ManifestPreloadConfig` accepts the following parameters:
+
+- `max_total_refs`: Maximum total chunk references to preload across all manifests.
+- `max_arrays_to_scan`: Maximum number of arrays to scan when looking for manifests to preload (default: 50). Increase this for repositories with many nested groups where coordinate arrays may appear later in the hierarchy.
+- `preload_if`: A condition that determines which manifests should be preloaded.
+
 #### Example
 
 For example, if we have a repo which contains data that we plan to open as an [`Xarray`](./xarray.md) dataset, we may want to configure the manifest preload to only preload manifests that contain arrays that are coordinates, in our case `time`, `latitude`, and `longitude`.
@@ -124,6 +130,7 @@ For example, if we have a repo which contains data that we plan to open as an [`
 config.manifest = icechunk.ManifestConfig(
     preload=icechunk.ManifestPreloadConfig(
         max_total_refs=100_000_000,
+        max_arrays_to_scan=1000,
         preload_if=icechunk.ManifestPreloadCondition.name_matches(".*time|.*latitude|.*longitude"),
     ),
 )
@@ -289,3 +296,25 @@ repo = icechunk.Repository.open(
     authorize_virtual_chunk_access=credentials,
 )
 ```
+
+## Proxy configuration
+
+Icechunk supports routing its requests through a proxy. This is useful when your object storage service itself is behind a proxy.
+
+!!! note
+
+    Proxy support is currently only implemented for S3-compatible storage instances.
+
+Icechunk automatically detects proxy settings from environment variables:
+
+```bash
+export HTTPS_PROXY=http://proxy.corp.com:8080
+export HTTP_PROXY=http://proxy.corp.com:8080
+```
+
+No code changes are required. Icechunk checks proxy sources in this order:
+1. `HTTPS_PROXY` / `https_proxy` - highest priority
+2. `HTTP_PROXY` / `http_proxy`
+3. `ALL_PROXY` / `all_proxy`
+
+Note that you must set the environment variable at the OS level, not via the python interpreter.

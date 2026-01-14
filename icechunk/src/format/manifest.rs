@@ -4,6 +4,7 @@ use std::{
     convert::Infallible,
     iter::zip,
     ops::Range,
+    string::FromUtf8Error,
     sync::Arc,
 };
 
@@ -205,7 +206,7 @@ impl ManifestSplits {
 pub fn uniform_manifest_split_edges(num_chunks: u32, split_size: &u32) -> Vec<u32> {
     (0u32..=num_chunks)
         .step_by(*split_size as usize)
-        .chain((num_chunks % split_size != 0).then_some(num_chunks))
+        .chain((!num_chunks.is_multiple_of(*split_size)).then_some(num_chunks))
         .collect()
 }
 #[derive(Debug, Error)]
@@ -239,6 +240,10 @@ pub enum VirtualReferenceErrorKind {
         "error retrieving virtual chunk, not enough data. Expected: ({expected}), available ({available})"
     )]
     InvalidObjectSize { expected: u64, available: u64 },
+    #[error("azure store configuration must include an account")]
+    AzureConfigurationMustIncludeAccount,
+    #[error("decoding virtual chunk url")]
+    Decoding(#[from] FromUtf8Error),
     #[error("unknown error")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -622,7 +627,7 @@ fn mk_chunk_ref<'bldr>(
 
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     max_depth: 64,
-    max_tables: 50_000_000,
+    max_tables: 500_000_000,
     max_apparent_size: 1 << 31, // taken from the default
     ignore_missing_null_terminator: true,
 };

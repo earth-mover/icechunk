@@ -180,7 +180,6 @@ async fn get_storage(
                 Some(credentials.clone()),
                 Some(object_store_config.clone()),
             )
-            .await
             .context("Failed to create GCS storage")?;
             Ok(storage)
         }
@@ -211,7 +210,7 @@ async fn repo_create(init_cmd: &CreateCommand, config: &CliConfig) -> Result<()>
 
     let config = Some(repo.get_config().clone());
 
-    Repository::create(config, Arc::clone(&storage), HashMap::new())
+    Repository::create(config, Arc::clone(&storage), HashMap::new(), None)
         .await
         .context(format!("Failed to create repository {:?}", init_cmd.repo))?;
 
@@ -321,6 +320,7 @@ fn add_repo_to_config(
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 },
                 credentials: S3Credentials::FromEnv,
                 config: RepositoryConfig::default(),
@@ -353,6 +353,7 @@ fn add_repo_to_config(
                     allow_http: false,
                     force_path_style: false,
                     network_stream_timeout_seconds: None,
+                    requester_pays: false,
                 },
                 credentials: S3Credentials::FromEnv,
                 config: RepositoryConfig::default(),
@@ -466,14 +467,11 @@ mod tests {
 
         repo_create(&init_cmd, &config).await.unwrap();
 
-        let refs = path.join("refs");
+        let repo = path.join("repo");
         let snapshots = path.join("snapshots");
 
-        assert!(refs.is_dir());
+        assert!(repo.is_file());
         assert!(snapshots.is_dir());
-
-        let mut refs_contents = read_dir(refs).unwrap();
-        assert!(refs_contents.next().is_some());
 
         let mut snapshots_contents = read_dir(snapshots).unwrap();
         assert!(snapshots_contents.next().is_some());

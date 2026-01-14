@@ -3,20 +3,19 @@ use crate::{
         AzureCredentials, AzureStaticCredentials, GcsBearerCredential, GcsCredentials,
         GcsCredentialsFetcher, GcsStaticCredentials, S3Credentials, S3Options,
     },
-    format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private,
 };
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::{
-    StreamExt, TryStreamExt,
+    Stream, StreamExt, TryStreamExt,
     stream::{self, BoxStream},
 };
 use object_store::{
     Attribute, AttributeValue, Attributes, BackoffConfig, ClientConfigKey,
-    CredentialProvider, GetOptions, ObjectMeta, ObjectStore, PutMode, PutOptions,
-    PutPayload, RetryConfig, StaticCredentialProvider, UpdateVersion,
+    CredentialProvider, GetOptions, ObjectMeta, ObjectStore, ObjectStoreExt as _,
+    PutMode, PutOptions, RetryConfig, StaticCredentialProvider, UpdateVersion,
     aws::AmazonS3Builder,
     azure::{AzureConfigKey, MicrosoftAzureBuilder},
     gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey},
@@ -34,21 +33,17 @@ use std::{
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::{Path as StdPath, PathBuf},
+    pin::Pin,
     sync::Arc,
 };
-use tokio::{
-    io::AsyncRead,
-    sync::{OnceCell, RwLock},
-};
-use tokio_util::compat::FuturesAsyncReadCompatExt;
+use tokio::sync::{OnceCell, RwLock};
 use tracing::instrument;
+use url::Url;
 
 use super::{
-    CHUNK_PREFIX, CONFIG_PATH, ConcurrencySettings, DeleteObjectsResult, ETag,
-    FetchConfigResult, Generation, GetRefResult, ListInfo, MANIFEST_PREFIX, REF_PREFIX,
-    Reader, RetriesSettings, SNAPSHOT_PREFIX, Settings, Storage, StorageError,
-    StorageErrorKind, StorageResult, TRANSACTION_PREFIX, UpdateConfigResult, VersionInfo,
-    WriteRefResult,
+    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, ListInfo,
+    RetriesSettings, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
+    VersionInfo, VersionedUpdateResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -118,7 +113,7 @@ impl ObjectStorage {
         Ok(storage)
     }
 
-    pub async fn new_gcs(
+    pub fn new_gcs(
         bucket: String,
         prefix: Option<String>,
         credentials: Option<GcsCredentials>,
@@ -128,6 +123,15 @@ impl ObjectStorage {
             Arc::new(GcsObjectStoreBackend { bucket, prefix, credentials, config });
         let storage = ObjectStorage { backend, client: OnceCell::new() };
 
+        Ok(storage)
+    }
+
+    pub fn new_http(
+        url: Url,
+        config: Option<HashMap<ClientConfigKey, String>>,
+    ) -> Result<ObjectStorage, StorageError> {
+        let backend = Arc::new(HttpObjectStoreBackend { url: url.to_string(), config });
+        let storage = ObjectStorage { backend, client: OnceCell::new() };
         Ok(storage)
     }
 
@@ -167,64 +171,9 @@ impl ObjectStorage {
             .map_err(Box::new)?)
     }
 
-    fn get_path_str(&self, file_prefix: &str, id: &str) -> ObjectPath {
-        let path = format!("{}/{}/{}", self.backend.prefix(), file_prefix, id);
+    fn prefixed_path(&self, path: &str) -> ObjectPath {
+        let path = format!("{}/{path}", self.backend.prefix());
         ObjectPath::from(path)
-    }
-
-    fn get_path<const SIZE: usize, T: FileTypeTag>(
-        &self,
-        file_prefix: &str,
-        id: &ObjectId<SIZE, T>,
-    ) -> ObjectPath {
-        // we serialize the url using crockford
-        self.get_path_str(file_prefix, id.to_string().as_str())
-    }
-
-    fn get_config_path(&self) -> ObjectPath {
-        self.get_path_str("", CONFIG_PATH)
-    }
-
-    fn get_snapshot_path(&self, id: &SnapshotId) -> ObjectPath {
-        self.get_path(SNAPSHOT_PREFIX, id)
-    }
-
-    fn get_manifest_path(&self, id: &ManifestId) -> ObjectPath {
-        self.get_path(MANIFEST_PREFIX, id)
-    }
-
-    fn get_transaction_path(&self, id: &SnapshotId) -> ObjectPath {
-        self.get_path(TRANSACTION_PREFIX, id)
-    }
-
-    fn get_chunk_path(&self, id: &ChunkId) -> ObjectPath {
-        self.get_path(CHUNK_PREFIX, id)
-    }
-
-    fn drop_prefix(&self, prefix: &ObjectPath, path: &ObjectPath) -> Option<ObjectPath> {
-        path.prefix_match(&ObjectPath::from(format!("{prefix}"))).map(|it| it.collect())
-    }
-
-    fn ref_key(&self, ref_key: &str) -> ObjectPath {
-        // ObjectPath knows how to deal with empty path parts: bar//foo
-        ObjectPath::from(format!("{}/{}/{}", self.backend.prefix(), REF_PREFIX, ref_key))
-    }
-
-    async fn get_object_reader(
-        &self,
-        settings: &Settings,
-        path: &ObjectPath,
-    ) -> StorageResult<impl AsyncRead + use<>> {
-        Ok(self
-            .get_client(settings)
-            .await
-            .get(path)
-            .await
-            .map_err(Box::new)?
-            .into_stream()
-            .err_into()
-            .into_async_read()
-            .compat())
     }
 
     fn metadata_to_attributes(
@@ -244,30 +193,28 @@ impl ObjectStorage {
         }
     }
 
-    fn get_ref_name(&self, prefix: &ObjectPath, meta: &ObjectMeta) -> Option<String> {
-        let relative_key = self.drop_prefix(prefix, &meta.location)?;
-        let parent = relative_key.parts().next()?;
-        Some(parent.as_ref().to_string())
-    }
-
     fn get_put_mode(
         &self,
         settings: &Settings,
-        previous_version: &VersionInfo,
+        previous_version: Option<&VersionInfo>,
     ) -> PutMode {
-        match (
-            previous_version.is_create(),
-            settings.unsafe_use_conditional_create(),
-            settings.unsafe_use_conditional_update(),
-        ) {
-            (true, true, _) => PutMode::Create,
-            (true, false, _) => PutMode::Overwrite,
+        if let Some(previous_version) = previous_version {
+            match (
+                previous_version.is_create(),
+                settings.unsafe_use_conditional_create(),
+                settings.unsafe_use_conditional_update(),
+            ) {
+                (true, true, _) => PutMode::Create,
+                (true, false, _) => PutMode::Overwrite,
 
-            (false, _, true) => PutMode::Update(UpdateVersion {
-                e_tag: previous_version.etag().cloned(),
-                version: previous_version.generation().cloned(),
-            }),
-            (false, _, false) => PutMode::Overwrite,
+                (false, _, true) => PutMode::Update(UpdateVersion {
+                    e_tag: previous_version.etag().cloned(),
+                    version: previous_version.generation().cloned(),
+                }),
+                (false, _, false) => PutMode::Overwrite,
+            }
+        } else {
+            PutMode::Overwrite
         }
     }
 }
@@ -283,270 +230,74 @@ impl private::Sealed for ObjectStorage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for ObjectStorage {
-    fn can_write(&self) -> bool {
-        self.backend.can_write()
+    async fn can_write(&self) -> StorageResult<bool> {
+        Ok(self.backend.can_write())
     }
 
     #[instrument(skip_all)]
-    fn default_settings(&self) -> Settings {
-        self.backend.default_settings()
+    async fn default_settings(&self) -> StorageResult<Settings> {
+        Ok(self.backend.default_settings())
     }
 
-    #[instrument(skip_all)]
-    async fn fetch_config(
+    async fn put_object(
         &self,
         settings: &Settings,
-    ) -> StorageResult<FetchConfigResult> {
-        let path = self.get_config_path();
-        let response = self.get_client(settings).await.get(&path).await;
-
-        match response {
-            Ok(result) => {
-                let version = VersionInfo {
-                    etag: result.meta.e_tag.as_ref().cloned().map(ETag),
-                    generation: result.meta.version.as_ref().cloned().map(Generation),
-                };
-
-                Ok(FetchConfigResult::Found {
-                    bytes: result.bytes().await.map_err(Box::new)?,
-                    version,
-                })
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let path = self.prefixed_path(path);
+        let mut attributes = Attributes::new();
+        if settings.unsafe_use_metadata() {
+            if let Some(content_type) = content_type {
+                attributes.insert(
+                    Attribute::ContentType,
+                    AttributeValue::from(content_type.to_string()),
+                );
             }
-            Err(object_store::Error::NotFound { .. }) => Ok(FetchConfigResult::NotFound),
-            Err(err) => Err(Box::new(err).into()),
-        }
-    }
-    #[instrument(skip(self, settings, config))]
-    async fn update_config(
-        &self,
-        settings: &Settings,
-        config: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<UpdateConfigResult> {
-        let path = self.get_config_path();
-        let attributes = if settings.unsafe_use_metadata() {
-            Attributes::from_iter(vec![(
-                Attribute::ContentType,
-                AttributeValue::from("application/yaml"),
-            )])
-        } else {
-            Attributes::new()
+            for (att, value) in self.metadata_to_attributes(settings, metadata).iter() {
+                attributes.insert(att.clone(), value.clone());
+            }
         };
 
         let mode = self.get_put_mode(settings, previous_version);
-
         let options = PutOptions { mode, attributes, ..PutOptions::default() };
+        // FIXME: use multipart
         let res =
-            self.get_client(settings).await.put_opts(&path, config.into(), options).await;
+            self.get_client(settings).await.put_opts(&path, bytes.into(), options).await;
         match res {
             Ok(res) => {
                 let new_version = VersionInfo {
                     etag: res.e_tag.map(ETag),
                     generation: res.version.map(Generation),
                 };
-                Ok(UpdateConfigResult::Updated { new_version })
+                Ok(VersionedUpdateResult::Updated { new_version })
             }
-            Err(object_store::Error::Precondition { .. }) => {
-                Ok(UpdateConfigResult::NotOnLatestVersion)
-            }
-            Err(err) => Err(Box::new(err).into()),
-        }
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_snapshot(
-        &self,
-        settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let path = self.get_snapshot_path(id);
-        Ok(Box::new(self.get_object_reader(settings, &path).await?))
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_manifest_known_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-        size: u64,
-    ) -> StorageResult<Reader> {
-        let path = self.get_manifest_path(id);
-        self.get_object_concurrently(settings, path.as_ref(), &(0..size)).await
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_manifest_unknown_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let path = self.get_manifest_path(id);
-        Ok(Box::new(self.get_object_reader(settings, &path).await?))
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_transaction_log(
-        &self,
-        settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let path = self.get_transaction_path(id);
-        Ok(Box::new(self.get_object_reader(settings, &path).await?))
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn write_snapshot(
-        &self,
-        settings: &Settings,
-        id: SnapshotId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        let path = self.get_snapshot_path(&id);
-        let attributes = self.metadata_to_attributes(settings, metadata);
-        let options = PutOptions { attributes, ..PutOptions::default() };
-        // FIXME: use multipart
-        self.get_client(settings)
-            .await
-            .put_opts(&path, bytes.into(), options)
-            .await
-            .map_err(Box::new)?;
-        Ok(())
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn write_manifest(
-        &self,
-        settings: &Settings,
-        id: ManifestId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        let path = self.get_manifest_path(&id);
-        let attributes = self.metadata_to_attributes(settings, metadata);
-        let options = PutOptions { attributes, ..PutOptions::default() };
-        // FIXME: use multipart
-        self.get_client(settings)
-            .await
-            .put_opts(&path, bytes.into(), options)
-            .await
-            .map_err(Box::new)?;
-        Ok(())
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn write_transaction_log(
-        &self,
-        settings: &Settings,
-        id: SnapshotId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        let path = self.get_transaction_path(&id);
-        let attributes = self.metadata_to_attributes(settings, metadata);
-        let options = PutOptions { attributes, ..PutOptions::default() };
-        // FIXME: use multipart
-        self.get_client(settings)
-            .await
-            .put_opts(&path, bytes.into(), options)
-            .await
-            .map_err(Box::new)?;
-        Ok(())
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_chunk(
-        &self,
-        settings: &Settings,
-        id: &ChunkId,
-        range: &Range<ChunkOffset>,
-    ) -> Result<Bytes, StorageError> {
-        let path = self.get_chunk_path(id);
-        self.get_object_concurrently(settings, path.as_ref(), range)
-            .await?
-            .to_bytes((range.end - range.start + 16) as usize)
-            .await
-    }
-
-    #[instrument(skip(self, settings, bytes))]
-    async fn write_chunk(
-        &self,
-        settings: &Settings,
-        id: ChunkId,
-        bytes: Bytes,
-    ) -> Result<(), StorageError> {
-        let path = self.get_chunk_path(&id);
-        self.get_client(settings)
-            .await
-            .put(&path, bytes.into())
-            .await
-            .map_err(Box::new)?;
-        Ok(())
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn get_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-    ) -> StorageResult<GetRefResult> {
-        let key = self.ref_key(ref_key);
-        match self.get_client(settings).await.get(&key).await {
-            Ok(res) => {
-                let etag = res.meta.e_tag.clone().map(ETag);
-                let generation = res.meta.version.clone().map(Generation);
-                Ok(GetRefResult::Found {
-                    bytes: res.bytes().await.map_err(Box::new)?,
-                    version: VersionInfo { etag, generation },
-                })
-            }
-            Err(object_store::Error::NotFound { .. }) => Ok(GetRefResult::NotFound),
-            Err(err) => Err(Box::new(err).into()),
-        }
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>> {
-        let prefix = &self.ref_key("");
-
-        Ok(self
-            .get_client(settings)
-            .await
-            .list(Some(prefix.clone()).as_ref())
-            .try_filter_map(|meta| async move {
-                let name = self.get_ref_name(prefix, &meta);
-                if name.is_none() {
-                    tracing::error!(object = ?meta, "Bad ref name")
-                }
-                Ok(name)
-            })
-            .try_collect()
-            .await
-            .map_err(Box::new)?)
-    }
-
-    #[instrument(skip(self, settings, bytes))]
-    async fn write_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-        bytes: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<WriteRefResult> {
-        let key = self.ref_key(ref_key);
-        let mode = self.get_put_mode(settings, previous_version);
-        let opts = PutOptions { mode, ..PutOptions::default() };
-
-        match self
-            .get_client(settings)
-            .await
-            .put_opts(&key, PutPayload::from_bytes(bytes), opts)
-            .await
-        {
-            Ok(_) => Ok(WriteRefResult::Written),
             Err(object_store::Error::Precondition { .. })
             | Err(object_store::Error::AlreadyExists { .. }) => {
-                Ok(WriteRefResult::WontOverwrite)
+                Ok(VersionedUpdateResult::NotOnLatestVersion)
+            }
+            Err(err) => Err(Box::new(err).into()),
+        }
+    }
+
+    async fn copy_object(
+        &self,
+        settings: &Settings,
+        from: &str,
+        to: &str,
+        _content_type: Option<&str>,
+        version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult> {
+        // FIXME: add support for content type, version check and metadata
+        let from = self.prefixed_path(from);
+        let to = self.prefixed_path(to);
+        match self.get_client(settings).await.copy(&from, &to).await {
+            Ok(_) => Ok(VersionedUpdateResult::Updated { new_version: version.clone() }),
+            Err(object_store::Error::NotFound { .. }) => {
+                Err(StorageErrorKind::ObjectNotFound.into())
             }
             Err(err) => Err(Box::new(err).into()),
         }
@@ -564,12 +315,15 @@ impl Storage for ObjectStorage {
             .await
             .list(Some(&prefix))
             // TODO: we should signal error instead of filtering
-            .try_filter_map(|object| async move {
-                let info = object_to_list_info(&object);
-                if info.is_none() {
-                    tracing::error!(object=?object, "Found bad object while listing");
+            .try_filter_map(move |object| {
+                let prefix = prefix.clone();
+                async move {
+                    let info = object_to_list_info(&prefix, &object);
+                    if info.is_none() {
+                        tracing::error!(object=?object, "Found bad object while listing");
+                    }
+                    Ok(info)
                 }
-                Ok(info)
             })
             .map_err(Box::new)
             .err_into();
@@ -586,7 +340,7 @@ impl Storage for ObjectStorage {
         let mut sizes = HashMap::new();
         let mut ids = Vec::new();
         for (id, size) in batch {
-            let path = self.get_path_str(prefix, id.as_str());
+            let path = self.prefixed_path(format!("{prefix}/{}", id.as_str()).as_str());
             ids.push(Ok(path.clone()));
             sizes.insert(path, size);
         }
@@ -612,62 +366,49 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self, settings))]
-    async fn get_snapshot_last_modified(
+    async fn get_object_last_modified(
         &self,
+        path: &str,
         settings: &Settings,
-        snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>> {
-        let path = self.get_snapshot_path(snapshot);
+        let path = self.prefixed_path(path);
         let res = self.get_client(settings).await.head(&path).await.map_err(Box::new)?;
         Ok(res.last_modified)
     }
 
     #[instrument(skip(self))]
-    async fn get_object_range_buf(
+    async fn get_object_range(
         &self,
         settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
-        let path = ObjectPath::from(key);
-        let usize_range = range.start..range.end;
-        let range = Some(usize_range.into());
+        path: &str,
+        range: Option<&Range<u64>>,
+    ) -> StorageResult<(
+        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+        VersionInfo,
+    )> {
+        let full_key = self.prefixed_path(path);
+        let range = range.map(|range| {
+            let usize_range = range.start..range.end;
+            usize_range.into()
+        });
         let opts = GetOptions { range, ..Default::default() };
-        Ok(Box::new(
-            self.get_client(settings)
-                .await
-                .get_opts(&path, opts)
-                .await
-                .map_err(Box::new)?
-                .bytes()
-                .await
-                .map_err(Box::new)?,
-        ))
-    }
+        let res = self.get_client(settings).await.get_opts(&full_key, opts).await;
 
-    #[instrument(skip(self))]
-    async fn get_object_range_read(
-        &self,
-        settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let path = ObjectPath::from(key);
-        let usize_range = range.start..range.end;
-        let range = Some(usize_range.into());
-        let opts = GetOptions { range, ..Default::default() };
-        let res: Box<dyn AsyncRead + Unpin + Send> = Box::new(
-            self.get_client(settings)
-                .await
-                .get_opts(&path, opts)
-                .await
-                .map_err(Box::new)?
-                .into_stream()
-                .err_into()
-                .into_async_read()
-                .compat(),
-        );
-        Ok(res)
+        match res {
+            Ok(result) => {
+                let version = VersionInfo {
+                    etag: result.meta.e_tag.as_ref().cloned().map(ETag),
+                    generation: result.meta.version.as_ref().cloned().map(Generation),
+                };
+                let stream =
+                    Box::pin(result.into_stream().map_err(|e| Box::new(e).into()));
+                Ok((stream, version))
+            }
+            Err(object_store::Error::NotFound { .. }) => {
+                Err(StorageErrorKind::ObjectNotFound.into())
+            }
+            Err(err) => Err(Box::new(err).into()),
+        }
     }
 }
 
@@ -827,13 +568,19 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = HttpBuilder::new().with_url(&self.url);
 
+        let empty = HashMap::new();
+        let config = self.config.as_ref().unwrap_or(&empty);
+
         // Add options
-        let builder = self
-            .config
-            .as_ref()
-            .unwrap_or(&HashMap::new())
+        let mut builder = config
             .iter()
             .fold(builder, |builder, (key, value)| builder.with_config(*key, value));
+
+        if !config.contains_key(&ClientConfigKey::AllowHttp)
+            && self.url.starts_with("http:")
+        {
+            builder = builder.with_config(ClientConfigKey::AllowHttp, "true")
+        }
 
         let builder = builder.with_retry(RetryConfig {
             backoff: BackoffConfig {
@@ -969,11 +716,11 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AzureObjectStoreBackend {
-    account: String,
-    container: String,
-    prefix: Option<String>,
-    credentials: Option<AzureCredentials>,
-    config: Option<HashMap<AzureConfigKey, String>>,
+    pub account: String,
+    pub container: String,
+    pub prefix: Option<String>,
+    pub credentials: Option<AzureCredentials>,
+    pub config: Option<HashMap<AzureConfigKey, String>>,
 }
 
 impl fmt::Display for AzureObjectStoreBackend {
@@ -1196,9 +943,12 @@ impl CredentialProvider for GcsRefreshableCredentialProvider {
     }
 }
 
-fn object_to_list_info(object: &ObjectMeta) -> Option<ListInfo<String>> {
+fn object_to_list_info(
+    prefix: &ObjectPath,
+    object: &ObjectMeta,
+) -> Option<ListInfo<String>> {
     let created_at = object.last_modified;
-    let id = object.location.filename()?.to_string();
+    let id = ObjectPath::from_iter(object.location.prefix_match(prefix)?).to_string();
     let size_bytes = object.size;
     Some(ListInfo { id, created_at, size_bytes })
 }
@@ -1210,8 +960,6 @@ mod tests {
 
     use icechunk_macros::tokio_test;
     use tempfile::TempDir;
-
-    use crate::format::{ChunkId, ManifestId, SnapshotId};
 
     use super::ObjectStorage;
 
@@ -1261,35 +1009,5 @@ mod tests {
         let store =
             ObjectStorage::new_local_filesystem(PathBuf::from(&rel_path).as_path()).await;
         assert!(store.is_ok());
-    }
-
-    #[tokio_test]
-    async fn test_object_store_paths() {
-        let store = ObjectStorage::new_local_filesystem(PathBuf::from(".").as_path())
-            .await
-            .unwrap();
-
-        let ref_key = "ref_key";
-        let ref_path = store.ref_key(ref_key);
-        assert_eq!(ref_path.to_string(), format!("refs/{ref_key}"));
-
-        let snapshot_id = SnapshotId::random();
-        let snapshot_path = store.get_snapshot_path(&snapshot_id);
-        assert_eq!(snapshot_path.to_string(), format!("snapshots/{snapshot_id}"));
-
-        let manifest_id = ManifestId::random();
-        let manifest_path = store.get_manifest_path(&manifest_id);
-        assert_eq!(manifest_path.to_string(), format!("manifests/{manifest_id}"));
-
-        let chunk_id = ChunkId::random();
-        let chunk_path = store.get_chunk_path(&chunk_id);
-        assert_eq!(chunk_path.to_string(), format!("chunks/{chunk_id}"));
-
-        let transaction_id = SnapshotId::random();
-        let transaction_path = store.get_transaction_path(&transaction_id);
-        assert_eq!(
-            transaction_path.to_string(),
-            format!("transactions/{transaction_id}")
-        );
     }
 }

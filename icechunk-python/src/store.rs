@@ -13,6 +13,7 @@ use icechunk::{
 };
 use itertools::Itertools as _;
 use pyo3::{
+    conversion::IntoPyObjectExt,
     exceptions::{PyKeyError, PyValueError},
     prelude::*,
     types::{PyTuple, PyType},
@@ -58,7 +59,7 @@ impl From<ChecksumArgument> for Checksum {
 
 #[pyclass]
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct VirtualChunkSpec {
+pub(crate) struct VirtualChunkSpec {
     #[pyo3(get)]
     index: Vec<u32>,
     #[pyo3(get)]
@@ -115,7 +116,7 @@ impl PyStore {
         bytes: PyBytes,
     ) -> PyResult<Self> {
         // This is a compute intensive task, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let bytes = bytes.into_inner();
             let store = Store::from_bytes(bytes).map_err(|e| {
                 PyValueError::new_err(format!(
@@ -134,7 +135,7 @@ impl PyStore {
     #[getter]
     fn read_only(&self, py: Python<'_>) -> PyIcechunkStoreResult<bool> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let read_only = self.0.read_only().await;
                 Ok(read_only)
@@ -144,7 +145,7 @@ impl PyStore {
 
     fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<'_, [u8]>> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             // FIXME: Use rmp_serde instead of serde_json to optimize performance
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let serialized =
@@ -183,7 +184,7 @@ impl PyStore {
 
     fn sync_clear(&self, py: Python<'_>) -> PyIcechunkStoreResult<()> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let store = Arc::clone(&self.0);
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 store.clear().await.map_err(PyIcechunkStoreError::from)?;
@@ -383,7 +384,7 @@ impl PyStore {
         validate_container: bool,
     ) -> PyIcechunkStoreResult<()> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let store = Arc::clone(&self.0);
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -441,7 +442,7 @@ impl PyStore {
         chunks: Vec<VirtualChunkSpec>,
         validate_containers: bool,
     ) -> PyIcechunkStoreResult<Option<Vec<Py<PyTuple>>>> {
-        py.allow_threads(move || {
+        py.detach(move || {
             let store = Arc::clone(&self.0);
 
             let res = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -483,7 +484,7 @@ impl PyStore {
 
             match res {
                 SetVirtualRefsResult::Done => Ok(None),
-                SetVirtualRefsResult::FailedRefs(vec) => Python::with_gil(|py| {
+                SetVirtualRefsResult::FailedRefs(vec) => Python::attach(|py| {
                     let res = vec
                         .into_iter()
                         .map(|ci| PyTuple::new(py, ci.0).map(|tup| tup.unbind()))
@@ -542,7 +543,7 @@ impl PyStore {
 
                 match res {
                     SetVirtualRefsResult::Done => Ok(None),
-                    SetVirtualRefsResult::FailedRefs(vec) => Python::with_gil(|py| {
+                    SetVirtualRefsResult::FailedRefs(vec) => Python::attach(|py| {
                         let res = vec
                             .into_iter()
                             .map(|ci| PyTuple::new(py, ci.0).map(|tup| tup.unbind()))
@@ -631,14 +632,18 @@ impl PyStore {
 
     fn list(&self, py: Python<'_>) -> PyIcechunkStoreResult<PyAsyncGenerator> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let store = Arc::clone(&self.0);
 
             #[allow(deprecated)]
             let list = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { store.list().await })?
-                .map_ok(|s| Python::with_gil(|py| s.to_object(py)))
                 .map_err(PyIcechunkStoreError::StoreError)
+                .and_then(|s| {
+                    futures::future::ready(Python::attach(|py| {
+                        s.into_py_any(py).map_err(PyIcechunkStoreError::PyError)
+                    }))
+                })
                 .err_into();
 
             let prepared_list = Arc::new(Mutex::new(list.boxed()));
@@ -652,14 +657,18 @@ impl PyStore {
         prefix: String,
     ) -> PyIcechunkStoreResult<PyAsyncGenerator> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let store = Arc::clone(&self.0);
 
             #[allow(deprecated)]
             let list = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { store.list_prefix(prefix.as_str()).await })?
-                .map_ok(|s| Python::with_gil(|py| s.to_object(py)))
                 .map_err(PyIcechunkStoreError::StoreError)
+                .and_then(|s| {
+                    futures::future::ready(Python::attach(|py| {
+                        s.into_py_any(py).map_err(PyIcechunkStoreError::PyError)
+                    }))
+                })
                 .err_into();
             let prepared_list = Arc::new(Mutex::new(list.boxed()));
             Ok(PyAsyncGenerator::new(prepared_list))
@@ -672,14 +681,18 @@ impl PyStore {
         prefix: String,
     ) -> PyIcechunkStoreResult<PyAsyncGenerator> {
         // This is blocking function, we need to release the Gil
-        py.allow_threads(move || {
+        py.detach(move || {
             let store = Arc::clone(&self.0);
 
             #[allow(deprecated)]
             let list = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { store.list_dir(prefix.as_str()).await })?
-                .map_ok(|s| Python::with_gil(|py| s.to_object(py)))
                 .map_err(PyIcechunkStoreError::StoreError)
+                .and_then(|s| {
+                    futures::future::ready(Python::attach(|py| {
+                        s.into_py_any(py).map_err(PyIcechunkStoreError::PyError)
+                    }))
+                })
                 .err_into();
             let prepared_list = Arc::new(Mutex::new(list.boxed()));
             Ok(PyAsyncGenerator::new(prepared_list))

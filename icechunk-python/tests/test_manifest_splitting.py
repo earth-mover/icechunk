@@ -23,7 +23,7 @@ DIMS = ("time", "latitude", "longitude")
 
 
 @given(data=st.data())
-def test_splitting_config_dict_roundtrip(data) -> None:
+def test_splitting_config_dict_roundtrip(data: st.DataObject) -> None:
     arrays = data.draw(
         st.lists(
             zarr_arrays(compressors=st.none(), attrs=st.none(), zarr_formats=st.just(3))
@@ -33,7 +33,7 @@ def test_splitting_config_dict_roundtrip(data) -> None:
     assert ic.ManifestSplittingConfig.from_dict(config.to_dict()) == config
 
 
-def test_manifest_splitting_appends() -> None:
+def test_manifest_splitting_appends(any_spec_version: int | None) -> None:
     array_condition = ManifestSplitCondition.or_conditions(
         [
             ManifestSplitCondition.name_matches("temperature"),
@@ -49,7 +49,7 @@ def test_manifest_splitting_appends() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         ### simple create repo with manifest splitting
         storage = ic.local_filesystem_storage(tmpdir)
-        repo = ic.Repository.create(storage, config=config)
+        repo = ic.Repository.create(storage, config=config, spec_version=any_spec_version)
         assert repo.config.manifest
         assert repo.config.manifest.splitting is not None
 
@@ -71,7 +71,7 @@ def test_manifest_splitting_appends() -> None:
                 mode="w",
             )
         session.commit("initialize")
-        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)  # type: ignore[arg-type]
         xr.testing.assert_identical(roundtripped, ds)
 
         nchunks = math.prod(SHAPE) * 2
@@ -88,7 +88,7 @@ def test_manifest_splitting_appends() -> None:
         with zarr.config.set({"array.write_empty_chunks": True}):
             to_icechunk(ds, session, mode="a", append_dim="time")
         session.commit("appended")
-        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)  # type: ignore[arg-type]
         xr.testing.assert_identical(roundtripped, xr.concat([ds, ds], dim="time"))
         nchunks += math.prod(SHAPE) * 2
         nmanifests += 6 * 2
@@ -112,7 +112,7 @@ def test_manifest_splitting_appends() -> None:
         with zarr.config.set({"array.write_empty_chunks": True}):
             to_icechunk(newds, session, mode="a", append_dim="longitude")
         session.commit("appended")
-        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)  # type: ignore[arg-type]
         xr.testing.assert_identical(
             roundtripped,
             xr.concat([xr.concat([ds, ds], dim="time"), newds], dim="longitude"),
@@ -126,7 +126,9 @@ def test_manifest_splitting_appends() -> None:
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
 
-def test_manifest_overwrite_splitting_config_on_read() -> None:
+def test_manifest_overwrite_splitting_config_on_read(
+    any_spec_version: int | None,
+) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {
             ManifestSplitCondition.name_matches("temperature"): {
@@ -152,7 +154,12 @@ def test_manifest_overwrite_splitting_config_on_read() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         ### simple create repo with manifest splitting
         storage = ic.local_filesystem_storage(tmpdir)
-        repo = ic.Repository.create(storage, config=config)
+        repo = ic.Repository.create(
+            storage,
+            config=config,
+            spec_version=any_spec_version,
+        )
+        assert repo.config.manifest is not None
         assert repo.config.manifest.splitting is not None
 
         ds = xr.Dataset(
@@ -164,7 +171,7 @@ def test_manifest_overwrite_splitting_config_on_read() -> None:
                 ds, session, encoding={"temperature": {"chunks": CHUNKS}}, mode="w"
             )
         session.commit("initialize")
-        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)  # type: ignore[arg-type]
         xr.testing.assert_identical(roundtripped, ds)
 
         nchunks = math.prod(SHAPE)
@@ -175,12 +182,13 @@ def test_manifest_overwrite_splitting_config_on_read() -> None:
         #### check that config is overwritten on read
         ### append along time - no splitting specified along this dimension
         repo = ic.Repository.open(storage, config=new_config)
+        assert repo.config.manifest is not None
         assert repo.config.manifest.splitting is not None
         session = repo.writable_session("main")
         with zarr.config.set({"array.write_empty_chunks": True}):
             to_icechunk(ds, session, mode="a", append_dim="time")
         session.commit("appended")
-        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)  # type: ignore[arg-type]
         xr.testing.assert_identical(roundtripped, xr.concat([ds, ds], dim="time"))
         nchunks = 2 * math.prod(SHAPE)
         nmanifests += 2
@@ -189,7 +197,7 @@ def test_manifest_overwrite_splitting_config_on_read() -> None:
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
 
-def test_manifest_splitting_sparse_regions() -> None:
+def test_manifest_splitting_sparse_regions(any_spec_version: int | None) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {
             ManifestSplitCondition.name_matches("temperature"): {
@@ -203,7 +211,11 @@ def test_manifest_splitting_sparse_regions() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         ### simple create repo with manifest splitting
         storage = ic.local_filesystem_storage(tmpdir)
-        repo = ic.Repository.create(storage, config=config)
+        repo = ic.Repository.create(
+            storage,
+            config=config,
+            spec_version=any_spec_version,
+        )
         assert repo.config.manifest
         assert repo.config.manifest.splitting is not None
 
@@ -225,7 +237,7 @@ def test_manifest_splitting_sparse_regions() -> None:
         with zarr.config.set({"array.write_empty_chunks": False}):
             to_icechunk(ds.isel(longitude=slice(1, 4)), session, region="auto")
         session.commit("write region 1")
-        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+        roundtripped = xr.open_dataset(session.store, engine="zarr", consolidated=False)  # type: ignore[arg-type]
         expected = xr.zeros_like(ds)
         expected.loc[{"longitude": slice(1, 3)}] = ds.isel(longitude=slice(1, 4))
         xr.testing.assert_identical(roundtripped, expected)
@@ -270,17 +282,25 @@ def test_manifest_splitting_sparse_regions() -> None:
         ),
     ],
 )
-def test_manifest_splitting_complex_config(config, expected_split_sizes) -> None:
+def test_manifest_splitting_complex_config(
+    config: ic.ManifestSplitValues,
+    expected_split_sizes: tuple[int, int, int],
+    any_spec_version: int | None,
+) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {ManifestSplitCondition.AnyArray(): config}
     )
-    config = ic.RepositoryConfig(
+    repo_config = ic.RepositoryConfig(
         inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)
     )
     with tempfile.TemporaryDirectory() as tmpdir:
         ### simple create repo with manifest splitting
         storage = ic.local_filesystem_storage(tmpdir)
-        repo = ic.Repository.create(storage, config=config)
+        repo = ic.Repository.create(
+            storage,
+            config=repo_config,
+            spec_version=any_spec_version,
+        )
         assert repo.config.manifest
         assert repo.config.manifest.splitting is not None
 

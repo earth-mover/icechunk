@@ -27,6 +27,13 @@ impl ConflictSolver for ConflictDetector {
         current_changes: ChangeSet,
         current_repo: &Session,
     ) -> SessionResult<ConflictResolution> {
+        if previous_change.moves().next().is_some() {
+            return Ok(ConflictResolution::Unsolvable {
+                reason: vec![Conflict::MoveOperationCannotBeRebased],
+                unmodified: current_changes,
+            });
+        }
+
         let new_nodes_explicit_conflicts = stream::iter(
             current_changes.new_nodes().map(Ok),
         )

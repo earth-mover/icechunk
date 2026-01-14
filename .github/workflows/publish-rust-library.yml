@@ -8,8 +8,8 @@ env:
   RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
   RUSTUP_MAX_RETRIES: 10
   # update RUST_CHANNEL and CARGO_DENY in sync
-  RUST_CHANNEL: '1.89.0'
-  CARGO_DENY_VERSION: '0.18.4'
+  RUST_CHANNEL: '1.91.0'
+  CARGO_DENY_VERSION: '0.18.9'
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Stand up MinIO
         run: |
           docker compose up -d minio

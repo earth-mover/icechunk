@@ -40,6 +40,19 @@ def local_filesystem_storage(path: str) -> Storage:
     return Storage.new_local_filesystem(path)
 
 
+def http_storage(base_url: str, opts: dict[str, str] | None = None) -> Storage:
+    """Create a read-only Storage instance that reads data from an HTTP(s) server
+
+    Parameters
+    ----------
+    base_url: str
+        The URL path to the root of the repository
+    opts: dict[str, str] | None
+        A dictionary of options for the HTTP object store. See https://docs.rs/object_store/latest/object_store/client/enum.ClientConfigKey.html#variants for a list of possible keys in snake case format.
+    """
+    return Storage.new_http(base_url, opts)
+
+
 def http_store(
     opts: dict[str, str] | None = None,
 ) -> ObjectStoreConfig.Http:
@@ -51,6 +64,11 @@ def http_store(
         A dictionary of options for the HTTP object store. See https://docs.rs/object_store/latest/object_store/client/enum.ClientConfigKey.html#variants for a list of possible keys in snake case format.
     """
     return ObjectStoreConfig.Http(opts)
+
+
+def redirect_storage(base_url: str) -> Storage:
+    # FIXME: document
+    return Storage.new_redirect(base_url)
 
 
 def local_filesystem_store(
@@ -74,6 +92,7 @@ def s3_store(
     s3_compatible: bool = False,
     force_path_style: bool = False,
     network_stream_timeout_seconds: int = 60,
+    requester_pays: bool = False,
 ) -> ObjectStoreConfig.S3Compatible | ObjectStoreConfig.S3:
     """Build an ObjectStoreConfig instance for S3 or S3 compatible object stores."""
 
@@ -83,6 +102,8 @@ def s3_store(
         allow_http=allow_http,
         force_path_style=force_path_style,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+        requester_pays=requester_pays,
+        anonymous=anonymous,
     )
     return (
         ObjectStoreConfig.S3Compatible(options)
@@ -108,6 +129,7 @@ def s3_storage(
     scatter_initial_credentials: bool = False,
     force_path_style: bool = False,
     network_stream_timeout_seconds: int = 60,
+    requester_pays: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -148,6 +170,8 @@ def s3_storage(
     network_stream_timeout_seconds: int
         Timeout requests if no bytes can be transmitted during this period of time.
         If set to 0, timeout is disabled.
+    requester_pays: bool
+        Enable requester pays for S3 buckets
     """
 
     credentials = s3_credentials(
@@ -166,6 +190,8 @@ def s3_storage(
         allow_http=allow_http,
         force_path_style=force_path_style,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+        requester_pays=requester_pays,
+        anonymous=anonymous or False,
     )
     return Storage.new_s3(
         config=options,
@@ -204,6 +230,7 @@ def s3_object_store_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         force_path_style=force_path_style,
+        anonymous=anonymous or False,
     )
     return Storage.new_s3_object_store(
         config=options,
@@ -288,6 +315,7 @@ def tigris_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+        anonymous=anonymous or False,
     )
     return Storage.new_tigris(
         config=options,
@@ -373,6 +401,7 @@ def r2_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
+        anonymous=anonymous or False,
     )
     return Storage.new_r2(
         config=options,
@@ -457,6 +486,23 @@ def gcs_storage(
         credentials=credentials,
         config=config,
     )
+
+
+def azure_store(
+    *,
+    account: str,
+    config: dict[str, str] | None = None,
+) -> ObjectStoreConfig.Azure:
+    """Build an ObjectStoreConfig instance for Azure stores.
+
+    Parameters
+    ----------
+    account: str
+        The account to which the caller must have access privileges
+    config: dict[str, str] | None
+        A dictionary of options for the Azure Blob Storage object store. See https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants for a list of possible configuration keys.
+    """
+    return ObjectStoreConfig.Azure({"account": account, **(config or {})})
 
 
 def azure_storage(

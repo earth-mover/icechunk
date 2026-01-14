@@ -1,23 +1,17 @@
 use std::{
-    collections::HashMap,
-    fmt,
-    future::ready,
-    ops::Range,
-    path::{Path, PathBuf},
+    collections::HashMap, fmt, future::ready, ops::Range, path::PathBuf, pin::Pin,
     sync::Arc,
 };
 
 use crate::{
     Storage, StorageError,
     config::{S3Credentials, S3CredentialsFetcher, S3Options},
-    format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
+    format::ChunkOffset,
     private,
 };
 use async_trait::async_trait;
 use aws_config::{
-    AppName, BehaviorVersion,
-    meta::region::RegionProviderChain,
-    retry::{ProvideErrorKind, RetryConfig},
+    AppName, BehaviorVersion, meta::region::RegionProviderChain, retry::RetryConfig,
 };
 use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_s3::{
@@ -28,26 +22,28 @@ use aws_sdk_s3::{
         interceptors::BeforeTransmitInterceptorContextMut,
     },
     error::{BoxError, SdkError},
-    operation::put_object::PutObjectError,
+    operation::{
+        complete_multipart_upload::CompleteMultipartUploadError,
+        copy_object::CopyObjectError, put_object::PutObjectError,
+    },
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
 };
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{
-    StreamExt, TryStreamExt,
+    Stream, StreamExt, TryStreamExt,
     stream::{self, BoxStream, FuturesOrdered},
 };
 use serde::{Deserialize, Serialize};
-use tokio::{io::AsyncRead, sync::OnceCell};
+use tokio::sync::OnceCell;
 use tracing::{error, instrument};
+use typed_path::Utf8UnixPath;
 
 use super::{
-    CHUNK_PREFIX, CONFIG_PATH, DeleteObjectsResult, FetchConfigResult, GetRefResult,
-    ListInfo, MANIFEST_PREFIX, REF_PREFIX, Reader, SNAPSHOT_PREFIX, Settings,
-    StorageErrorKind, StorageResult, TRANSACTION_PREFIX, UpdateConfigResult, VersionInfo,
-    WriteRefResult, split_in_multiple_equal_requests,
+    DeleteObjectsResult, ListInfo, Settings, StorageErrorKind, StorageResult,
+    VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -208,6 +204,16 @@ pub async fn mk_client(
     Client::from_conf(config)
 }
 
+fn stream2stream(
+    s: ByteStream,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>> {
+    let res = stream::try_unfold(s, move |mut stream| async move {
+        let next = stream.try_next().await?;
+        Ok(next.map(|bytes| (bytes, stream)))
+    });
+    Box::pin(res)
+}
+
 impl S3Storage {
     pub fn new(
         config: S3Options,
@@ -219,11 +225,13 @@ impl S3Storage {
         extra_write_headers: Vec<(String, String)>,
     ) -> Result<S3Storage, StorageError> {
         let client = OnceCell::new();
+        let prefix = prefix.unwrap_or_default();
+        let prefix = prefix.strip_suffix("/").unwrap_or(prefix.as_str()).to_string();
         Ok(S3Storage {
             client,
             config,
             bucket,
-            prefix: prefix.unwrap_or_default(),
+            prefix,
             credentials,
             can_write,
             extra_read_headers,
@@ -235,7 +243,7 @@ impl S3Storage {
     /// client is not serializeable and must be initialized after deserialization. Under normal construction
     /// the original client is returned immediately.
     #[instrument(skip_all)]
-    async fn get_client(&self, settings: &Settings) -> &Arc<Client> {
+    pub async fn get_client(&self, settings: &Settings) -> &Arc<Client> {
         self.client
             .get_or_init(|| async {
                 Arc::new(
@@ -252,7 +260,7 @@ impl S3Storage {
             .await
     }
 
-    fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
+    pub fn get_path_str(&self, file_prefix: &str, id: &str) -> StorageResult<String> {
         let path = PathBuf::from_iter([self.prefix.as_str(), file_prefix, id]);
         let path_str =
             path.into_os_string().into_string().map_err(StorageErrorKind::BadPrefix)?;
@@ -260,51 +268,8 @@ impl S3Storage {
         Ok(path_str.replace("\\", "/"))
     }
 
-    fn get_path<const SIZE: usize, T: FileTypeTag>(
-        &self,
-        file_prefix: &str,
-        id: &ObjectId<SIZE, T>,
-    ) -> StorageResult<String> {
-        // we serialize the url using crockford
-        self.get_path_str(file_prefix, id.to_string().as_str())
-    }
-
-    fn get_config_path(&self) -> StorageResult<String> {
-        self.get_path_str("", CONFIG_PATH)
-    }
-
-    fn get_snapshot_path(&self, id: &SnapshotId) -> StorageResult<String> {
-        self.get_path(SNAPSHOT_PREFIX, id)
-    }
-
-    fn get_manifest_path(&self, id: &ManifestId) -> StorageResult<String> {
-        self.get_path(MANIFEST_PREFIX, id)
-    }
-
-    fn get_chunk_path(&self, id: &ChunkId) -> StorageResult<String> {
-        self.get_path(CHUNK_PREFIX, id)
-    }
-
-    fn get_transaction_path(&self, id: &SnapshotId) -> StorageResult<String> {
-        self.get_path(TRANSACTION_PREFIX, id)
-    }
-
-    fn ref_key(&self, ref_key: &str) -> StorageResult<String> {
-        let path = PathBuf::from_iter([self.prefix.as_str(), REF_PREFIX, ref_key]);
-        let path_str =
-            path.into_os_string().into_string().map_err(StorageErrorKind::BadPrefix)?;
-
-        Ok(path_str.replace("\\", "/"))
-    }
-
-    async fn get_object_reader(
-        &self,
-        settings: &Settings,
-        key: &str,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let client = self.get_client(settings).await;
-        let b = client.get_object().bucket(self.bucket.as_str()).key(key);
-        Ok(Box::new(b.send().await.map_err(Box::new)?.body.into_async_read()))
+    fn prefixed_path(&self, path: &str) -> String {
+        format!("{}/{path}", self.prefix)
     }
 
     async fn put_object_single<
@@ -313,37 +278,86 @@ impl S3Storage {
         &self,
         settings: &Settings,
         key: &str,
+        bytes: Bytes,
         content_type: Option<impl Into<String>>,
         metadata: I,
-        storage_class: Option<&String>,
-        bytes: impl Into<ByteStream>,
-    ) -> StorageResult<()> {
-        let mut b = self
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let mut req = self
             .get_client(settings)
             .await
             .put_object()
             .bucket(self.bucket.clone())
-            .key(key);
-
-        if settings.unsafe_use_metadata()
-            && let Some(ct) = content_type
-        {
-            b = b.content_type(ct);
-        }
+            .key(key)
+            .body(bytes.into());
 
         if settings.unsafe_use_metadata() {
+            if let Some(ct) = content_type {
+                req = req.content_type(ct)
+            };
+
             for (k, v) in metadata {
-                b = b.metadata(k, v);
+                req = req.metadata(k, v);
             }
         }
 
-        if let Some(klass) = storage_class {
+        if let Some(klass) = settings.storage_class() {
             let klass = klass.as_str().into();
-            b = b.storage_class(klass);
+            req = req.storage_class(klass);
         }
 
-        b.body(bytes.into()).send().await.map_err(Box::new)?;
-        Ok(())
+        if let Some(previous_version) = previous_version.as_ref() {
+            match (
+                previous_version.etag(),
+                settings.unsafe_use_conditional_create(),
+                settings.unsafe_use_conditional_update(),
+            ) {
+                (None, true, _) => req = req.if_none_match("*"),
+                (Some(etag), _, true) => req = req.if_match(strip_quotes(etag)),
+                (_, _, _) => {}
+            }
+        }
+
+        match req.send().await {
+            Ok(out) => {
+                let new_etag = out
+                    .e_tag()
+                    .ok_or(StorageErrorKind::Other(
+                        "Object should have an etag".to_string(),
+                    ))?
+                    .to_string();
+                let new_version = VersionInfo::from_etag_only(new_etag);
+                Ok(VersionedUpdateResult::Updated { new_version })
+            }
+            // minio returns this
+            Err(SdkError::ServiceError(err)) => {
+                let code = err.err().meta().code().unwrap_or_default();
+                if code == "PreconditionFailed"
+                    || code == "ConditionalRequestConflict"
+                    // ConcurrentModification sent by Ceph Object Gateway
+                    || code == "ConcurrentModification"
+                {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    Err(StorageError::from(Box::new(
+                        SdkError::<PutObjectError>::ServiceError(err),
+                    )))
+                }
+            }
+            // S3 API documents this
+            Err(SdkError::ResponseError(err)) => {
+                let status = err.raw().status().as_u16();
+                // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
+                if status == 409 || status == 412 {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    Err(StorageError::from(Box::new(
+                        SdkError::<PutObjectError>::ResponseError(err),
+                    )))
+                }
+            }
+            Err(err) => Err(Box::new(err).into()),
+        }
     }
 
     async fn put_object_multipart<
@@ -352,11 +366,11 @@ impl S3Storage {
         &self,
         settings: &Settings,
         key: &str,
+        bytes: &Bytes,
         content_type: Option<impl Into<String>>,
         metadata: I,
-        storage_class: Option<&String>,
-        bytes: &Bytes,
-    ) -> StorageResult<()> {
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
         let mut multi = self
             .get_client(settings)
             .await
@@ -376,7 +390,7 @@ impl S3Storage {
             }
         }
 
-        if let Some(klass) = storage_class {
+        if let Some(klass) = settings.storage_class() {
             let klass = klass.as_str().into();
             multi = multi.storage_class(klass);
         }
@@ -402,17 +416,17 @@ impl S3Storage {
             .map(|(part_idx, range)| async move {
                 let body = bytes.slice(range.start as usize..range.end as usize).into();
                 let idx = part_idx as i32 + 1;
-                self.get_client(settings)
+                let req = self
+                    .get_client(settings)
                     .await
                     .upload_part()
                     .upload_id(upload_id)
                     .bucket(self.bucket.clone())
                     .key(key)
                     .part_number(idx)
-                    .body(body)
-                    .send()
-                    .await
-                    .map(|res| (idx, res))
+                    .body(body);
+
+                req.send().await.map(|res| (idx, res))
             })
             .collect::<FuturesOrdered<_>>();
 
@@ -431,61 +445,70 @@ impl S3Storage {
         let completed_parts =
             CompletedMultipartUpload::builder().set_parts(Some(completed_parts)).build();
 
-        self.get_client(settings)
+        let mut req = self
+            .get_client(settings)
             .await
             .complete_multipart_upload()
             .bucket(self.bucket.clone())
             .key(key)
             .upload_id(upload_id)
             //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
-            .multipart_upload(completed_parts)
-            .send()
-            .await
-            .map_err(Box::new)?;
+            .multipart_upload(completed_parts);
 
-        Ok(())
-    }
-
-    async fn put_object<
-        I: IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
-    >(
-        &self,
-        settings: &Settings,
-        key: &str,
-        content_type: Option<impl Into<String>>,
-        metadata: I,
-        storage_class: Option<&String>,
-        bytes: &Bytes,
-    ) -> StorageResult<()> {
-        if bytes.len() >= settings.minimum_size_for_multipart_upload() as usize {
-            self.put_object_multipart(
-                settings,
-                key,
-                content_type,
-                metadata,
-                storage_class,
-                bytes,
-            )
-            .await
-        } else {
-            self.put_object_single(
-                settings,
-                key,
-                content_type,
-                metadata,
-                storage_class,
-                bytes.clone(),
-            )
-            .await
+        if let Some(previous_version) = previous_version.as_ref() {
+            match (
+                previous_version.etag(),
+                settings.unsafe_use_conditional_create(),
+                settings.unsafe_use_conditional_update(),
+            ) {
+                (None, true, _) => req = req.if_none_match("*"),
+                (Some(etag), _, true) => req = req.if_match(strip_quotes(etag)),
+                (_, _, _) => {}
+            }
         }
-    }
 
-    fn get_ref_name<'a>(&self, key: Option<&'a str>) -> Option<&'a str> {
-        let key = key?;
-        let prefix = self.ref_key("").ok()?;
-        let relative_key = key.strip_prefix(&prefix)?;
-        let ref_name = relative_key.split('/').next()?;
-        Some(ref_name)
+        match req.send().await {
+            Ok(out) => {
+                let new_etag = out
+                    .e_tag()
+                    .ok_or(StorageErrorKind::Other(
+                        "Object should have an etag".to_string(),
+                    ))?
+                    .to_string();
+                let new_version = VersionInfo::from_etag_only(new_etag);
+                Ok(VersionedUpdateResult::Updated { new_version })
+            }
+            // minio returns this
+            Err(SdkError::ServiceError(err)) => {
+                let code = err.err().meta().code().unwrap_or_default();
+                if code == "PreconditionFailed"
+                    || code == "ConditionalRequestConflict"
+                    // ConcurrentModification sent by Ceph Object Gateway
+                    || code == "ConcurrentModification"
+                {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    Err(StorageError::from(Box::new(SdkError::<
+                        CompleteMultipartUploadError,
+                    >::ServiceError(
+                        err
+                    ))))
+                }
+            }
+            // S3 API documents this
+            Err(SdkError::ResponseError(err)) => {
+                let status = err.raw().status().as_u16();
+                // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
+                if status == 409 || status == 412 {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                } else {
+                    Err(StorageError::from(Box::new(
+                        SdkError::<PutObjectError>::ResponseError(err),
+                    )))
+                }
+            }
+            Err(err) => Err(Box::new(err).into()),
+        }
     }
 }
 
@@ -498,105 +521,88 @@ impl private::Sealed for S3Storage {}
 #[async_trait]
 #[typetag::serde]
 impl Storage for S3Storage {
-    fn can_write(&self) -> bool {
-        self.can_write
+    async fn can_write(&self) -> StorageResult<bool> {
+        Ok(self.can_write)
     }
 
-    #[instrument(skip_all)]
-    async fn fetch_config(
+    async fn put_object(
         &self,
         settings: &Settings,
-    ) -> StorageResult<FetchConfigResult> {
-        let key = self.get_config_path()?;
-        let res = self
-            .get_client(settings)
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let path = self.prefixed_path(path);
+        if bytes.len() >= settings.minimum_size_for_multipart_upload() as usize {
+            self.put_object_multipart(
+                settings,
+                path.as_str(),
+                &bytes,
+                content_type,
+                metadata,
+                previous_version,
+            )
             .await
-            .get_object()
-            .bucket(self.bucket.clone())
-            .key(key)
-            .send()
-            .await;
-
-        match res {
-            Ok(output) => match output.e_tag {
-                Some(etag) => Ok(FetchConfigResult::Found {
-                    bytes: output.body.collect().await.map_err(Box::new)?.into_bytes(),
-                    version: VersionInfo::from_etag_only(etag),
-                }),
-                None => Ok(FetchConfigResult::NotFound),
-            },
-            Err(sdk_err) => match sdk_err.as_service_error() {
-                Some(e) if e.is_no_such_key() => Ok(FetchConfigResult::NotFound),
-                Some(_)
-                    if sdk_err
-                        .raw_response()
-                        .is_some_and(|x| x.status().as_u16() == 404) =>
-                {
-                    // needed for Cloudflare R2 public bucket URLs
-                    // if config doesn't exist we get a 404 that isn't parsed by the AWS SDK
-                    // into anything useful. So we need to parse the raw response, and match
-                    // the status code.
-                    Ok(FetchConfigResult::NotFound)
-                }
-                _ => Err(Box::new(sdk_err).into()),
-            },
+        } else {
+            self.put_object_single(
+                settings,
+                path.as_str(),
+                bytes,
+                content_type,
+                metadata,
+                previous_version,
+            )
+            .await
         }
     }
 
-    #[instrument(skip(self, settings, config))]
-    async fn update_config(
+    async fn copy_object(
         &self,
         settings: &Settings,
-        config: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<UpdateConfigResult> {
-        let key = self.get_config_path()?;
+        from: &str,
+        to: &str,
+        content_type: Option<&str>,
+        version: &VersionInfo,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let from = format!("{}/{}", self.bucket, self.prefixed_path(from));
+        let to = self.prefixed_path(to);
         let mut req = self
             .get_client(settings)
             .await
-            .put_object()
+            .copy_object()
             .bucket(self.bucket.clone())
-            .key(key)
-            .body(config.into());
-
-        if settings.unsafe_use_metadata() {
-            req = req.content_type("application/yaml")
+            .key(to)
+            .copy_source(from);
+        if settings.unsafe_use_conditional_update()
+            && let Some(etag) = version.etag()
+        {
+            req = req.copy_source_if_match(strip_quotes(etag));
         }
-
-        if let Some(klass) = settings.metadata_storage_class() {
-            req = req.storage_class(klass.as_str().into())
+        if let Some(klass) = settings.storage_class() {
+            let klass = klass.as_str().into();
+            req = req.storage_class(klass);
         }
-
-        match (
-            previous_version.etag(),
-            settings.unsafe_use_conditional_create(),
-            settings.unsafe_use_conditional_update(),
-        ) {
-            (None, true, _) => req = req.if_none_match("*"),
-            (Some(etag), _, true) => req = req.if_match(strip_quotes(etag)),
-            (_, _, _) => {}
+        if let Some(ct) = content_type {
+            req = req.content_type(ct);
         }
-
-        let res = req.send().await;
-
-        match res {
-            Ok(out) => {
-                let new_etag = out
-                    .e_tag()
-                    .ok_or(StorageErrorKind::Other(
-                        "Config object should have an etag".to_string(),
-                    ))?
-                    .to_string();
-                let new_version = VersionInfo::from_etag_only(new_etag);
-                Ok(UpdateConfigResult::Updated { new_version })
-            }
-            // minio returns this
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+        match req.send().await {
+            Ok(_) => Ok(VersionedUpdateResult::Updated { new_version: version.clone() }),
             Err(SdkError::ServiceError(err)) => {
-                if err.err().meta().code() == Some("PreconditionFailed") {
-                    Ok(UpdateConfigResult::NotOnLatestVersion)
+                let code = err.err().meta().code().unwrap_or_default();
+                if code == "PreconditionFailed"
+                    || code == "ConditionalRequestConflict"
+                    // ConcurrentModification sent by Ceph Object Gateway
+                    || code == "ConcurrentModification"
+                {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
                     Err(StorageError::from(Box::new(
-                        SdkError::<PutObjectError>::ServiceError(err),
+                        SdkError::<CopyObjectError>::ServiceError(err),
                     )))
                 }
             }
@@ -605,267 +611,27 @@ impl Storage for S3Storage {
                 let status = err.raw().status().as_u16();
                 // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
                 if status == 409 || status == 412 {
-                    Ok(UpdateConfigResult::NotOnLatestVersion)
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
                     Err(StorageError::from(Box::new(
                         SdkError::<PutObjectError>::ResponseError(err),
                     )))
                 }
             }
-            Err(err) => Err(Box::new(err).into()),
-        }
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_snapshot(
-        &self,
-        settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let key = self.get_snapshot_path(id)?;
-        self.get_object_reader(settings, key.as_str()).await
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_manifest_known_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-        size: u64,
-    ) -> StorageResult<Reader> {
-        let key = self.get_manifest_path(id)?;
-        self.get_object_concurrently(settings, key.as_str(), &(0..size)).await
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_manifest_unknown_size(
-        &self,
-        settings: &Settings,
-        id: &ManifestId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let key = self.get_manifest_path(id)?;
-        self.get_object_reader(settings, key.as_str()).await
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_transaction_log(
-        &self,
-        settings: &Settings,
-        id: &SnapshotId,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
-        let key = self.get_transaction_path(id)?;
-        self.get_object_reader(settings, key.as_str()).await
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn fetch_chunk(
-        &self,
-        settings: &Settings,
-        id: &ChunkId,
-        range: &Range<ChunkOffset>,
-    ) -> StorageResult<Bytes> {
-        let key = self.get_chunk_path(id)?;
-        self.get_object_concurrently(settings, key.as_str(), range)
-            .await?
-            .to_bytes((range.end - range.start) as usize)
-            .await
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn write_snapshot(
-        &self,
-        settings: &Settings,
-        id: SnapshotId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        let key = self.get_snapshot_path(&id)?;
-        self.put_object(
-            settings,
-            key.as_str(),
-            None::<String>,
-            metadata,
-            settings.metadata_storage_class(),
-            &bytes,
-        )
-        .await
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn write_manifest(
-        &self,
-        settings: &Settings,
-        id: ManifestId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        let key = self.get_manifest_path(&id)?;
-        self.put_object(
-            settings,
-            key.as_str(),
-            None::<String>,
-            metadata.into_iter(),
-            settings.metadata_storage_class(),
-            &bytes,
-        )
-        .await
-    }
-
-    #[instrument(skip(self, settings, metadata, bytes))]
-    async fn write_transaction_log(
-        &self,
-        settings: &Settings,
-        id: SnapshotId,
-        metadata: Vec<(String, String)>,
-        bytes: Bytes,
-    ) -> StorageResult<()> {
-        let key = self.get_transaction_path(&id)?;
-        self.put_object(
-            settings,
-            key.as_str(),
-            None::<String>,
-            metadata.into_iter(),
-            settings.metadata_storage_class(),
-            &bytes,
-        )
-        .await
-    }
-
-    #[instrument(skip(self, settings, bytes))]
-    async fn write_chunk(
-        &self,
-        settings: &Settings,
-        id: ChunkId,
-        bytes: bytes::Bytes,
-    ) -> Result<(), StorageError> {
-        let key = self.get_chunk_path(&id)?;
-        let metadata: [(String, String); 0] = [];
-        self.put_object(
-            settings,
-            key.as_str(),
-            None::<String>,
-            metadata,
-            settings.chunks_storage_class(),
-            &bytes,
-        )
-        .await
-    }
-
-    #[instrument(skip(self, settings))]
-    async fn get_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-    ) -> StorageResult<GetRefResult> {
-        let key = self.ref_key(ref_key)?;
-        let res = self
-            .get_client(settings)
-            .await
-            .get_object()
-            .bucket(self.bucket.clone())
-            .key(key.clone())
-            .send()
-            .await;
-
-        match res {
-            Ok(res) => {
-                let bytes = res.body.collect().await.map_err(Box::new)?.into_bytes();
-                if let Some(version) = res.e_tag.map(VersionInfo::from_etag_only) {
-                    Ok(GetRefResult::Found { bytes, version })
-                } else {
-                    Ok(GetRefResult::NotFound)
-                }
-            }
-            Err(err)
-                if err
-                    .as_service_error()
-                    .map(|e| e.is_no_such_key())
-                    .unwrap_or(false) =>
-            {
-                Ok(GetRefResult::NotFound)
-            }
-            Err(err) => Err(Box::new(err).into()),
-        }
-    }
-
-    #[instrument(skip_all)]
-    async fn ref_names(&self, settings: &Settings) -> StorageResult<Vec<String>> {
-        let prefix = self.ref_key("")?;
-        let mut paginator = self
-            .get_client(settings)
-            .await
-            .list_objects_v2()
-            .bucket(self.bucket.clone())
-            .prefix(prefix.clone())
-            .into_paginator()
-            .send();
-
-        let mut res = Vec::new();
-
-        while let Some(page) = paginator.try_next().await.map_err(Box::new)? {
-            for obj in page.contents.unwrap_or_else(Vec::new) {
-                let name = self.get_ref_name(obj.key());
-                if let Some(name) = name {
-                    res.push(name.to_string());
-                } else {
-                    tracing::error!(object = ?obj, "Bad ref name")
-                }
-            }
-        }
-
-        Ok(res)
-    }
-
-    #[instrument(skip(self, settings, bytes))]
-    async fn write_ref(
-        &self,
-        settings: &Settings,
-        ref_key: &str,
-        bytes: Bytes,
-        previous_version: &VersionInfo,
-    ) -> StorageResult<WriteRefResult> {
-        let key = self.ref_key(ref_key)?;
-        let mut builder = self
-            .get_client(settings)
-            .await
-            .put_object()
-            .bucket(self.bucket.clone())
-            .key(key.clone());
-
-        match (
-            previous_version.etag(),
-            settings.unsafe_use_conditional_create(),
-            settings.unsafe_use_conditional_update(),
-        ) {
-            (None, true, _) => {
-                builder = builder.if_none_match("*");
-            }
-            (Some(etag), _, true) => {
-                builder = builder.if_match(strip_quotes(etag));
-            }
-            (_, _, _) => {}
-        }
-
-        if let Some(klass) = settings.metadata_storage_class() {
-            builder = builder.storage_class(klass.as_str().into())
-        }
-
-        let res = builder.body(bytes.into()).send().await;
-
-        match res {
-            Ok(_) => Ok(WriteRefResult::Written),
-            Err(err) => {
-                let code = err.as_service_error().and_then(|e| e.code()).unwrap_or("");
-                if code.contains("PreconditionFailed")
-                    || code.contains("ConditionalRequestConflict")
-                    // ConcurrentModification sent by Ceph Object Gateway
-                    || code.contains("ConcurrentModification")
+            Err(sdk_err) => match sdk_err.as_service_error() {
+                Some(_)
+                    if sdk_err
+                        .raw_response()
+                        .is_some_and(|x| x.status().as_u16() == 404) =>
                 {
-                    Ok(WriteRefResult::WontOverwrite)
-                } else {
-                    Err(Box::new(err).into())
+                    // needed for Cloudflare R2 public bucket URLs
+                    // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
+                    // into anything useful. So we need to parse the raw response, and match
+                    // the status code.
+                    Err(StorageErrorKind::ObjectNotFound.into())
                 }
-            }
+                _ => Err(Box::new(sdk_err).into()),
+            },
         }
     }
 
@@ -876,12 +642,18 @@ impl Storage for S3Storage {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let prefix = format!("{}/{}", self.prefix, prefix).replace("//", "/");
-        let stream = self
+        let mut req = self
             .get_client(settings)
             .await
             .list_objects_v2()
             .bucket(self.bucket.clone())
-            .prefix(prefix)
+            .prefix(prefix.clone());
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let stream = req
             .into_paginator()
             .send()
             .into_stream_03x()
@@ -891,12 +663,15 @@ impl Storage for S3Storage {
                 ready(Ok(contents))
             })
             .try_flatten()
-            .try_filter_map(|object| async move {
-                let info = object_to_list_info(&object);
-                if info.is_none() {
-                    tracing::error!(object=?object, "Found bad object while listing");
+            .try_filter_map(move |object| {
+                let prefix = prefix.clone();
+                async move {
+                    let info = object_to_list_info(prefix.as_str(), &object);
+                    if info.is_none() {
+                        tracing::error!(object=?object, "Found bad object while listing");
+                    }
+                    Ok(info)
                 }
-                Ok(info)
             });
         Ok(stream.boxed())
     }
@@ -924,15 +699,18 @@ impl Storage for S3Storage {
             .build()
             .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
 
-        let res = self
+        let mut req = self
             .get_client(settings)
             .await
             .delete_objects()
             .bucket(self.bucket.clone())
-            .delete(delete)
-            .send()
-            .await
-            .map_err(Box::new)?;
+            .delete(delete);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let res = req.send().await.map_err(Box::new)?;
 
         if let Some(err) = res.errors.as_ref().and_then(|e| e.first()) {
             tracing::error!(
@@ -955,21 +733,24 @@ impl Storage for S3Storage {
     }
 
     #[instrument(skip(self, settings))]
-    async fn get_snapshot_last_modified(
+    async fn get_object_last_modified(
         &self,
+        path: &str,
         settings: &Settings,
-        snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>> {
-        let key = self.get_snapshot_path(snapshot)?;
-        let res = self
+        let key = self.prefixed_path(path);
+        let mut req = self
             .get_client(settings)
             .await
             .head_object()
             .bucket(self.bucket.clone())
-            .key(key)
-            .send()
-            .await
-            .map_err(Box::new)?;
+            .key(key);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let res = req.send().await.map_err(Box::new)?;
 
         let res = res.last_modified.ok_or(StorageErrorKind::Other(
             "Object has no last_modified field".to_string(),
@@ -981,43 +762,63 @@ impl Storage for S3Storage {
         Ok(res)
     }
 
-    #[instrument(skip(self))]
-    async fn get_object_range_buf(
+    async fn get_object_range(
         &self,
         settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn Buf + Unpin + Send>> {
-        let b = self
-            .get_client(settings)
-            .await
-            .get_object()
-            .bucket(self.bucket.clone())
-            .key(key)
-            .range(range_to_header(range));
-        Ok(Box::new(
-            b.send().await.map_err(Box::new)?.body.collect().await.map_err(Box::new)?,
-        ))
-    }
-
-    #[instrument(skip(self))]
-    async fn get_object_range_read(
-        &self,
-        settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<Box<dyn AsyncRead + Unpin + Send>> {
+        path: &str,
+        range: Option<&Range<u64>>,
+    ) -> StorageResult<(
+        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+        VersionInfo,
+    )> {
         let client = self.get_client(settings).await;
         let bucket = self.bucket.clone();
-        Ok(Box::new(get_object_range(client.as_ref(), bucket, key, range).await?))
+        let key = self.prefixed_path(path);
+        let mut req = client.get_object().bucket(bucket).key(key);
+        if let Some(range) = range {
+            req = req.range(range_to_header(range));
+        }
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+        match req.send().await {
+            Ok(output) => match output.e_tag {
+                Some(etag) => {
+                    let stream = stream2stream(output.body).err_into();
+                    Ok((Box::pin(stream), VersionInfo::from_etag_only(etag)))
+                }
+                None => {
+                    Err(StorageErrorKind::Other("Object should have an etag".to_string())
+                        .into())
+                }
+            },
+            Err(sdk_err) => match sdk_err.as_service_error() {
+                Some(e) if e.is_no_such_key() => {
+                    Err(StorageErrorKind::ObjectNotFound.into())
+                }
+                Some(_)
+                    if sdk_err
+                        .raw_response()
+                        .is_some_and(|x| x.status().as_u16() == 404) =>
+                {
+                    // needed for Cloudflare R2 public bucket URLs
+                    // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
+                    // into anything useful. So we need to parse the raw response, and match
+                    // the status code.
+                    Err(StorageErrorKind::ObjectNotFound.into())
+                }
+                _ => Err(Box::new(sdk_err).into()),
+            },
+        }
     }
 }
 
-fn object_to_list_info(object: &Object) -> Option<ListInfo<String>> {
+fn object_to_list_info(prefix: &str, object: &Object) -> Option<ListInfo<String>> {
     let key = object.key()?;
     let last_modified = object.last_modified()?;
     let created_at = last_modified.to_chrono_utc().ok()?;
-    let id = Path::new(key).file_name().and_then(|s| s.to_str())?.to_string();
+    let prefix = Utf8UnixPath::new(prefix);
+    let id = Utf8UnixPath::new(key).strip_prefix(prefix).ok()?.to_string();
     let size_bytes = object.size.unwrap_or(0) as u64;
     Some(ListInfo { id, created_at, size_bytes })
 }
@@ -1057,16 +858,6 @@ impl ProvideRefreshableCredentials {
     }
 }
 
-async fn get_object_range(
-    client: &Client,
-    bucket: String,
-    key: &str,
-    range: &Range<ChunkOffset>,
-) -> StorageResult<impl AsyncRead + use<>> {
-    let b = client.get_object().bucket(bucket).key(key).range(range_to_header(range));
-    Ok(b.send().await.map_err(Box::new)?.body.into_async_read())
-}
-
 fn strip_quotes(s: &str) -> &str {
     s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
 }
@@ -1089,6 +880,7 @@ mod tests {
             anonymous: false,
             force_path_style: false,
             network_stream_timeout_seconds: None,
+            requester_pays: false,
         };
         let credentials = S3Credentials::Static(S3StaticCredentials {
             access_key_id: "access_key_id".to_string(),
@@ -1111,50 +903,10 @@ mod tests {
 
         assert_eq!(
             serialized,
-            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
+            r#"{"config":{"region":"us-west-2","endpoint_url":"http://localhost:9000","anonymous":false,"allow_http":true,"force_path_style":false,"network_stream_timeout_seconds":null,"requester_pays":false},"credentials":{"s3_credential_type":"static","access_key_id":"access_key_id","secret_access_key":"secret_access_key","session_token":"session_token","expires_after":null},"bucket":"bucket","prefix":"prefix","can_write":true,"extra_read_headers":[],"extra_write_headers":[]}"#
         );
 
         let deserialized: S3Storage = serde_json::from_str(&serialized).unwrap();
         assert_eq!(storage.config, deserialized.config);
-    }
-
-    #[tokio_test]
-    async fn test_s3_paths() {
-        let storage = S3Storage::new(
-            S3Options {
-                region: Some("us-west-2".to_string()),
-                endpoint_url: None,
-                allow_http: true,
-                anonymous: false,
-                force_path_style: false,
-                network_stream_timeout_seconds: None,
-            },
-            "bucket".to_string(),
-            Some("prefix".to_string()),
-            S3Credentials::FromEnv,
-            true,
-            Vec::new(),
-            Vec::new(),
-        )
-        .unwrap();
-
-        let ref_path = storage.ref_key("ref_key").unwrap();
-        assert_eq!(ref_path, "prefix/refs/ref_key");
-
-        let snapshot_id = SnapshotId::random();
-        let snapshot_path = storage.get_snapshot_path(&snapshot_id).unwrap();
-        assert_eq!(snapshot_path, format!("prefix/snapshots/{snapshot_id}"));
-
-        let manifest_id = ManifestId::random();
-        let manifest_path = storage.get_manifest_path(&manifest_id).unwrap();
-        assert_eq!(manifest_path, format!("prefix/manifests/{manifest_id}"));
-
-        let chunk_id = ChunkId::random();
-        let chunk_path = storage.get_chunk_path(&chunk_id).unwrap();
-        assert_eq!(chunk_path, format!("prefix/chunks/{chunk_id}"));
-
-        let transaction_id = SnapshotId::random();
-        let transaction_path = storage.get_transaction_path(&transaction_id).unwrap();
-        assert_eq!(transaction_path, format!("prefix/transactions/{transaction_id}"));
     }
 }

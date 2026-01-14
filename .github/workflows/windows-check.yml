@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - 'support/**'
 
 env:
   CARGO_INCREMENTAL: 0
@@ -28,12 +29,12 @@ jobs:
       #pull-requests: read
     env:
       #CC: deny_c
-      RUST_CHANNEL: '1.89.0'
+      RUST_CHANNEL: '1.91.0'
 
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 

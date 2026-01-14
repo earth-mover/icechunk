@@ -1,6 +1,13 @@
 import abc
 import datetime
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from enum import Enum
 from typing import Any, TypeAlias
 
@@ -14,6 +21,7 @@ class S3Options:
         anonymous: bool = False,
         force_path_style: bool = False,
         network_stream_timeout_seconds: int | None = None,
+        requester_pays: bool = False,
     ) -> None:
         """
         Create a new `S3Options` object
@@ -33,6 +41,8 @@ class S3Options:
         network_stream_timeout_seconds: int | None
             Timeout requests if no bytes can be transmitted during this period of time.
             If set to 0, timeout is disabled. Default is 60 seconds.
+        requester_pays: bool
+            Enable requester pays for S3 buckets
         """
 
     @property
@@ -193,16 +203,16 @@ class ObjectStoreConfig:
         def __init__(self, options: S3Options) -> None: ...
 
     class Gcs:
-        def __init__(self, opts: dict[str, str] | None = None) -> None: ...
+        def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
 
     class Azure:
-        def __init__(self, opts: dict[str, str] | None = None) -> None: ...
+        def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
 
     class Tigris:
         def __init__(self, opts: S3Options) -> None: ...
 
     class Http:
-        def __init__(self, opts: dict[str, str] | None = None) -> None: ...
+        def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
 
 AnyObjectStoreConfig = (
     ObjectStoreConfig.InMemory
@@ -579,6 +589,7 @@ class ManifestPreloadConfig:
         self,
         max_total_refs: int | None = None,
         preload_if: ManifestPreloadCondition | None = None,
+        max_arrays_to_scan: int | None = None,
     ) -> None:
         """
         Create a new `ManifestPreloadConfig` object
@@ -589,6 +600,9 @@ class ManifestPreloadConfig:
             The maximum number of references to preload.
         preload_if: ManifestPreloadCondition | None
             The condition under which manifests will be preloaded.
+        max_arrays_to_scan: int | None
+            The maximum number of arrays to scan when looking for manifests to preload.
+            Default is 50. Increase for repositories with many nested groups.
         """
         ...
     @property
@@ -633,6 +647,28 @@ class ManifestPreloadConfig:
         ----------
         value: ManifestPreloadCondition | None
             The condition under which manifests will be preloaded.
+        """
+        ...
+    @property
+    def max_arrays_to_scan(self) -> int | None:
+        """
+        The maximum number of arrays to scan when looking for manifests to preload.
+
+        Returns
+        -------
+        int | None
+            The maximum number of arrays to scan. Default is 50.
+        """
+        ...
+    @max_arrays_to_scan.setter
+    def max_arrays_to_scan(self, value: int | None) -> None:
+        """
+        Set the maximum number of arrays to scan when looking for manifests to preload.
+
+        Parameters
+        ----------
+        value: int | None
+            The maximum number of arrays to scan.
         """
         ...
 
@@ -728,6 +764,17 @@ class ManifestSplittingConfig:
             ],
         ],
     ) -> ManifestSplittingConfig: ...
+    def to_dict(
+        config: ManifestSplittingConfig,
+    ) -> dict[
+        ManifestSplitCondition,
+        dict[
+            ManifestSplitDimCondition.Axis
+            | ManifestSplitDimCondition.DimensionName
+            | ManifestSplitDimCondition.Any,
+            int,
+        ],
+    ]: ...
     def __init__(self, split_sizes: SplitSizes) -> None:
         """Configuration for how Icechunk manifests will be split.
 
@@ -1360,6 +1407,25 @@ class RepositoryConfig:
         Clear all virtual chunk containers from the repository.
         """
         ...
+    def merge(self, other: RepositoryConfig) -> RepositoryConfig:
+        """
+        Merge another RepositoryConfig with this one.
+
+        When merging, values from the other config take precedence. For nested configs
+        (compression, caching, manifest, storage), the merge is applied recursively.
+        For virtual_chunk_containers, entries from the other config extend this one.
+
+        Parameters
+        ----------
+        other: RepositoryConfig
+            The configuration to merge with this one.
+
+        Returns
+        -------
+        RepositoryConfig
+            A new merged configuration.
+        """
+        ...
 
 class Diff:
     """The result of comparing two snapshots"""
@@ -1405,6 +1471,12 @@ class Diff:
         The chunks indices that had data updated in the target ref, keyed by the path to the array.
         """
         ...
+    @property
+    def moved_nodes(self) -> list[tuple[str, str]]:
+        """
+        The list of node moves, in order of application, as tuples (from_path, to_path).
+        """
+        ...
 
 class GCSummary:
     """Summarizes the results of a garbage collection operation on an icechunk repo"""
@@ -1445,6 +1517,89 @@ class GCSummary:
         """
         ...
 
+class UpdateType:
+    @property
+    def updated_at(self) -> datetime.datetime: ...
+    @property
+    def backup_path(self) -> str | None: ...
+
+class RepoInitializedUpdate(UpdateType):
+    pass
+
+class RepoMigratedUpdate(UpdateType):
+    @property
+    def from_version(self) -> int: ...
+    @property
+    def to_version(self) -> int: ...
+
+class ConfigChangedUpdate(UpdateType):
+    pass
+
+class MetadataChangedUpdate(UpdateType):
+    pass
+
+class TagCreatedUpdate(UpdateType):
+    @property
+    def name(self) -> str: ...
+
+class TagDeletedUpdate(UpdateType):
+    @property
+    def name(self) -> str: ...
+    @property
+    def previous_snap_id(self) -> str: ...
+
+class BranchCreatedUpdate(UpdateType):
+    @property
+    def name(self) -> str: ...
+
+class BranchDeletedUpdate(UpdateType):
+    @property
+    def name(self) -> str: ...
+    @property
+    def previous_snap_id(self) -> str: ...
+
+class BranchResetUpdate(UpdateType):
+    @property
+    def name(self) -> str: ...
+    @property
+    def previous_snap_id(self) -> str: ...
+
+class NewCommitUpdate(UpdateType):
+    @property
+    def branch(self) -> str: ...
+
+class CommitAmendedUpdate(UpdateType):
+    @property
+    def name(self) -> str: ...
+    @property
+    def previous_snap_id(self) -> str: ...
+
+class NewDetachedSnapshotUpdate(UpdateType):
+    @property
+    def new_snap_id(self) -> str: ...
+
+class GCRanUpdate(UpdateType):
+    pass
+
+class ExpirationRanUpdate(UpdateType):
+    pass
+
+class ManifestFileInfo:
+    """Manifest file metadata"""
+
+    @property
+    def id(self) -> str:
+        """The manifest id"""
+        ...
+    @property
+    def size_bytes(self) -> int:
+        """The size in bytes of the"""
+        ...
+    @property
+    def num_chunk_refs(self) -> int:
+        """The number of chunk references contained in this manifest"""
+        ...
+
 class PyRepository:
     @classmethod
     def create(
@@ -1453,6 +1608,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        spec_version: int | None = None,
     ) -> PyRepository: ...
     @classmethod
     async def create_async(
@@ -1461,6 +1617,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        spec_version: int | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open(
@@ -1485,6 +1642,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        create_version: int | None = None,
     ) -> PyRepository: ...
     @classmethod
     async def open_or_create_async(
@@ -1493,6 +1651,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        create_version: int | None = None,
     ) -> PyRepository: ...
     @staticmethod
     def exists(storage: Storage) -> bool: ...
@@ -1526,6 +1685,12 @@ class PyRepository:
     ) -> PyRepository: ...
     def set_default_commit_metadata(self, metadata: dict[str, Any]) -> None: ...
     def default_commit_metadata(self) -> dict[str, Any]: ...
+    def get_metadata(self) -> dict[str, Any]: ...
+    async def get_metadata_async(self) -> dict[str, Any]: ...
+    def set_metadata(self, metadata: dict[str, Any]) -> None: ...
+    async def set_metadata_async(self, metadata: dict[str, Any]) -> None: ...
+    def update_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]: ...
+    async def update_metadata_async(self, metadata: dict[str, Any]) -> dict[str, Any]: ...
     def async_ancestry(
         self,
         *,
@@ -1533,6 +1698,7 @@ class PyRepository:
         tag: str | None = None,
         snapshot_id: str | None = None,
     ) -> AsyncIterator[SnapshotInfo]: ...
+    def async_ops_log(self) -> AsyncIterator[UpdateType]: ...
     def create_branch(self, branch: str, snapshot_id: str) -> None: ...
     async def create_branch_async(self, branch: str, snapshot_id: str) -> None: ...
     def list_branches(self) -> set[str]: ...
@@ -1541,6 +1707,10 @@ class PyRepository:
     async def lookup_branch_async(self, branch: str) -> str: ...
     def lookup_snapshot(self, snapshot_id: str) -> SnapshotInfo: ...
     async def lookup_snapshot_async(self, snapshot_id: str) -> SnapshotInfo: ...
+    def list_manifest_files(self, snapshot_id: str) -> list[ManifestFileInfo]: ...
+    async def list_manifest_files_async(
+        self, snapshot_id: str
+    ) -> list[ManifestFileInfo]: ...
     def reset_branch(
         self, branch: str, to_snapshot_id: str, from_snapshot_id: str | None
     ) -> None: ...
@@ -1593,6 +1763,8 @@ class PyRepository:
     ) -> PySession: ...
     def writable_session(self, branch: str) -> PySession: ...
     async def writable_session_async(self, branch: str) -> PySession: ...
+    def rearrange_session(self, branch: str) -> PySession: ...
+    async def rearrange_session_async(self, branch: str) -> PySession: ...
     def expire_snapshots(
         self,
         older_than: datetime.datetime,
@@ -1631,6 +1803,20 @@ class PyRepository:
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> GCSummary: ...
+    def chunk_storage_stats(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> ChunkStorageStats: ...
+    async def chunk_storage_stats_async(
+        self,
+        *,
+        max_snapshots_in_memory: int = 50,
+        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
+        max_concurrent_manifest_fetches: int = 500,
+    ) -> ChunkStorageStats: ...
     def total_chunks_storage(
         self,
         *,
@@ -1649,6 +1835,28 @@ class PyRepository:
     async def inspect_snapshot_async(
         self, snapshot_id: str, *, pretty: bool = True
     ) -> str: ...
+    @property
+    def spec_version(self) -> int: ...
+
+class ChunkType(Enum):
+    """Enum for Zarr chunk types
+
+    Attributes
+    ----------
+    Uninitialized: int
+        Chunk doesn't have a materialized type yet
+    Native: int
+        Regular Zarr chunks
+    Virtual: int
+        Chunk conforming to the VirtualiZarr spec
+    Inline: int
+        Chunk is store inline in the manifest
+    """
+
+    UNINITIALIZED = 0
+    NATIVE = 1
+    VIRTUAL = 2
+    INLINE = 3
 
 class PySession:
     @classmethod
@@ -1665,6 +1873,14 @@ class PySession:
     def has_uncommitted_changes(self) -> bool: ...
     def status(self) -> Diff: ...
     def discard_changes(self) -> None: ...
+    def move_node(self, from_path: str, to_path: str) -> None: ...
+    def reindex_array(
+        self,
+        array_path: str,
+        shift_chunk: Callable[[Iterable[int]], Iterable[int] | None],
+    ) -> None: ...
+    def shift_array(self, array_path: str, offset: Iterable[int]) -> None: ...
+    async def move_node_async(self, from_path: str, to_path: str) -> None: ...
     def all_virtual_chunk_locations(self) -> list[str]: ...
     async def all_virtual_chunk_locations_async(self) -> list[str]: ...
     def all_virtual_refs(
@@ -1676,6 +1892,12 @@ class PySession:
     def chunk_coordinates(
         self, array_path: str, batch_size: int
     ) -> AsyncIterator[list[list[int]]]: ...
+    def chunk_type(
+        self, array_path: str, chunk_coordinates: Sequence[int]
+    ) -> ChunkType: ...
+    async def chunk_type_async(
+        self, array_path: str, chunk_coordinates: Sequence[int]
+    ) -> ChunkType: ...
     @property
     def store(self) -> PyStore: ...
     @property
@@ -1702,6 +1924,16 @@ class PySession:
         metadata: dict[str, Any] | None = None,
     ) -> str: ...
     async def flush_async(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str: ...
+    def amend(
+        self,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str: ...
+    async def amend_async(
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
@@ -1790,22 +2022,6 @@ class PyStore:
 class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
     def __aiter__(self) -> PyAsyncStringGenerator: ...
     async def __anext__(self) -> str: ...
-
-class ManifestFileInfo:
-    """Manifest file metadata"""
-
-    @property
-    def id(self) -> str:
-        """The manifest id"""
-        ...
-    @property
-    def size_bytes(self) -> int:
-        """The size in bytes of the"""
-        ...
-    @property
-    def num_chunk_refs(self) -> int:
-        """The number of chunk references contained in this manifest"""
-        ...
 
 class SnapshotInfo:
     """Metadata for a snapshot"""
@@ -2177,6 +2393,17 @@ class Storage:
         *,
         config: dict[str, str] | None = None,
     ) -> Storage: ...
+    @classmethod
+    def new_http(
+        cls,
+        base_url: str,
+        config: dict[str, str] | None = None,
+    ) -> Storage: ...
+    @classmethod
+    def new_redirect(
+        cls,
+        base_url: str,
+    ) -> Storage: ...
     def __repr__(self) -> str: ...
     def default_settings(self) -> StorageSettings: ...
 
@@ -2256,6 +2483,23 @@ class IcechunkError(Exception):
 class ConflictError(Exception):
     """An error that occurs when a conflict is detected"""
 
+    def __init__(
+        self,
+        expected_parent: str | None = None,
+        actual_parent: str | None = None,
+    ) -> None:
+        """
+        Create a new ConflictError.
+
+        Parameters
+        ----------
+        expected_parent: str | None
+            The expected parent snapshot ID.
+        actual_parent: str | None
+            The actual parent snapshot ID of the branch.
+        """
+        ...
+
     @property
     def expected_parent(self) -> str:
         """The expected parent snapshot ID.
@@ -2311,8 +2555,31 @@ class ConflictType(Enum):
     DeleteOfUpdatedGroup = (10,)
     """A delete is attempted on an updated group"""
 
+    (MoveOperationCannotBeRebased,) = (11,)
+    """Move operation cannot be rebased"""
+
 class Conflict:
     """A conflict detected between snapshots"""
+
+    def __init__(
+        self,
+        conflict_type: ConflictType,
+        path: str,
+        conflicted_chunks: list[list[int]] | None = None,
+    ) -> None:
+        """
+        Create a new Conflict.
+
+        Parameters
+        ----------
+        conflict_type: ConflictType
+            The type of conflict.
+        path: str
+            The path of the node that caused the conflict.
+        conflicted_chunks: list[list[int]] | None
+            If the conflict is a chunk conflict, the list of chunk indices in conflict.
+        """
+        ...
 
     @property
     def conflict_type(self) -> ConflictType:
@@ -2343,6 +2610,19 @@ class Conflict:
 
 class RebaseFailedError(IcechunkError):
     """An error that occurs when a rebase operation fails"""
+
+    def __init__(self, snapshot: str, conflicts: list[Conflict]) -> None:
+        """
+        Create a new RebaseFailedError.
+
+        Parameters
+        ----------
+        snapshot: str
+            The snapshot ID that the session was rebased to.
+        conflicts: list[Conflict]
+            The conflicts that occurred during the rebase operation.
+        """
+        ...
 
     @property
     def snapshot(self) -> str:
@@ -2396,3 +2676,70 @@ def spec_version() -> int:
         int: The version of the Icechunk specification that the library is compatible with
     """
     ...
+
+def _upgrade_icechunk_repository(
+    repo: PyRepository, *, dry_run: bool = True, delete_unused_v1_files: bool = False
+) -> None:
+    """
+    Migrate a repository to the latest version of Icechunk.
+
+    This is an administrative operation, and must be executed in isolation from
+    other readers and writers. Other processes running concurrently on the same
+    repo may see undefined behavior.
+
+    At this time, this function supports only migration from Icechunk spec version 1
+    to Icechunk spec version 2. This means Icechunk versions 1.x to 2.x.
+
+    The operation is usually fast, but it can take several minutes if there is a very
+    large version history (thousands of snapshots).
+    """
+    ...
+
+class ChunkStorageStats:
+    """Statistics about chunk storage across different chunk types."""
+
+    @property
+    def native_bytes(self) -> int:
+        """Total bytes stored in native chunks (stored in icechunk's chunk storage)"""
+        ...
+
+    @property
+    def virtual_bytes(self) -> int:
+        """Total bytes stored in virtual chunks (references to external data)"""
+        ...
+
+    @property
+    def inlined_bytes(self) -> int:
+        """Total bytes stored in inline chunks (stored directly in manifests)"""
+        ...
+
+    @property
+    def non_virtual_bytes(self) -> int:
+        """
+        Total bytes excluding virtual chunks.
+
+        This represents the approximate size of all objects stored in the
+        icechunk repository itself (native chunks plus inline chunks).
+        Virtual chunks are not included since they reference external data.
+
+        Returns:
+            int: The sum of native_bytes and inlined_bytes
+        """
+        ...
+
+    @property
+    def total_bytes(self) -> int:
+        """
+        Total bytes across all chunk types.
+
+        Returns the sum of native_bytes, virtual_bytes, and inlined_bytes.
+        This represents the total size of all data referenced by the repository,
+        including both data stored in icechunk and external virtual references.
+
+        Returns:
+            int: The sum of all chunk storage bytes
+        """
+        ...
+
+    def __repr__(self) -> str: ...
+    def __add__(self, other: ChunkStorageStats) -> ChunkStorageStats: ...

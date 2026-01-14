@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - 'support/**'
   schedule:
     # three times a day to run the integration tests that take a long time
     - cron:  '33 3,10,15 * * *'
@@ -23,7 +24,7 @@ env:
   RUST_BACKTRACE: short
   RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
   RUSTUP_MAX_RETRIES: 10
-  RUST_CHANNEL: '1.89.0'
+  RUST_CHANNEL: '1.91.0'
 
 jobs:
   rust:
@@ -41,11 +42,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-latest]
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -90,7 +91,7 @@ jobs:
       - name: Run tests with Docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         env:
-          RUST_LOG: trace
+          RUST_LOG: icechunk=trace
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
