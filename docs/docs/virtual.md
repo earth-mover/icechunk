@@ -240,9 +240,9 @@ No extra configuration is necessary for local filesystem references.
 
 ### Virtual Reference File Format Support
 
-Currently, Icechunk supports `HDF5`, `netcdf4`, and `netcdf3` files for use in virtual references with `VirtualiZarr`. Support for other filetypes is under development in the VirtualiZarr project. Below are some relevant issues:
+Icechunk supports creating virtual references for any filetypes that `VirtualiZarr` supports. This currently includes `HDF5`, `netcdf4`, and `netcdf3`, and `TIFF/GeoTIFF`. Support for other filetypes is under development in the VirtualiZarr project, and VirtualiZarr has an extensible system of 3rd-party `Parsers` if you want to implement support for a new filetype yourself Below are some relevant docs and issues:
 
-- [meta issue for file format support](https://github.com/zarr-developers/VirtualiZarr/issues/218)
-- [Support for GRIB2 files](https://github.com/zarr-developers/VirtualiZarr/issues/312)
-- [Support for GRIB2 files with datatree](https://github.com/zarr-developers/VirtualiZarr/issues/11)
-- [Support for TIFF files](https://github.com/zarr-developers/VirtualiZarr/issues/291)
+- [VirtualiZarr docs on Custom Parsers](https://virtualizarr.readthedocs.io/en/stable/custom_parsers.html)
+- [Meta issue for all file format support](https://github.com/zarr-developers/VirtualiZarr/issues/218)
+- [Issue tracking support for GRIB2 files](https://github.com/zarr-developers/VirtualiZarr/issues/312)
+- [Issue tracking support for GRIB2 files with datatree](https://github.com/zarr-developers/VirtualiZarr/issues/11)

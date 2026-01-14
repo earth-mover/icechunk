@@ -1,6 +1,13 @@
 import abc
 import datetime
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from enum import Enum
 from typing import Any, TypeAlias
 
@@ -1831,6 +1838,26 @@ class PyRepository:
     @property
     def spec_version(self) -> int: ...
 
+class ChunkType(Enum):
+    """Enum for Zarr chunk types
+
+    Attributes
+    ----------
+    Uninitialized: int
+        Chunk doesn't have a materialized type yet
+    Native: int
+        Regular Zarr chunks
+    Virtual: int
+        Chunk conforming to the VirtualiZarr spec
+    Inline: int
+        Chunk is store inline in the manifest
+    """
+
+    UNINITIALIZED = 0
+    NATIVE = 1
+    VIRTUAL = 2
+    INLINE = 3
+
 class PySession:
     @classmethod
     def from_bytes(cls, data: bytes) -> PySession: ...
@@ -1859,6 +1886,12 @@ class PySession:
     def chunk_coordinates(
         self, array_path: str, batch_size: int
     ) -> AsyncIterator[list[list[int]]]: ...
+    def chunk_type(
+        self, array_path: str, chunk_coordinates: Sequence[int]
+    ) -> ChunkType: ...
+    async def chunk_type_async(
+        self, array_path: str, chunk_coordinates: Sequence[int]
+    ) -> ChunkType: ...
     @property
     def store(self) -> PyStore: ...
     @property
