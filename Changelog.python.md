@@ -4,7 +4,8 @@
 
 ### Features
 
-- New method for returning a chunk type.
+- Extend storage stats calculation to include virtual and inline chunks.
+- New methods `Session.chunk_type` and `Session.chunk_type_async` for returning the chunk type (native, inline, virtual, and uninitialized).
 
 ### Fixes
 
