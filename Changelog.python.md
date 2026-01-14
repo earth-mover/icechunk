@@ -1,5 +1,15 @@
 # Changelog
 
+## Python Icechunk Library 1.1.16
+
+### Features
+
+- New method for returning a chunk type.
+
+### Fixes
+
+- Anonymous GCS credentials when setting `icechunk.gcs_credentials(anonymous=True)` now works.
+
 ## Python Icechunk Library 1.1.15
 
 ### Features
