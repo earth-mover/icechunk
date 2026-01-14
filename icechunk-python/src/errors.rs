@@ -205,7 +205,6 @@ impl PyConflictError {
         )
     }
 
-
     // Control pickling to work with tblib
     fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
         let cls = py.get_type::<PyConflictError>().into_py_any(py)?;

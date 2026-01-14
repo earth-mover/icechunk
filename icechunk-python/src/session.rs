@@ -5,8 +5,8 @@ use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Store,
+    format::manifest::{Checksum, ChunkPayload},
     format::{ChunkIndices, Path},
-    format::manifest::{ChunkPayload, Checksum},
     session::{Session, SessionErrorKind},
     store::{StoreError, StoreErrorKind},
 };
