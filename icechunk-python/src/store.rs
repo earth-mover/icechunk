@@ -316,7 +316,7 @@ impl PyStore {
         py: Python<'_>,
         key: String,
     ) -> PyIcechunkStoreResult<VirtualRefResult> {
-        py.allow_threads(move || {
+        py.detach(move || {
             let store = Arc::clone(&self.0);
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {

@@ -284,7 +284,7 @@ impl PySession {
     }
 
     pub fn all_virtual_refs(&self, py: Python<'_>) -> PyResult<Vec<VirtualRefTuple>> {
-        py.allow_threads(move || {
+        py.detach(move || {
             let session = self.0.blocking_read();
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
