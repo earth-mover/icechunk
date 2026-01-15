@@ -461,6 +461,29 @@ impl Store {
     }
 
     #[instrument(skip(self))]
+    pub async fn all_virtual_refs(&self) -> StoreResult<Vec<(String, VirtualChunkRef)>> {
+        let session = self.session.read().await;
+        let refs: Vec<_> = session
+            .all_chunks()
+            .await?
+            .try_filter_map(|(path, info)| match info.payload {
+                ChunkPayload::Virtual(reference) => {
+                    let coords = info.coord.0.iter().map(|c| c.to_string()).join("/");
+                    let key =
+                        [path.to_string()[1..].to_string(), "c".to_string(), coords]
+                            .iter()
+                            .filter(|s| !s.is_empty())
+                            .join("/");
+                    std::future::ready(Ok(Some((key, reference))))
+                }
+                _ => std::future::ready(Ok(None)),
+            })
+            .try_collect()
+            .await?;
+        Ok(refs)
+    }
+
+    #[instrument(skip(self))]
     pub async fn delete_dir(&self, prefix: &str) -> StoreResult<()> {
         if self.read_only().await {
             return Err(StoreErrorKind::ReadOnly.into());
