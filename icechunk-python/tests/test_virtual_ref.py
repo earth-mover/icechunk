@@ -200,7 +200,7 @@ async def test_write_minio_virtual_refs(
     vref_none = await store.get_virtual_ref_async("c/0/0/3")
     assert vref_none is None
 
-    all_refs = await session.all_virtual_refs_async()
+    all_refs = await store.all_virtual_refs_async()
     all_refs_dict = {
         key: (location, offset, length) for key, location, offset, length, _ in all_refs
     }
@@ -322,9 +322,9 @@ async def test_public_virtual_refs(
     assert vref[2] == 288
 
     if use_async:
-        all_refs = await session.all_virtual_refs_async()
+        all_refs = await store.all_virtual_refs_async()
     else:
-        all_refs = session.all_virtual_refs()
+        all_refs = store.all_virtual_refs()
 
     assert len(all_refs) == 1
     assert all_refs[0][0] == "year/c/0"

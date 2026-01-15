@@ -278,6 +278,50 @@ class IcechunkStore(Store, SyncMixin):
         checksum = etag if etag is not None else last_modified
         return (location, offset, length, checksum)
 
+    def all_virtual_refs(
+        self,
+    ) -> list[tuple[str, str, int, int, str | datetime | None]]:
+        """
+        Return all virtual references in the store.
+
+        Returns
+        -------
+        list[tuple[str, str, int, int, str | datetime | None]]
+            A list of tuples containing:
+            - zarr_key: The full zarr key (e.g., "array/c/0/0/1")
+            - location: The storage location URL
+            - offset: Byte offset in the file
+            - length: Length in bytes
+            - checksum: Either an etag string or datetime, or None
+        """
+        result = self._store.all_virtual_refs()
+        return [
+            (key, location, offset, length, etag if etag is not None else last_modified)
+            for key, location, offset, length, etag, last_modified in result
+        ]
+
+    async def all_virtual_refs_async(
+        self,
+    ) -> list[tuple[str, str, int, int, str | datetime | None]]:
+        """
+        Return all virtual references in the store (async version).
+
+        Returns
+        -------
+        list[tuple[str, str, int, int, str | datetime | None]]
+            A list of tuples containing:
+            - zarr_key: The full zarr key (e.g., "array/c/0/0/1")
+            - location: The storage location URL
+            - offset: Byte offset in the file
+            - length: Length in bytes
+            - checksum: Either an etag string or datetime, or None
+        """
+        result = await self._store.all_virtual_refs_async()
+        return [
+            (key, location, offset, length, etag if etag is not None else last_modified)
+            for key, location, offset, length, etag, last_modified in result
+        ]
+
     def set_virtual_ref(
         self,
         key: str,
