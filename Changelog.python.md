@@ -10,6 +10,7 @@
 ### Fixes
 
 - Anonymous GCS credentials when setting `icechunk.gcs_credentials(anonymous=True)` now works.
+- Fix anonymous S3 storage access for public buckets.
 
 ## Python Icechunk Library 1.1.15
 
