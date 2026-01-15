@@ -82,6 +82,7 @@ def s3_store(
         region=region,
         endpoint_url=endpoint_url,
         allow_http=allow_http,
+        anonymous=anonymous,
         force_path_style=force_path_style,
         network_stream_timeout_seconds=network_stream_timeout_seconds,
         requester_pays=requester_pays,

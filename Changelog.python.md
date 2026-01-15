@@ -1,5 +1,17 @@
 # Changelog
 
+## Python Icechunk Library 1.1.16
+
+### Features
+
+- Extend storage stats calculation to include virtual and inline chunks.
+- New methods `Session.chunk_type` and `Session.chunk_type_async` for returning the chunk type (native, inline, virtual, and uninitialized).
+
+### Fixes
+
+- Anonymous GCS credentials when setting `icechunk.gcs_credentials(anonymous=True)` now works.
+- Fix anonymous S3 storage access for public buckets.
+
 ## Python Icechunk Library 1.1.15
 
 ### Features
