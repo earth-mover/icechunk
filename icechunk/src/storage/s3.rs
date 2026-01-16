@@ -137,9 +137,8 @@ pub async fn mk_client(
 
     #[allow(clippy::unwrap_used)]
     let app_name = AppName::new("icechunk").unwrap();
-    let mut aws_config = aws_config::defaults(BehaviorVersion::v2025_08_07())
-        .region(region)
-        .app_name(app_name);
+    let mut aws_config =
+        aws_config::defaults(BehaviorVersion::latest()).region(region).app_name(app_name);
 
     if let Some(endpoint) = endpoint {
         aws_config = aws_config.endpoint_url(endpoint)
