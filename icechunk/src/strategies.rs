@@ -119,7 +119,11 @@ pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDi
         })
 }
 
-pub fn manifest_extents2(ndim: usize) -> impl Strategy<Value = ManifestExtents> {
+// Generates a subset of possible manifest extents where the width of each extent is
+// in [1, 999]
+pub fn limited_width_manifest_extents(
+    ndim: usize,
+) -> impl Strategy<Value = ManifestExtents> {
     (vec(0u32..1000u32, ndim), vec(1u32..1000u32, ndim)).prop_map(|(start, delta)| {
         let stop = std::iter::zip(start.iter(), delta.iter())
             .map(|(s, d)| s + d)
@@ -128,6 +132,8 @@ pub fn manifest_extents2(ndim: usize) -> impl Strategy<Value = ManifestExtents> 
     })
 }
 
+// Generates possible manifest extents where the width of each extent is
+// in [1, 4_294_967_295]
 pub fn manifest_extents(ndim: usize) -> impl Strategy<Value = ManifestExtents> {
     vec(
         any::<Range<u32>>()
@@ -599,11 +605,6 @@ fn chunk_payload() -> impl Strategy<Value = ChunkPayload> {
         chunk_ref().prop_map(Ref)
     ]
 }
-
-// pub fn chunk_indices2() -> impl Strategy<Value = ChunkIndices> {
-//     (any::<u8>().prop_map(usize::from), any::<Range<u32>>())
-//         .prop_flat_map(|(dim, data)| chunk_indices(dim, data))
-// }
 
 pub fn large_chunk_indices(dim: usize) -> impl Strategy<Value = ChunkIndices> {
     any::<Range<u32>>().prop_flat_map(move |data| chunk_indices(dim, data))

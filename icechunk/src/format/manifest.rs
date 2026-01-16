@@ -637,7 +637,7 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 mod tests {
     use super::*;
     use crate::strategies::{
-        ShapeDim, manifest_extents, manifest_extents2, shapes_and_dims,
+        ShapeDim, limited_width_manifest_extents, manifest_extents, shapes_and_dims,
     };
     use icechunk_macros;
     use itertools::{all, multizip};
@@ -685,7 +685,7 @@ mod tests {
 
     #[proptest]
     fn test_property_extents_widths(
-        #[strategy(manifest_extents2(4))] extent1: ManifestExtents,
+        #[strategy(limited_width_manifest_extents(4))] extent1: ManifestExtents,
         #[strategy(vec(0..100, 4))] delta_left: Vec<i32>,
         #[strategy(vec(0..100, 4))] delta_right: Vec<i32>,
     ) {
