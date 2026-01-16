@@ -1080,3 +1080,43 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
 
     Ok(())
 }
+
+#[tokio_test]
+async fn test_repository_with_millions_of_virtual_chunks() -> Result<(), Box<dyn Error>> {
+    use tokio::task::JoinSet;
+    const REPO_SIZE: u32 = 14_000_000;
+
+    let repo_dir = TempDir::new()?;
+    let repo = create_local_repository(repo_dir.path(), None).await;
+    let mut ds = repo.writable_session("main").await.unwrap();
+
+    let shape = ArrayShape::new([(REPO_SIZE as u64, 1)]).unwrap();
+    let user_data = Bytes::new();
+
+    let new_array_path: Path = "/array".try_into().unwrap();
+
+    ds.add_array(new_array_path.clone(), shape, None, user_data).await.unwrap();
+
+    let mut set = JoinSet::new();
+
+    for idx in 0..REPO_SIZE {
+        let mut ds = ds.clone();
+        let new_array_path = new_array_path.clone();
+        set.spawn(async move {
+            dbg!(idx);
+            let payload = ChunkPayload::Virtual(VirtualChunkRef {
+                location: VirtualChunkLocation::from_absolute_path("file://foo").unwrap(),
+                offset: 0,
+                length: 5,
+                checksum: None,
+            });
+            ds.set_chunk_ref(new_array_path, ChunkIndices(vec![idx]), Some(payload))
+                .await
+                .unwrap();
+        });
+    }
+
+    ds.commit("really big changeset", None).await?;
+
+    Ok(())
+}
