@@ -1116,6 +1116,8 @@ async fn test_repository_with_millions_of_virtual_chunks() -> Result<(), Box<dyn
         });
     }
 
+    while let Some(res) = set.join_next().await {}
+
     ds.commit("really big changeset", None).await?;
 
     Ok(())
