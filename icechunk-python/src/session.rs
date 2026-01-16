@@ -4,7 +4,8 @@ use async_stream::try_stream;
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Store,
-    format::{ChunkIndices, Path, manifest::ChunkPayload},
+    format::manifest::ChunkPayload,
+    format::{ChunkIndices, Path},
     session::{Session, SessionErrorKind},
     store::{StoreError, StoreErrorKind},
 };
