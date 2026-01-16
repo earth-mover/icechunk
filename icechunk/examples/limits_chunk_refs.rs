@@ -11,6 +11,7 @@ use icechunk::{
 
 use bytes::Bytes;
 use itertools::Itertools;
+use tokio::sync::RwLock;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -38,14 +39,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .expect("Failed to initialize repository");
 
-    let mut ds = repo.writable_session("main").await.unwrap();
+    let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
 
     let shape = ArrayShape::new([(REPO_SIZE as u64, 1)]).unwrap();
     let user_data = Bytes::new();
 
     let new_array_path: Path = "/array".try_into().unwrap();
 
-    ds.add_array(new_array_path.clone(), shape, None, user_data).await.unwrap();
+    ds.write()
+        .await
+        .add_array(new_array_path.clone(), shape, None, user_data)
+        .await
+        .unwrap();
 
     let payload = ChunkPayload::Inline(Bytes::from_static(&[42u8]));
 
@@ -53,12 +58,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut set = tokio::task::JoinSet::new();
 
         for idx in chnk {
-            let mut ds = ds.clone();
             let new_array_path = new_array_path.clone();
             let payload = payload.clone();
+            let ds = ds.clone();
 
             set.spawn(async move {
-                ds.set_chunk_ref(new_array_path, ChunkIndices(vec![idx]), Some(payload))
+                ds.write()
+                    .await
+                    .set_chunk_ref(new_array_path, ChunkIndices(vec![idx]), Some(payload))
                     .await
             });
         }
@@ -68,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    ds.commit("really big changeset", None).await?;
+    ds.write().await.commit("really big changeset", None).await?;
 
     Ok(())
 }
