@@ -716,12 +716,13 @@ mod tests {
     use super::ChangeSet;
 
     use crate::{
-        change_set::{ArrayData, MoveTracker},
+        change_set::{ArrayData, EditChanges, MoveTracker},
         format::{
             ChunkIndices, NodeId, Path,
             manifest::{ChunkInfo, ChunkPayload, ManifestSplits},
             snapshot::ArrayShape,
         },
+        roundtrip_serialization_tests,
     };
 
     #[icechunk_macros::test]
@@ -965,4 +966,40 @@ mod tests {
             &Path::new("/other").unwrap(),
         );
     }
+
+    use crate::strategies::{
+        array_data, bytes, gen_move, large_chunk_indices, manifest_extents, node_id,
+        path, split_manifest,
+    };
+    use proptest::collection::{btree_map, hash_map, hash_set, vec};
+    use proptest::prelude::*;
+
+    prop_compose! {
+        fn edit_changes()(num_of_dims in 1..=20usize)(
+            new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
+                new_arrays in hash_map(path(),(node_id(), array_data()), 3..7),
+           updated_arrays in hash_map(node_id(), array_data(), 3..7),
+           updated_groups in hash_map(node_id(), bytes(), 3..7),
+           set_chunks in btree_map(node_id(),
+                hash_map(manifest_extents(num_of_dims), split_manifest(), 3..7),
+            3..7),
+    deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(large_chunk_indices(num_of_dims), 3..8), 3..7),
+            deleted_groups in hash_set((path(), node_id()), 3..7),
+            deleted_arrays in hash_set((path(), node_id()), 3..7)
+        ) -> EditChanges {
+            EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups, new_arrays}
+        }
+    }
+
+    fn move_tracker() -> impl Strategy<Value = MoveTracker> {
+        vec(gen_move(), 1..5).prop_map(MoveTracker).boxed()
+    }
+
+    fn change_set() -> impl Strategy<Value = ChangeSet> {
+        use ChangeSet::*;
+        prop_oneof![edit_changes().prop_map(Edit), move_tracker().prop_map(Rearrange)]
+            .boxed()
+    }
+
+    roundtrip_serialization_tests!(serialize_and_deserialize_change_sets - change_set);
 }
