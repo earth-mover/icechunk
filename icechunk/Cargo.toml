@@ -105,3 +105,8 @@ cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs", "dep:assert_fs"]
 name = "icechunk"
 path = "src/bin/icechunk/main.rs"
 required-features = ["cli"]
+
+[[example]]
+name = "limits_chunk_ref"
+path = "examples/limits_chunk_ref.rs"
+required-features = ["logs"]

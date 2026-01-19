@@ -13,8 +13,19 @@ use bytes::Bytes;
 use itertools::Itertools;
 use tokio::sync::RwLock;
 
+use test_log::tracing_subscriber;
+use test_log::tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing::info;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
+        ))
+        .with(tracing_subscriber::fmt::layer().compact())
+        .init();
+
     const CHUNK_SIZE: usize = 20_000;
 
     let args: Vec<_> = std::env::args().collect();
@@ -54,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let payload = ChunkPayload::Inline(Bytes::from_static(&[42u8]));
 
+    let mut count = 0;
     for chnk in &(0..REPO_SIZE).chunks(CHUNK_SIZE) {
         let mut set = tokio::task::JoinSet::new();
 
@@ -73,8 +85,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(res) = set.join_next().await {
             res.unwrap().unwrap();
         }
+
+        count += CHUNK_SIZE;
+        if count % 1_000_000 == 0 {
+            info!("{count} chunk_ref written");
+        }
     }
 
+    info!("starting commit");
     ds.write().await.commit("really big changeset", None).await?;
 
     Ok(())
