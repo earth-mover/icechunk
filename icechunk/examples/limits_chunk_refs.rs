@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::{collections::HashMap, vec};
+use std::vec;
 
 use icechunk::{
-    Repository, Storage,
-    config::Credentials,
+    Repository, RepositoryConfig, Storage,
+    config::{
+        ManifestConfig, ManifestSplitCondition, ManifestSplitDim,
+        ManifestSplitDimCondition, ManifestSplittingConfig,
+    },
     format::{ChunkIndices, Path, manifest::ChunkPayload, snapshot::ArrayShape},
     storage::ObjectStorage,
 };
@@ -13,9 +16,26 @@ use bytes::Bytes;
 use itertools::Itertools;
 use tokio::sync::RwLock;
 
+use clap::Parser;
 use test_log::tracing_subscriber;
 use test_log::tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tracing::info;
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Location for the new repo
+    #[arg(default_value = "test_repo")]
+    repo_dir: PathBuf,
+
+    /// Number of chunk_refs to set
+    #[arg(default_value_t = 1_000_000)]
+    count: u32,
+
+    /// Number of chunk_refs per manifest
+    #[arg(default_value_t = 50_000_000)]
+    num_chunks: u32,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,27 +48,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     const CHUNK_SIZE: usize = 20_000;
 
-    let args: Vec<_> = std::env::args().collect();
-    if args.len() != 3 {
-        println!(
-            "Error: Pass either\n --write path/to/repo\n or\n --read path/to/repo\n as command line argument."
-        );
-        return Err("Invalid arguments".into());
-    }
-
-    let repo_dir = PathBuf::from(args[2].as_str());
-    let repo_size: u32 = args[1].parse()?;
+    let args = Args::parse();
+    let repo_dir = args.repo_dir;
+    let repo_size = args.count;
+    let num_chunks = args.num_chunks;
 
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
         ObjectStorage::new_local_filesystem(repo_dir.as_path())
             .await
             .expect("Creating local storage failed"),
     );
-    let creds: HashMap<String, Option<Credentials>> = Default::default();
+    let creds = Default::default();
 
-    let repo = Repository::create(None, storage, creds, None)
-        .await
-        .expect("Failed to initialize repository");
+    let split_sizes = Some(vec![(
+        ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
+        vec![ManifestSplitDim {
+            condition: ManifestSplitDimCondition::Any,
+            num_chunks: num_chunks,
+        }],
+    )]);
+    let manifest_config = ManifestConfig {
+        splitting: Some(ManifestSplittingConfig { split_sizes }),
+        ..ManifestConfig::default()
+    };
+
+    let repo = Repository::create(
+        Some(RepositoryConfig {
+            inline_chunk_threshold_bytes: Some(0),
+            manifest: Some(manifest_config),
+            ..Default::default()
+        }),
+        storage,
+        creds,
+        None,
+    )
+    .await
+    .expect("Failed to initialize repository");
 
     let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
 

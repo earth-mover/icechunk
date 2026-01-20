@@ -81,6 +81,7 @@ reqwest = { version = "0.12.28", default-features = false, features = [
   "system-proxy",
 ] }
 [dev-dependencies]
+clap = { version = "4.5", features = ["derive"] }
 fs_extra = "1.3.0"
 icechunk-macros = { path = "../icechunk-macros", version = "0.1.0" }
 port_check = "0.3.0"
@@ -109,4 +110,4 @@ required-features = ["cli"]
 [[example]]
 name = "limits_chunk_ref"
 path = "examples/limits_chunk_ref.rs"
-required-features = ["logs"]
+required-features = ["logs", "dep:clap"]
