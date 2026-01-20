@@ -36,8 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Invalid arguments".into());
     }
 
-    let repo_dir = std::path::PathBuf::from(args[2].as_str());
-    let REPO_SIZE: u32 = args[1].parse()?;
+    let repo_dir = PathBuf::from(args[2].as_str());
+    let repo_size: u32 = args[1].parse()?;
 
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
         ObjectStorage::new_local_filesystem(repo_dir.as_path())
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
 
-    let shape = ArrayShape::new([(REPO_SIZE as u64, 1)]).unwrap();
+    let shape = ArrayShape::new([(repo_size as u64, 1)]).unwrap();
     let user_data = Bytes::new();
 
     let new_array_path: Path = "/array".try_into().unwrap();
@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let payload = ChunkPayload::Inline(Bytes::from_static(&[42u8]));
 
     let mut count = 0;
-    for chnk in &(0..REPO_SIZE).chunks(CHUNK_SIZE) {
+    for chnk in &(0..repo_size).chunks(CHUNK_SIZE) {
         let mut set = tokio::task::JoinSet::new();
 
         for idx in chnk {
