@@ -2,21 +2,25 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
     iter,
-    sync::LazyLock,
+    sync::{atomic::AtomicBool, LazyLock},
 };
 
 use bytes::Bytes;
 use itertools::{Either, Itertools as _};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::{
     format::{
-        ChunkIndices, NodeId, Path,
         manifest::{ChunkInfo, ChunkPayload, ManifestExtents, ManifestSplits, Overlap},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
+        ChunkIndices, NodeId, Path,
     },
-    session::{SessionErrorKind, SessionResult, find_coord},
+    session::{find_coord, SessionErrorKind, SessionResult},
 };
+
+// Constant derived from docs in https://icechunk.io/en/stable/performance/#splitting-manifests
+const NUM_CHUNKS_LIMIT: u64 = 1_000_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArrayData {
@@ -27,13 +31,21 @@ pub struct ArrayData {
 
 type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct EditChanges {
     new_groups: HashMap<Path, (NodeId, Bytes)>,
     new_arrays: HashMap<Path, (NodeId, ArrayData)>,
     updated_arrays: HashMap<NodeId, ArrayData>,
     updated_groups: HashMap<NodeId, Bytes>,
     set_chunks: BTreeMap<NodeId, HashMap<ManifestExtents, SplitManifest>>,
+
+    // Number of chunks added to this change set
+    num_chunks: u64,
+
+    // Did we already print a warning about too many chunks in this change set?
+    #[serde(skip)]
+    excessive_num_chunks_warned: AtomicBool,
+
     // This map keeps track of any chunk deletes that are
     // outside the domain of the current array shape. This is needed to handle
     // the very unlikely case of multiple resizes in the same session.
@@ -41,6 +53,42 @@ pub struct EditChanges {
     deleted_groups: HashSet<(Path, NodeId)>,
     deleted_arrays: HashSet<(Path, NodeId)>,
 }
+
+impl Clone for EditChanges {
+    fn clone(&self) -> Self {
+        Self {
+            new_groups: self.new_groups.clone(),
+            new_arrays: self.new_arrays.clone(),
+            updated_arrays: self.updated_arrays.clone(),
+            updated_groups: self.updated_groups.clone(),
+            set_chunks: self.set_chunks.clone(),
+            num_chunks: self.num_chunks.clone(),
+            excessive_num_chunks_warned: AtomicBool::new(
+                self.excessive_num_chunks_warned
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            deleted_chunks_outside_bounds: self.deleted_chunks_outside_bounds.clone(),
+            deleted_groups: self.deleted_groups.clone(),
+            deleted_arrays: self.deleted_arrays.clone(),
+        }
+    }
+}
+
+impl PartialEq for EditChanges {
+    fn eq(&self, other: &Self) -> bool {
+        self.new_groups.eq(&other.new_groups)
+            && self.new_arrays.eq(&other.new_arrays)
+            && self.updated_arrays.eq(&other.updated_arrays)
+            && self.updated_groups.eq(&other.updated_groups)
+            && self.set_chunks.eq(&other.set_chunks)
+            && self.num_chunks.eq(&other.num_chunks)
+            && self.deleted_chunks_outside_bounds.eq(&other.deleted_chunks_outside_bounds)
+            && self.deleted_groups.eq(&other.deleted_groups)
+            && self.deleted_arrays.eq(&other.deleted_arrays)
+    }
+}
+
+impl Eq for EditChanges {}
 
 impl EditChanges {
     fn is_empty(&self) -> bool {
@@ -449,7 +497,9 @@ impl ChangeSet {
         let extent = splits.find(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
-        self.edits_mut()?
+        let edits = self.edits_mut()?;
+
+        let old = edits
             .set_chunks
             .entry(node_id)
             .or_insert_with(|| {
@@ -461,6 +511,25 @@ impl ChangeSet {
             .entry(extent.clone())
             .or_default()
             .insert(coord, data);
+
+        if old.is_none() {
+            edits.num_chunks += 1;
+        }
+
+        if edits.num_chunks > NUM_CHUNKS_LIMIT
+            && !edits
+                .excessive_num_chunks_warned
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            warn!(
+                "ACHIEVEMENT UNLOCKED, HARD MODE AVAILABLE! There are more than {NUM_CHUNKS_LIMIT} chunk references being loaded into this commit. This will generate large manifests and impact performance, consider setting up manifest splitting for this array. More info at https://icechunk.io/en/stable/performance/#splitting-manifests ",
+            );
+
+            edits
+                .excessive_num_chunks_warned
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
         Ok(())
     }
 
@@ -718,9 +787,9 @@ mod tests {
     use crate::{
         change_set::{ArrayData, EditChanges, MoveTracker},
         format::{
-            ChunkIndices, NodeId, Path,
             manifest::{ChunkInfo, ChunkPayload, ManifestSplits},
             snapshot::ArrayShape,
+            ChunkIndices, NodeId, Path,
         },
         roundtrip_serialization_tests,
     };
@@ -912,9 +981,9 @@ mod tests {
         );
         assert!(mt.moved_from(&Path::new("/foo/bar/old").unwrap()).is_none());
         assert!(mt.moved_from(&Path::new("/foo/bar/old/more").unwrap()).is_none());
-        assert!(
-            mt.moved_from(&Path::new("/foo/bar/old/more/andmore").unwrap()).is_none()
-        );
+        assert!(mt
+            .moved_from(&Path::new("/foo/bar/old/more/andmore").unwrap())
+            .is_none());
 
         assert_eq!(
             mt.moved_from(&Path::new("/foo/bar/new/inner-new").unwrap())
