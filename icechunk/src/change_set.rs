@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
     iter,
-    sync::{atomic::AtomicBool, LazyLock},
+    sync::{LazyLock, atomic::AtomicBool},
 };
 
 use bytes::Bytes;
@@ -12,11 +12,11 @@ use tracing::warn;
 
 use crate::{
     format::{
+        ChunkIndices, NodeId, Path,
         manifest::{ChunkInfo, ChunkPayload, ManifestExtents, ManifestSplits, Overlap},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
-        ChunkIndices, NodeId, Path,
     },
-    session::{find_coord, SessionErrorKind, SessionResult},
+    session::{SessionErrorKind, SessionResult, find_coord},
 };
 
 // Constant derived from docs in https://icechunk.io/en/stable/performance/#splitting-manifests
@@ -787,9 +787,9 @@ mod tests {
     use crate::{
         change_set::{ArrayData, EditChanges, MoveTracker},
         format::{
+            ChunkIndices, NodeId, Path,
             manifest::{ChunkInfo, ChunkPayload, ManifestSplits},
             snapshot::ArrayShape,
-            ChunkIndices, NodeId, Path,
         },
         roundtrip_serialization_tests,
     };
@@ -981,9 +981,9 @@ mod tests {
         );
         assert!(mt.moved_from(&Path::new("/foo/bar/old").unwrap()).is_none());
         assert!(mt.moved_from(&Path::new("/foo/bar/old/more").unwrap()).is_none());
-        assert!(mt
-            .moved_from(&Path::new("/foo/bar/old/more/andmore").unwrap())
-            .is_none());
+        assert!(
+            mt.moved_from(&Path::new("/foo/bar/old/more/andmore").unwrap()).is_none()
+        );
 
         assert_eq!(
             mt.moved_from(&Path::new("/foo/bar/new/inner-new").unwrap())
