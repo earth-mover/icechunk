@@ -522,7 +522,7 @@ impl ChangeSet {
                 .load(std::sync::atomic::Ordering::Relaxed)
         {
             warn!(
-                "ACHIEVEMENT UNLOCKED, HARD MODE AVAILABLE! There are more than {NUM_CHUNKS_LIMIT} chunk references being loaded into this commit. This will generate large manifests and impact performance, consider setting up manifest splitting for this array. More info at https://icechunk.io/en/stable/performance/#splitting-manifests ",
+                "There are more than {NUM_CHUNKS_LIMIT} chunk references being loaded into this commit. This will generate large manifests and impact performance, consider setting up manifest splitting for this array. More info at https://icechunk.io/en/stable/performance/#splitting-manifests ",
             );
 
             edits
