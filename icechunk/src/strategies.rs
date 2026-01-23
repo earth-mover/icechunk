@@ -7,23 +7,34 @@ use crate::config::{
     S3StaticCredentials,
 };
 use crate::format::format_constants::SpecVersionBin;
-use crate::format::manifest::ManifestExtents;
+use crate::format::manifest::{
+    ChunkPayload, ChunkRef, ManifestExtents, SecondsSinceEpoch, VirtualChunkLocation,
+    VirtualChunkRef,
+};
 use crate::format::snapshot::{ArrayShape, DimensionName};
-use crate::format::{ChunkIndices, Path};
+use crate::format::{ChunkId, ChunkIndices, NodeId, Path, manifest};
 use crate::session::Session;
 use crate::storage::{
-    ConcurrencySettings, RetriesSettings, Settings, new_in_memory_storage,
+    ConcurrencySettings, ETag, RetriesSettings, Settings, new_in_memory_storage,
 };
 use crate::virtual_chunks::VirtualChunkContainer;
 use crate::{ObjectStoreConfig, Repository, RepositoryConfig};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use prop::string::string_regex;
+use proptest::collection::{btree_map, vec};
 use proptest::prelude::*;
-use proptest::{collection::vec, option, strategy::Strategy};
-use std::collections::HashMap;
+use proptest::{
+    array::{uniform8, uniform12},
+    option,
+    strategy::Strategy,
+};
+use std::collections::{BTreeMap, HashMap};
 use std::num::{NonZeroU16, NonZeroU64};
 use std::ops::{Bound, Range};
 use std::path::PathBuf;
+
+use crate::change_set::{ArrayData, Move};
 
 const MAX_NDIM: usize = 4;
 
@@ -108,7 +119,11 @@ pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDi
         })
 }
 
-pub fn manifest_extents(ndim: usize) -> impl Strategy<Value = ManifestExtents> {
+// Generates a subset of possible manifest extents where the width of each extent is
+// in [1, 999]
+pub fn limited_width_manifest_extents(
+    ndim: usize,
+) -> impl Strategy<Value = ManifestExtents> {
     (vec(0u32..1000u32, ndim), vec(1u32..1000u32, ndim)).prop_map(|(start, delta)| {
         let stop = std::iter::zip(start.iter(), delta.iter())
             .map(|(s, d)| s + d)
@@ -117,8 +132,21 @@ pub fn manifest_extents(ndim: usize) -> impl Strategy<Value = ManifestExtents> {
     })
 }
 
+// Generates possible manifest extents where the width of each extent is
+// in [1, 4_294_967_295]
+pub fn manifest_extents(ndim: usize) -> impl Strategy<Value = ManifestExtents> {
+    vec(
+        any::<Range<u32>>()
+            .prop_filter("Could not construct a nonempty range", |range| {
+                !range.is_empty()
+            }),
+        ndim,
+    )
+    .prop_map(ManifestExtents::from_ranges_iter)
+}
+
 prop_compose! {
-    pub fn chunk_indices(dim: usize, values_in: Range<u32>)(v in proptest::collection::vec(values_in, dim..(dim+1))) -> ChunkIndices {
+    pub fn chunk_indices(dim: usize, values_in: Range<u32>)(v in vec(values_in, dim..(dim+1))) -> ChunkIndices {
         ChunkIndices(v)
     }
 }
@@ -219,7 +247,7 @@ pub fn object_store_config() -> BoxedStrategy<ObjectStoreConfig> {
     use ObjectStoreConfig::*;
     prop_oneof![
         Just(InMemory),
-        proptest::collection::vec(string_regex("[a-zA-Z0-9\\-_]+").unwrap(), 1..4)
+        vec(string_regex("[a-zA-Z0-9\\-_]+").unwrap(), 1..4)
             .prop_map(|s| LocalFileSystem(PathBuf::from(s.join("/")))),
         s3_options().prop_map(S3),
         s3_options().prop_map(S3Compatible),
@@ -255,8 +283,8 @@ pub fn manifest_preload_condition() -> BoxedStrategy<ManifestPreloadCondition> {
     ];
     leaf.prop_recursive(4, 20, 5, |inner| {
         prop_oneof![
-            proptest::collection::vec(inner.clone(), 1..4).prop_map(Or),
-            proptest::collection::vec(inner.clone(), 1..4).prop_map(And),
+            vec(inner.clone(), 1..4).prop_map(Or),
+            vec(inner.clone(), 1..4).prop_map(And),
         ]
     })
     .boxed()
@@ -305,7 +333,7 @@ prop_compose! {
 
 prop_compose! {
     pub fn split_sizes()
-        (condition in manifest_split_condition(), dims in proptest::collection::vec(manifest_split_dim(), 1..5))
+        (condition in manifest_split_condition(), dims in vec(manifest_split_dim(), 1..5))
     -> (ManifestSplitCondition, Vec<ManifestSplitDim>) {
     (condition, dims)
     }
@@ -313,7 +341,7 @@ prop_compose! {
 
 prop_compose! {
     pub fn manifest_splitting_config()
-        (sizes in option::of(proptest::collection::vec(split_sizes(), 1..5)))
+        (sizes in option::of(vec(split_sizes(), 1..5)))
     -> ManifestSplittingConfig {
         ManifestSplittingConfig{split_sizes: sizes}
     }
@@ -329,7 +357,7 @@ prop_compose! {
 
 prop_compose! {
     pub fn virtual_chunk_containers()
-        (containers in proptest::collection::vec(virtual_chunk_container(), 0..10))
+        (containers in vec(virtual_chunk_container(), 0..10))
     -> HashMap<String, VirtualChunkContainer> {
         containers.into_iter().map(|cont| (cont.url_prefix().to_string(), cont)).collect()
     }
@@ -455,4 +483,142 @@ pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
 pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
     use AzureCredentials::*;
     prop_oneof![Just(FromEnv), azure_static_credentials().prop_map(Static)].boxed()
+}
+
+fn path_component() -> impl Strategy<Value = String> {
+    string_regex("[a-zA-Z0-9]{10}").expect("Could not generate a valid path component")
+}
+
+fn file_path_components() -> impl Strategy<Value = Vec<String>> {
+    vec(path_component(), 8..15)
+}
+
+// Given a collection of directory names, an absolute Unix style path
+// using the directory names in order is generated
+fn to_abs_unix_path(path_components: Vec<String>) -> String {
+    format!("/{}", path_components.join("/"))
+}
+
+// Generates Unix style absolute file paths
+fn absolute_path() -> impl Strategy<Value = String> {
+    file_path_components().prop_map(to_abs_unix_path)
+}
+
+pub fn path() -> impl Strategy<Value = Path> {
+    absolute_path().prop_filter_map("Could not generate a valid path", |abs_path| {
+        Path::new(&abs_path).ok()
+    })
+}
+
+type DimensionShapeInfo = (u64, u64);
+
+prop_compose! {
+    fn dimension_shape_info()(dim_length in any::<u64>(), chunk_length in any::<NonZeroU64>()) -> DimensionShapeInfo {
+        (dim_length, chunk_length.get())
+    }
+}
+
+prop_compose! {
+    fn array_shape()(dimensions in vec(dimension_shape_info(), 5..30)) -> ArrayShape {
+        ArrayShape::new(dimensions).unwrap()
+    }
+}
+
+fn dimension_name() -> impl Strategy<Value = DimensionName> {
+    use DimensionName::*;
+    prop_oneof![Just(NotSpecified), any::<String>().prop_map(Name)]
+}
+
+prop_compose! {
+pub fn bytes()(random_data in any::<Vec<u8>>()) -> Bytes {
+        Bytes::from(random_data)
+    }
+}
+
+prop_compose! {
+pub    fn array_data()(shape in array_shape(),
+        dimension_names in option::of(vec(dimension_name(), 5..10)),
+    user_data in bytes()) -> ArrayData {
+        ArrayData{shape, dimension_names, user_data}
+    }
+}
+
+pub fn node_id() -> impl Strategy<Value = NodeId> {
+    uniform8(any::<u8>()).prop_map(NodeId::new)
+}
+
+fn chunk_id() -> impl Strategy<Value = ChunkId> {
+    uniform12(any::<u8>()).prop_map(ChunkId::new)
+}
+
+prop_compose! {
+    fn chunk_ref()(id in chunk_id(), offset in any::<u64>(), length in any::<u64>()) -> ChunkRef {
+        ChunkRef{ id, offset, length }
+    }
+}
+
+fn etag() -> impl Strategy<Value = ETag> {
+    any::<String>().prop_map(ETag)
+}
+fn checksum() -> impl Strategy<Value = manifest::Checksum> {
+    use manifest::Checksum::*;
+    prop_oneof![
+        any::<u32>().prop_map(SecondsSinceEpoch).prop_map(LastModified),
+        etag().prop_map(ETag)
+    ]
+}
+
+fn non_empty_alphanumeric_string() -> impl Strategy<Value = String> {
+    string_regex("[a-zA-Z0-9]{1,}")
+        .expect("Could not generate a valid nonempty alphanumeric string")
+}
+
+prop_compose! {
+    fn url_with_host_and_path()(protocol in transfer_protocol(),
+        host in non_empty_alphanumeric_string(),
+        path in non_empty_alphanumeric_string()) -> String {
+        format!("{}://{}/{}", protocol, host, path)
+    }
+}
+
+fn virtual_chunk_location() -> impl Strategy<Value = VirtualChunkLocation> {
+    url_with_host_and_path()
+        .prop_filter_map("Could not generate url with valid host and path", |url| {
+            VirtualChunkLocation::from_absolute_path(&url).ok()
+        })
+}
+
+prop_compose! {
+    fn virtual_chunk_ref()(location in virtual_chunk_location(),
+        offset in any::<u64>(),
+        length in any::<u64>(),
+       checksum in option::of(checksum())) -> VirtualChunkRef {
+        VirtualChunkRef{ location, offset, length, checksum }
+    }
+}
+
+fn chunk_payload() -> impl Strategy<Value = ChunkPayload> {
+    use ChunkPayload::*;
+    prop_oneof![
+        bytes().prop_map(Inline),
+        virtual_chunk_ref().prop_map(Virtual),
+        chunk_ref().prop_map(Ref)
+    ]
+}
+
+pub fn large_chunk_indices(dim: usize) -> impl Strategy<Value = ChunkIndices> {
+    any::<Range<u32>>().prop_flat_map(move |data| chunk_indices(dim, data))
+}
+
+pub fn split_manifest()
+-> impl Strategy<Value = BTreeMap<ChunkIndices, Option<ChunkPayload>>> {
+    any::<u16>().prop_map(usize::from).prop_flat_map(|dim| {
+        btree_map(large_chunk_indices(dim), option::of(chunk_payload()), 3..10)
+    })
+}
+
+prop_compose! {
+    pub fn gen_move()(to in path(), from in path()) -> Move {
+        Move{to, from}
+    }
 }

@@ -636,7 +636,9 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::strategies::{ShapeDim, manifest_extents, shapes_and_dims};
+    use crate::strategies::{
+        ShapeDim, limited_width_manifest_extents, manifest_extents, shapes_and_dims,
+    };
     use icechunk_macros;
     use itertools::{all, multizip};
     use proptest::collection::vec;
@@ -683,7 +685,7 @@ mod tests {
 
     #[proptest]
     fn test_property_extents_widths(
-        #[strategy(manifest_extents(4))] extent1: ManifestExtents,
+        #[strategy(limited_width_manifest_extents(4))] extent1: ManifestExtents,
         #[strategy(vec(0..100, 4))] delta_left: Vec<i32>,
         #[strategy(vec(0..100, 4))] delta_right: Vec<i32>,
     ) {
@@ -732,6 +734,7 @@ mod tests {
                     ..((extent.end as i32 - width - low) as u32)
             }),
         );
+
         prop_assert_eq!(extent2.overlap_with(&extent1), Overlap::None);
 
         let extent2 = ManifestExtents::from_ranges_iter(
