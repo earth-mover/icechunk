@@ -29,6 +29,7 @@ use aws_sdk_s3::{
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
 };
+use aws_smithy_runtime::client::retries::classifiers::HttpStatusCodeClassifier;
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -191,6 +192,12 @@ pub async fn mk_client(
         .build();
 
     s3_builder = s3_builder.identity_cache(id_cache);
+
+    // Add retry classifier for HTTP 408 (Request Timeout)
+    // The default HttpStatusCodeClassifier only retries on 500, 502, 503, 504
+    static RETRY_CODES: &[u16] = &[408];
+    s3_builder = s3_builder
+        .retry_classifier(HttpStatusCodeClassifier::new_from_codes(RETRY_CODES));
 
     if !extra_read_headers.is_empty() || !extra_write_headers.is_empty() {
         s3_builder = s3_builder.interceptor(ExtraHeadersInterceptor {
