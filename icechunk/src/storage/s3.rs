@@ -32,6 +32,7 @@ use aws_sdk_s3::{
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
 };
+use aws_smithy_runtime::client::retries::classifiers::HttpStatusCodeClassifier;
 use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
@@ -194,6 +195,18 @@ pub async fn mk_client(
         .build();
 
     s3_builder = s3_builder.identity_cache(id_cache);
+
+    // Add retry classifier for HTTP 408 (Request Timeout)
+    // The default HttpStatusCodeClassifier only retries on 500, 502, 503, 504
+    static RETRY_CODES: &[u16] = &[408];
+    // This confusingly named `retry_classifier` method ends up calling
+    // `push_retry_classifier` after wrapping our custom classifier in `SharedRetryClassifier`.
+    // Ultimately, this is a push on to a `Vec<SharedRetryClassifier>`, and is thus additive
+    // to the existing default retry configuration.
+    // https://github.com/smithy-lang/smithy-rs/blob/cfcc39cf4b5bea665bba684b64bfca2b89e4bc73/rust-runtime/aws-smithy-runtime-api/src/client/runtime_components.rs#L755
+    // https://github.com/smithy-lang/smithy-rs/blob/cfcc39cf4b5bea665bba684b64bfca2b89e4bc73/rust-runtime/aws-smithy-runtime-api/src/client/runtime_components.rs#L370
+    s3_builder = s3_builder
+        .retry_classifier(HttpStatusCodeClassifier::new_from_codes(RETRY_CODES));
 
     if !extra_read_headers.is_empty() || !extra_write_headers.is_empty() {
         s3_builder = s3_builder.interceptor(ExtraHeadersInterceptor {
