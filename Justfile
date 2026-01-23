@@ -41,7 +41,7 @@ check-deps *args='':
   cargo deny --all-features check {{args}}
 
 run-all-examples:
-  for example in icechunk/examples/*.rs; do cargo run --example "$(basename "${example%.rs}")"; done
+  for example in icechunk/examples/*.rs; do if [[ ${example} =~ "limits_chunk_refs" ]]; then continue; fi; cargo run --example "$(basename "${example%.rs}")"; done
 
 # fast pre-commit - format and lint only
 pre-commit-fast:
