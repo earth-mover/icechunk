@@ -31,7 +31,7 @@ pub struct ArrayData {
 
 type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, Serialize, Deserialize)]
 pub struct EditChanges {
     new_groups: HashMap<Path, (NodeId, Bytes)>,
     new_arrays: HashMap<Path, (NodeId, ArrayData)>,
@@ -53,6 +53,21 @@ pub struct EditChanges {
     deleted_chunks_outside_bounds: BTreeMap<NodeId, HashSet<ChunkIndices>>,
     deleted_groups: HashSet<(Path, NodeId)>,
     deleted_arrays: HashSet<(Path, NodeId)>,
+}
+
+impl PartialEq for EditChanges {
+    fn eq(&self, other: &Self) -> bool {
+        // Ignore num_chunks and excessive_num_chunks_warned
+        // for equality purposes
+        self.new_groups.eq(&other.new_groups)
+            && self.new_arrays.eq(&other.new_arrays)
+            && self.updated_arrays.eq(&other.updated_arrays)
+            && self.updated_groups.eq(&other.updated_groups)
+            && self.set_chunks.eq(&other.set_chunks)
+            && self.deleted_chunks_outside_bounds.eq(&other.deleted_chunks_outside_bounds)
+            && self.deleted_groups.eq(&other.deleted_groups)
+            && self.deleted_arrays.eq(&other.deleted_arrays)
+    }
 }
 
 impl EditChanges {
