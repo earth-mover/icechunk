@@ -19,8 +19,12 @@ use crate::{
     session::{SessionErrorKind, SessionResult, find_coord},
 };
 
-// Constant derived from docs in https://icechunk.io/en/stable/performance/#splitting-manifests
-const NUM_CHUNKS_LIMIT: u64 = 1_000_000;
+// We have limitations on how many chunks we can save on a single commit.
+// Mostly due to flatbuffers not supporting 64-bit offsets,
+// but also because we can't do transaction log splitting (like we can with manifests).
+// For now we suggest smaller commits as a solution.
+// See discussion in https://github.com/earth-mover/icechunk/issues/1558 for more details
+const NUM_CHUNKS_LIMIT: u64 = 50_000_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArrayData {
@@ -481,7 +485,7 @@ impl ChangeSet {
 
         if edits.num_chunks > NUM_CHUNKS_LIMIT && !edits.excessive_num_chunks_warned {
             warn!(
-                "There are more than {NUM_CHUNKS_LIMIT} chunk references being loaded into this commit. This is close to the maximum number of chunk modifications Icechunk supports in a single commit, we recommend to split into smaller commits and/or setting up manifest splitting for this array. More info at https://icechunk.io/en/stable/performance/#splitting-manifests",
+                "There are more than {NUM_CHUNKS_LIMIT} chunk references being loaded into this commit. This is close to the maximum number of chunk modifications Icechunk supports in a single commit, we recommend to split into smaller commits."
             );
 
             edits.excessive_num_chunks_warned = true;
