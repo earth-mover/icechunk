@@ -483,7 +483,7 @@ impl ChangeSet {
 
         if edits.num_chunks > NUM_CHUNKS_LIMIT && !edits.excessive_num_chunks_warned {
             warn!(
-                "There are more than {NUM_CHUNKS_LIMIT} chunk references being loaded into this commit. This will generate large manifests and impact performance, consider setting up manifest splitting for this array. More info at https://icechunk.io/en/stable/performance/#splitting-manifests ",
+                "There are more than {NUM_CHUNKS_LIMIT} chunk references being loaded into this commit. This is close to the maximum number of chunk modifications Icechunk supports in a single commit, we recommend to split into smaller commits and/or setting up manifest splitting for this array. More info at https://icechunk.io/en/stable/performance/#splitting-manifests",
             );
 
             edits.excessive_num_chunks_warned = true;
