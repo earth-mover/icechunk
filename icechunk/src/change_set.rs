@@ -6,6 +6,7 @@ use std::{
 use bytes::Bytes;
 use itertools::{Either, Itertools as _};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::{
     format::{
@@ -15,6 +16,13 @@ use crate::{
     },
     session::{SessionResult, find_coord},
 };
+
+// We have limitations on how many chunks we can save on a single commit.
+// Mostly due to flatbuffers not supporting 64-bit offsets,
+// but also because we can't do transaction log splitting (like we can with manifests).
+// For now we suggest smaller commits as a solution.
+// See discussion in https://github.com/earth-mover/icechunk/issues/1558 for more details
+const NUM_CHUNKS_LIMIT: u64 = 50_000_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArrayData {
@@ -31,6 +39,13 @@ pub struct ChangeSet {
     updated_arrays: HashMap<NodeId, ArrayData>,
     updated_groups: HashMap<NodeId, Bytes>,
     set_chunks: BTreeMap<NodeId, HashMap<ManifestExtents, SplitManifest>>,
+
+    // Number of chunks added to this change set
+    num_chunks: u64,
+
+    // Did we already print a warning about too many chunks in this change set?
+    excessive_num_chunks_warned: bool,
+
     // This map keeps track of any chunk deletes that are
     // outside the domain of the current array shape. This is needed to handle
     // the very unlikely case of multiple resizes in the same session.
@@ -244,7 +259,8 @@ impl ChangeSet {
         let extent = splits.find(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
-        self.set_chunks
+        let old = self
+            .set_chunks
             .entry(node_id)
             .or_insert_with(|| {
                 HashMap::<
@@ -255,6 +271,18 @@ impl ChangeSet {
             .entry(extent.clone())
             .or_default()
             .insert(coord, data);
+
+        if old.is_none() {
+            self.num_chunks += 1;
+        }
+
+        if self.num_chunks > NUM_CHUNKS_LIMIT && !self.excessive_num_chunks_warned {
+            warn!(
+                "There are more than {NUM_CHUNKS_LIMIT} chunk references being loaded into this commit. This is close to the maximum number of chunk modifications Icechunk supports in a single commit, we recommend to split into smaller commits."
+            );
+
+            self.excessive_num_chunks_warned = true;
+        }
     }
 
     pub fn get_chunk_ref(
