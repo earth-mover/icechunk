@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
     iter,
-    sync::{LazyLock, atomic::AtomicBool},
+    sync::LazyLock,
 };
 
 use bytes::Bytes;
@@ -31,7 +31,7 @@ pub struct ArrayData {
 
 type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EditChanges {
     new_groups: HashMap<Path, (NodeId, Bytes)>,
     new_arrays: HashMap<Path, (NodeId, ArrayData)>,
@@ -40,11 +40,12 @@ pub struct EditChanges {
     set_chunks: BTreeMap<NodeId, HashMap<ManifestExtents, SplitManifest>>,
 
     // Number of chunks added to this change set
+    #[serde(skip)]
     num_chunks: u64,
 
     // Did we already print a warning about too many chunks in this change set?
     #[serde(skip)]
-    excessive_num_chunks_warned: AtomicBool,
+    excessive_num_chunks_warned: bool,
 
     // This map keeps track of any chunk deletes that are
     // outside the domain of the current array shape. This is needed to handle
@@ -53,42 +54,6 @@ pub struct EditChanges {
     deleted_groups: HashSet<(Path, NodeId)>,
     deleted_arrays: HashSet<(Path, NodeId)>,
 }
-
-impl Clone for EditChanges {
-    fn clone(&self) -> Self {
-        Self {
-            new_groups: self.new_groups.clone(),
-            new_arrays: self.new_arrays.clone(),
-            updated_arrays: self.updated_arrays.clone(),
-            updated_groups: self.updated_groups.clone(),
-            set_chunks: self.set_chunks.clone(),
-            num_chunks: self.num_chunks.clone(),
-            excessive_num_chunks_warned: AtomicBool::new(
-                self.excessive_num_chunks_warned
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            ),
-            deleted_chunks_outside_bounds: self.deleted_chunks_outside_bounds.clone(),
-            deleted_groups: self.deleted_groups.clone(),
-            deleted_arrays: self.deleted_arrays.clone(),
-        }
-    }
-}
-
-impl PartialEq for EditChanges {
-    fn eq(&self, other: &Self) -> bool {
-        self.new_groups.eq(&other.new_groups)
-            && self.new_arrays.eq(&other.new_arrays)
-            && self.updated_arrays.eq(&other.updated_arrays)
-            && self.updated_groups.eq(&other.updated_groups)
-            && self.set_chunks.eq(&other.set_chunks)
-            && self.num_chunks.eq(&other.num_chunks)
-            && self.deleted_chunks_outside_bounds.eq(&other.deleted_chunks_outside_bounds)
-            && self.deleted_groups.eq(&other.deleted_groups)
-            && self.deleted_arrays.eq(&other.deleted_arrays)
-    }
-}
-
-impl Eq for EditChanges {}
 
 impl EditChanges {
     fn is_empty(&self) -> bool {
@@ -516,18 +481,12 @@ impl ChangeSet {
             edits.num_chunks += 1;
         }
 
-        if edits.num_chunks > NUM_CHUNKS_LIMIT
-            && !edits
-                .excessive_num_chunks_warned
-                .load(std::sync::atomic::Ordering::Relaxed)
-        {
+        if edits.num_chunks > NUM_CHUNKS_LIMIT && !edits.excessive_num_chunks_warned {
             warn!(
                 "There are more than {NUM_CHUNKS_LIMIT} chunk references being loaded into this commit. This will generate large manifests and impact performance, consider setting up manifest splitting for this array. More info at https://icechunk.io/en/stable/performance/#splitting-manifests ",
             );
 
-            edits
-                .excessive_num_chunks_warned
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            edits.excessive_num_chunks_warned = true;
         }
 
         Ok(())
@@ -1056,7 +1015,7 @@ mod tests {
             deleted_groups in hash_set((path(), node_id()), 3..7),
             deleted_arrays in hash_set((path(), node_id()), 3..7)
         ) -> EditChanges {
-            EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups, new_arrays}
+            EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, num_chunks: 0, excessive_num_chunks_warned: false, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups, new_arrays}
         }
     }
 
