@@ -1,6 +1,5 @@
 import contextlib
 import warnings
-from datetime import datetime
 from collections.abc import AsyncIterator, Callable, Generator, Iterable, Sequence
 from typing import Any, NoReturn, Self
 
