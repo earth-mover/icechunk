@@ -495,6 +495,7 @@ impl PyStore {
     /// This method is significantly faster than set_virtual_refs for large
     /// numbers of references as it uses Arrow's zero-copy FFI to avoid
     /// creating Python objects per chunk.
+    #[pyo3(signature = (array_path, chunk_grid_shape, locations, offsets, lengths, arr_offset=None, checksum=None, validate_containers=true))]
     fn set_virtual_refs_arr(
         &self,
         py: Python<'_>,
@@ -503,6 +504,8 @@ impl PyStore {
         locations: PyArray,
         offsets: PyArray,
         lengths: PyArray,
+        arr_offset: Option<Vec<u32>>,
+        checksum: Option<ChecksumArgument>,
         validate_containers: bool,
     ) -> PyIcechunkStoreResult<Option<Vec<Py<PyTuple>>>> {
         let store = Arc::clone(&self.0);
@@ -535,6 +538,9 @@ impl PyStore {
                 .clone(),
         );
 
+        // Convert checksum argument to Checksum type
+        let checksum: Option<Checksum> = checksum.map(|c| c.into());
+
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let array_path = if !array_path.starts_with("/") {
@@ -554,6 +560,8 @@ impl PyStore {
                         &locations,
                         &offsets,
                         &lengths,
+                        checksum,
+                        arr_offset.as_deref(),
                         validate_containers,
                     )
                     .await
@@ -578,6 +586,7 @@ impl PyStore {
     /// This method is significantly faster than set_virtual_refs for large
     /// numbers of references as it uses Arrow's zero-copy FFI to avoid
     /// creating Python objects per chunk.
+    #[pyo3(signature = (array_path, chunk_grid_shape, locations, offsets, lengths, arr_offset=None, checksum=None, validate_containers=true))]
     fn set_virtual_refs_arr_async<'py>(
         &'py self,
         py: Python<'py>,
@@ -586,6 +595,8 @@ impl PyStore {
         locations: PyArray,
         offsets: PyArray,
         lengths: PyArray,
+        arr_offset: Option<Vec<u32>>,
+        checksum: Option<ChecksumArgument>,
         validate_containers: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.0);
@@ -618,6 +629,9 @@ impl PyStore {
                 .clone(),
         );
 
+        // Convert checksum argument to Checksum type
+        let checksum: Option<Checksum> = checksum.map(|c| c.into());
+
         pyo3_async_runtimes::tokio::future_into_py::<_, Option<Vec<Py<PyTuple>>>>(
             py,
             async move {
@@ -638,6 +652,8 @@ impl PyStore {
                         &locations,
                         &offsets,
                         &lengths,
+                        checksum,
+                        arr_offset.as_deref(),
                         validate_containers,
                     )
                     .await

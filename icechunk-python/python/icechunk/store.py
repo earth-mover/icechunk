@@ -362,6 +362,8 @@ class IcechunkStore(Store, SyncMixin):
         offsets: "pa.UInt64Array",
         lengths: "pa.UInt64Array",
         *,
+        arr_offset: tuple[int, ...] | None = None,
+        checksum: datetime | str | None = None,
         validate_containers: bool = True,
     ) -> list[tuple[int, ...]] | None:
         """Store multiple virtual references using Arrow arrays.
@@ -384,6 +386,13 @@ class IcechunkStore(Store, SyncMixin):
             PyArrow UInt64Array of byte offsets within each file
         lengths : pa.UInt64Array
             PyArrow UInt64Array of byte lengths of each chunk
+        arr_offset : tuple[int, ...] | None
+            Optional offset to add to computed chunk indices. Useful for append
+            operations where new chunks should be written at an offset from (0,0,...).
+            Must have the same length as chunk_grid_shape. Default is None.
+        checksum : datetime | str | None
+            Optional checksum for all chunks. Can be a datetime (last modified time)
+            or a string (ETag). Default is None.
         validate_containers : bool
             If True, validate that locations match registered virtual chunk containers.
             Default is True.
@@ -420,6 +429,8 @@ class IcechunkStore(Store, SyncMixin):
             locations,
             offsets,
             lengths,
+            list(arr_offset) if arr_offset is not None else None,
+            checksum,
             validate_containers,
         )
 
@@ -431,6 +442,8 @@ class IcechunkStore(Store, SyncMixin):
         offsets: "pa.UInt64Array",
         lengths: "pa.UInt64Array",
         *,
+        arr_offset: tuple[int, ...] | None = None,
+        checksum: datetime | str | None = None,
         validate_containers: bool = True,
     ) -> list[tuple[int, ...]] | None:
         """Store multiple virtual references using Arrow arrays (async version).
@@ -453,6 +466,13 @@ class IcechunkStore(Store, SyncMixin):
             PyArrow UInt64Array of byte offsets within each file
         lengths : pa.UInt64Array
             PyArrow UInt64Array of byte lengths of each chunk
+        arr_offset : tuple[int, ...] | None
+            Optional offset to add to computed chunk indices. Useful for append
+            operations where new chunks should be written at an offset from (0,0,...).
+            Must have the same length as chunk_grid_shape. Default is None.
+        checksum : datetime | str | None
+            Optional checksum for all chunks. Can be a datetime (last modified time)
+            or a string (ETag). Default is None.
         validate_containers : bool
             If True, validate that locations match registered virtual chunk containers.
             Default is True.
@@ -489,6 +509,8 @@ class IcechunkStore(Store, SyncMixin):
             locations,
             offsets,
             lengths,
+            list(arr_offset) if arr_offset is not None else None,
+            checksum,
             validate_containers,
         )
 

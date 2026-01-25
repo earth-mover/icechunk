@@ -2001,7 +2001,9 @@ class PyStore:
         locations: pa.StringArray,
         offsets: pa.UInt64Array,
         lengths: pa.UInt64Array,
-        validate_containers: bool,
+        arr_offset: tuple[int, ...] | None = None,
+        checksum: datetime.datetime | str | None = None,
+        validate_containers: bool = True,
     ) -> list[tuple[int, ...]] | None: ...
     async def set_virtual_refs_arr_async(
         self,
@@ -2010,7 +2012,9 @@ class PyStore:
         locations: pa.StringArray,
         offsets: pa.UInt64Array,
         lengths: pa.UInt64Array,
-        validate_containers: bool,
+        arr_offset: tuple[int, ...] | None = None,
+        checksum: datetime.datetime | str | None = None,
+        validate_containers: bool = True,
     ) -> list[tuple[int, ...]] | None: ...
     async def delete(self, key: str) -> None: ...
     async def delete_dir(self, prefix: str) -> None: ...
