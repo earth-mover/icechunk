@@ -1994,6 +1994,15 @@ class PyStore:
         chunks: list[VirtualChunkSpec],
         validate_containers: bool,
     ) -> list[tuple[int, ...]] | None: ...
+    def set_virtual_refs_arr(
+        self,
+        array_path: str,
+        chunk_grid_shape: list[int],
+        locations: pa.StringArray,
+        offsets: pa.UInt64Array,
+        lengths: pa.UInt64Array,
+        validate_containers: bool,
+    ) -> list[tuple[int, ...]] | None: ...
     async def set_virtual_refs_arr_async(
         self,
         array_path: str,
