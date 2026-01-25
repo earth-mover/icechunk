@@ -1080,3 +1080,77 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
 
     Ok(())
 }
+
+#[cfg(feature = "arrow")]
+#[tokio_test]
+async fn test_set_virtual_refs_from_arrow() -> Result<(), Box<dyn std::error::Error>> {
+    use arrow_array::{StringArray, UInt64Array};
+
+    let chunk_dir = TempDir::new()?;
+    let chunk_1 = chunk_dir.path().join("chunk-1").to_str().unwrap().to_owned();
+    let chunk_2 = chunk_dir.path().join("chunk-2").to_str().unwrap().to_owned();
+    let chunk_3 = chunk_dir.path().join("chunk-3").to_str().unwrap().to_owned();
+    let chunk_4 = chunk_dir.path().join("chunk-4").to_str().unwrap().to_owned();
+
+    let bytes1 = Bytes::copy_from_slice(b"first");
+    let bytes2 = Bytes::copy_from_slice(b"second");
+    let bytes3 = Bytes::copy_from_slice(b"third!");
+    let bytes4 = Bytes::copy_from_slice(b"fourth");
+    let chunks = [
+        (chunk_1.clone(), bytes1.clone()),
+        (chunk_2.clone(), bytes2.clone()),
+        (chunk_3.clone(), bytes3.clone()),
+        (chunk_4.clone(), bytes4.clone()),
+    ];
+    write_chunks_to_local_fs(chunks.iter().cloned()).await;
+
+    let repo_dir = TempDir::new()?;
+    let repo = create_local_repository(repo_dir.path(), Some(chunk_dir.path())).await;
+    let session = repo.writable_session("main").await.unwrap();
+    let store = Store::from_session(Arc::new(RwLock::new(session))).await;
+
+    // Set up array metadata
+    store
+        .set(
+            "zarr.json",
+            Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+        )
+        .await?;
+    let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{},"shape":[2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}],"storage_transformers":[],"dimension_names":["x","y"]}"#);
+    store.set("array/zarr.json", zarr_meta).await?;
+
+    // Create Arrow arrays for 4 chunks in a 2x2 grid (C-order: [0,0], [0,1], [1,0], [1,1])
+    let locations = StringArray::from(vec![
+        format!("file://{}", chunk_1),
+        format!("file://{}", chunk_2),
+        format!("file://{}", chunk_3),
+        format!("file://{}", chunk_4),
+    ]);
+    let offsets = UInt64Array::from(vec![0, 0, 0, 0]);
+    let lengths = UInt64Array::from(vec![5, 6, 6, 6]);
+
+    // Call set_virtual_refs_from_arrow
+    let array_path: Path = "/array".try_into().unwrap();
+    let chunk_grid_shape = vec![2u32, 2u32];
+    let result = store
+        .set_virtual_refs_from_arrow(
+            &array_path,
+            &chunk_grid_shape,
+            &locations,
+            &offsets,
+            &lengths,
+            false, // don't validate containers
+        )
+        .await?;
+
+    // Check result is success
+    assert!(matches!(result, icechunk::store::SetVirtualRefsResult::Done));
+
+    // Verify we can read the chunks back
+    assert_eq!(store.get("array/c/0/0", &ByteRange::ALL).await?, bytes1);
+    assert_eq!(store.get("array/c/0/1", &ByteRange::ALL).await?, bytes2);
+    assert_eq!(store.get("array/c/1/0", &ByteRange::ALL).await?, bytes3);
+    assert_eq!(store.get("array/c/1/1", &ByteRange::ALL).await?, bytes4);
+
+    Ok(())
+}
