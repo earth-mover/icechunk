@@ -1,5 +1,6 @@
 use std::{borrow::Cow, sync::Arc};
 
+use arrow_array::{Array, StringArray, UInt64Array};
 use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
@@ -11,6 +12,7 @@ use icechunk::{
     storage::ETag,
     store::{SetVirtualRefsResult, StoreError, StoreErrorKind},
 };
+use pyo3_arrow::PyArray;
 use itertools::Itertools as _;
 use pyo3::{
     conversion::IntoPyObjectExt,
@@ -481,6 +483,93 @@ impl PyStore {
                             .map(|ci| PyTuple::new(py, ci.0).map(|tup| tup.unbind()))
                             .try_collect()?;
 
+                        Ok(Some(res))
+                    }),
+                }
+            },
+        )
+    }
+
+    /// Set virtual references using Arrow arrays (async version).
+    ///
+    /// This method is significantly faster than set_virtual_refs for large
+    /// numbers of references as it uses Arrow's zero-copy FFI to avoid
+    /// creating Python objects per chunk.
+    fn set_virtual_refs_arr_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        array_path: String,
+        chunk_grid_shape: Vec<u32>,
+        locations: PyArray,
+        offsets: PyArray,
+        lengths: PyArray,
+        validate_containers: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = Arc::clone(&self.0);
+
+        // Extract Arrow arrays from PyArrow via FFI (zero-copy)
+        // PyArray::into_inner() returns (Arc<dyn Array>, Arc<Field>), we only need the array
+        let (locations_arr, _) = locations.into_inner();
+        let (offsets_arr, _) = offsets.into_inner();
+        let (lengths_arr, _) = lengths.into_inner();
+
+        // Downcast to concrete types
+        let locations: Arc<StringArray> = Arc::new(
+            locations_arr
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| {
+                    PyValueError::new_err("locations must be a StringArray")
+                })?
+                .clone(),
+        );
+        let offsets: Arc<UInt64Array> = Arc::new(
+            offsets_arr
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| PyValueError::new_err("offsets must be a UInt64Array"))?
+                .clone(),
+        );
+        let lengths: Arc<UInt64Array> = Arc::new(
+            lengths_arr
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| PyValueError::new_err("lengths must be a UInt64Array"))?
+                .clone(),
+        );
+
+        pyo3_async_runtimes::tokio::future_into_py::<_, Option<Vec<Py<PyTuple>>>>(
+            py,
+            async move {
+                let array_path = if !array_path.starts_with("/") {
+                    format!("/{array_path}")
+                } else {
+                    array_path
+                };
+
+                let path = Path::try_from(array_path).map_err(|e| {
+                    PyValueError::new_err(format!("Invalid array path: {e}"))
+                })?;
+
+                let res = store
+                    .set_virtual_refs_from_arrow(
+                        &path,
+                        &chunk_grid_shape,
+                        &locations,
+                        &offsets,
+                        &lengths,
+                        validate_containers,
+                    )
+                    .await
+                    .map_err(PyIcechunkStoreError::from)?;
+
+                match res {
+                    SetVirtualRefsResult::Done => Ok(None),
+                    SetVirtualRefsResult::FailedRefs(vec) => Python::attach(|py| {
+                        let res = vec
+                            .into_iter()
+                            .map(|ci| PyTuple::new(py, ci.0).map(|tup| tup.unbind()))
+                            .try_collect()?;
                         Ok(Some(res))
                     }),
                 }
