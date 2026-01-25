@@ -926,6 +926,7 @@ impl Store {
 /// If `offset` is provided, it is added element-wise to the computed indices.
 #[cfg(feature = "arrow")]
 fn flat_to_nd_indices(flat: usize, shape: &[u32], offset: Option<&[u32]>) -> Vec<u32> {
+    // TODO: check that this vibe-coded function makes any sense at all...
     let total: usize = shape.iter().map(|&d| d as usize).product();
     shape
         .iter()
