@@ -1,4 +1,4 @@
-//! HTTP redirect-based storage for read-only access via signed URLs.
+//! Read-only storage that follows HTTP redirects to the underlying backend.
 
 use std::{ops::Range, pin::Pin, sync::Arc};
 

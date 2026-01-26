@@ -1,4 +1,4 @@
-//! Basic conflict resolution strategy that detects but does not auto-resolve.
+//! Configurable conflict resolution with policies for common conflict types.
 
 use async_trait::async_trait;
 

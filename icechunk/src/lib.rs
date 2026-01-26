@@ -19,18 +19,17 @@
 //!
 //! # Key types
 //!
-//! - [`Repository`] - Entry point for version control (branches, tags, sessions)
+//! - [`Repository`] - Handle to a versioned data store
 //! - [`session::Session`] - Transaction context for reading/writing data
 //! - [`Store`] - Zarr-compatible key-value interface backed by a Session
 //!
 //! # Architecture
 //!
 //! ```text
-//! Repository (version control)
-//!     └── Session (transaction context)
-//!             ├── ChangeSet (uncommitted modifications)
-//!             └── AssetManager (typed I/O with caching)
-//!                     └── Storage (S3, GCS, Azure, local, etc.)
+//! Repository ─creates─► Session
+//!                           ├── ChangeSet (uncommitted modifications)
+//!                           └── AssetManager (typed I/O with caching)
+//!                                   └── Storage (S3, GCS, Azure, local, etc.)
 //! ```
 //!
 pub mod asset_manager;

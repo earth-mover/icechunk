@@ -4,7 +4,7 @@
 //! and handles committing them.
 //!
 //! Sessions come in three modes:
-//! - **Read-only**: Can read data, no ChangeSet
+//! - **Read-only**: Can read data, ChangeSet is unused
 //! - **Writable**: Can read and write chunks/metadata
 //! - **Rearrange**: Can move/rename nodes (no chunk writes)
 
@@ -246,7 +246,7 @@ pub type ReindexOperationResult = Result<Option<ChunkIndices>, SessionError>;
 /// and handle committing them.
 ///
 /// Three modes:
-/// - **Read-only**: Can read data, no ChangeSet
+/// - **Read-only**: Can read data, ChangeSet is unused
 /// - **Writable**: Can read and write chunks/metadata
 /// - **Rearrange**: Can move/rename nodes (no chunk writes)
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -1,11 +1,11 @@
 //! The entry point for Icechunk operations.
 //!
-//! A [`Repository`] manages version control (branches, tags) and creates [`Session`]s
-//! for reading and writing data. It holds shared resources like the [`AssetManager`]
-//! cache and storage configuration.
+//! A [`Repository`] is a handle to a versioned data store. It holds shared resources
+//! (storage, configuration) and provides methods to create [`Session`]s and
+//! manage branches, tags, and snapshot history.
 //!
 //! Key types:
-//! - [`Repository`] - Main handle for a versioned data store
+//! - [`Repository`] - Handle to a versioned data store
 //! - [`VersionInfo`] - Specifies which version to access (snapshot ID, branch, tag, or timestamp)
 
 use async_stream::try_stream;
@@ -181,9 +181,9 @@ impl From<IcechunkFormatError> for RepositoryError {
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
-/// Entry point for Icechunk version control.
+/// Handle to a versioned Icechunk data store.
 ///
-/// Manages branches, tags, and creates [`Session`]s for reading/writing data.
+/// Provides methods to create [`Session`]s and manage branches, tags, and history.
 ///
 /// [`Session`]: crate::session::Session
 #[derive(Debug, Serialize, Deserialize)]
