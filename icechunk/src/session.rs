@@ -1803,64 +1803,23 @@ pub async fn get_chunk(
     }
 }
 
-/// Yields nodes in the base snapshot, applying any relevant updates in the changeset
 async fn updated_existing_nodes<'a>(
     parent_group: &Path,
     asset_manager: &AssetManager,
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
 ) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + use<'a>> {
-    let snapshot = asset_manager.fetch_snapshot(parent_id).await?;
-
-    // Clone parent_group so we can move it into closures
-    let parent_group_owned = parent_group.clone();
-    let parent_group_owned2 = parent_group.clone();
-
-    // Part 1: Nodes that are already children of this parent in the snapshot
-    let updated_nodes = snapshot
-        .clone()
+    let updated_nodes = asset_manager
+        .fetch_snapshot(parent_id)
+        .await?
         .iter_arc(parent_group)
         .filter_map_ok(move |node| change_set.update_existing_node(node))
-        .filter(move |result| {
-            // After applying moves, filter out nodes that no longer belong to this parent
-            match result {
-                Ok(node) => {
-                    // Check if this node is a direct child of parent_group
-                    node.path
-                        .ancestors()
-                        .nth(1)
-                        .map(|p| p == parent_group_owned)
-                        .unwrap_or(false)
-                }
-                Err(_) => true, // Keep errors in the stream
-            }
-        })
         .map(|n| match n {
             Ok(n) => Ok(n),
             Err(err) => Err(SessionError::from(err)),
         });
 
-    // Part 2: Nodes that have been moved INTO this parent from elsewhere
-    let moved_in_nodes = change_set
-        .moves()
-        .filter(move |m| {
-            // Check if the destination is a direct child of parent_group
-            m.to.ancestors().nth(1).map(|p| p == parent_group_owned2).unwrap_or(false)
-        })
-        .map(move |m| {
-            // Fetch the node from its original location in the snapshot
-            match snapshot.get_node(&m.from) {
-                Ok(node) => {
-                    // Update the node's path to the new location
-                    let mut moved_node = node.clone();
-                    moved_node.path = m.to.clone();
-                    Ok(moved_node)
-                }
-                Err(e) => Err(SessionError::from(e)),
-            }
-        });
-
-    Ok(updated_nodes.chain(moved_in_nodes))
+    Ok(updated_nodes)
 }
 
 /// Yields nodes with the snapshot, applying any relevant updates in the changeset,
