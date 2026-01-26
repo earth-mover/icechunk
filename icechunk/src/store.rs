@@ -206,7 +206,7 @@ impl Store {
     /// Returns a vector of the results, in the same order as the keys passed. Errors retrieving
     /// individual keys will be flagged in the inner [`StoreResult`].
     ///
-    /// The outer [`StoreResult`] is used to flag a global failure and it could be [`StoreError::PartialValuesPanic`].
+    /// The outer [`StoreResult`] is used to flag a global failure and it could be [`StoreErrorKind::PartialValuesPanic`].
     ///
     /// Currently this function is using concurrency but not parallelism. To limit the number of
     /// concurrent tasks use the Store config value `get_partial_values_concurrency`.

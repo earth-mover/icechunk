@@ -36,14 +36,14 @@ pub enum ExpireRefResult {
 /// For this reasons, it's recommended to invalidate any snapshot
 /// caches before traversing history againg. The cache in the
 /// passed `asset_manager` is invalidated here, but other caches
-/// may exist, for example, in [`Repository`] instances.
+/// may exist, for example, in [`crate::Repository`] instances.
 ///
 /// Returns the ids of all snapshots considered expired and skipped
 /// from history. Notice that this snapshot are not necessarily
 /// available for garbage collection, they could still be pointed by
 /// ether refs.
 ///
-/// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
+/// See: <https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md>
 #[instrument(skip(asset_manager))]
 pub async fn expire_ref(
     asset_manager: Arc<AssetManager>,
@@ -152,13 +152,13 @@ pub async fn expire_ref(
 /// For this reasons, it's recommended to invalidate any snapshot
 /// caches before traversing history againg. The cache in the
 /// passed `asset_manager` is invalidated here, but other caches
-/// may exist, for example, in [`Repository`] instances.
+/// may exist, for example, in [`crate::Repository`] instances.
 ///
 /// Notice that the snapshot returned as released, are not necessarily
 /// available for garbage collection, they could still be pointed by
 /// ether refs.
 ///
-/// See: https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md
+/// See: <https://github.com/earth-mover/icechunk/blob/main/design-docs/007-basic-expiration.md>
 #[instrument(skip(asset_manager))]
 pub async fn expire(
     asset_manager: Arc<AssetManager>,

@@ -827,7 +827,7 @@ impl Session {
     ///
     /// This function doesn't return [`Bytes`] directly to avoid locking the ref to self longer
     /// than needed. We want the bytes to be pulled from object store without holding a ref to the
-    /// [`Repository`], that way, writes can happen concurrently.
+    /// [`crate::Repository`], that way, writes can happen concurrently.
     ///
     /// The result of calling this function is None, if the chunk reference is not present in the
     /// repository, or a [`Future`] that will fetch the bytes, possibly failing.
@@ -910,7 +910,7 @@ impl Session {
     /// The reason to use this design, instead of simple pass the [`Bytes`] is to avoid holding a
     /// reference to the repository while the payload is uploaded to object store. This way, the
     /// reference is hold very briefly, and then an owned object is obtained which can do the actual
-    /// upload without holding any [`Repository`] references.
+    /// upload without holding any [`crate::Repository`] references.
     ///
     /// Example usage:
     /// ```ignore
@@ -1352,13 +1352,13 @@ impl Session {
     /// Detect and optionally fix conflicts between the current [`ChangeSet`] (or session) and
     /// the tip of the branch.
     ///
-    /// When [`Repository::commit`] method is called, the system validates that the tip of the
+    /// When [`Session::commit`] method is called, the system validates that the tip of the
     /// passed branch is exactly the same as the `snapshot_id` for the current session. If that
-    /// is not the case, the commit operation fails with [`SessionError::Conflict`].
+    /// is not the case, the commit operation fails with `SessionErrorKind::Conflict`.
     ///
     /// In that situation, the user has two options:
     /// 1. Abort the session and start a new one with using the new branch tip as a parent.
-    /// 2. Use [`Repository::rebase`] to try to "fast-forward" the session through the new
+    /// 2. Use [`Session::rebase`] to try to "fast-forward" the session through the new
     ///    commits.
     ///
     /// The issue with option 1 is that all the writes that have been done in the session,
@@ -1373,7 +1373,7 @@ impl Session {
     /// and a new commit both wrote to the same chunk, or both updated user attributes for
     /// the same group.
     ///
-    /// This is what [`Repository::rebase`] helps with. It can detect conflicts to let
+    /// This is what [`Session::rebase`] helps with. It can detect conflicts to let
     /// the user fix them manually, or it can attempt to fix conflicts based on a policy.
     ///
     /// Example:
@@ -1410,7 +1410,7 @@ impl Session {
     /// When there are more than one commit between the parent snapshot and the tip of
     /// the branch, `rebase` iterates over all of them, older first, trying to fast-forward.
     /// If at some point it finds a conflict it cannot recover from, `rebase` leaves the
-    /// `Repository` in a consistent state, that would successfully commit on top
+    /// `Session` in a consistent state, that would successfully commit on top
     /// of the latest successfully fast-forwarded commit.
     #[instrument(skip(self, solver))]
     pub async fn rebase(
@@ -1791,17 +1791,52 @@ async fn updated_existing_nodes<'a>(
     change_set: &'a ChangeSet,
     parent_id: &SnapshotId,
 ) -> SessionResult<impl Iterator<Item = SessionResult<NodeSnapshot>> + use<'a>> {
-    let updated_nodes = asset_manager
-        .fetch_snapshot(parent_id)
-        .await?
+    let snapshot = asset_manager.fetch_snapshot(parent_id).await?;
+
+    // Clone parent_group so we can move it into closures
+    let parent_group_owned = parent_group.clone();
+    let parent_group_owned2 = parent_group.clone();
+
+    // Part 1: Nodes that are already children of this parent in the snapshot
+    let updated_nodes = snapshot
+        .clone()
         .iter_arc(parent_group)
         .filter_map_ok(move |node| change_set.update_existing_node(node))
+        .filter(move |result| {
+            // After applying moves, filter out nodes that no longer belong to this parent
+            match result {
+                Ok(node) => {
+                    // Check if this node is a direct child of parent_group
+                    node.path.ancestors().nth(1).map(|p| &p == &parent_group_owned).unwrap_or(false)
+                },
+                Err(_) => true, // Keep errors in the stream
+            }
+        })
         .map(|n| match n {
             Ok(n) => Ok(n),
             Err(err) => Err(SessionError::from(err)),
         });
 
-    Ok(updated_nodes)
+    // Part 2: Nodes that have been moved INTO this parent from elsewhere
+    let moved_in_nodes = change_set.moves()
+        .filter(move |m| {
+            // Check if the destination is a direct child of parent_group
+            m.to.ancestors().nth(1).map(|p| &p == &parent_group_owned2).unwrap_or(false)
+        })
+        .filter_map(move |m| {
+            // Fetch the node from its original location in the snapshot
+            match snapshot.get_node(&m.from) {
+                Ok(node) => {
+                    // Update the node's path to the new location
+                    let mut moved_node = node.clone();
+                    moved_node.path = m.to.clone();
+                    Some(Ok(moved_node))
+                },
+                Err(e) => Some(Err(SessionError::from(e))),
+            }
+        });
+
+    Ok(updated_nodes.chain(moved_in_nodes))
 }
 
 /// Yields nodes with the snapshot, applying any relevant updates in the changeset,
