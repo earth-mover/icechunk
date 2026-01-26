@@ -1,10 +1,8 @@
 //! Tracks uncommitted modifications during a session.
 //!
-//! [`ChangeSet`] is an enum with two variants for the two writable session modes:
-//! - [`ChangeSet::Edit`] - Tracks new/updated/deleted arrays, groups, and chunks
-//! - [`ChangeSet::Rearrange`] - Tracks move/rename operations
-//!
-//! [`ArrayData`] holds array metadata (shape, dimension names, user attributes).
+//! Key types:
+//! - [`ChangeSet`] - Enum with variants for the two writable session modes
+//! - [`ArrayData`] - Array metadata (shape, dimension names, user attributes)
 
 use std::{
     borrow::Cow,
