@@ -1,5 +1,16 @@
 # Changelog
 
+## Python Icechunk Library 1.1.17
+
+### Features
+
+- Add warning for large number of chunks in a single commit.
+
+### Fixes
+
+- Retry on HTTP Status 408.
+- Update S3 SDK dependency to avoid a CVE in one of their dependencies.
+
 ## Python Icechunk Library 1.1.16
 
 ### Features

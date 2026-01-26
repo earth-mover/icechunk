@@ -1736,7 +1736,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "anyhow",
  "assert_fs",
@@ -1746,6 +1746,7 @@ dependencies = [
  "aws-config",
  "aws-credential-types",
  "aws-sdk-s3",
+ "aws-smithy-runtime",
  "aws-smithy-types-convert",
  "base32",
  "base64",
@@ -1799,7 +1800,7 @@ dependencies = [
 
 [[package]]
 name = "icechunk-python"
-version = "1.1.16"
+version = "1.1.17"
 dependencies = [
  "async-stream",
  "async-trait",

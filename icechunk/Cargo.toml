@@ -1,6 +1,6 @@
 [package]
 name = "icechunk"
-version = "0.3.19"
+version = "0.3.20"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -44,6 +44,7 @@ aws-sdk-s3 = "1.120.0"
 aws-config = "1.8.12"
 aws-credential-types = "1.2.11"
 typed-path = "0.12.0"
+aws-smithy-runtime = "1.8.5"
 aws-smithy-types-convert = { version = "0.60.11", features = [
   "convert-chrono",
   "convert-streams",
