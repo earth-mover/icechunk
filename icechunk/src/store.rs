@@ -503,8 +503,9 @@ impl Store {
             }
         }
 
-        // Build refs by iterating Arrow arrays
+        // Build refs by iterating Arrow arrays, skipping empty paths
         let refs_iter: Vec<(ChunkIndices, VirtualChunkRef)> = (0..n_chunks)
+            .filter(|&i| !locations.value(i).is_empty())
             .map(|i| {
                 let indices = flat_to_nd_indices(i, chunk_grid_shape, arr_offset);
                 let location = VirtualChunkLocation::from_absolute_path(locations.value(i))
@@ -2529,5 +2530,71 @@ mod tests {
             zarr_json,
             Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group"}"#)
         );
+    }
+
+    #[cfg(feature = "arrow")]
+    #[tokio::test]
+    async fn test_set_virtual_refs_from_arrow_skips_empty_paths() {
+        use arrow_array::{StringArray, UInt64Array};
+
+        let repo = create_memory_store_repository().await;
+        let session = Arc::new(RwLock::new(repo.writable_session("main").await.unwrap()));
+        let store = Store::from_session(Arc::clone(&session)).await;
+
+        // Create a group and array
+        store
+            .set(
+                "zarr.json",
+                Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group"}"#),
+            )
+            .await
+            .unwrap();
+
+        store
+            .set(
+                "array/zarr.json",
+                Bytes::copy_from_slice(
+                    br#"{"zarr_format":3,"node_type":"array","shape":[3],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}]}"#,
+                ),
+            )
+            .await
+            .unwrap();
+
+        // Create Arrow arrays with one empty path (should be skipped)
+        let locations = StringArray::from(vec!["s3://bucket/file1.dat", "", "s3://bucket/file3.dat"]);
+        let offsets = UInt64Array::from(vec![0, 100, 200]);
+        let lengths = UInt64Array::from(vec![50, 50, 50]);
+
+        let result = store
+            .set_virtual_refs_from_arrow(
+                &"/array".try_into().unwrap(),
+                &[3],
+                &locations,
+                &offsets,
+                &lengths,
+                None,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+
+        // Should succeed - empty path at index 1 should be skipped
+        assert!(matches!(result, SetVirtualRefsResult::Done));
+
+        // Verify only 2 chunks were written (indices 0 and 2, not 1)
+        let keys: Vec<String> = store
+            .list_prefix("array")
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        // Should have zarr.json + 2 chunks (c/0 and c/2)
+        assert_eq!(keys.len(), 3);
+        assert!(keys.contains(&"array/zarr.json".to_string()));
+        assert!(keys.contains(&"array/c/0".to_string()));
+        assert!(keys.contains(&"array/c/2".to_string()));
+        assert!(!keys.contains(&"array/c/1".to_string()));
     }
 }

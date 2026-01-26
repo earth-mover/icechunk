@@ -1139,6 +1139,8 @@ async fn test_set_virtual_refs_from_arrow() -> Result<(), Box<dyn std::error::Er
             &locations,
             &offsets,
             &lengths,
+            None,  // checksum
+            None,  // arr_offset
             false, // don't validate containers
         )
         .await?;
