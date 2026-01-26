@@ -1821,6 +1821,7 @@ dependencies = [
  "clap",
  "dialoguer",
  "dirs",
+ "erased-serde",
  "err-into",
  "flatbuffers",
  "flexbuffers",
@@ -1854,7 +1855,6 @@ dependencies = [
  "tracing-error",
  "tracing-subscriber",
  "typed-path",
- "typetag",
  "url",
  "urlencoding",
  "warp",
@@ -1878,6 +1878,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "erased-serde",
  "futures",
  "icechunk",
  "itertools",
@@ -1887,12 +1888,12 @@ dependencies = [
  "pyo3-bytes",
  "rand",
  "rmp-serde",
+ "rmpv",
  "serde",
  "serde_json",
  "strsim",
  "thiserror",
  "tokio",
- "typetag",
 ]
 
 [[package]]
@@ -4002,30 +4003,6 @@ name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
-
-[[package]]
-name = "typetag"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be2212c8a9b9bcfca32024de14998494cf9a5dfa59ea1b829de98bac374b86bf"
-dependencies = [
- "erased-serde",
- "inventory",
- "once_cell",
- "serde",
- "typetag-impl",
-]
-
-[[package]]
-name = "typetag-impl"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27a7a9b72ba121f6f1f6c3632b85604cac41aedb5ddc70accbebb6cac83de846"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.113",
-]
 
 [[package]]
 name = "unarray"

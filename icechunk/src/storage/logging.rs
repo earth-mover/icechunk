@@ -19,6 +19,7 @@ use crate::private;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoggingStorage {
+    #[serde(with = "super::storage_serde")]
     backend: Arc<dyn Storage + Send + Sync>,
     fetch_log: Mutex<Vec<(String, String)>>,
 }
@@ -49,9 +50,16 @@ impl fmt::Display for LoggingStorage {
 impl private::Sealed for LoggingStorage {}
 
 #[async_trait]
-#[typetag::serde]
 #[allow(clippy::expect_used)] // this implementation is intended for tests only
 impl Storage for LoggingStorage {
+    fn type_tag(&self) -> &'static str {
+        "LoggingStorage"
+    }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
+
     async fn default_settings(&self) -> StorageResult<Settings> {
         self.backend.default_settings().await
     }

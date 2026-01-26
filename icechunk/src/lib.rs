@@ -28,6 +28,7 @@ pub mod inspect;
 pub mod migrations;
 pub mod ops;
 pub mod refs;
+pub mod registry;
 pub mod repository;
 pub mod session;
 pub mod storage;
@@ -38,11 +39,14 @@ mod stream_utils;
 pub mod virtual_chunks;
 
 pub use config::{ObjectStoreConfig, RepositoryConfig};
+pub use registry::{register_gcs_credentials_fetcher, register_s3_credentials_fetcher};
 pub use repository::Repository;
-pub use storage::{
-    ObjectStorage, Storage, StorageError, new_in_memory_storage,
-    new_local_filesystem_storage, new_s3_storage,
-};
+pub use storage::{ObjectStorage, Storage, StorageError};
+pub use storage::new_in_memory_storage;
+#[cfg(feature = "object-store-local")]
+pub use storage::new_local_filesystem_storage;
+#[cfg(feature = "s3")]
+pub use storage::new_s3_storage;
 pub use store::Store;
 
 mod private {

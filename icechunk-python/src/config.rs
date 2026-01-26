@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, TimeDelta, Timelike, Utc};
-use icechunk::storage::RetriesSettings;
+use icechunk::storage::{RetriesSettings, StorageError};
 use itertools::Itertools;
 use pyo3::exceptions::PyValueError;
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,7 @@ use icechunk::{
         ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
         S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
     },
+    register_gcs_credentials_fetcher, register_s3_credentials_fetcher,
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
 };
@@ -33,6 +34,45 @@ use pyo3::{
 };
 
 use crate::errors::PyIcechunkStoreError;
+
+/// Register the Python credential fetchers with icechunk.
+/// This must be called before any credential fetcher can be deserialized.
+pub fn register_python_credential_fetchers() {
+    register_s3_credentials_fetcher(
+        "PythonCredentialsFetcher<S3>",
+        deserialize_python_s3_credentials_fetcher,
+    );
+    register_gcs_credentials_fetcher(
+        "PythonCredentialsFetcher<GCS>",
+        deserialize_python_gcs_credentials_fetcher,
+    );
+}
+
+fn deserialize_python_s3_credentials_fetcher(
+    value: rmpv::Value,
+) -> Result<Arc<dyn S3CredentialsFetcher>, StorageError> {
+    let fetcher: PythonCredentialsFetcher<S3StaticCredentials> =
+        rmpv::ext::from_value(value).map_err(|e| {
+            icechunk::storage::StorageErrorKind::Other(format!(
+                "Failed to deserialize PythonCredentialsFetcher<S3>: {}",
+                e
+            ))
+        })?;
+    Ok(Arc::new(fetcher))
+}
+
+fn deserialize_python_gcs_credentials_fetcher(
+    value: rmpv::Value,
+) -> Result<Arc<dyn GcsCredentialsFetcher>, StorageError> {
+    let fetcher: PythonCredentialsFetcher<GcsBearerCredential> =
+        rmpv::ext::from_value(value).map_err(|e| {
+            icechunk::storage::StorageErrorKind::Other(format!(
+                "Failed to deserialize PythonCredentialsFetcher<GCS>: {}",
+                e
+            ))
+        })?;
+    Ok(Arc::new(fetcher))
+}
 
 #[pyclass(name = "S3StaticCredentials")]
 #[derive(Clone, Debug)]
@@ -172,8 +212,15 @@ where
 }
 
 #[async_trait]
-#[typetag::serde]
 impl S3CredentialsFetcher for PythonCredentialsFetcher<S3StaticCredentials> {
+    fn type_tag(&self) -> &'static str {
+        "PythonCredentialsFetcher<S3>"
+    }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
+
     async fn get(&self) -> Result<S3StaticCredentials, String> {
         if let Some(static_creds) = self.initial.as_ref() {
             match static_creds.expires_after {
@@ -199,8 +246,15 @@ impl S3CredentialsFetcher for PythonCredentialsFetcher<S3StaticCredentials> {
 }
 
 #[async_trait]
-#[typetag::serde]
 impl GcsCredentialsFetcher for PythonCredentialsFetcher<GcsBearerCredential> {
+    fn type_tag(&self) -> &'static str {
+        "PythonCredentialsFetcher<GCS>"
+    }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
+
     async fn get(&self) -> Result<GcsBearerCredential, String> {
         if let Some(static_creds) = self.initial.as_ref() {
             match static_creds.expires_after {

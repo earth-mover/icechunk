@@ -162,6 +162,9 @@ fn pep440_version() -> String {
 /// The icechunk Python module implemented in Rust.
 #[pymodule]
 fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Register Python credential fetchers with icechunk registry
+    config::register_python_credential_fetchers();
+
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<PyRepository>()?;
     m.add_class::<PyRepositoryConfig>()?;

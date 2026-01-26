@@ -13,7 +13,15 @@ pub use object_store::gcp::GcpCredential;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::{format::Path, storage, virtual_chunks::VirtualChunkContainer};
+use crate::{
+    format::Path,
+    registry::{
+        deserialize_gcs_credentials_fetcher, deserialize_s3_credentials_fetcher,
+        serialize_with_tag,
+    },
+    storage,
+    virtual_chunks::VirtualChunkContainer,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct S3Options {
@@ -549,9 +557,44 @@ pub struct S3StaticCredentials {
 }
 
 #[async_trait]
-#[typetag::serde(tag = "s3_credentials_fetcher_type")]
 pub trait S3CredentialsFetcher: fmt::Debug + Sync + Send {
+    /// Returns the type tag used for serialization/deserialization.
+    fn type_tag(&self) -> &'static str;
+
+    /// Serialize self for use with the registry pattern.
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize;
+
     async fn get(&self) -> Result<S3StaticCredentials, String>;
+}
+
+/// Serde helper module for Arc<dyn S3CredentialsFetcher>
+pub mod s3_credentials_fetcher_serde {
+    use super::*;
+
+    pub fn serialize<S>(
+        fetcher: &Arc<dyn S3CredentialsFetcher>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serialize_with_tag(
+            serializer,
+            "s3_credentials_fetcher_type",
+            fetcher.type_tag(),
+            fetcher.as_serialize(),
+        )
+    }
+
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<Arc<dyn S3CredentialsFetcher>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = rmpv::Value::deserialize(deserializer)?;
+        deserialize_s3_credentials_fetcher(value).map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
@@ -562,7 +605,7 @@ pub enum S3Credentials {
     FromEnv,
     Anonymous,
     Static(S3StaticCredentials),
-    Refreshable(Arc<dyn S3CredentialsFetcher>),
+    Refreshable(#[serde(with = "s3_credentials_fetcher_serde")] Arc<dyn S3CredentialsFetcher>),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -589,9 +632,44 @@ impl From<&GcsBearerCredential> for GcpCredential {
 }
 
 #[async_trait]
-#[typetag::serde(tag = "gcs_credentials_fetcher_type")]
 pub trait GcsCredentialsFetcher: fmt::Debug + Sync + Send {
+    /// Returns the type tag used for serialization/deserialization.
+    fn type_tag(&self) -> &'static str;
+
+    /// Serialize self for use with the registry pattern.
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize;
+
     async fn get(&self) -> Result<GcsBearerCredential, String>;
+}
+
+/// Serde helper module for Arc<dyn GcsCredentialsFetcher>
+pub mod gcs_credentials_fetcher_serde {
+    use super::*;
+
+    pub fn serialize<S>(
+        fetcher: &Arc<dyn GcsCredentialsFetcher>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serialize_with_tag(
+            serializer,
+            "gcs_credentials_fetcher_type",
+            fetcher.type_tag(),
+            fetcher.as_serialize(),
+        )
+    }
+
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<Arc<dyn GcsCredentialsFetcher>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = rmpv::Value::deserialize(deserializer)?;
+        deserialize_gcs_credentials_fetcher(value).map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
@@ -602,7 +680,7 @@ pub enum GcsCredentials {
     FromEnv,
     Anonymous,
     Static(GcsStaticCredentials),
-    Refreshable(Arc<dyn GcsCredentialsFetcher>),
+    Refreshable(#[serde(with = "gcs_credentials_fetcher_serde")] Arc<dyn GcsCredentialsFetcher>),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

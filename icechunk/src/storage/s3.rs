@@ -532,8 +532,15 @@ pub fn range_to_header(range: &Range<ChunkOffset>) -> String {
 impl private::Sealed for S3Storage {}
 
 #[async_trait]
-#[typetag::serde]
 impl Storage for S3Storage {
+    fn type_tag(&self) -> &'static str {
+        "S3Storage"
+    }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
+
     async fn can_write(&self) -> StorageResult<bool> {
         Ok(self.can_write)
     }
