@@ -1,4 +1,4 @@
-//! Icechunk: A transactional storage engine for Zarr.
+//! A transactional storage engine for Zarr.
 //!
 //! Icechunk provides version-controlled, transactional access to Zarr data on cloud
 //! object storage. It adds a layer of indirection between Zarr keys and on-disk storage,
