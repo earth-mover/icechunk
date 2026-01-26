@@ -1,22 +1,21 @@
-//! General design:
-//! - Most things are async even if they don't need to be. Async propagates unfortunately. If
-//!   something can be async sometimes it needs to be async always. In our example: fetching from
-//!   storage.
-//! - There is a high level interface that knows about arrays, groups, user attributes, etc. This
-//!   is the [`repository::Repository`] type.
-//! - There is a low level interface that speaks zarr keys and values, and is used to provide the
-//!   zarr store that will be used from python. This is the [`zarr::Store`] type.
-//! - There is a translation language between low and high levels. When user writes to a zarr key,
-//!   we need to convert that key to the language of arrays and groups. This is implemented it the
-//!   [`zarr`] module
-//! - There is an abstract type for loading and saving of the Arrow datastructures.
-//!   This is the [`Storage`] trait. It knows how to fetch and write arrow.
-//!   We have:
-//!     - an in memory implementation
-//!     - an s3 implementation that writes to parquet
-//!     - a caching wrapper implementation
-//! - The datastructures are represented by concrete types in the [`mod@format`] modules.
-//!   These datastructures use Arrow RecordBatches for representation.
+//! Icechunk: A transactional storage engine for Zarr.
+//!
+//! # Key types
+//!
+//! - [`repository::Repository`] - Entry point for version control (branches, tags, sessions)
+//! - [`session::Session`] - Transaction context for reading/writing data
+//! - [`store::Store`] - Zarr-compatible key-value interface backed by a Session
+//!
+//! # Architecture
+//!
+//! ```text
+//! Repository (version control)
+//!     └── Session (transaction state)
+//!             ├── ChangeSet (uncommitted modifications)
+//!             └── AssetManager (caching layer)
+//!                     └── Storage (S3, local, etc.)
+//! ```
+//!
 pub mod asset_manager;
 pub mod change_set;
 pub mod cli;

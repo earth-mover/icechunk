@@ -1,3 +1,10 @@
+//! Zarr-compatible key-value interface.
+//!
+//! [`Store`] is backed by a [`Session`] and translates Zarr string keys (like `"array/c/0/0"`)
+//! into typed Icechunk operations. This is the interface used by Zarr libraries.
+//!
+//! [`Session`]: crate::session::Session
+
 use std::{
     collections::HashSet,
     fmt::Display,
@@ -31,6 +38,7 @@ use crate::{
     session::{Session, SessionError, SessionErrorKind, get_chunk, is_prefix_match},
 };
 
+/// Result of listing a directory: either a key (leaf) or prefix (subdirectory).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ListDirItem {
     Key(String),
@@ -139,6 +147,7 @@ pub enum SetVirtualRefsResult {
     FailedRefs(Vec<ChunkIndices>),
 }
 
+/// Zarr-compatible key-value interface backed by a [`Session`].
 #[derive(Clone)]
 pub struct Store {
     session: Arc<RwLock<Session>>,

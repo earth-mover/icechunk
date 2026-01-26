@@ -1,3 +1,5 @@
+//! CLI command definitions and handlers.
+
 use crate::repository::VersionInfo;
 use clap::{Args, Parser, Subcommand};
 use dialoguer::{Input, Select};

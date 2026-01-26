@@ -1,3 +1,5 @@
+//! Garbage collection to remove unreferenced data.
+
 use std::{
     collections::{HashMap, HashSet},
     future::ready,

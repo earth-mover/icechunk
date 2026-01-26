@@ -1,4 +1,6 @@
-//! How seralizers work:
+//! Flatbuffer serialization for Icechunk metadata.
+//!
+//! How serializers work:
 //!
 //! - Main goal is to make sure newer version of Icechunk can read metadata files created using
 //!   older versions. In this way, a repository can evolve during its life. As users upgrade their

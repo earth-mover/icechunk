@@ -1,3 +1,5 @@
+//! Basic conflict resolution strategy that detects but does not auto-resolve.
+
 use async_trait::async_trait;
 
 use crate::{

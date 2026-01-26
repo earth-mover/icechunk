@@ -1,3 +1,5 @@
+//! Storage wrapper that logs all operations (for testing).
+
 use std::{
     fmt,
     ops::Range,

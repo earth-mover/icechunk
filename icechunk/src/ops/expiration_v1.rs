@@ -1,3 +1,5 @@
+//! Expire old snapshots beyond a time threshold.
+
 use std::{collections::HashSet, sync::Arc};
 
 use chrono::{DateTime, Utc};

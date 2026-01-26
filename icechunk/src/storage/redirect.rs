@@ -1,3 +1,5 @@
+//! HTTP redirect-based storage for read-only access via signed URLs.
+
 use std::{ops::Range, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;

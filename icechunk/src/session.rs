@@ -1,3 +1,13 @@
+//! The transaction context for reading and writing data.
+//!
+//! A [`Session`] tracks a base snapshot, accumulates changes in a [`ChangeSet`],
+//! and handles committing them.
+//!
+//! Sessions come in three modes:
+//! - **Read-only**: Can read data, no ChangeSet
+//! - **Writable**: Can read and write chunks/metadata
+//! - **Rearrange**: Can move/rename nodes (no chunk writes)
+
 use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -230,6 +240,15 @@ impl ManifestSplits {
 
 pub type ReindexOperationResult = Result<Option<ChunkIndices>, SessionError>;
 
+/// A transaction context for reading and writing Icechunk data.
+///
+/// Sessions track a base snapshot, accumulate changes in a [`ChangeSet`],
+/// and handle committing them.
+///
+/// Three modes:
+/// - **Read-only**: Can read data, no ChangeSet
+/// - **Writable**: Can read and write chunks/metadata
+/// - **Rearrange**: Can move/rename nodes (no chunk writes)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     config: RepositoryConfig,
