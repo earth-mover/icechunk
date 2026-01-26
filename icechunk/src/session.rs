@@ -722,6 +722,32 @@ impl Session {
         }
     }
 
+    /// Bulk version - sets multiple chunk refs for a single node.
+    /// More efficient than calling set_node_chunk_ref repeatedly.
+    #[instrument(skip(self, chunks))]
+    pub fn set_node_chunk_refs<I>(
+        &mut self,
+        node: &NodeSnapshot,
+        chunks: I,
+    ) -> SessionResult<()>
+    where
+        I: IntoIterator<Item = (ChunkIndices, Option<ChunkPayload>)>,
+    {
+        if let NodeData::Array { shape, dimension_names, .. } = &node.node_data {
+            let splits = self
+                .get_splits(&node.id, &node.path, shape, dimension_names)
+                .clone();
+            self.change_set_mut()?.set_chunk_refs(node.id.clone(), chunks, &splits)?;
+            Ok(())
+        } else {
+            Err(SessionErrorKind::NotAnArray {
+                node: Box::new(node.clone()),
+                message: "setting chunk refs".to_string(),
+            }
+            .into())
+        }
+    }
+
     #[instrument(skip(self))]
     pub async fn get_closest_ancestor_node(
         &self,

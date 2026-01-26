@@ -414,24 +414,27 @@ impl Store {
         }
 
         let mut session = self.session.write().await;
-        // Look up the node once, not for every chunk
         let node = session.get_array(array_path).await?;
+
+        // Separate valid refs from failed ones
         let mut failed = Vec::new();
-        for (index, reference) in references.into_iter() {
-            if validate_container
-                && session.matching_container(&reference.location).is_none()
-            {
-                failed.push(index);
-            } else {
-                session
-                    .set_node_chunk_ref(
-                        &node,
-                        index,
-                        Some(ChunkPayload::Virtual(reference)),
-                    )
-                    .await?;
-            }
-        }
+        let valid_refs: Vec<_> = references
+            .into_iter()
+            .filter_map(|(index, reference)| {
+                if validate_container
+                    && session.matching_container(&reference.location).is_none()
+                {
+                    failed.push(index);
+                    None
+                } else {
+                    Some((index, Some(ChunkPayload::Virtual(reference))))
+                }
+            })
+            .collect();
+
+        // Use bulk method - one hash lookup for all refs
+        session.set_node_chunk_refs(&node, valid_refs)?;
+
         if failed.is_empty() {
             Ok(SetVirtualRefsResult::Done)
         } else {

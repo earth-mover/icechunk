@@ -494,6 +494,54 @@ impl ChangeSet {
         Ok(())
     }
 
+    /// Bulk version of set_chunk_ref - sets multiple chunk refs for the same node.
+    /// More efficient than calling set_chunk_ref repeatedly as it only does one hash lookup.
+    pub fn set_chunk_refs<I>(
+        &mut self,
+        node_id: NodeId,
+        chunks: I,
+        splits: &ManifestSplits,
+    ) -> SessionResult<()>
+    where
+        I: IntoIterator<Item = (ChunkIndices, Option<ChunkPayload>)>,
+    {
+        let edits = self.edits_mut()?;
+
+        let node_chunks = edits
+            .set_chunks
+            .entry(node_id)
+            .or_insert_with(|| {
+                HashMap::<
+                    ManifestExtents,
+                    BTreeMap<ChunkIndices, Option<ChunkPayload>>,
+                >::with_capacity(splits.len())
+            });
+
+        for (coord, data) in chunks {
+            #[allow(clippy::expect_used)]
+            let extent = splits.find(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
+
+            let old = node_chunks
+                .entry(extent.clone())
+                .or_default()
+                .insert(coord, data);
+
+            if old.is_none() {
+                edits.num_chunks += 1;
+            }
+        }
+
+        if edits.num_chunks > NUM_CHUNKS_LIMIT && !edits.excessive_num_chunks_warned {
+            warn!(
+                "There are more than {NUM_CHUNKS_LIMIT} chunk references being loaded into this commit. This is close to the maximum number of chunk modifications Icechunk supports in a single commit, we recommend to split into smaller commits."
+            );
+
+            edits.excessive_num_chunks_warned = true;
+        }
+
+        Ok(())
+    }
+
     pub fn get_chunk_ref(
         &self,
         node_id: &NodeId,
