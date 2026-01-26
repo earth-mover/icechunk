@@ -2,7 +2,7 @@
 
 use crate::format::ChunkIndices;
 use crate::format::snapshot::{DimensionName, NodeData};
-use crate::repository::VersionInfo;
+use crate::repository::{RepositoryErrorKind, VersionInfo};
 use chrono::Local;
 use clap::{Args, Parser, Subcommand};
 use dialoguer::{Input, Select};
@@ -68,8 +68,7 @@ struct HistoryArgs {
     repo: RepositoryAlias,
     #[arg(
         name = "reference",
-        default_value = "main",
-        help = "Branch, tag or snapshot to show history for."
+        help = "ID of snapshot to show history for"
     )]
     reference: String,
     #[arg(short = 'n', default_value_t = 10, help = "Number of snapshots to list")]
@@ -82,8 +81,7 @@ struct InspectArgs {
     repo: RepositoryAlias,
     #[arg(
         name = "reference",
-        default_value = "main",
-        help = "Branch, tag or snapshot ID."
+        help = "ID of snapshot to inspect"
     )]
     reference: String,
 }
@@ -112,8 +110,7 @@ struct BranchCreateArgs {
     branch: String,
     #[arg(
         name = "from",
-        default_value = "main",
-        help = "Branch, tag or snapshot to create the branch from"
+        help = "ID of snapshot to create the branch from"
     )]
     from: String,
 }
@@ -151,8 +148,7 @@ struct TagCreateArgs {
     tag: String,
     #[arg(
         name = "target",
-        default_value = "main",
-        help = "Branch, tag or snapshot to create the tag for"
+        help = "ID of snapshot to create the tag for"
     )]
     target: String,
 }
@@ -169,9 +165,9 @@ struct TagDeleteArgs {
 struct DiffArgs {
     #[arg(name = "alias", help = "Alias of the repository in the config")]
     repo: RepositoryAlias,
-    #[arg(name = "from", help = "Source reference")]
+    #[arg(name = "from", help = "Source snapshot ID")]
     from: String,
-    #[arg(name = "to", help = "Target reference")]
+    #[arg(name = "to", help = "Target snapshot ID")]
     to: String,
 }
 
@@ -336,36 +332,10 @@ async fn open_repository(
     Ok(repository)
 }
 
-async fn resolve_ref_by_name(
-    repository: &Repository,
-    reference: &String,
-) -> Result<SnapshotId> {
-    let result = repository.resolve_version(&VersionInfo::BranchTipRef(reference.clone())).await;
-    match result {
-        Result::Ok(snapshot_id) => return Ok(snapshot_id),
-        Err(_) => { /* Try next */ }
-    }
-    let result = repository.resolve_version(&VersionInfo::TagRef(reference.clone())).await;
-    match result {
-        Result::Ok(snapshot_id) => return Ok(snapshot_id),
-        Err(_) => { /* Try next */ }
-    }
-
-    let snapshot_id = SnapshotId::try_from(reference.as_str());
-    match snapshot_id {
-        Result::Ok(id) => {
-            let result = repository.resolve_version(&VersionInfo::SnapshotId(id)).await;
-            match result {
-                Result::Ok(snapshot_id) => return Ok(snapshot_id),
-                Err(_) => { /* Try next */ }
-            }
-        }
-        Err(_) => { /* Try next */ }
-    }
-    Err(anyhow::anyhow!(
-        "Reference {:?} not found to be a branch, tag or snapshot",
-        reference
-    ))
+fn parse_snapshot(reference: &String) -> Result<SnapshotId> {
+    let snapshot_id = SnapshotId::try_from(reference.as_str())
+        .map_err(|_| RepositoryErrorKind::InvalidSnapshotId(reference.clone()))?;
+    Ok(snapshot_id)
 }
 
 async fn repo_create(init_cmd: &CreateCommand, config: &CliConfig) -> Result<()> {
@@ -402,7 +372,7 @@ async fn create_branch(
     config: &CliConfig,
 ) -> Result<()> {
     let repository = open_repository(&args.repo, config).await?;
-    let from_snapshot = resolve_ref_by_name(&repository, &args.from).await?;
+    let from_snapshot = parse_snapshot(&args.from)?;
     repository
         .create_branch(&args.branch, &from_snapshot)
         .await
@@ -456,7 +426,7 @@ async fn create_tag(
     config: &CliConfig,
 ) -> Result<()> {
     let repository = open_repository(&args.repo, config).await?;
-    let target_snapshot = resolve_ref_by_name(&repository, &args.target).await?;
+    let target_snapshot = parse_snapshot(&args.target)?;
     
     repository
         .create_tag(&args.tag, &target_snapshot)
@@ -514,7 +484,7 @@ async fn history(
     mut writer: impl std::io::Write,
 ) -> Result<()> {
     let repository = open_repository(&args.repo, config).await?;
-    let snapshot = resolve_ref_by_name(&repository, &args.reference).await?;
+    let snapshot = parse_snapshot(&args.reference)?;
     let ancestry = repository.ancestry(&VersionInfo::SnapshotId(snapshot)).await?;
     let snapshots: Vec<_> = ancestry.take(args.n).collect().await;
     for snapshot in snapshots {
@@ -549,7 +519,7 @@ async fn inspect(
     mut writer: impl std::io::Write,
 ) -> Result<()> {
     let repository = open_repository(&args.repo, config).await?;
-    let snapshot_id = resolve_ref_by_name(&repository, &args.reference).await?;
+    let snapshot_id = parse_snapshot(&args.reference)?;
     let snapshot = repository.asset_manager().fetch_snapshot(&snapshot_id).await?;
 
     writeln!(writer, "Snapshot: {}", snapshot_id)?;
@@ -620,8 +590,8 @@ async fn diff(
 ) -> Result<()> {
     let repository = open_repository(&args.repo, config).await?;
 
-    let from_ref = VersionInfo::SnapshotId(resolve_ref_by_name(&repository, &args.from).await?);
-    let to_ref = VersionInfo::SnapshotId(resolve_ref_by_name(&repository, &args.to).await?);
+    let from_ref = VersionInfo::SnapshotId(parse_snapshot(&args.from)?);
+    let to_ref = VersionInfo::SnapshotId(parse_snapshot(&args.to)?);
 
     let diff = repository
         .diff(&from_ref, &to_ref)
