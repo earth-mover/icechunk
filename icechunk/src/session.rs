@@ -622,7 +622,7 @@ impl Session {
     ) -> SessionResult<()> {
         let node = self.get_array(node_path).await?;
         for coord in coords {
-            self.set_node_chunk_ref(node.clone(), coord, None).await?
+            self.set_node_chunk_ref(&node, coord, None).await?
         }
         Ok(())
     }
@@ -638,7 +638,7 @@ impl Session {
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
         let node_snapshot = self.get_array(&path).await?;
-        self.set_node_chunk_ref(node_snapshot, coord, data).await
+        self.set_node_chunk_ref(&node_snapshot, coord, data).await
     }
 
     pub fn lookup_splits(&self, node_id: &NodeId) -> Option<&ManifestSplits> {
@@ -690,21 +690,21 @@ impl Session {
         })
     }
 
-    // Helper function that accepts a NodeSnapshot instead of a path,
-    // this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
+    /// Helper function that accepts a NodeSnapshot instead of a path,
+    /// this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
     #[instrument(skip(self))]
-    async fn set_node_chunk_ref(
+    pub async fn set_node_chunk_ref(
         &mut self,
-        node: NodeSnapshot,
+        node: &NodeSnapshot,
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
-        if let NodeData::Array { shape, dimension_names, .. } = node.node_data {
+        if let NodeData::Array { shape, dimension_names, .. } = &node.node_data {
             if shape.valid_chunk_coord(&coord) {
                 let splits = self
-                    .get_splits(&node.id, &node.path, &shape, &dimension_names)
+                    .get_splits(&node.id, &node.path, shape, dimension_names)
                     .clone();
-                self.change_set_mut()?.set_chunk_ref(node.id, coord, data, &splits)?;
+                self.change_set_mut()?.set_chunk_ref(node.id.clone(), coord, data, &splits)?;
                 Ok(())
             } else {
                 Err(SessionErrorKind::InvalidIndex {

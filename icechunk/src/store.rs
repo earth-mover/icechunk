@@ -414,6 +414,8 @@ impl Store {
         }
 
         let mut session = self.session.write().await;
+        // Look up the node once, not for every chunk
+        let node = session.get_array(array_path).await?;
         let mut failed = Vec::new();
         for (index, reference) in references.into_iter() {
             if validate_container
@@ -422,8 +424,8 @@ impl Store {
                 failed.push(index);
             } else {
                 session
-                    .set_chunk_ref(
-                        array_path.clone(),
+                    .set_node_chunk_ref(
+                        &node,
                         index,
                         Some(ChunkPayload::Virtual(reference)),
                     )
