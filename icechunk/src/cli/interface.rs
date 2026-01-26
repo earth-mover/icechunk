@@ -42,8 +42,8 @@ enum Command {
     Config(ConfigCommand),
     #[command(subcommand, about = "Manage repositories")]
     Repo(RepoCommand),
-    #[clap(name = "history", about = "Show history of a branch, tag or snapshot")]
-    History(HistoryArgs),
+    #[clap(name = "ancestry", about = "Show ancestry of a branch, tag or snapshot")]
+    Ancestry(AncestryArgs),
     #[clap(name = "inspect", about = "Show snapshot details")]
     Inspect(InspectArgs),
     #[command(subcommand, about = "Manage branches")]
@@ -61,12 +61,12 @@ enum RepoCommand {
 }
 
 #[derive(Debug, Args)]
-struct HistoryArgs {
+struct AncestryArgs {
     #[arg(name = "alias", help = "Alias of the repository in the config")]
     repo: RepositoryAlias,
     #[arg(
         name = "reference",
-        help = "ID of snapshot to show history for"
+        help = "ID of snapshot to show ancestry for"
     )]
     reference: String,
     #[arg(short = 'n', default_value_t = 10, help = "Number of snapshots to list")]
@@ -468,8 +468,8 @@ fn show_snapshot(mut writer: impl std::io::Write, snapshot: SnapshotInfo, with_m
     Ok(())
 }
 
-async fn history(
-    args: &HistoryArgs,
+async fn ancestry(
+    args: &AncestryArgs,
     config: &CliConfig,
     mut writer: impl std::io::Write,
 ) -> Result<()> {
@@ -849,8 +849,8 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
         Command::Repo(RepoCommand::Create(init_cmd)) => {
             repo_create(&init_cmd, &config).await
         }
-        Command::History(history_args) => {
-            history(&history_args, &config, stdout()).await?;
+        Command::Ancestry(ancestry_args) => {
+            ancestry(&ancestry_args, &config, stdout()).await?;
             Ok(())
         }
         Command::Inspect(inspect_args) => {
@@ -967,7 +967,7 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_history() {
+    async fn test_ancestry() {
         let temp = assert_fs::TempDir::new().unwrap();
         let path = temp.path().to_path_buf();
 
@@ -985,13 +985,13 @@ mod tests {
         let init_cmd = CreateCommand { repo: repo_alias.clone() };
         repo_create(&init_cmd, &config).await.unwrap();
 
-        let args = HistoryArgs {
+        let args = AncestryArgs {
             repo: repo_alias.clone(),
             reference: "main".to_string(),
             n: 10,
         };
         let mut writer = Vec::new();
-        history(&args, &config, &mut writer).await.unwrap();
+        ancestry(&args, &config, &mut writer).await.unwrap();
         let output = String::from_utf8(writer).unwrap();
         println!("{}", output);
 
