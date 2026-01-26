@@ -1807,8 +1807,12 @@ async fn updated_existing_nodes<'a>(
             match result {
                 Ok(node) => {
                     // Check if this node is a direct child of parent_group
-                    node.path.ancestors().nth(1).map(|p| &p == &parent_group_owned).unwrap_or(false)
-                },
+                    node.path
+                        .ancestors()
+                        .nth(1)
+                        .map(|p| p == parent_group_owned)
+                        .unwrap_or(false)
+                }
                 Err(_) => true, // Keep errors in the stream
             }
         })
@@ -1818,21 +1822,22 @@ async fn updated_existing_nodes<'a>(
         });
 
     // Part 2: Nodes that have been moved INTO this parent from elsewhere
-    let moved_in_nodes = change_set.moves()
+    let moved_in_nodes = change_set
+        .moves()
         .filter(move |m| {
             // Check if the destination is a direct child of parent_group
-            m.to.ancestors().nth(1).map(|p| &p == &parent_group_owned2).unwrap_or(false)
+            m.to.ancestors().nth(1).map(|p| p == parent_group_owned2).unwrap_or(false)
         })
-        .filter_map(move |m| {
+        .map(move |m| {
             // Fetch the node from its original location in the snapshot
             match snapshot.get_node(&m.from) {
                 Ok(node) => {
                     // Update the node's path to the new location
                     let mut moved_node = node.clone();
                     moved_node.path = m.to.clone();
-                    Some(Ok(moved_node))
-                },
-                Err(e) => Some(Err(SessionError::from(e))),
+                    Ok(moved_node)
+                }
+                Err(e) => Err(SessionError::from(e)),
             }
         });
 
