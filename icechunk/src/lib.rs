@@ -1,19 +1,36 @@
 //! Icechunk: A transactional storage engine for Zarr.
 //!
+//! Icechunk provides version-controlled, transactional access to Zarr data on cloud
+//! object storage. It adds a layer of indirection between Zarr keys and on-disk storage,
+//! enabling:
+//!
+//! - **Serializable isolation** - Reads are isolated from concurrent writes and always
+//!   use a committed snapshot. Writes are committed atomically and never partially visible.
+//! - **Time travel** - Previous snapshots remain accessible after new ones are written.
+//! - **Version control** - Repositories support branches (mutable) and tags (immutable)
+//!   that reference snapshots.
+//!
+//! # Core concepts
+//!
+//! A **repository** contains a Zarr hierarchy (groups and arrays) with full version history.
+//! Each update creates a new **snapshot** with a unique ID. **Branches** are mutable
+//! references to snapshots (like Git branches), while **tags** are immutable references
+//! (like Git tags). The default branch is `main`.
+//!
 //! # Key types
 //!
-//! - [`repository::Repository`] - Entry point for version control (branches, tags, sessions)
+//! - [`Repository`] - Entry point for version control (branches, tags, sessions)
 //! - [`session::Session`] - Transaction context for reading/writing data
-//! - [`store::Store`] - Zarr-compatible key-value interface backed by a Session
+//! - [`Store`] - Zarr-compatible key-value interface backed by a Session
 //!
 //! # Architecture
 //!
 //! ```text
 //! Repository (version control)
-//!     └── Session (transaction state)
+//!     └── Session (transaction context)
 //!             ├── ChangeSet (uncommitted modifications)
-//!             └── AssetManager (caching layer)
-//!                     └── Storage (S3, local, etc.)
+//!             └── AssetManager (typed I/O with caching)
+//!                     └── Storage (S3, GCS, Azure, local, etc.)
 //! ```
 //!
 pub mod asset_manager;

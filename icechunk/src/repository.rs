@@ -181,10 +181,9 @@ impl From<IcechunkFormatError> for RepositoryError {
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
-/// The entry point for Icechunk operations.
+/// Entry point for Icechunk version control.
 ///
-/// A `Repository` manages version control (branches, tags) and creates [`Session`]s
-/// for reading and writing data.
+/// Manages branches, tags, and creates [`Session`]s for reading/writing data.
 ///
 /// [`Session`]: crate::session::Session
 #[derive(Debug, Serialize, Deserialize)]
