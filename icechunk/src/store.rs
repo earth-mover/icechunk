@@ -23,7 +23,7 @@ use crate::{
     error::ICError,
     format::{
         ByteRange, ChunkIndices, ChunkOffset, Path, PathError,
-        manifest::{ChunkPayload, VirtualChunkRef},
+        manifest::{Checksum, ChunkPayload, VirtualChunkLocation, VirtualChunkRef},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot, NodeType},
     },
     refs::{RefError, RefErrorKind},
@@ -437,6 +437,87 @@ impl Store {
         }
     }
 
+    /// Set virtual references from Arrow arrays.
+    ///
+    /// This is more efficient than `set_virtual_refs` when called from Python
+    /// as it avoids creating millions of intermediate Python objects.
+    ///
+    /// # Arguments
+    /// * `array_path` - Path to the array in the store
+    /// * `chunk_grid_shape` - Shape of the chunk grid (product must equal array lengths)
+    /// * `locations` - Arrow StringArray of URLs to external files
+    /// * `offsets` - Arrow UInt64Array of byte offsets
+    /// * `lengths` - Arrow UInt64Array of byte lengths
+    /// * `checksum` - Optional checksum applied to all chunks (e.g., LastModified timestamp)
+    /// * `arr_offset` - Optional offset to add to computed chunk indices (for append operations)
+    /// * `validate_container` - If true, validate locations match registered containers
+    #[cfg(feature = "arrow")]
+    #[instrument(skip(self, locations, offsets, lengths))]
+    pub async fn set_virtual_refs_from_arrow(
+        &self,
+        array_path: &Path,
+        chunk_grid_shape: &[u32],
+        locations: &arrow_array::StringArray,
+        offsets: &arrow_array::UInt64Array,
+        lengths: &arrow_array::UInt64Array,
+        checksum: Option<Checksum>,
+        arr_offset: Option<&[u32]>,
+        validate_container: bool,
+    ) -> StoreResult<SetVirtualRefsResult> {
+        use arrow_array::Array;
+
+        let n_chunks = locations.len();
+
+        // Validate array lengths match
+        if offsets.len() != n_chunks || lengths.len() != n_chunks {
+            return Err(StoreErrorKind::Other(
+                "Arrow array lengths must match".to_string(),
+            )
+            .into());
+        }
+
+        // Validate chunk_grid_shape product equals n_chunks
+        let expected: usize = chunk_grid_shape.iter().map(|&x| x as usize).product();
+        if expected != n_chunks {
+            return Err(StoreErrorKind::Other(format!(
+                "chunk_grid_shape product ({}) != array length ({})",
+                expected, n_chunks
+            ))
+            .into());
+        }
+
+        // Validate arr_offset length if provided
+        if let Some(offset) = arr_offset {
+            if offset.len() != chunk_grid_shape.len() {
+                return Err(StoreErrorKind::Other(format!(
+                    "arr_offset length ({}) != chunk_grid_shape length ({})",
+                    offset.len(),
+                    chunk_grid_shape.len()
+                ))
+                .into());
+            }
+        }
+
+        // Build refs by iterating Arrow arrays
+        let refs_iter: Vec<(ChunkIndices, VirtualChunkRef)> = (0..n_chunks)
+            .map(|i| {
+                let indices = flat_to_nd_indices(i, chunk_grid_shape, arr_offset);
+                let location = VirtualChunkLocation::from_absolute_path(locations.value(i))
+                    .map_err(|e| StoreErrorKind::Other(e.to_string()))?;
+                let vref = VirtualChunkRef {
+                    location,
+                    offset: offsets.value(i),
+                    length: lengths.value(i),
+                    checksum: checksum.clone(),
+                };
+                Ok((ChunkIndices(indices), vref))
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+
+        // Delegate to existing method
+        self.set_virtual_refs(array_path, validate_container, refs_iter).await
+    }
+
     #[instrument(skip(self))]
     pub async fn delete_dir(&self, prefix: &str) -> StoreResult<()> {
         if self.read_only().await {
@@ -835,6 +916,27 @@ impl Store {
         };
         Ok(res)
     }
+}
+
+/// Convert flat index to N-dimensional indices (C-order/row-major).
+///
+/// Used by `set_virtual_refs_from_arrow` to compute chunk coordinates
+/// from the flat position in the Arrow arrays.
+///
+/// If `offset` is provided, it is added element-wise to the computed indices.
+#[cfg(feature = "arrow")]
+fn flat_to_nd_indices(flat: usize, shape: &[u32], offset: Option<&[u32]>) -> Vec<u32> {
+    // TODO: check that this vibe-coded function makes any sense at all...
+    let total: usize = shape.iter().map(|&d| d as usize).product();
+    shape
+        .iter()
+        .enumerate()
+        .scan(total, |stride, (i, &dim)| {
+            *stride /= dim as usize;
+            let idx = ((flat / *stride) % dim as usize) as u32;
+            Some(idx + offset.map_or(0, |o| o[i]))
+        })
+        .collect()
 }
 
 async fn set_array_meta(

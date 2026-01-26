@@ -11,6 +11,8 @@ from collections.abc import (
 from enum import Enum
 from typing import Any, TypeAlias
 
+import pyarrow as pa
+
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
     def __init__(
@@ -1991,6 +1993,28 @@ class PyStore:
         array_path: str,
         chunks: list[VirtualChunkSpec],
         validate_containers: bool,
+    ) -> list[tuple[int, ...]] | None: ...
+    def set_virtual_refs_arr(
+        self,
+        array_path: str,
+        chunk_grid_shape: list[int],
+        locations: pa.StringArray,
+        offsets: pa.UInt64Array,
+        lengths: pa.UInt64Array,
+        arr_offset: tuple[int, ...] | None = None,
+        checksum: datetime.datetime | str | None = None,
+        validate_containers: bool = True,
+    ) -> list[tuple[int, ...]] | None: ...
+    async def set_virtual_refs_arr_async(
+        self,
+        array_path: str,
+        chunk_grid_shape: list[int],
+        locations: pa.StringArray,
+        offsets: pa.UInt64Array,
+        lengths: pa.UInt64Array,
+        arr_offset: tuple[int, ...] | None = None,
+        checksum: datetime.datetime | str | None = None,
+        validate_containers: bool = True,
     ) -> list[tuple[int, ...]] | None: ...
     async def delete(self, key: str) -> None: ...
     async def delete_dir(self, prefix: str) -> None: ...
