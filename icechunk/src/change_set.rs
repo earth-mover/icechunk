@@ -8,6 +8,7 @@ use std::{
 use bytes::Bytes;
 use itertools::{Either, Itertools as _};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::{
     format::{
@@ -18,6 +19,13 @@ use crate::{
     session::{SessionErrorKind, SessionResult, find_coord},
 };
 
+// We have limitations on how many chunks we can save on a single commit.
+// Mostly due to flatbuffers not supporting 64-bit offsets,
+// but also because we can't do transaction log splitting (like we can with manifests).
+// For now we suggest smaller commits as a solution.
+// See discussion in https://github.com/earth-mover/icechunk/issues/1558 for more details
+const NUM_CHUNKS_LIMIT: u64 = 50_000_000;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArrayData {
     pub shape: ArrayShape,
@@ -27,13 +35,20 @@ pub struct ArrayData {
 
 type SplitManifest = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EditChanges {
     new_groups: HashMap<Path, (NodeId, Bytes)>,
     new_arrays: HashMap<Path, (NodeId, ArrayData)>,
     updated_arrays: HashMap<NodeId, ArrayData>,
     updated_groups: HashMap<NodeId, Bytes>,
     set_chunks: BTreeMap<NodeId, HashMap<ManifestExtents, SplitManifest>>,
+
+    // Number of chunks added to this change set
+    num_chunks: u64,
+
+    // Did we already print a warning about too many chunks in this change set?
+    excessive_num_chunks_warned: bool,
+
     // This map keeps track of any chunk deletes that are
     // outside the domain of the current array shape. This is needed to handle
     // the very unlikely case of multiple resizes in the same session.
@@ -449,7 +464,9 @@ impl ChangeSet {
         let extent = splits.find(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
-        self.edits_mut()?
+        let edits = self.edits_mut()?;
+
+        let old = edits
             .set_chunks
             .entry(node_id)
             .or_insert_with(|| {
@@ -461,6 +478,19 @@ impl ChangeSet {
             .entry(extent.clone())
             .or_default()
             .insert(coord, data);
+
+        if old.is_none() {
+            edits.num_chunks += 1;
+        }
+
+        if edits.num_chunks > NUM_CHUNKS_LIMIT && !edits.excessive_num_chunks_warned {
+            warn!(
+                "There are more than {NUM_CHUNKS_LIMIT} chunk references being loaded into this commit. This is close to the maximum number of chunk modifications Icechunk supports in a single commit, we recommend to split into smaller commits."
+            );
+
+            edits.excessive_num_chunks_warned = true;
+        }
+
         Ok(())
     }
 
@@ -975,19 +1005,19 @@ mod tests {
     use proptest::prelude::*;
 
     prop_compose! {
-        fn edit_changes()(num_of_dims in 1..=20usize)(
-            new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
-                new_arrays in hash_map(path(),(node_id(), array_data()), 3..7),
-           updated_arrays in hash_map(node_id(), array_data(), 3..7),
-           updated_groups in hash_map(node_id(), bytes(), 3..7),
+        fn edit_changes()(num_of_dims in 1..=5usize)(
+            new_groups in hash_map(path(),(node_id(), bytes()), 0..3),
+                new_arrays in hash_map(path(),(node_id(), array_data()), 0..3),
+           updated_arrays in hash_map(node_id(), array_data(), 0..3),
+           updated_groups in hash_map(node_id(), bytes(), 0..3),
            set_chunks in btree_map(node_id(),
-                hash_map(manifest_extents(num_of_dims), split_manifest(), 3..7),
-            3..7),
-    deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(large_chunk_indices(num_of_dims), 3..8), 3..7),
-            deleted_groups in hash_set((path(), node_id()), 3..7),
-            deleted_arrays in hash_set((path(), node_id()), 3..7)
+                hash_map(manifest_extents(num_of_dims), split_manifest(), 0..3),
+            0..3),
+            deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(large_chunk_indices(num_of_dims), 0..3), 0..3),
+            deleted_groups in hash_set((path(), node_id()), 0..3),
+            deleted_arrays in hash_set((path(), node_id()), 0..3)
         ) -> EditChanges {
-            EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups, new_arrays}
+            EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, num_chunks: 0, excessive_num_chunks_warned: false, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups, new_arrays}
         }
     }
 

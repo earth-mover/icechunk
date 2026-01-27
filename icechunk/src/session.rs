@@ -2617,12 +2617,14 @@ async fn do_commit_v2(
         };
 
         let update_type = match commit_method {
-            CommitMethod::NewCommit => {
-                UpdateType::NewCommitUpdate { branch: branch_name.to_string() }
-            }
+            CommitMethod::NewCommit => UpdateType::NewCommitUpdate {
+                branch: branch_name.to_string(),
+                new_snap_id: new_snapshot_id.clone(),
+            },
             CommitMethod::Amend => UpdateType::CommitAmendedUpdate {
                 branch: branch_name.to_string(),
                 previous_snap_id: parent_snapshot.id.clone(),
+                new_snap_id: new_snapshot_id.clone(),
             },
         };
         Ok(Arc::new(repo_info.add_snapshot(
@@ -3221,7 +3223,10 @@ mod tests {
                     SpecVersionBin::current(),
                     snapshot.as_ref().try_into()?,
                     Some("main"),
-                    UpdateType::NewCommitUpdate { branch: "main".to_string() },
+                    UpdateType::NewCommitUpdate {
+                        branch: "main".to_string(),
+                        new_snap_id: snapshot.id().clone(),
+                    },
                     "backup_path",
                 )?;
         asset_manager.create_repo_info(Arc::new(repo_info)).await?;
@@ -4186,7 +4191,7 @@ mod tests {
         let repo = create_memory_store_repository().await;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        session.commit("make root", None).await?;
+        let snap1 = session.commit("make root", None).await?;
 
         let mut session = repo.writable_session("main").await?;
         session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
@@ -4221,7 +4226,7 @@ mod tests {
         session
             .add_group("/error".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        session.amend("second amend", None).await?;
+        let after_amend2 = session.amend("second amend", None).await?;
 
         let anc_from_tag: Vec<_> = repo
             .ancestry(&VersionInfo::TagRef("tag".to_string()))
@@ -4253,15 +4258,20 @@ mod tests {
             vec![
                 CommitAmendedUpdate {
                     branch: "main".to_string(),
-                    previous_snap_id: before_amend2
+                    previous_snap_id: before_amend2.clone(),
+                    new_snap_id: after_amend2.clone(),
                 },
                 TagCreatedUpdate { name: "tag".to_string() },
                 CommitAmendedUpdate {
                     branch: "main".to_string(),
-                    previous_snap_id: before_amend1
+                    previous_snap_id: before_amend1.clone(),
+                    new_snap_id: before_amend2.clone(),
                 },
-                NewCommitUpdate { branch: "main".to_string() },
-                NewCommitUpdate { branch: "main".to_string() },
+                NewCommitUpdate {
+                    branch: "main".to_string(),
+                    new_snap_id: before_amend1
+                },
+                NewCommitUpdate { branch: "main".to_string(), new_snap_id: snap1 },
                 RepoInitializedUpdate,
             ]
         );
