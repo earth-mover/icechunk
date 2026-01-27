@@ -503,9 +503,9 @@ impl Store {
             }
         }
 
-        // Build refs by iterating Arrow arrays, skipping empty paths
+        // Build refs by iterating Arrow arrays, skipping null entries (missing chunks)
         let refs_iter: Vec<(ChunkIndices, VirtualChunkRef)> = (0..n_chunks)
-            .filter(|&i| !locations.value(i).is_empty())
+            .filter(|&i| !locations.is_null(i))
             .map(|i| {
                 let indices = flat_to_nd_indices(i, chunk_grid_shape, arr_offset);
                 let location = VirtualChunkLocation::from_absolute_path(locations.value(i))
@@ -2534,7 +2534,7 @@ mod tests {
 
     #[cfg(feature = "arrow")]
     #[tokio::test]
-    async fn test_set_virtual_refs_from_arrow_skips_empty_paths() {
+    async fn test_set_virtual_refs_from_arrow_skips_nulls() {
         use arrow_array::{StringArray, UInt64Array};
 
         let repo = create_memory_store_repository().await;
@@ -2560,10 +2560,10 @@ mod tests {
             .await
             .unwrap();
 
-        // Create Arrow arrays with one empty path (should be skipped)
-        let locations = StringArray::from(vec!["s3://bucket/file1.dat", "", "s3://bucket/file3.dat"]);
-        let offsets = UInt64Array::from(vec![0, 100, 200]);
-        let lengths = UInt64Array::from(vec![50, 50, 50]);
+        // Create Arrow arrays with one null entry (should be skipped)
+        let locations = StringArray::from(vec![Some("s3://bucket/file1.dat"), None, Some("s3://bucket/file3.dat")]);
+        let offsets = UInt64Array::from(vec![Some(0), None, Some(200)]);
+        let lengths = UInt64Array::from(vec![Some(50), None, Some(50)]);
 
         let result = store
             .set_virtual_refs_from_arrow(
@@ -2579,7 +2579,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Should succeed - empty path at index 1 should be skipped
+        // Should succeed - null entry at index 1 should be skipped
         assert!(matches!(result, SetVirtualRefsResult::Done));
 
         // Verify only 2 chunks were written (indices 0 and 2, not 1)
