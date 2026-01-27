@@ -5124,7 +5124,7 @@ pub mod generated {
 
     impl<'a> NewCommitUpdate<'a> {
         pub const VT_BRANCH: flatbuffers::VOffsetT = 4;
-        pub const VT_SNAP_ID: flatbuffers::VOffsetT = 6;
+        pub const VT_NEW_SNAP_ID: flatbuffers::VOffsetT = 6;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -5141,8 +5141,8 @@ pub mod generated {
             args: &'args NewCommitUpdateArgs<'args>,
         ) -> flatbuffers::WIPOffset<NewCommitUpdate<'bldr>> {
             let mut builder = NewCommitUpdateBuilder::new(_fbb);
-            if let Some(x) = args.snap_id {
-                builder.add_snap_id(x);
+            if let Some(x) = args.new_snap_id {
+                builder.add_new_snap_id(x);
             }
             if let Some(x) = args.branch {
                 builder.add_branch(x);
@@ -5165,12 +5165,14 @@ pub mod generated {
             }
         }
         #[inline]
-        pub fn snap_id(&self) -> &'a ObjectId12 {
+        pub fn new_snap_id(&self) -> &'a ObjectId12 {
             // Safety:
             // Created from valid Table for this object
             // which contains a valid value in this slot
             unsafe {
-                self._tab.get::<ObjectId12>(NewCommitUpdate::VT_SNAP_ID, None).unwrap()
+                self._tab
+                    .get::<ObjectId12>(NewCommitUpdate::VT_NEW_SNAP_ID, None)
+                    .unwrap()
             }
         }
     }
@@ -5188,21 +5190,21 @@ pub mod generated {
                     Self::VT_BRANCH,
                     true,
                 )?
-                .visit_field::<ObjectId12>("snap_id", Self::VT_SNAP_ID, true)?
+                .visit_field::<ObjectId12>("new_snap_id", Self::VT_NEW_SNAP_ID, true)?
                 .finish();
             Ok(())
         }
     }
     pub struct NewCommitUpdateArgs<'a> {
         pub branch: Option<flatbuffers::WIPOffset<&'a str>>,
-        pub snap_id: Option<&'a ObjectId12>,
+        pub new_snap_id: Option<&'a ObjectId12>,
     }
     impl<'a> Default for NewCommitUpdateArgs<'a> {
         #[inline]
         fn default() -> Self {
             NewCommitUpdateArgs {
-                branch: None,  // required field
-                snap_id: None, // required field
+                branch: None,      // required field
+                new_snap_id: None, // required field
             }
         }
     }
@@ -5220,9 +5222,11 @@ pub mod generated {
             );
         }
         #[inline]
-        pub fn add_snap_id(&mut self, snap_id: &ObjectId12) {
-            self.fbb_
-                .push_slot_always::<&ObjectId12>(NewCommitUpdate::VT_SNAP_ID, snap_id);
+        pub fn add_new_snap_id(&mut self, new_snap_id: &ObjectId12) {
+            self.fbb_.push_slot_always::<&ObjectId12>(
+                NewCommitUpdate::VT_NEW_SNAP_ID,
+                new_snap_id,
+            );
         }
         #[inline]
         pub fn new(
@@ -5235,7 +5239,7 @@ pub mod generated {
         pub fn finish(self) -> flatbuffers::WIPOffset<NewCommitUpdate<'a>> {
             let o = self.fbb_.end_table(self.start_);
             self.fbb_.required(o, NewCommitUpdate::VT_BRANCH, "branch");
-            self.fbb_.required(o, NewCommitUpdate::VT_SNAP_ID, "snap_id");
+            self.fbb_.required(o, NewCommitUpdate::VT_NEW_SNAP_ID, "new_snap_id");
             flatbuffers::WIPOffset::new(o.value())
         }
     }
@@ -5244,7 +5248,7 @@ pub mod generated {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             let mut ds = f.debug_struct("NewCommitUpdate");
             ds.field("branch", &self.branch());
-            ds.field("snap_id", &self.snap_id());
+            ds.field("new_snap_id", &self.new_snap_id());
             ds.finish()
         }
     }
@@ -5266,6 +5270,7 @@ pub mod generated {
     impl<'a> CommitAmendedUpdate<'a> {
         pub const VT_BRANCH: flatbuffers::VOffsetT = 4;
         pub const VT_PREVIOUS_SNAP_ID: flatbuffers::VOffsetT = 6;
+        pub const VT_NEW_SNAP_ID: flatbuffers::VOffsetT = 8;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -5282,6 +5287,9 @@ pub mod generated {
             args: &'args CommitAmendedUpdateArgs<'args>,
         ) -> flatbuffers::WIPOffset<CommitAmendedUpdate<'bldr>> {
             let mut builder = CommitAmendedUpdateBuilder::new(_fbb);
+            if let Some(x) = args.new_snap_id {
+                builder.add_new_snap_id(x);
+            }
             if let Some(x) = args.previous_snap_id {
                 builder.add_previous_snap_id(x);
             }
@@ -5316,6 +5324,17 @@ pub mod generated {
                     .unwrap()
             }
         }
+        #[inline]
+        pub fn new_snap_id(&self) -> &'a ObjectId12 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<ObjectId12>(CommitAmendedUpdate::VT_NEW_SNAP_ID, None)
+                    .unwrap()
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for CommitAmendedUpdate<'_> {
@@ -5336,6 +5355,7 @@ pub mod generated {
                     Self::VT_PREVIOUS_SNAP_ID,
                     true,
                 )?
+                .visit_field::<ObjectId12>("new_snap_id", Self::VT_NEW_SNAP_ID, true)?
                 .finish();
             Ok(())
         }
@@ -5343,6 +5363,7 @@ pub mod generated {
     pub struct CommitAmendedUpdateArgs<'a> {
         pub branch: Option<flatbuffers::WIPOffset<&'a str>>,
         pub previous_snap_id: Option<&'a ObjectId12>,
+        pub new_snap_id: Option<&'a ObjectId12>,
     }
     impl<'a> Default for CommitAmendedUpdateArgs<'a> {
         #[inline]
@@ -5350,6 +5371,7 @@ pub mod generated {
             CommitAmendedUpdateArgs {
                 branch: None,           // required field
                 previous_snap_id: None, // required field
+                new_snap_id: None,      // required field
             }
         }
     }
@@ -5374,6 +5396,13 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_new_snap_id(&mut self, new_snap_id: &ObjectId12) {
+            self.fbb_.push_slot_always::<&ObjectId12>(
+                CommitAmendedUpdate::VT_NEW_SNAP_ID,
+                new_snap_id,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> CommitAmendedUpdateBuilder<'a, 'b, A> {
@@ -5389,6 +5418,7 @@ pub mod generated {
                 CommitAmendedUpdate::VT_PREVIOUS_SNAP_ID,
                 "previous_snap_id",
             );
+            self.fbb_.required(o, CommitAmendedUpdate::VT_NEW_SNAP_ID, "new_snap_id");
             flatbuffers::WIPOffset::new(o.value())
         }
     }
@@ -5398,6 +5428,7 @@ pub mod generated {
             let mut ds = f.debug_struct("CommitAmendedUpdate");
             ds.field("branch", &self.branch());
             ds.field("previous_snap_id", &self.previous_snap_id());
+            ds.field("new_snap_id", &self.new_snap_id());
             ds.finish()
         }
     }

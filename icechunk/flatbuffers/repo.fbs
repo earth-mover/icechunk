@@ -55,11 +55,12 @@ table BranchResetUpdate {
 }
 table NewCommitUpdate {
   branch: string (required);
-  snap_id: ObjectId12 (required);
+  new_snap_id: ObjectId12 (required);
 }
 table CommitAmendedUpdate {
   branch: string (required);
   previous_snap_id: ObjectId12 (required);
+  new_snap_id: ObjectId12 (required);
 }
 table NewDetachedSnapshotUpdate {
   new_snap_id: ObjectId12 (required);

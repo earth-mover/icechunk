@@ -1078,13 +1078,36 @@ def test_ops_log_commit_snap_id() -> None:
     )
 
     session = repo.writable_session("main")
-    store = session.store
-
-    group = zarr.group(store=store, overwrite=True)
+    group = zarr.group(store=session.store, overwrite=True)
     array = group.create_array("array", shape=(10,), chunks=(5,), dtype="i4")
     array[:] = 42
     snap_id = session.commit("commit 1")
 
     change = next(repo.ops_log())
     assert isinstance(change, ic.NewCommitUpdate)
-    assert change.snap_id == snap_id
+    assert change.new_snap_id == snap_id
+    assert change.branch == "main"
+
+
+def test_ops_log_amend_snap_id() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+
+    session = repo.writable_session("main")
+    group = zarr.group(store=session.store, overwrite=True)
+    array = group.create_array("array", shape=(10,), chunks=(5,), dtype="i4")
+    array[:] = 42
+    old_snap_id = session.commit("commit 1")
+
+    session = repo.writable_session("main")
+    group = zarr.open_group(store=session.store)
+    array = cast("zarr.core.array.Array[Any]", group["array"])
+    array[:] = 43
+    new_snap_id = session.amend("amended")
+
+    change = next(repo.ops_log())
+    assert isinstance(change, ic.CommitAmendedUpdate)
+    assert change.new_snap_id == new_snap_id
+    assert change.previous_snap_id == old_snap_id
+    assert change.branch == "main"

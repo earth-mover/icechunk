@@ -520,7 +520,7 @@ pub(crate) struct PyNewCommitUpdate {
     #[pyo3(get)]
     branch: String,
     #[pyo3(get)]
-    snap_id: String,
+    new_snap_id: String,
 }
 
 #[pyclass(name = "CommitAmendedUpdate", eq, extends=PyUpdateType)]
@@ -530,6 +530,8 @@ pub(crate) struct PyCommitAmendedUpdate {
     branch: String,
     #[pyo3(get)]
     previous_snap_id: String,
+    #[pyo3(get)]
+    new_snap_id: String,
 }
 
 #[pyclass(name = "NewDetachedSnapshotUpdate", eq, extends=PyUpdateType)]
@@ -607,7 +609,10 @@ impl PyBranchResetUpdate {
 #[pymethods]
 impl PyNewCommitUpdate {
     fn __repr__(&self) -> PyResult<String> {
-        Ok(format!("NewCommitUpdate(branch={}, snap_id={})", self.branch, self.snap_id))
+        Ok(format!(
+            "NewCommitUpdate(branch={}, snap_id={})",
+            self.branch, self.new_snap_id
+        ))
     }
 }
 
@@ -615,8 +620,8 @@ impl PyNewCommitUpdate {
 impl PyCommitAmendedUpdate {
     fn __repr__(&self) -> PyResult<String> {
         Ok(format!(
-            "CommitAmendedUpdate(branch={}, previous_snap_id={})",
-            self.branch, self.previous_snap_id
+            "CommitAmendedUpdate(branch={}, previous_snap_id={}, new_snap_id={})",
+            self.branch, self.previous_snap_id, self.new_snap_id,
         ))
     }
 }
@@ -736,30 +741,33 @@ fn mk_update_type(
             )?
             .into_any()
             .unbind(),
-            UpdateType::NewCommitUpdate { branch, snap_id } => Bound::new(
+            UpdateType::NewCommitUpdate { branch, new_snap_id } => Bound::new(
                 py,
                 (
                     PyNewCommitUpdate {
                         branch: branch.clone(),
-                        snap_id: snap_id.to_string(),
+                        new_snap_id: new_snap_id.to_string(),
                     },
                     PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
             .unbind(),
-            UpdateType::CommitAmendedUpdate { branch, previous_snap_id } => Bound::new(
-                py,
-                (
-                    PyCommitAmendedUpdate {
-                        branch: branch.clone(),
-                        previous_snap_id: previous_snap_id.to_string(),
-                    },
-                    PyUpdateType { updated_at, backup_path },
-                ),
-            )?
-            .into_any()
-            .unbind(),
+            UpdateType::CommitAmendedUpdate { branch, previous_snap_id, new_snap_id } => {
+                Bound::new(
+                    py,
+                    (
+                        PyCommitAmendedUpdate {
+                            branch: branch.clone(),
+                            previous_snap_id: previous_snap_id.to_string(),
+                            new_snap_id: new_snap_id.to_string(),
+                        },
+                        PyUpdateType { updated_at, backup_path },
+                    ),
+                )?
+                .into_any()
+                .unbind()
+            }
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id } => Bound::new(
                 py,
                 (

@@ -2619,11 +2619,12 @@ async fn do_commit_v2(
         let update_type = match commit_method {
             CommitMethod::NewCommit => UpdateType::NewCommitUpdate {
                 branch: branch_name.to_string(),
-                snap_id: new_snapshot_id.clone(),
+                new_snap_id: new_snapshot_id.clone(),
             },
             CommitMethod::Amend => UpdateType::CommitAmendedUpdate {
                 branch: branch_name.to_string(),
                 previous_snap_id: parent_snapshot.id.clone(),
+                new_snap_id: new_snapshot_id.clone(),
             },
         };
         Ok(Arc::new(repo_info.add_snapshot(
@@ -3224,7 +3225,7 @@ mod tests {
                     Some("main"),
                     UpdateType::NewCommitUpdate {
                         branch: "main".to_string(),
-                        snap_id: snapshot.id().clone(),
+                        new_snap_id: snapshot.id().clone(),
                     },
                     "backup_path",
                 )?;
@@ -4225,7 +4226,7 @@ mod tests {
         session
             .add_group("/error".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        session.amend("second amend", None).await?;
+        let after_amend2 = session.amend("second amend", None).await?;
 
         let anc_from_tag: Vec<_> = repo
             .ancestry(&VersionInfo::TagRef("tag".to_string()))
@@ -4257,15 +4258,20 @@ mod tests {
             vec![
                 CommitAmendedUpdate {
                     branch: "main".to_string(),
-                    previous_snap_id: before_amend2
+                    previous_snap_id: before_amend2.clone(),
+                    new_snap_id: after_amend2.clone(),
                 },
                 TagCreatedUpdate { name: "tag".to_string() },
                 CommitAmendedUpdate {
                     branch: "main".to_string(),
                     previous_snap_id: before_amend1.clone(),
+                    new_snap_id: before_amend2.clone(),
                 },
-                NewCommitUpdate { branch: "main".to_string(), snap_id: before_amend1 },
-                NewCommitUpdate { branch: "main".to_string(), snap_id: snap1 },
+                NewCommitUpdate {
+                    branch: "main".to_string(),
+                    new_snap_id: before_amend1
+                },
+                NewCommitUpdate { branch: "main".to_string(), new_snap_id: snap1 },
                 RepoInitializedUpdate,
             ]
         );
