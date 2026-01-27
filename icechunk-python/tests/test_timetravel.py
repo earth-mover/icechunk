@@ -1070,3 +1070,21 @@ async def test_long_ops_log(spec_version: int | None) -> None:
         assert t == ic.BranchCreatedUpdate
 
     # TODO: add check for next updates page path
+
+
+def test_ops_log_commit_snap_id() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+
+    session = repo.writable_session("main")
+    store = session.store
+
+    group = zarr.group(store=store, overwrite=True)
+    array = group.create_array("array", shape=(10,), chunks=(5,), dtype="i4")
+    array[:] = 42
+    snap_id = session.commit("commit 1")
+
+    change = next(repo.ops_log())
+    assert isinstance(change, ic.NewCommitUpdate)
+    assert change.snap_id == snap_id

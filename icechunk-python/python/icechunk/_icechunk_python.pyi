@@ -1567,6 +1567,8 @@ class BranchResetUpdate(UpdateType):
 class NewCommitUpdate(UpdateType):
     @property
     def branch(self) -> str: ...
+    @property
+    def snpa_id(self) -> str: ...
 
 class CommitAmendedUpdate(UpdateType):
     @property
