@@ -14,7 +14,7 @@ This document explains how Store works internally—how keys are parsed, how ope
 
 ## Store Structure
 
-`Store` (defined in `store.rs`) wraps a Session with concurrency control:
+`Store` (defined in `store.rs`) is backed by a Session with concurrency control:
 
 ```rust
 #[derive(Clone)]
@@ -144,8 +144,17 @@ impl Store {
         if self.read_only().await {
             return Err(StoreErrorKind::ReadOnly.into());
         }
-        let mut guard = self.session.write().await;
-        delete_key(key, guard.deref_mut()).await
+        let mut session = self.session.write().await;
+        match Key::parse(key)? {
+            Key::Metadata { node_path } => {
+                session.delete_node(&node_path).await?;
+            }
+            Key::Chunk { node_path, coords } => {
+                session.delete_chunks(&node_path, vec![coords]).await?;
+            }
+            Key::ZarrV2(_) => {} // No-op for legacy keys
+        }
+        Ok(())
     }
 }
 ```
@@ -154,12 +163,22 @@ impl Store {
 
 ```rust
 impl Store {
+    /// Returns keys and prefixes as strings
     pub async fn list_dir(
+        &self,
+        prefix: &str,
+    ) -> StoreResult<impl Stream<Item = StoreResult<String>>> {
+        // Internally uses list_dir_items and converts to strings
+        ...
+    }
+
+    /// Returns structured items distinguishing keys from prefixes
+    pub async fn list_dir_items(
         &self,
         prefix: &str,
     ) -> StoreResult<impl Stream<Item = StoreResult<ListDirItem>>> {
         let guard = self.session.read().await;
-        list_dir_items(prefix, guard.deref()).await
+        ...
     }
 }
 
@@ -169,6 +188,8 @@ pub enum ListDirItem {
     Prefix(String), // A directory (group or array path)
 }
 ```
+
+> **Note**: `list_dir` returns strings for compatibility with Zarr; use `list_dir_items` if you need to distinguish between files and directories.
 
 ---
 
@@ -324,7 +345,7 @@ Store errors wrap lower-layer errors while adding Zarr-specific context. The `#[
 | **Interface** | String keys (`"array/c/0/0"`) | Typed methods (`get_chunk(&path, &coords)`) |
 | **Primary users** | Python bindings, Zarr libraries | Internal Rust code |
 | **Key parsing** | Handles Zarr key formats | Expects pre-parsed input |
-| **Concurrency** | RwLock for safe sharing | Not Sync—one per task |
+| **Concurrency** | Built-in RwLock for safe sharing | Not Sync—wrap in `Arc<RwLock<Session>>` for sharing |
 | **Abstraction level** | Higher (key-value semantics) | Lower (typed operations) |
 
 For internal Rust code, prefer using `Session` directly—it's more type-safe and avoids parsing overhead.

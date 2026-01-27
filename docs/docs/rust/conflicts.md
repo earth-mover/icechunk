@@ -72,10 +72,12 @@ pub enum Conflict {
 | `NewNodeInInvalidGroup` | You created a node under a path that no longer exists |
 | `ZarrMetadataDoubleUpdate` | Both writers modified the same array/group metadata |
 | `ZarrMetadataUpdateOfDeletedArray` | You updated metadata for an array the other writer deleted |
+| `ZarrMetadataUpdateOfDeletedGroup` | You updated metadata for a group the other writer deleted |
 | `ChunkDoubleUpdate` | Both writers modified the same chunk(s) |
 | `ChunksUpdatedInDeletedArray` | You wrote chunks to an array the other writer deleted |
 | `ChunksUpdatedInUpdatedArray` | You wrote chunks to an array the other writer also modified |
 | `DeleteOfUpdatedArray` | You deleted an array the other writer updated |
+| `DeleteOfUpdatedGroup` | You deleted a group the other writer updated |
 | `MoveOperationCannotBeRebased` | Move operations can't be automatically rebased |
 
 ### Why `ChunkDoubleUpdate` Uses `HashSet<ChunkIndices>`
@@ -120,24 +122,39 @@ The solver receives:
 
 ### BasicSolver
 
-The default `BasicSolver` (in `conflicts/basic_solver.rs`) implements simple resolution rules:
+The default `BasicSolver` (in `conflicts/basic_solver.rs`) implements configurable resolution rules:
 
-**Automatically Resolvable:**
+```rust
+pub struct BasicConflictSolver {
+    pub on_chunk_conflict: VersionSelection,  // UseOurs, UseTheirs, or Fail
+    pub fail_on_delete_of_updated_array: bool,
+    pub fail_on_delete_of_updated_group: bool,
+}
+```
+
+**Always Resolvable:**
 
 | Situation | Resolution |
 |-----------|------------|
 | Different arrays modified | Merge both changes |
 | Same array, different chunks | Merge chunk sets |
-| You wrote, they deleted the same chunk | Keep your write |
 
-**Not Automatically Resolvable:**
+**Configurable (resolved by default):**
+
+| Situation | Default Resolution | Config to Fail |
+|-----------|-------------------|----------------|
+| Same chunk modified by both | Use ours (`on_chunk_conflict: UseOurs`) | Set to `Fail` |
+| You deleted an array they updated | Allow delete | `fail_on_delete_of_updated_array: true` |
+| You deleted a group they updated | Allow delete | `fail_on_delete_of_updated_group: true` |
+
+**Never Resolvable:**
 
 | Situation | Why |
 |-----------|-----|
-| Same chunk modified by both | Can't merge binary data |
+| You wrote chunks to a deleted array | Data would be lost |
 | Same metadata modified by both | Can't merge JSON safely |
 | Move operations | Path semantics are complex |
-| Delete vs. update on same node | Ambiguous user intent |
+| New node conflicts with existing | Ambiguous which to keep |
 
 ---
 

@@ -24,7 +24,7 @@ Sessions come in three modes, each with different capabilities:
 
 ### Why Three Modes?
 
-- **Read-only**: No ChangeSet needed—just reads from the base snapshot. Multiple read-only sessions can share the same cached data.
+- **Read-only**: ChangeSet is unused—just reads from the base snapshot. Multiple read-only sessions can share the same cached data.
 
 - **Writable**: The common case for data updates. Tracks new arrays, updated metadata, and chunk writes in a ChangeSet.
 
@@ -222,10 +222,10 @@ flowchart TD
     E --> F[Write snapshot + transaction log]
     F --> G{Conditional update branch ref}
     G -->|Success| H[Return new SnapshotId]
-    G -->|Conflict| I[Attempt rebase]
-    I -->|Resolved| B
-    I -->|Failed| J[Return ConflictError]
+    G -->|Conflict| I[Return ConflictError]
 ```
+
+> **Note**: The `commit()` method does not automatically rebase. If you want automatic conflict resolution, use `commit_rebasing()` which catches conflict errors and attempts to merge changes.
 
 Key points:
 
@@ -233,7 +233,7 @@ Key points:
 2. **Inline chunks embedded** in manifests during step B
 3. **TransactionLog** records what changed (for [conflict detection](conflicts.md))
 4. **Conditional write** on branch ref detects concurrent commits
-5. **Rebase** attempts to merge changes if someone else committed first
+5. **Conflict handling**: `commit()` returns `ConflictError` if someone else committed first; the caller must explicitly use `commit_rebasing()` or handle the conflict
 
 ### Manifest Building
 
@@ -293,8 +293,10 @@ pub enum SessionErrorKind {
 
     // Commit errors
     NoChangesToCommit,
+    NoAmendForInitialCommit,
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
     RebaseFailed { snapshot: SnapshotId, conflicts: Vec<Conflict> },
+    BadSnapshotChainForDiff,
 
     // Validation errors
     InvalidIndex { coords: ChunkIndices, path: Path },

@@ -4,14 +4,14 @@
 
 # Rust Library Overview
 
-This section of the documentation explains the internals of the icechunk rust library.
+This section documents the internals of the Icechunk Rust library.
 
-At a very high level the organization is:
+At a high level, the organization is:
 
-- [Repository](repository.md) is the entry point—it manages branches, tags, and creates sessions.
+- [Repository](repository.md) is the entry point—it provides access to branches and tags, and creates sessions.
 - [Sessions](session.md) handle transactions for reading and writing data.
 - [ChangeSets](session.md#changeset) track which chunks and metadata changed, for inclusion in the next snapshot.
-- [Snapshots](core-types.md#snapshot) captures the entire repository state at a point in time.
+- [Snapshots](core-types.md#snapshot) capture the entire repository state at a point in time.
 - [Manifests](core-types.md#manifest) index where chunks are stored.
 - The [Storage](storage.md) layer abstracts away whether you're on S3 or a local disk.
 

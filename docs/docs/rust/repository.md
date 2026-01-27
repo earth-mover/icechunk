@@ -4,7 +4,7 @@
 
 The **Repository** is where everything starts. It's the handle you use to access a versioned collection of arrays and groups—similar to how a Git repository handle lets you access commits, branches, and files.
 
-But `Repository` itself is lightweight. It doesn't hold [Snapshot](core-types.md#snapshot) data or track modifications—that's what [Sessions](session.md) are for. Think of `Repository` as the factory that creates Sessions, plus the manager for branches and tags.
+But `Repository` itself is lightweight. It doesn't hold [Snapshot](core-types.md#snapshot) data or track modifications—that's what [Sessions](session.md) are for. Think of `Repository` as the factory that creates Sessions, plus the interface for working with branches and tags (whose state lives in storage).
 
 This document explains the `Repository` type and its supporting types: how versions are specified, how branches and tags work, and how configuration flows through the system.
 
@@ -39,9 +39,11 @@ pub enum VersionInfo {
 **Resolution** happens when creating a Session:
 
 - **SnapshotId**: Used directly (no resolution needed)
-- **TagRef**: Read `refs/tag.{name}/ref.json` → extract snapshot ID
-- **BranchTipRef**: Read `refs/branch.{name}/ref.json` → extract snapshot ID
+- **TagRef**: Look up tag in storage → extract snapshot ID
+- **BranchTipRef**: Look up branch in storage → extract snapshot ID
 - **AsOf**: Walk snapshot ancestry until finding one where `flushed_at <= at`
+
+> **Note**: In v1 repositories, refs are stored as individual files (`refs/branch.{name}/ref.json`). In v2+, all refs are stored in a central `RepoInfo` object for atomic updates.
 
 ---
 
@@ -53,18 +55,14 @@ Refs are named pointers to [Snapshots](core-types.md#snapshot). They make it pos
 
 A branch tracks a line of work. When you commit, the branch moves to point to your new snapshot.
 
-**Storage**: `refs/branch.{name}/ref.json`
-
 **Key properties**:
 - Mutable—updated on each commit to that branch
 - The `main` branch is created automatically and cannot be deleted
-- Updates use **conditional writes** (ETags) for [conflict detection](conflicts.md)
+- Updates use **conditional writes** for [conflict detection](conflicts.md)
 
 ### Tags
 
 A tag permanently marks a specific snapshot—like a release version.
-
-**Storage**: `refs/tag.{name}/ref.json`
 
 **Key properties**:
 - Immutable—once created, always points to the same snapshot

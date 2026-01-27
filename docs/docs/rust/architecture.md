@@ -13,11 +13,11 @@ This document explains these layers and how data flows through them.
 The [`Repository`](repository.md) type (in `repository.rs`) is the entry point for version control operations:
 
 - Opening/creating repositories
-- Managing branches and tags (see [Refs](core-types.md#refs-branches-and-tags))
+- Working with branches and tags (see [Refs](core-types.md#refs-branches-and-tags))
 - Resolving version specifiers (`VersionInfo`)
 - Creating [Sessions](#2-transaction-layer-session--changeset) for reading or writing
 
-`Repository` doesn't directly handle data—it delegates to `Session` for all operations.
+`Repository` doesn't directly handle data—it delegates to `Session` for all read/write operations.
 
 ### 2. Transaction Layer: Session + ChangeSet
 
@@ -44,7 +44,7 @@ The [`Store`](store.md) type (in `store.rs`) provides a key-value interface that
 - `list_dir(prefix)` for directory listing
 - Key parsing to translate Zarr [Paths](core-types.md#path) and [ChunkIndices](core-types.md#chunkindices) to Icechunk operations
 
-Store wraps a [`Session`](session.md) and translates string keys to typed method calls.
+Store is backed by a [`Session`](session.md) and translates string keys to typed method calls.
 
 ## Data Flow
 
@@ -190,23 +190,20 @@ The dependency graph flows downward (higher modules depend on lower ones):
 ┌─────────────────────▼───────────────────────┐
 │     session.rs          store.rs            │
 │   (transactions)    (zarr interface)        │
-└─────────────────────┬───────────────────────┘
-                      │
-┌─────────────────────▼───────────────────────┐
-│               change_set.rs                 │
-│          (modification tracking)            │
-└─────────────────────┬───────────────────────┘
-                      │
-┌─────────────────────▼───────────────────────┐
-│              asset_manager.rs               │
-│           (caching coordinator)             │
-└─────────────────────┬───────────────────────┘
-                      │
-┌─────────────────────▼───────────────────────┐
-│    format/              storage/            │
-│  (serialization)    (I/O backends)          │
-└─────────────────────────────────────────────┘
+└────────┬────────────────────┬───────────────┘
+         │                    │
+┌────────▼────────┐  ┌────────▼────────┐
+│  change_set.rs  │  │ asset_manager.rs│
+│ (modifications) │  │    (caching)    │
+└─────────────────┘  └────────┬────────┘
+                              │
+         ┌────────────────────▼───────────────┐
+         │    format/              storage/   │
+         │  (serialization)    (I/O backends) │
+         └────────────────────────────────────┘
 ```
+
+> **Note**: `change_set.rs` and `asset_manager.rs` are parallel components both used by `session.rs`—`ChangeSet` tracks modifications while `AssetManager` handles cached reads.
 
 ## Key Relationships
 

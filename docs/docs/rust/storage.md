@@ -20,16 +20,7 @@ The `Storage` trait (defined in `storage/mod.rs`) is the abstraction for all I/O
 #[async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
-    async fn default_settings(&self) -> StorageResult<Settings>;
-    async fn can_write(&self) -> StorageResult<bool>;
-
-    async fn get_object(
-        &self,
-        settings: &Settings,
-        path: &str,
-        range: Option<&Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)>;
-
+    // Required methods (must be implemented)
     async fn get_object_range(
         &self,
         settings: &Settings,
@@ -78,16 +69,19 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>>;
 
-    async fn delete_objects(
-        &self,
-        settings: &Settings,
-        prefix: &str,
-        ids: BoxStream<'_, (String, u64)>,
-    ) -> StorageResult<DeleteObjectsResult>;
+    async fn can_write(&self) -> StorageResult<bool>;
 
-    async fn root_is_clean(&self) -> StorageResult<bool>;
+    // Methods with default implementations
+    async fn default_settings(&self) -> StorageResult<Settings> { ... }
+    async fn get_object(&self, ...) -> StorageResult<...> { ... }
+    async fn delete_objects(&self, ...) -> StorageResult<...> { ... }
+    async fn root_is_clean(&self) -> StorageResult<bool> { ... }
+    async fn get_object_concurrently(&self, ...) -> StorageResult<...> { ... }
+    async fn get_object_concurrently_multiple(&self, ...) -> StorageResult<...> { ... }
 }
 ```
+
+> **Note**: Methods with `{ ... }` have default implementations and are optional to override.
 
 ### Key Design Decisions
 
@@ -317,7 +311,14 @@ pub async fn new_azure_blob_storage(
     credentials: Option<AzureCredentials>,
     config: Option<HashMap<String, String>>,
 ) -> StorageResult<Arc<dyn Storage>>;
+
+// Redirect-based storage (for read-only access via HTTP redirects)
+pub fn new_redirect_storage(
+    base_url: &str,
+) -> StorageResult<Arc<dyn Storage>>;
 ```
+
+> **Note**: `new_in_memory_storage`, `new_local_filesystem_storage`, and `new_azure_blob_storage` are `async` functions.
 
 ### Why Two S3 Implementations?
 

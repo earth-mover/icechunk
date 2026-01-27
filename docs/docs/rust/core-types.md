@@ -4,7 +4,7 @@
 
 A **[Snapshot](#snapshot)** is like a git commit—it captures the entire repository at a specific moment. If you have a [`SnapshotId`](#content-addressable-ids), you can reconstruct exactly what every array and group looked like at that version: their metadata, shapes, and where all their chunks are stored.
 
-Snapshots are composed of many smaller pieces: they contains **[NodeSnapshots](#nodesnapshot)** (one per array/group), which point to **[Manifests](#manifest)**, which contain **[ChunkPayloads](#chunkpayload-aka-chunk-reference)** that describe where each chunk's bytes live. All of these are tied together with typed **[IDs](#content-addressable-ids)**.
+Snapshots are composed of many smaller pieces: they contain **[NodeSnapshots](#nodesnapshot)** (one per array/group), which point to **[Manifests](#manifest)**, which contain **[ChunkPayloads](#chunkpayload-aka-chunk-reference)** that describe where each chunk's bytes live. All of these are tied together with typed **[IDs](#content-addressable-ids)**.
 
 This document defines these types **from the ground up**—starting with the simplest building blocks and working toward the [Snapshot](#snapshot) that ties them all together.
 
@@ -91,6 +91,30 @@ ChunkIndices(vec![0u32, 0, 1])
 
 The number of indices matches the array's dimensionality. Indices are `u32` values.
 
+### ByteRange
+
+Specifies which bytes to read from a chunk or object. Used for partial reads:
+
+```rust
+pub enum ByteRange {
+    /// Fixed range [start, end)
+    Bounded(Range<ChunkOffset>),
+    /// All bytes from offset to end
+    From(ChunkOffset),
+    /// Last n bytes
+    Last(ChunkLength),
+    /// All bytes except last n
+    Until(ChunkOffset),
+}
+```
+
+| Variant | Example | Reads |
+|---------|---------|-------|
+| `Bounded(10..20)` | Bytes 10-19 | Fixed slice |
+| `From(100)` | Bytes 100 to end | Tail of object |
+| `Last(50)` | Last 50 bytes | Footer/trailer |
+| `Until(50)` | All except last 50 | Skip trailer |
+
 ---
 
 ## Chunk Storage
@@ -114,7 +138,11 @@ Chunks can be stored in three ways:
 ```rust
 enum ChunkPayload {
     Ref(ChunkRef),        // Stored in Icechunk's storage
-    Inline(Bytes),        // Raw chunk data embedded in manifest
+    Inline {              // Raw chunk data embedded in manifest
+        bytes: Bytes,
+        offset: ChunkOffset,
+        length: ChunkLength,
+    },
     Virtual(VirtualChunkRef),  // Reference to external file
 }
 
