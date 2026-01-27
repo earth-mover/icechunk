@@ -610,7 +610,7 @@ impl PyBranchResetUpdate {
 impl PyNewCommitUpdate {
     fn __repr__(&self) -> PyResult<String> {
         Ok(format!(
-            "NewCommitUpdate(branch={}, snap_id={})",
+            "NewCommitUpdate(branch={}, new_snap_id={})",
             self.branch, self.new_snap_id
         ))
     }
