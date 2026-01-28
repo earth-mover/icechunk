@@ -264,8 +264,15 @@ impl std::fmt::Display for RedirectStorage {
 }
 
 #[async_trait]
-#[typetag::serde]
 impl Storage for RedirectStorage {
+    fn type_tag(&self) -> &'static str {
+        "RedirectStorage"
+    }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
+
     async fn can_write(&self) -> StorageResult<bool> {
         self.backend().await?.can_write().await
     }

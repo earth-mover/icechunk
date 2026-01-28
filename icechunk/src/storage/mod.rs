@@ -1,4 +1,11 @@
-use ::object_store::{ClientConfigKey, azure::AzureConfigKey, gcp::GoogleConfigKey};
+#[cfg(feature = "object-store-http")]
+use ::object_store::ClientConfigKey;
+#[cfg(feature = "object-store-azure")]
+use ::object_store::azure::AzureConfigKey;
+#[cfg(feature = "object-store-gcs")]
+use ::object_store::gcp::GoogleConfigKey;
+
+#[cfg(feature = "s3")]
 use aws_sdk_s3::{
     config::http::HttpResponse,
     error::SdkError,
@@ -12,6 +19,7 @@ use aws_sdk_s3::{
     },
     primitives::ByteStreamError,
 };
+
 use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{
@@ -19,7 +27,10 @@ use futures::{
     stream::{self, BoxStream, FuturesOrdered},
 };
 use itertools::Itertools;
+
+#[cfg(feature = "s3")]
 use s3::S3Storage;
+
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::{max, min},
@@ -47,16 +58,30 @@ pub mod logging;
 
 pub mod object_store;
 pub mod redirect;
+
+#[cfg(feature = "s3")]
 pub mod s3;
 
 pub use object_store::ObjectStorage;
 
 use crate::{
-    config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options},
     error::ICError,
     private,
+    registry::{extract_type_tag, serialize_with_tag, storage_registry},
     storage::redirect::RedirectStorage,
 };
+
+#[cfg(any(feature = "s3", feature = "object-store-s3"))]
+use crate::config::S3Credentials;
+
+#[cfg(any(feature = "s3", feature = "object-store-s3"))]
+use crate::config::S3Options;
+
+#[cfg(feature = "object-store-azure")]
+use crate::config::AzureCredentials;
+
+#[cfg(feature = "object-store-gcs")]
+use crate::config::GcsCredentials;
 
 #[derive(Debug, Error)]
 pub enum StorageErrorKind {
@@ -66,30 +91,42 @@ pub enum StorageErrorKind {
     ObjectStore(#[from] Box<::object_store::Error>),
     #[error("bad object store prefix {0:?}")]
     BadPrefix(OsString),
+
+    #[cfg(feature = "s3")]
     #[error("error getting object from object store {0}")]
     S3GetObjectError(#[from] Box<SdkError<GetObjectError, HttpResponse>>),
+    #[cfg(feature = "s3")]
     #[error("error writing object to object store {0}")]
     S3PutObjectError(#[from] Box<SdkError<PutObjectError, HttpResponse>>),
+    #[cfg(feature = "s3")]
     #[error("error creating multipart upload {0}")]
     S3CreateMultipartUploadError(
         #[from] Box<SdkError<CreateMultipartUploadError, HttpResponse>>,
     ),
+    #[cfg(feature = "s3")]
     #[error("error uploading multipart part {0}")]
     S3UploadPartError(#[from] Box<SdkError<UploadPartError, HttpResponse>>),
+    #[cfg(feature = "s3")]
     #[error("error completing multipart upload {0}")]
     S3CompleteMultipartUploadError(
         #[from] Box<SdkError<CompleteMultipartUploadError, HttpResponse>>,
     ),
+    #[cfg(feature = "s3")]
     #[error("error copying object in object store {0}")]
     S3CopyObjectError(#[from] Box<SdkError<CopyObjectError, HttpResponse>>),
+    #[cfg(feature = "s3")]
     #[error("error getting object metadata from object store {0}")]
     S3HeadObjectError(#[from] Box<SdkError<HeadObjectError, HttpResponse>>),
+    #[cfg(feature = "s3")]
     #[error("error listing objects in object store {0}")]
     S3ListObjectError(#[from] Box<SdkError<ListObjectsV2Error, HttpResponse>>),
+    #[cfg(feature = "s3")]
     #[error("error deleting objects in object store {0}")]
     S3DeleteObjectError(#[from] Box<SdkError<DeleteObjectsError, HttpResponse>>),
+    #[cfg(feature = "s3")]
     #[error("error streaming bytes from object store {0}")]
     S3StreamError(#[from] Box<ByteStreamError>),
+
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
     #[error("storage configuration error: {0}")]
@@ -411,8 +448,12 @@ impl DeleteObjectsResult {
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
-#[typetag::serde(tag = "type")]
 pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
+    /// Returns the type tag used for serialization/deserialization.
+    fn type_tag(&self) -> &'static str;
+
+    /// Serialize self for use with the registry pattern.
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize;
     async fn default_settings(&self) -> StorageResult<Settings> {
         Ok(Default::default())
     }
@@ -662,6 +703,7 @@ pub fn split_in_multiple_equal_requests(
     .map(|(_, range)| range)
 }
 
+#[cfg(feature = "s3")]
 pub fn new_s3_storage(
     config: S3Options,
     bucket: String,
@@ -687,6 +729,7 @@ pub fn new_s3_storage(
     Ok(Arc::new(st))
 }
 
+#[cfg(feature = "s3")]
 pub fn new_r2_storage(
     config: S3Options,
     bucket: Option<String>,
@@ -736,6 +779,7 @@ pub fn new_r2_storage(
     Ok(Arc::new(st))
 }
 
+#[cfg(feature = "s3")]
 pub fn new_tigris_storage(
     config: S3Options,
     bucket: String,
@@ -786,6 +830,7 @@ pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
     Ok(Arc::new(st))
 }
 
+#[cfg(feature = "object-store-local")]
 pub async fn new_local_filesystem_storage(
     path: &Path,
 ) -> StorageResult<Arc<dyn Storage>> {
@@ -793,6 +838,7 @@ pub async fn new_local_filesystem_storage(
     Ok(Arc::new(st))
 }
 
+#[cfg(feature = "object-store-http")]
 pub fn new_http_storage(
     base_url: &str,
     config: Option<HashMap<String, String>>,
@@ -818,6 +864,7 @@ pub fn new_redirect_storage(base_url: &str) -> StorageResult<Arc<dyn Storage>> {
     Ok(Arc::new(RedirectStorage::new(base_url)))
 }
 
+#[cfg(feature = "object-store-s3")]
 pub async fn new_s3_object_store_storage(
     config: S3Options,
     bucket: String,
@@ -835,6 +882,7 @@ pub async fn new_s3_object_store_storage(
     Ok(Arc::new(storage))
 }
 
+#[cfg(feature = "object-store-azure")]
 pub async fn new_azure_blob_storage(
     account: String,
     container: String,
@@ -853,6 +901,7 @@ pub async fn new_azure_blob_storage(
     Ok(Arc::new(storage))
 }
 
+#[cfg(feature = "object-store-gcs")]
 pub fn new_gcs_storage(
     bucket: String,
     prefix: Option<String>,
@@ -868,6 +917,49 @@ pub fn new_gcs_storage(
         .collect();
     let storage = ObjectStorage::new_gcs(bucket, prefix, credentials, Some(config))?;
     Ok(Arc::new(storage))
+}
+
+// =============================================================================
+// Serde helper module for Arc<dyn Storage>
+// =============================================================================
+
+/// Serde helper module for serializing/deserializing Arc<dyn Storage>.
+/// Use with `#[serde(with = "storage_serde")]` on fields.
+pub mod storage_serde {
+    use super::*;
+
+    pub fn serialize<S>(
+        storage: &Arc<dyn Storage + Send + Sync>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serialize_with_tag(serializer, "type", storage.type_tag(), storage.as_serialize())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Arc<dyn Storage + Send + Sync>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = rmpv::Value::deserialize(deserializer)?;
+        let type_tag =
+            extract_type_tag(&value, "type").map_err(serde::de::Error::custom)?;
+
+        let registry = storage_registry();
+        let deserialize_fn = registry.get(&type_tag).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "Unknown Storage type: {}. Available types depend on enabled features.",
+                type_tag
+            ))
+        })?;
+
+        // The registry returns Arc<dyn Storage>, but since Storage: Send + Sync,
+        // we can safely convert it to Arc<dyn Storage + Send + Sync>
+        let storage = deserialize_fn(value).map_err(serde::de::Error::custom)?;
+        // SAFETY: Storage trait requires Send + Sync, so this cast is always valid
+        Ok(storage as Arc<dyn Storage + Send + Sync>)
+    }
 }
 
 #[cfg(test)]
@@ -902,6 +994,13 @@ mod tests {
     #[tokio_test]
     /// Regression test: we can deserialize a GCS credential with token
     async fn test_gcs_session_serialization() {
+        // Use a wrapper struct to test serialization since we use serde(with = ...) pattern
+        #[derive(Serialize, Deserialize)]
+        struct StorageWrapper {
+            #[serde(with = "super::storage_serde")]
+            storage: Arc<dyn Storage + Send + Sync>,
+        }
+
         let storage = new_gcs_storage(
             "bucket".to_string(),
             Some("prefix".to_string()),
@@ -914,8 +1013,9 @@ mod tests {
             None,
         )
         .unwrap();
-        let bytes = rmp_serde::to_vec(&storage).unwrap();
-        let dese: Result<Arc<dyn Storage>, _> = rmp_serde::from_slice(&bytes);
+        let wrapper = StorageWrapper { storage };
+        let bytes = rmp_serde::to_vec(&wrapper).unwrap();
+        let dese: Result<StorageWrapper, _> = rmp_serde::from_slice(&bytes);
         assert!(dese.is_ok())
     }
 

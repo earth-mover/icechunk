@@ -1,28 +1,60 @@
 use crate::{
-    config::{
-        AzureCredentials, AzureStaticCredentials, GcsBearerCredential, GcsCredentials,
-        GcsCredentialsFetcher, GcsStaticCredentials, S3Credentials, S3Options,
-    },
+    config::S3Credentials,
     private,
+    registry::{extract_type_tag, object_store_backend_registry, serialize_with_tag},
 };
+
+#[cfg(feature = "object-store-s3")]
+use crate::config::S3Options;
+
+#[cfg(feature = "object-store-azure")]
+use crate::config::{AzureCredentials, AzureStaticCredentials};
+
+#[cfg(feature = "object-store-gcs")]
+use crate::config::{
+    GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
+};
+
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
+
+#[cfg(feature = "object-store-gcs")]
+use chrono::TimeDelta;
+
 use futures::{
     Stream, StreamExt, TryStreamExt,
     stream::{self, BoxStream},
 };
 use object_store::{
-    Attribute, AttributeValue, Attributes, BackoffConfig, ClientConfigKey,
-    CredentialProvider, GetOptions, ObjectMeta, ObjectStore, ObjectStoreExt as _,
-    PutMode, PutOptions, RetryConfig, StaticCredentialProvider, UpdateVersion,
-    aws::AmazonS3Builder,
-    azure::{AzureConfigKey, MicrosoftAzureBuilder},
-    gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey},
-    http::HttpBuilder,
+    Attribute, AttributeValue, Attributes, GetOptions, ObjectMeta, ObjectStore,
+    ObjectStoreExt as _, PutMode, PutOptions, UpdateVersion,
     local::LocalFileSystem,
     memory::InMemory,
     path::Path as ObjectPath,
+};
+
+#[cfg(any(
+    feature = "object-store-s3",
+    feature = "object-store-gcs",
+    feature = "object-store-azure",
+    feature = "object-store-http"
+))]
+use object_store::{BackoffConfig, RetryConfig};
+
+#[cfg(feature = "object-store-http")]
+use object_store::{ClientConfigKey, http::HttpBuilder};
+
+#[cfg(feature = "object-store-s3")]
+use object_store::aws::AmazonS3Builder;
+
+#[cfg(feature = "object-store-azure")]
+use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
+
+#[cfg(feature = "object-store-gcs")]
+use object_store::{
+    CredentialProvider, StaticCredentialProvider,
+    gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -48,6 +80,7 @@ use super::{
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ObjectStorage {
+    #[serde(with = "object_store_backend_serde")]
     backend: Arc<dyn ObjectStoreBackend>,
     #[serde(skip)]
     /// We need to use OnceCell to allow async initialization, because serde
@@ -69,6 +102,7 @@ impl ObjectStorage {
     /// Create an local filesystem Storage implementation
     ///
     /// This implementation should not be used in production code.
+    #[cfg(feature = "object-store-local")]
     pub async fn new_local_filesystem(
         prefix: &StdPath,
     ) -> Result<ObjectStorage, StorageError> {
@@ -81,6 +115,7 @@ impl ObjectStorage {
         Ok(storage)
     }
 
+    #[cfg(feature = "object-store-s3")]
     pub async fn new_s3(
         bucket: String,
         prefix: Option<String>,
@@ -94,6 +129,7 @@ impl ObjectStorage {
         Ok(storage)
     }
 
+    #[cfg(feature = "object-store-azure")]
     pub async fn new_azure(
         account: String,
         container: String,
@@ -113,6 +149,7 @@ impl ObjectStorage {
         Ok(storage)
     }
 
+    #[cfg(feature = "object-store-gcs")]
     pub fn new_gcs(
         bucket: String,
         prefix: Option<String>,
@@ -126,6 +163,7 @@ impl ObjectStorage {
         Ok(storage)
     }
 
+    #[cfg(feature = "object-store-http")]
     pub fn new_http(
         url: Url,
         config: Option<HashMap<ClientConfigKey, String>>,
@@ -228,8 +266,15 @@ impl fmt::Display for ObjectStorage {
 impl private::Sealed for ObjectStorage {}
 
 #[async_trait]
-#[typetag::serde]
 impl Storage for ObjectStorage {
+    fn type_tag(&self) -> &'static str {
+        "ObjectStorage"
+    }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
+
     async fn can_write(&self) -> StorageResult<bool> {
         Ok(self.backend.can_write())
     }
@@ -412,8 +457,13 @@ impl Storage for ObjectStorage {
     }
 }
 
-#[typetag::serde(tag = "object_store_provider_type")]
 pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
+    /// Returns the type tag used for serialization/deserialization.
+    fn type_tag(&self) -> &'static str;
+
+    /// Serialize self for use with the registry pattern.
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize;
+
     fn mk_object_store(
         &self,
         settings: &Settings,
@@ -444,8 +494,15 @@ impl fmt::Display for InMemoryObjectStoreBackend {
     }
 }
 
-#[typetag::serde(name = "in_memory_object_store_provider")]
 impl ObjectStoreBackend for InMemoryObjectStoreBackend {
+    fn type_tag(&self) -> &'static str {
+        "in_memory_object_store_provider"
+    }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
+
     fn mk_object_store(
         &self,
         _settings: &Settings,
@@ -479,19 +536,29 @@ impl ObjectStoreBackend for InMemoryObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-local")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LocalFileSystemObjectStoreBackend {
     path: PathBuf,
 }
 
+#[cfg(feature = "object-store-local")]
 impl fmt::Display for LocalFileSystemObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "LocalFileSystemObjectStoreBackend(path={})", self.path.display())
     }
 }
 
-#[typetag::serde(name = "local_file_system_object_store_provider")]
+#[cfg(feature = "object-store-local")]
 impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
+    fn type_tag(&self) -> &'static str {
+        "local_file_system_object_store_provider"
+    }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
+
     fn mk_object_store(
         &self,
         _settings: &Settings,
@@ -536,12 +603,14 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-http")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HttpObjectStoreBackend {
     pub url: String,
     pub config: Option<HashMap<ClientConfigKey, String>>,
 }
 
+#[cfg(feature = "object-store-http")]
 impl fmt::Display for HttpObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -560,8 +629,16 @@ impl fmt::Display for HttpObjectStoreBackend {
     }
 }
 
-#[typetag::serde(name = "http_object_store_provider")]
+#[cfg(feature = "object-store-http")]
 impl ObjectStoreBackend for HttpObjectStoreBackend {
+    fn type_tag(&self) -> &'static str {
+        "http_object_store_provider"
+    }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
+
     fn mk_object_store(
         &self,
         settings: &Settings,
@@ -616,6 +693,7 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-s3")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct S3ObjectStoreBackend {
     bucket: String,
@@ -624,6 +702,7 @@ pub struct S3ObjectStoreBackend {
     config: Option<S3Options>,
 }
 
+#[cfg(feature = "object-store-s3")]
 impl fmt::Display for S3ObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -636,8 +715,16 @@ impl fmt::Display for S3ObjectStoreBackend {
     }
 }
 
-#[typetag::serde(name = "s3_object_store_provider")]
+#[cfg(feature = "object-store-s3")]
 impl ObjectStoreBackend for S3ObjectStoreBackend {
+    fn type_tag(&self) -> &'static str {
+        "s3_object_store_provider"
+    }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
+
     fn mk_object_store(
         &self,
         settings: &Settings,
@@ -714,6 +801,7 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-azure")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AzureObjectStoreBackend {
     pub account: String,
@@ -723,6 +811,7 @@ pub struct AzureObjectStoreBackend {
     pub config: Option<HashMap<AzureConfigKey, String>>,
 }
 
+#[cfg(feature = "object-store-azure")]
 impl fmt::Display for AzureObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -735,8 +824,16 @@ impl fmt::Display for AzureObjectStoreBackend {
     }
 }
 
-#[typetag::serde(name = "azure_object_store_provider")]
+#[cfg(feature = "object-store-azure")]
 impl ObjectStoreBackend for AzureObjectStoreBackend {
+    fn type_tag(&self) -> &'static str {
+        "azure_object_store_provider"
+    }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
+
     fn mk_object_store(
         &self,
         settings: &Settings,
@@ -795,6 +892,7 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-gcs")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GcsObjectStoreBackend {
     pub bucket: String,
@@ -803,6 +901,7 @@ pub struct GcsObjectStoreBackend {
     pub config: Option<HashMap<GoogleConfigKey, String>>,
 }
 
+#[cfg(feature = "object-store-gcs")]
 impl fmt::Display for GcsObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -814,8 +913,16 @@ impl fmt::Display for GcsObjectStoreBackend {
     }
 }
 
-#[typetag::serde(name = "gcs_object_store_provider")]
+#[cfg(feature = "object-store-gcs")]
 impl ObjectStoreBackend for GcsObjectStoreBackend {
+    fn type_tag(&self) -> &'static str {
+        "gcs_object_store_provider"
+    }
+
+    fn as_serialize(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
+
     fn mk_object_store(
         &self,
         settings: &Settings,
@@ -892,12 +999,14 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-gcs")]
 #[derive(Debug)]
 pub struct GcsRefreshableCredentialProvider {
     last_credential: Arc<RwLock<Option<GcsBearerCredential>>>,
     refresher: Arc<dyn GcsCredentialsFetcher>,
 }
 
+#[cfg(feature = "object-store-gcs")]
 impl GcsRefreshableCredentialProvider {
     pub fn new(refresher: Arc<dyn GcsCredentialsFetcher>) -> Self {
         Self { last_credential: Arc::new(RwLock::new(None)), refresher }
@@ -931,6 +1040,7 @@ impl GcsRefreshableCredentialProvider {
     }
 }
 
+#[cfg(feature = "object-store-gcs")]
 #[async_trait]
 impl CredentialProvider for GcsRefreshableCredentialProvider {
     type Credential = GcpCredential;
@@ -951,6 +1061,50 @@ fn object_to_list_info(
     let id = ObjectPath::from_iter(object.location.prefix_match(prefix)?).to_string();
     let size_bytes = object.size;
     Some(ListInfo { id, created_at, size_bytes })
+}
+
+// =============================================================================
+// Serde helper module for Arc<dyn ObjectStoreBackend>
+// =============================================================================
+
+/// Serde helper module for serializing/deserializing Arc<dyn ObjectStoreBackend>.
+/// Use with `#[serde(with = "object_store_backend_serde")]` on fields.
+pub mod object_store_backend_serde {
+    use super::*;
+
+    pub fn serialize<S>(
+        backend: &Arc<dyn ObjectStoreBackend>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serialize_with_tag(
+            serializer,
+            "object_store_provider_type",
+            backend.type_tag(),
+            backend.as_serialize(),
+        )
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Arc<dyn ObjectStoreBackend>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = rmpv::Value::deserialize(deserializer)?;
+        let type_tag = extract_type_tag(&value, "object_store_provider_type")
+            .map_err(serde::de::Error::custom)?;
+
+        let registry = object_store_backend_registry();
+        let deserialize_fn = registry.get(&type_tag).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "Unknown ObjectStoreBackend type: {}. Available types depend on enabled features.",
+                type_tag
+            ))
+        })?;
+
+        deserialize_fn(value).map_err(serde::de::Error::custom)
+    }
 }
 
 #[cfg(test)]

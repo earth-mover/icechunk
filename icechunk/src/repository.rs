@@ -177,6 +177,7 @@ pub struct Repository {
     config: RepositoryConfig,
     storage_settings: storage::Settings,
     config_version: storage::VersionInfo,
+    #[serde(with = "storage::storage_serde")]
     storage: Arc<dyn Storage + Send + Sync>,
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,

@@ -46,6 +46,7 @@ use crate::{
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(from = "AssetManagerSerializer")]
 pub struct AssetManager {
+    #[serde(with = "storage::storage_serde")]
     storage: Arc<dyn Storage + Send + Sync>,
     storage_settings: storage::Settings,
     spec_version: SpecVersionBin,
@@ -80,6 +81,7 @@ impl private::Sealed for AssetManager {}
 
 #[derive(Debug, Deserialize)]
 struct AssetManagerSerializer {
+    #[serde(with = "storage::storage_serde")]
     storage: Arc<dyn Storage + Send + Sync>,
     storage_settings: storage::Settings,
     spec_version: SpecVersionBin,
