@@ -1372,7 +1372,9 @@ mod test {
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
         };
         let pre_existing_manifest =
-            Manifest::from_iter(vec![ci1].into_iter()).await?.unwrap();
+            Manifest::from_iter(&ManifestId::random(), vec![ci1].into_iter())
+                .await?
+                .unwrap();
         let pre_existing_manifest = Arc::new(pre_existing_manifest);
         let pre_existing_id = pre_existing_manifest.id();
         let pre_size = manager.write_manifest(Arc::clone(&pre_existing_manifest)).await?;
@@ -1388,8 +1390,11 @@ mod test {
             100,
         );
 
-        let manifest =
-            Arc::new(Manifest::from_iter(vec![ci2.clone()].into_iter()).await?.unwrap());
+        let manifest = Arc::new(
+            Manifest::from_iter(&ManifestId::random(), vec![ci2.clone()].into_iter())
+                .await?
+                .unwrap(),
+        );
         let id = manifest.id();
         let size = caching.write_manifest(Arc::clone(&manifest)).await?;
 
@@ -1475,16 +1480,25 @@ mod test {
         let ci8 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
         let ci9 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
 
-        let manifest1 =
-            Arc::new(Manifest::from_iter(vec![ci1, ci2, ci3]).await?.unwrap());
+        let manifest1 = Arc::new(
+            Manifest::from_iter(&ManifestId::random(), vec![ci1, ci2, ci3])
+                .await?
+                .unwrap(),
+        );
         let id1 = manifest1.id();
         let size1 = manager.write_manifest(Arc::clone(&manifest1)).await?;
-        let manifest2 =
-            Arc::new(Manifest::from_iter(vec![ci4, ci5, ci6]).await?.unwrap());
+        let manifest2 = Arc::new(
+            Manifest::from_iter(&ManifestId::random(), vec![ci4, ci5, ci6])
+                .await?
+                .unwrap(),
+        );
         let id2 = manifest2.id();
         let size2 = manager.write_manifest(Arc::clone(&manifest2)).await?;
-        let manifest3 =
-            Arc::new(Manifest::from_iter(vec![ci7, ci8, ci9]).await?.unwrap());
+        let manifest3 = Arc::new(
+            Manifest::from_iter(&ManifestId::random(), vec![ci7, ci8, ci9])
+                .await?
+                .unwrap(),
+        );
         let id3 = manifest3.id();
         let size3 = manager.write_manifest(Arc::clone(&manifest3)).await?;
 
@@ -1533,11 +1547,14 @@ mod test {
         ));
 
         // some reasonable size so it takes some time to parse
-        let manifest = Manifest::from_iter((0..5_000).map(|_| ChunkInfo {
-            node: NodeId::random(),
-            coord: ChunkIndices(Vec::from([rand::random(), rand::random()])),
-            payload: ChunkPayload::Inline("hello".into()),
-        }))
+        let manifest = Manifest::from_iter(
+            &ManifestId::random(),
+            (0..5_000).map(|_| ChunkInfo {
+                node: NodeId::random(),
+                coord: ChunkIndices(Vec::from([rand::random(), rand::random()])),
+                payload: ChunkPayload::Inline("hello".into()),
+            }),
+        )
         .await
         .unwrap()
         .unwrap();

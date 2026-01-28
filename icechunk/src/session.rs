@@ -2032,7 +2032,7 @@ impl<'a> FlushProcess<'a> {
         let mut to = vec![];
         let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-        if let Some(new_manifest) = Manifest::from_stream(chunks)
+        if let Some(new_manifest) = Manifest::from_stream(&ManifestId::random(), chunks)
             .await
             .map_err(|e| SessionErrorKind::ManifestCreationError(Box::new(e)))?
         {
@@ -3151,8 +3151,12 @@ mod tests {
             payload: ChunkPayload::Inline("hello".into()),
         };
 
-        let manifest =
-            Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()]).await?.unwrap();
+        let manifest = Manifest::from_iter(
+            &ManifestId::random(),
+            vec![chunk1.clone(), chunk2.clone()],
+        )
+        .await?
+        .unwrap();
         let manifest = Arc::new(manifest);
         let manifest_id = manifest.id();
         let manifest_size = asset_manager.write_manifest(Arc::clone(&manifest)).await?;

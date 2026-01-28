@@ -372,6 +372,7 @@ impl Manifest {
     }
 
     pub async fn from_stream<E>(
+        manifest_id: &ManifestId,
         stream: impl Stream<Item = Result<ChunkInfo, E>>,
     ) -> Result<Option<Self>, E> {
         // TODO: what's a good capacity?
@@ -405,7 +406,6 @@ impl Manifest {
         }
 
         let arrays = builder.create_vector(array_manifests.as_slice());
-        let manifest_id = ManifestId::random();
         let bin_manifest_id = generated::ObjectId12::new(&manifest_id.0);
 
         let manifest = generated::Manifest::create(
@@ -422,9 +422,11 @@ impl Manifest {
 
     /// Used for tests
     pub async fn from_iter<T: IntoIterator<Item = ChunkInfo>>(
+        manifest_id: &ManifestId,
         iter: T,
     ) -> Result<Option<Self>, Infallible> {
-        Self::from_stream(futures::stream::iter(iter.into_iter().map(Ok))).await
+        Self::from_stream(manifest_id, futures::stream::iter(iter.into_iter().map(Ok)))
+            .await
     }
 
     pub fn len(&self) -> usize {
