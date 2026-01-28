@@ -442,6 +442,10 @@ impl Manifest {
         unsafe { flatbuffers::root_unchecked::<generated::Manifest>(&self.buffer) }
     }
 
+    pub fn arrays(&self) -> impl Iterator<Item = NodeId> {
+        self.root().arrays().iter().map(|am| NodeId::from(am.node_id().0))
+    }
+
     pub fn get_chunk_payload(
         &self,
         node: &NodeId,
