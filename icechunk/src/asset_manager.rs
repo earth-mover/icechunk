@@ -1,3 +1,10 @@
+//! Typed I/O layer for Icechunk assets.
+//!
+//! Sits between [`crate::session::Session`] and [`Storage`], handling serialization
+//! and caching. While [`Storage`] provides generic object store operations (bytes
+//! in/out), this module works with typed Icechunk assets: snapshots, manifests,
+//! transaction logs, and chunks.
+
 use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -43,6 +50,7 @@ use crate::{
     },
 };
 
+/// Reads and writes Icechunk assets with caching and concurrency control.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(from = "AssetManagerSerializer")]
 pub struct AssetManager {

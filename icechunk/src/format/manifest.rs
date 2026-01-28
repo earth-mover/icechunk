@@ -1,3 +1,5 @@
+//! Chunk reference tables mapping coordinates to storage locations.
+
 use std::{
     borrow::Cow,
     cmp::{max, min},

@@ -1,3 +1,5 @@
+//! Proptest strategies for property-based testing.
+
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use crate::config::{
     AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,

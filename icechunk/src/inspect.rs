@@ -1,3 +1,7 @@
+//! Debugging utilities for examining repository state.
+//!
+//! Provides [`snapshot_json`] for serializing snapshot information to JSON.
+
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};

@@ -1,3 +1,5 @@
+//! Repository state at a point in time (arrays, groups, and manifest references).
+
 use std::{collections::BTreeMap, convert::Infallible, num::NonZeroU64, sync::Arc};
 
 use bytes::Bytes;

@@ -1,3 +1,5 @@
+//! Upgrade repositories between Icechunk format versions.
+
 use std::{collections::HashSet, sync::Arc, time::Instant};
 
 use async_stream::try_stream;

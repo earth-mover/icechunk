@@ -1,3 +1,5 @@
+//! Repository maintenance operations.
+
 use std::{collections::HashSet, sync::Arc};
 
 use async_stream::try_stream;
@@ -15,9 +17,14 @@ use crate::{
     refs::{RefResult, list_refs},
     repository::{RepositoryError, RepositoryResult},
 };
+
+/// Expire old snapshots beyond a threshold.
 pub mod expiration_v1;
+/// Garbage collection to remove unreferenced data.
 pub mod gc;
+/// Manifest optimization and rebuilding.
 pub mod manifests;
+/// Repository statistics.
 pub mod stats;
 
 #[instrument(skip_all)]

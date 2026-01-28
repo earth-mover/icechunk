@@ -1,3 +1,5 @@
+//! Native S3 client implementation of [`Storage`](super::Storage).
+
 use std::{
     collections::HashMap, fmt, future::ready, ops::Range, path::PathBuf, pin::Pin,
     sync::Arc,
