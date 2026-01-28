@@ -601,8 +601,24 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
         length: 5,
         checksum: None,
     };
-    store.set_virtual_ref("array/c/0/0/0", ref1, false).await?;
-    store.set_virtual_ref("array/c/0/0/1", ref2, false).await?;
+    store.set_virtual_ref("array/c/0/0/0", ref1.clone(), false).await?;
+    store.set_virtual_ref("array/c/0/0/1", ref2.clone(), false).await?;
+
+    let retrieved_ref1 = store.get_virtual_ref("array/c/0/0/0").await?;
+    assert_eq!(retrieved_ref1, Some(ref1.clone()));
+
+    let retrieved_ref2 = store.get_virtual_ref("array/c/0/0/1").await?;
+    assert_eq!(retrieved_ref2, Some(ref2.clone()));
+
+    let non_existent = store.get_virtual_ref("array/c/0/0/2").await?;
+    assert_eq!(non_existent, None);
+
+    let all_refs: HashMap<String, VirtualChunkRef> =
+        store.all_virtual_refs().await?.into_iter().collect();
+
+    assert_eq!(all_refs.len(), 2);
+    assert_eq!(all_refs.get("array/c/0/0/0"), Some(&ref1));
+    assert_eq!(all_refs.get("array/c/0/0/1"), Some(&ref2));
 
     assert_eq!(store.get("array/c/0/0/0", &ByteRange::ALL).await?, bytes1,);
     assert_eq!(
@@ -788,11 +804,27 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
         checksum: Some(Checksum::ETag(ETag("bad".to_string()))),
     };
 
-    store.set_virtual_ref("year/c/0", ref1, false).await?;
-    store.set_virtual_ref("year/c/1", ref2, false).await?;
-    store.set_virtual_ref("year/c/2", ref3, false).await?;
-    store.set_virtual_ref("year/c/3", ref_expired, false).await?;
-    store.set_virtual_ref("year/c/4", ref_bad_tag, false).await?;
+    store.set_virtual_ref("year/c/0", ref1.clone(), false).await?;
+    store.set_virtual_ref("year/c/1", ref2.clone(), false).await?;
+    store.set_virtual_ref("year/c/2", ref3.clone(), false).await?;
+    store.set_virtual_ref("year/c/3", ref_expired.clone(), false).await?;
+    store.set_virtual_ref("year/c/4", ref_bad_tag.clone(), false).await?;
+
+    assert_eq!(store.get_virtual_ref("year/c/0").await?, Some(ref1.clone()));
+    assert_eq!(store.get_virtual_ref("year/c/1").await?, Some(ref2.clone()));
+    assert_eq!(store.get_virtual_ref("year/c/2").await?, Some(ref3.clone()));
+    assert_eq!(store.get_virtual_ref("year/c/3").await?, Some(ref_expired.clone()));
+    assert_eq!(store.get_virtual_ref("year/c/4").await?, Some(ref_bad_tag.clone()));
+
+    let all_refs: HashMap<String, VirtualChunkRef> =
+        store.all_virtual_refs().await?.into_iter().collect();
+
+    assert_eq!(all_refs.len(), 5);
+    assert_eq!(all_refs.get("year/c/0"), Some(&ref1));
+    assert_eq!(all_refs.get("year/c/1"), Some(&ref2));
+    assert_eq!(all_refs.get("year/c/2"), Some(&ref3));
+    assert_eq!(all_refs.get("year/c/3"), Some(&ref_expired));
+    assert_eq!(all_refs.get("year/c/4"), Some(&ref_bad_tag));
 
     // FIXME: enable this once object_store can access public buckets without credentials
     // otherwise we get an error in GHA
@@ -935,9 +967,13 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         length: 5,
         checksum: Some(Checksum::LastModified(old_timestamp)),
     };
-    store.set_virtual_ref("array/c/0/0/0", ref1, false).await?;
-    store.set_virtual_ref("array/c/0/0/1", ref2, false).await?;
-    store.set_virtual_ref("array/c/1/0/0", ref3, false).await?;
+    store.set_virtual_ref("array/c/0/0/0", ref1.clone(), false).await?;
+    store.set_virtual_ref("array/c/0/0/1", ref2.clone(), false).await?;
+    store.set_virtual_ref("array/c/1/0/0", ref3.clone(), false).await?;
+
+    assert_eq!(store.get_virtual_ref("array/c/0/0/0").await?, Some(ref1));
+    assert_eq!(store.get_virtual_ref("array/c/0/0/1").await?, Some(ref2));
+    assert_eq!(store.get_virtual_ref("array/c/1/0/0").await?, Some(ref3));
 
     // set virtual refs in local filesystem
     let chunk_1 = chunk_dir.path().join("chunk-1").to_str().unwrap().to_owned();
@@ -983,9 +1019,13 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         checksum: Some(Checksum::ETag(ETag(String::from("invalid etag")))),
     };
 
-    store.set_virtual_ref("array/c/0/0/2", ref1, false).await?;
-    store.set_virtual_ref("array/c/0/0/3", ref2, false).await?;
-    store.set_virtual_ref("array/c/1/0/1", ref3, false).await?;
+    store.set_virtual_ref("array/c/0/0/2", ref1.clone(), false).await?;
+    store.set_virtual_ref("array/c/0/0/3", ref2.clone(), false).await?;
+    store.set_virtual_ref("array/c/1/0/1", ref3.clone(), false).await?;
+
+    assert_eq!(store.get_virtual_ref("array/c/0/0/2").await?, Some(ref1));
+    assert_eq!(store.get_virtual_ref("array/c/0/0/3").await?, Some(ref2));
+    assert_eq!(store.get_virtual_ref("array/c/1/0/1").await?, Some(ref3));
 
     // set a virtual ref in a public bucket
     let public_ref = VirtualChunkRef {
@@ -1005,8 +1045,11 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         checksum: Some(Checksum::ETag(ETag(String::from("invalid etag")))),
     };
 
-    store.set_virtual_ref("array/c/1/1/1", public_ref, false).await?;
-    store.set_virtual_ref("array/c/1/1/2", public_modified_ref, false).await?;
+    store.set_virtual_ref("array/c/1/1/1", public_ref.clone(), false).await?;
+    store.set_virtual_ref("array/c/1/1/2", public_modified_ref.clone(), false).await?;
+
+    assert_eq!(store.get_virtual_ref("array/c/1/1/1").await?, Some(public_ref));
+    assert_eq!(store.get_virtual_ref("array/c/1/1/2").await?, Some(public_modified_ref));
 
     // assert we can find all the virtual chunks
 

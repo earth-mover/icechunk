@@ -185,6 +185,30 @@ async def test_write_minio_virtual_refs(
             validate_container=True,
         )
 
+    vref_0_0_0 = await store.get_virtual_ref_async("c/0/0/0")
+    assert vref_0_0_0 is not None
+    assert vref_0_0_0[0] == f"s3://testbucket/{prefix}/chunk-1"
+    assert vref_0_0_0[1] == 0
+    assert vref_0_0_0[2] == 4
+
+    vref_0_0_1 = await store.get_virtual_ref_async("c/0/0/1")
+    assert vref_0_0_1 is not None
+    assert vref_0_0_1[0] == f"s3://testbucket/{prefix}/chunk-2"
+    assert vref_0_0_1[1] == 1
+    assert vref_0_0_1[2] == 4
+
+    vref_none = await store.get_virtual_ref_async("c/0/0/3")
+    assert vref_none is None
+
+    all_refs = await store.all_virtual_refs_async()
+    all_refs_dict = {
+        key: (location, offset, length) for key, location, offset, length, _ in all_refs
+    }
+
+    assert len(all_refs_dict) >= 2
+    assert all_refs_dict.get("c/0/0/0") == (f"s3://testbucket/{prefix}/chunk-1", 0, 4)
+    assert all_refs_dict.get("c/0/0/1") == (f"s3://testbucket/{prefix}/chunk-2", 1, 4)
+
     buffer_prototype = zarr.core.buffer.default_buffer_prototype()
 
     first = await store.get("c/0/0/0", prototype=buffer_prototype)
@@ -286,6 +310,27 @@ async def test_public_virtual_refs(
             offset=22306,
             length=288,
         )
+
+    if use_async:
+        vref = await store.get_virtual_ref_async("year/c/0")
+    else:
+        vref = store.get_virtual_ref("year/c/0")
+
+    assert vref is not None
+    assert vref[0].endswith("/netcdf/oscar_vel2018.nc")
+    assert vref[1] == 22306
+    assert vref[2] == 288
+
+    if use_async:
+        all_refs = await store.all_virtual_refs_async()
+    else:
+        all_refs = store.all_virtual_refs()
+
+    assert len(all_refs) == 1
+    assert all_refs[0][0] == "year/c/0"
+    assert all_refs[0][1].endswith("/netcdf/oscar_vel2018.nc")
+    assert all_refs[0][2] == 22306
+    assert all_refs[0][3] == 288
 
     nodes = [n async for n in store.list()]
     assert "year/c/0" in nodes
@@ -400,6 +445,12 @@ def test_error_on_nonexisting_virtual_chunk_container(
         ],
     )
 
+    vref = store.get_virtual_ref("c/0")
+    assert vref is not None
+    assert vref[0] == "file:///foo"
+    assert vref[1] == 0
+    assert vref[2] == 4
+
     with pytest.raises(
         IcechunkError, match=r"file:///foo.* edit the repository configuration"
     ):
@@ -438,6 +489,13 @@ def test_error_on_non_authorized_virtual_chunk_container(
             ),
         ],
     )
+
+    # don't need authorization just to view what the virtual chunk is, only to fetch from that location
+    vref = store.get_virtual_ref("c/0")
+    assert vref is not None
+    assert vref[0] == "file:///foo/bar"
+    assert vref[1] == 0
+    assert vref[2] == 4
 
     with pytest.raises(IcechunkError, match=r"file:///foo.*authorize"):
         array[0]
