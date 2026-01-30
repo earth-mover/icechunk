@@ -747,15 +747,21 @@ impl Repository {
         self.snapshot_info_ancestry_v1(&snapshot_id).await
     }
 
+    /// This method uses the repo info object to obtain the ops log.
+    /// The repo info object is mutable, so it may change while this operation happens.
+    /// For reproducibility, this method retuns the repo object used to calculate the log.
     #[instrument(skip(self))]
     pub async fn ops_log(
         &self,
-    ) -> RepositoryResult<
+    ) -> RepositoryResult<(
         impl Stream<Item = RepositoryResult<(DateTime<Utc>, UpdateType, Option<String>)>>
         + Send
         + use<>,
-    > {
-        let (repo_info, _) = self.get_repo_info().await?;
+        Arc<RepoInfo>,
+        storage::VersionInfo,
+    )> {
+        let (repo_info, version_root) = self.get_repo_info().await?;
+        let repo_info_root = Arc::clone(&repo_info);
         let mut repo_info = Some(repo_info);
         // When we change to a new repo file, it will have the first backup_file = None, because
         // all files have this. We need to use the previous element in the sequence to know the
@@ -792,7 +798,7 @@ impl Repository {
 
         };
 
-        Ok(stream)
+        Ok((stream, repo_info_root, version_root))
     }
 
     /// Create a new branch in the repository at the given snapshot id

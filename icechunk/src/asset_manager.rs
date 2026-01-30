@@ -1135,7 +1135,7 @@ async fn fetch_transaction_log(
     .map(Arc::new)
 }
 
-async fn write_repo_info(
+pub async fn write_repo_info(
     info: Arc<RepoInfo>,
     spec_version: SpecVersionBin,
     version: &VersionInfo,
@@ -1215,7 +1215,7 @@ async fn write_repo_info(
     }
 }
 
-async fn fetch_repo_info(
+pub async fn fetch_repo_info(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
