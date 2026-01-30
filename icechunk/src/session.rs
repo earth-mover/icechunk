@@ -4253,8 +4253,13 @@ mod tests {
             anc_from_main,
             vec!["second amend", "make root", "Repository initialized"]
         );
-        let updates =
-            repo.ops_log().await?.map_ok(|(_, up, _)| up).try_collect::<Vec<_>>().await?;
+        let updates = repo
+            .ops_log()
+            .await?
+            .0
+            .map_ok(|(_, up, _)| up)
+            .try_collect::<Vec<_>>()
+            .await?;
 
         use UpdateType::*;
         assert_eq!(

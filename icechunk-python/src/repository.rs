@@ -1358,7 +1358,7 @@ impl PyRepository {
             let ops = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move {
                     let repo = self.0.read().await;
-                    repo.ops_log().await
+                    repo.ops_log().await.map(|(stream, _, _)| stream)
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?
                 .map_err(PyIcechunkStoreError::RepositoryError)
