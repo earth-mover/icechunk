@@ -506,6 +506,7 @@ impl AssetManager {
             None,
             self.storage.as_ref(),
             &self.storage_settings,
+            None,
         )
         .await
     }
@@ -529,6 +530,7 @@ impl AssetManager {
                 Some(backup_path.as_str()),
                 self.storage.as_ref(),
                 &self.storage_settings,
+                None,
             )
             .await
             {
@@ -1135,6 +1137,7 @@ async fn fetch_transaction_log(
     .map(Arc::new)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn write_repo_info(
     info: Arc<RepoInfo>,
     spec_version: SpecVersionBin,
@@ -1143,6 +1146,7 @@ pub async fn write_repo_info(
     backup_path: Option<&str>,
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
+    path: Option<&str>,
 ) -> RepositoryResult<VersionInfo> {
     use format_constants::*;
     let metadata = vec![
@@ -1178,12 +1182,13 @@ pub async fn write_repo_info(
 
     debug!(size_bytes = buffer.len(), "Writing repo info");
 
+    let repo_file_path = path.unwrap_or(REPO_INFO_FILE_PATH);
     if let Some(backup_path) = backup_path {
         let backup_path = format!("{OVERWRITTEN_FILES_PATH}/{backup_path}");
         match storage
             .copy_object(
                 storage_settings,
-                REPO_INFO_FILE_PATH,
+                repo_file_path,
                 backup_path.as_str(),
                 None,
                 version,
@@ -1200,7 +1205,7 @@ pub async fn write_repo_info(
     match storage
         .put_object(
             storage_settings,
-            REPO_INFO_FILE_PATH,
+            repo_file_path,
             buffer.into(),
             None,
             metadata,
@@ -1235,7 +1240,7 @@ async fn fetch_repo_info_backup(
     .await
 }
 
-async fn fetch_repo_info_from_path(
+pub async fn fetch_repo_info_from_path(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     path: &str,
