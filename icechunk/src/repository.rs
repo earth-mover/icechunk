@@ -749,7 +749,7 @@ impl Repository {
 
     /// This method uses the repo info object to obtain the ops log.
     /// The repo info object is mutable, so it may change while this operation happens.
-    /// For reproducibility, this method retuns the repo object used to calculate the log.
+    /// For reproducibility, this method returns the repo object used to calculate the log.
     #[instrument(skip(self))]
     pub async fn ops_log(
         &self,
