@@ -655,9 +655,14 @@ macro_rules! roundtrip_serialization_tests {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use crate::strategies::{
-        azure_credentials, gcs_static_credentials, repository_config,
-        s3_static_credentials,
+    use crate::{
+        ObjectStoreConfig, RepositoryConfig,
+        config::S3Options,
+        strategies::{
+            azure_credentials, gcs_static_credentials, repository_config,
+            s3_static_credentials,
+        },
+        virtual_chunks::VirtualChunkContainer,
     };
 
     use proptest::prelude::*;
