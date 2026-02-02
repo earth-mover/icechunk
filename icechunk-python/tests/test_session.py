@@ -177,7 +177,7 @@ def test_session_mode() -> None:
     assert readonly.read_only
 
     # readonly session from snapshot
-    readonly_snap = repo.readonly_session(snapshot=writable.snapshot_id)
+    readonly_snap = repo.readonly_session(snapshot_id=writable.snapshot_id)
     assert readonly_snap.mode == SessionMode.READONLY
     assert readonly_snap.read_only
 
@@ -190,5 +190,8 @@ def test_session_mode() -> None:
     # after commit, session becomes readonly
     writable = repo.writable_session("main")
     assert writable.mode == SessionMode.WRITABLE
+    # opening a group to make a change is necessary
+    # until https://github.com/earth-mover/icechunk/issues/1595 fixed
+    zarr.group(writable.store)
     writable.commit("test")
     assert writable.mode == SessionMode.READONLY
