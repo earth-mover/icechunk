@@ -495,6 +495,8 @@ impl RepositoryConfig {
                 (Some(s), None) => Some(s.clone()),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
+            // For virtual_chunk_containers, replace rather than extend.
+            // This is consistent with other fields: if specified, it replaces.
             virtual_chunk_containers: match (
                 &self.virtual_chunk_containers,
                 other.virtual_chunk_containers,
@@ -502,11 +504,7 @@ impl RepositoryConfig {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
-                (Some(mine), Some(theirs)) => {
-                    let mut merged = mine.clone();
-                    merged.extend(theirs);
-                    Some(merged)
-                }
+                (Some(_), Some(theirs)) => Some(theirs),
             },
             manifest: match (&self.manifest, other.manifest) {
                 (None, None) => None,
@@ -672,9 +670,14 @@ macro_rules! roundtrip_serialization_tests {
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use crate::strategies::{
-        azure_credentials, gcs_static_credentials, repository_config,
-        s3_static_credentials,
+    use crate::{
+        ObjectStoreConfig, RepositoryConfig,
+        config::S3Options,
+        strategies::{
+            azure_credentials, gcs_static_credentials, repository_config,
+            s3_static_credentials,
+        },
+        virtual_chunks::VirtualChunkContainer,
     };
 
     use proptest::prelude::*;
@@ -685,4 +688,89 @@ mod tests {
         test_gcs_static_credentials_roundtrip - gcs_static_credentials,
         test_azure_credentials_roundtrip - azure_credentials
     );
+
+    #[icechunk_macros::test]
+    fn test_merge_replaces_virtual_chunk_containers() {
+        // Create a config with a VCC
+        let mut config1 = RepositoryConfig::default();
+        config1.set_virtual_chunk_container(
+            VirtualChunkContainer::new(
+                "s3://bucket1/".to_string(),
+                ObjectStoreConfig::S3(S3Options {
+                    region: Some("us-east-1".to_string()),
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
+                    requester_pays: false,
+                }),
+            )
+            .unwrap(),
+        );
+
+        // Create a config with no VCCs (cleared)
+        let mut config2 = RepositoryConfig::default();
+        config2.clear_virtual_chunk_containers();
+
+        // Merge: config2 (empty VCCs) should replace config1's VCCs
+        let merged = config1.merge(config2);
+
+        // VCCs should be empty after merge
+        assert_eq!(
+            merged.virtual_chunk_containers,
+            Some(std::collections::HashMap::new()),
+            "Merging with cleared VCCs should result in empty VCCs"
+        );
+    }
+
+    #[icechunk_macros::test]
+    fn test_merge_replaces_virtual_chunk_containers_with_new_ones() {
+        // Create a config with VCC1
+        let mut config1 = RepositoryConfig::default();
+        config1.set_virtual_chunk_container(
+            VirtualChunkContainer::new(
+                "s3://bucket1/".to_string(),
+                ObjectStoreConfig::S3(S3Options {
+                    region: Some("us-east-1".to_string()),
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
+                    requester_pays: false,
+                }),
+            )
+            .unwrap(),
+        );
+
+        // Create a config with VCC2
+        let mut config2 = RepositoryConfig::default();
+        config2.set_virtual_chunk_container(
+            VirtualChunkContainer::new(
+                "s3://bucket2/".to_string(),
+                ObjectStoreConfig::S3(S3Options {
+                    region: Some("us-west-2".to_string()),
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
+                    requester_pays: false,
+                }),
+            )
+            .unwrap(),
+        );
+
+        // Merge: config2's VCCs should replace config1's VCCs
+        let merged = config1.merge(config2);
+
+        let vccs = merged.virtual_chunk_containers.unwrap();
+        assert_eq!(vccs.len(), 1, "Should have exactly one VCC after merge");
+        assert!(
+            vccs.contains_key("s3://bucket2/"),
+            "Should contain bucket2, not bucket1"
+        );
+        assert!(!vccs.contains_key("s3://bucket1/"), "Should not contain bucket1");
+    }
 }

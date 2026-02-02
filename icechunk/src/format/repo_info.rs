@@ -61,17 +61,42 @@ impl std::fmt::Debug for RepoInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateType {
     RepoInitializedUpdate,
-    RepoMigratedUpdate { from_version: SpecVersionBin, to_version: SpecVersionBin },
+    RepoMigratedUpdate {
+        from_version: SpecVersionBin,
+        to_version: SpecVersionBin,
+    },
     ConfigChangedUpdate, // FIXME: implement
     MetadataChangedUpdate,
-    TagCreatedUpdate { name: String },
-    TagDeletedUpdate { name: String, previous_snap_id: SnapshotId },
-    BranchCreatedUpdate { name: String },
-    BranchDeletedUpdate { name: String, previous_snap_id: SnapshotId },
-    BranchResetUpdate { name: String, previous_snap_id: SnapshotId },
-    NewCommitUpdate { branch: String },
-    CommitAmendedUpdate { branch: String, previous_snap_id: SnapshotId },
-    NewDetachedSnapshotUpdate { new_snap_id: SnapshotId },
+    TagCreatedUpdate {
+        name: String,
+    },
+    TagDeletedUpdate {
+        name: String,
+        previous_snap_id: SnapshotId,
+    },
+    BranchCreatedUpdate {
+        name: String,
+    },
+    BranchDeletedUpdate {
+        name: String,
+        previous_snap_id: SnapshotId,
+    },
+    BranchResetUpdate {
+        name: String,
+        previous_snap_id: SnapshotId,
+    },
+    NewCommitUpdate {
+        branch: String,
+        new_snap_id: SnapshotId,
+    },
+    CommitAmendedUpdate {
+        branch: String,
+        previous_snap_id: SnapshotId,
+        new_snap_id: SnapshotId,
+    },
+    NewDetachedSnapshotUpdate {
+        new_snap_id: SnapshotId,
+    },
     GCRanUpdate,
     ExpirationRanUpdate,
 }
@@ -874,14 +899,20 @@ impl RepoInfo {
             }
             generated::UpdateType::NewCommitUpdate => {
                 let up = update.update_type_as_new_commit_update().unwrap();
-                Ok(UpdateType::NewCommitUpdate { branch: up.branch().to_string() })
+                let new_snap_id = SnapshotId::new(up.new_snap_id().0);
+                Ok(UpdateType::NewCommitUpdate {
+                    branch: up.branch().to_string(),
+                    new_snap_id,
+                })
             }
             generated::UpdateType::CommitAmendedUpdate => {
                 let up = update.update_type_as_commit_amended_update().unwrap();
                 let previous_snap_id = SnapshotId::new(up.previous_snap_id().0);
+                let new_snap_id = SnapshotId::new(up.new_snap_id().0);
                 Ok(UpdateType::CommitAmendedUpdate {
                     branch: up.branch().to_string(),
                     previous_snap_id,
+                    new_snap_id,
                 })
             }
             generated::UpdateType::NewDetachedSnapshotUpdate => {
@@ -1128,26 +1159,34 @@ fn update_type_to_fb<'bldr>(
                 .as_union_value(),
             ))
         }
-        UpdateType::NewCommitUpdate { branch } => {
+        UpdateType::NewCommitUpdate { branch, new_snap_id } => {
             let branch = Some(builder.create_string(branch));
+            let object_id12 = generated::ObjectId12::new(&new_snap_id.0);
+            let new_snap_id = Some(&object_id12);
             Ok((
                 generated::UpdateType::NewCommitUpdate,
                 generated::NewCommitUpdate::create(
                     builder,
-                    &generated::NewCommitUpdateArgs { branch },
+                    &generated::NewCommitUpdateArgs { branch, new_snap_id },
                 )
                 .as_union_value(),
             ))
         }
-        UpdateType::CommitAmendedUpdate { branch, previous_snap_id } => {
+        UpdateType::CommitAmendedUpdate { branch, previous_snap_id, new_snap_id } => {
             let branch = Some(builder.create_string(branch));
             let object_id12 = generated::ObjectId12::new(&previous_snap_id.0);
             let previous_snap_id = Some(&object_id12);
+            let object_id12 = generated::ObjectId12::new(&new_snap_id.0);
+            let new_snap_id = Some(&object_id12);
             Ok((
                 generated::UpdateType::CommitAmendedUpdate,
                 generated::CommitAmendedUpdate::create(
                     builder,
-                    &generated::CommitAmendedUpdateArgs { branch, previous_snap_id },
+                    &generated::CommitAmendedUpdateArgs {
+                        branch,
+                        previous_snap_id,
+                        new_snap_id,
+                    },
                 )
                 .as_union_value(),
             ))
@@ -1212,7 +1251,10 @@ mod tests {
             SpecVersionBin::current(),
             snap2.clone(),
             Some("main"),
-            UpdateType::NewCommitUpdate { branch: "main".to_string() },
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: snap2.id.clone(),
+            },
             "foo/bar",
         )?;
         assert_eq!(&repo.resolve_branch("main")?, &snap2.id);
@@ -1240,7 +1282,10 @@ mod tests {
             SpecVersionBin::current(),
             snap3.clone(),
             Some("main"),
-            UpdateType::NewCommitUpdate { branch: "main".to_string() },
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: snap3.id.clone(),
+            },
             "foo",
         )?;
         assert_eq!(&repo.resolve_branch("main")?, &snap3.id);
@@ -1310,9 +1355,12 @@ mod tests {
         };
         let repo = repo.add_snapshot(
             SpecVersionBin::current(),
-            snap2,
+            snap2.clone(),
             Some("main"),
-            UpdateType::NewCommitUpdate { branch: "main".to_string() },
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: snap2.id.clone(),
+            },
             "foo",
         )?;
         let repo = repo.add_branch(SpecVersionBin::current(), "baz", &id2, "/foo/bar")?;

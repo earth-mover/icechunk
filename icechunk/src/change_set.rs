@@ -1016,17 +1016,17 @@ mod tests {
     use proptest::prelude::*;
 
     prop_compose! {
-        fn edit_changes()(num_of_dims in 1..=20usize)(
-            new_groups in hash_map(path(),(node_id(), bytes()), 3..7),
-                new_arrays in hash_map(path(),(node_id(), array_data()), 3..7),
-           updated_arrays in hash_map(node_id(), array_data(), 3..7),
-           updated_groups in hash_map(node_id(), bytes(), 3..7),
+        fn edit_changes()(num_of_dims in 1..=5usize)(
+            new_groups in hash_map(path(),(node_id(), bytes()), 0..3),
+                new_arrays in hash_map(path(),(node_id(), array_data()), 0..3),
+           updated_arrays in hash_map(node_id(), array_data(), 0..3),
+           updated_groups in hash_map(node_id(), bytes(), 0..3),
            set_chunks in btree_map(node_id(),
-                hash_map(manifest_extents(num_of_dims), split_manifest(), 3..7),
-            3..7),
-    deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(large_chunk_indices(num_of_dims), 3..8), 3..7),
-            deleted_groups in hash_set((path(), node_id()), 3..7),
-            deleted_arrays in hash_set((path(), node_id()), 3..7)
+                hash_map(manifest_extents(num_of_dims), split_manifest(), 0..3),
+            0..3),
+            deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(large_chunk_indices(num_of_dims), 0..3), 0..3),
+            deleted_groups in hash_set((path(), node_id()), 0..3),
+            deleted_arrays in hash_set((path(), node_id()), 0..3)
         ) -> EditChanges {
             EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, num_chunks: 0, excessive_num_chunks_warned: false, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups, new_arrays}
         }

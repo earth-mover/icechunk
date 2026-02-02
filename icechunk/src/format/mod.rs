@@ -174,6 +174,12 @@ impl<const SIZE: usize, T: FileTypeTag> From<&ObjectId<SIZE, T>> for String {
     }
 }
 
+impl<const SIZE: usize, T: FileTypeTag> From<[u8; SIZE]> for ObjectId<SIZE, T> {
+    fn from(value: [u8; SIZE]) -> Self {
+        ObjectId::new(value)
+    }
+}
+
 impl<const SIZE: usize, T: FileTypeTag> TryInto<String> for ObjectId<SIZE, T> {
     type Error = Infallible;
 
