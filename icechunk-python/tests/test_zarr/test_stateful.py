@@ -71,6 +71,7 @@ Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     store: ic.IcechunkStore  # Override parent class type annotation
     model: ModelStore  # Override to add move() method
+    storage: ic.Storage
 
     def __init__(self, storage: Storage) -> None:
         self.storage = storage
@@ -326,7 +327,53 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         pickle.loads(pickle.dumps(self.repo))
 
 
+class TwoActorZarrHierarchyStateMachine(ModifiedZarrHierarchyStateMachine):
+    """
+    This test models two "actors" operating sequentially on the repo.
+    """
+
+    actors: tuple[type[Repository], ...]
+
+    def __init__(self, storage: Storage) -> None:
+        super().__init__(storage)
+        self.actors = (Repository, Repository)
+
+    @precondition(lambda _: False)
+    @rule()
+    def upgrade_spec_version(self) -> None:
+        pass
+
+    @rule(data=st.data())
+    def reopen_with_new_actor(self, data: st.DataObject) -> None:
+        # We use the Zarr's memory store as the model,
+        # Since we cannot `reset_branch` on the model; we must commit here.
+        if self.store.session.has_uncommitted_changes:
+            self.commit_with_check(data)
+
+        actor = data.draw(st.sampled_from(self.actors))
+        self.repo = actor.open(self.storage)
+        self.store = self.repo.writable_session("main").store
+
+
+def test_two_actors() -> None:
+    def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
+        return TwoActorZarrHierarchyStateMachine(in_memory_storage())
+
+    run_state_machine_as_test(  # type: ignore[no-untyped-call]
+        mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
+    )
+
+
 def test_zarr_hierarchy() -> None:
+    def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
+        return ModifiedZarrHierarchyStateMachine(in_memory_storage())
+
+    run_state_machine_as_test(  # type: ignore[no-untyped-call]
+        mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
+    )
+
+
+def test_zarr_hierarchy_two_actors() -> None:
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(in_memory_storage())
 
