@@ -2,8 +2,15 @@
 
 ## Unreleased
 
+### Features
+
 ### Fixes
 
+## Python Icechunk Library 1.1.18
+
+### Fixes
+
+- Bug where `RepositoryConfig.clear_virtual_chunk_containers()` was not respected.
 - Minor bug in merge conflict report.
 
 ## Python Icechunk Library 1.1.17
