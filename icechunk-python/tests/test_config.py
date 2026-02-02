@@ -148,6 +148,7 @@ def test_virtual_chunk_containers() -> None:
 
 
 def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
+
     storage = icechunk.in_memory_storage()
     repo = icechunk.Repository.create(
         storage=storage,
@@ -281,3 +282,34 @@ def test_s3_storage_options() -> None:
     )
     # TODO: add accessors and verify values
     # currently this is only testing we can construct
+
+
+def test_clear_virtual_chunk_containers_persists_through_reopen() -> None:
+    """Test that clearing VCCs is respected by reopen().
+
+    Regression test for: https://github.com/earth-mover/icechunk/issues/XXX
+    """
+    storage = icechunk.in_memory_storage()
+
+    # Create repo and add a VCC
+    repo = icechunk.Repository.create(storage=storage)
+    config = repo.config
+    store_config = icechunk.s3_store(region="us-east-1")
+    container = icechunk.VirtualChunkContainer("s3://testbucket/", store_config)
+    config.set_virtual_chunk_container(container)
+    repo = repo.reopen(config=config)
+    repo.save_config()
+
+    vccs = repo.config.virtual_chunk_containers or {}
+    assert "s3://testbucket/" in vccs
+
+    # Clear VCCs and reopen
+    config = repo.config
+    config.clear_virtual_chunk_containers()
+    assert config.virtual_chunk_containers == {}
+
+    repo = repo.reopen(config=config)
+
+    # VCCs should be cleared after reopen
+    reopened_vccs = repo.config.virtual_chunk_containers or {}
+    assert reopened_vccs == {}, f"Expected no VCCs after reopen, got: {list(reopened_vccs.keys())}"
