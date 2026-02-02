@@ -21,7 +21,7 @@ license = { file = "LICENSE" }
 dynamic = ["version"]
 authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
-dependencies = ["zarr>=3,!=3.0.3"]
+dependencies = ["zarr>=3.1.0"]
 
 [dependency-groups]
 dev = [
