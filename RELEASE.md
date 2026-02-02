@@ -20,7 +20,7 @@
 1. Go to the [`Python CI and library release` github action](https://github.com/earth-mover/icechunk/actions/workflows/python-ci.yaml).
 1. Check `Make a PyPI release`.
 1. Uncheck `Use git-based version for nightly builds`.
-1. Under `Branch to build/release (for manual builds only)` select the branch you want to release (`main` for a normal release, `support/v1.x` for a V1 support release).
+1. Under `Branch to build/release (for manual builds only)` select the branch you want to release (`main` for a normal release, `support/v1.x` for a V1 support release). Where it asks which branch workflow you want to use the workflow from just use the one from `main`.
 1. Click the green `Run workflow` button to launch.
 1. After the previous point completes, [create a new release in GitHub](https://github.com/earth-mover/icechunk/releases/new). Ask it to create the tag, and generate the release notes. Once you hit release, this step will upload the new version to [PyPI](https://pypi.org/project/icechunk/), and notify the community slack of the new release.
 1. After an hour or so an automated PR should appear to update the [conda-forge feedstock](https://github.com/conda-forge/icechunk-feedstock). Merge that and the new version will appear on conda-forge.
