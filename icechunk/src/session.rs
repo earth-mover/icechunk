@@ -1373,7 +1373,7 @@ impl Session {
     ///
     /// When [`Session::commit`] method is called, the system validates that the tip of the
     /// passed branch is exactly the same as the `snapshot_id` for the current session. If that
-    /// is not the case, the commit operation fails with `SessionErrorKind::Conflict`.
+    /// is not the case, the commit operation fails with [`SessionErrorKind::Conflict`].
     ///
     /// In that situation, the user has two options:
     /// 1. Abort the session and start a new one with using the new branch tip as a parent.
