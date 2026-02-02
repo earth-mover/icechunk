@@ -11,6 +11,7 @@ from icechunk import (
     IcechunkError,
     Repository,
     RepositoryConfig,
+    SessionMode,
     VirtualChunkContainer,
     VirtualChunkSpec,
     in_memory_storage,
@@ -160,3 +161,34 @@ async def test_chunk_type(
     assert await session.chunk_type_async("/air_temp", [0, 0]) == ChunkType.VIRTUAL
     assert await session.chunk_type_async("/air_temp", [0, 2]) == chunk_type
     assert await session.chunk_type_async("/air_temp", [0, 3]) == ChunkType.UNINITIALIZED
+
+
+def test_session_mode() -> None:
+    repo = Repository.create(storage=in_memory_storage())
+
+    # writable session
+    writable = repo.writable_session("main")
+    assert writable.mode == SessionMode.WRITABLE
+    assert not writable.read_only
+
+    # readonly session from branch
+    readonly = repo.readonly_session(branch="main")
+    assert readonly.mode == SessionMode.READONLY
+    assert readonly.read_only
+
+    # readonly session from snapshot
+    readonly_snap = repo.readonly_session(snapshot=writable.snapshot_id)
+    assert readonly_snap.mode == SessionMode.READONLY
+    assert readonly_snap.read_only
+
+    # rearrange session (requires spec_version >= 2)
+    repo_v2 = Repository.create(storage=in_memory_storage(), spec_version=2)
+    rearrange = repo_v2.rearrange_session("main")
+    assert rearrange.mode == SessionMode.REARRANGE
+    assert not rearrange.read_only
+
+    # after commit, session becomes readonly
+    writable = repo.writable_session("main")
+    assert writable.mode == SessionMode.WRITABLE
+    writable.commit("test")
+    assert writable.mode == SessionMode.READONLY
