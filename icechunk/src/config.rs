@@ -756,9 +756,6 @@ mod tests {
             vccs.contains_key("s3://bucket2/"),
             "Should contain bucket2, not bucket1"
         );
-        assert!(
-            !vccs.contains_key("s3://bucket1/"),
-            "Should not contain bucket1"
-        );
+        assert!(!vccs.contains_key("s3://bucket1/"), "Should not contain bucket1");
     }
 }
