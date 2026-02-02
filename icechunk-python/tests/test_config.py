@@ -170,7 +170,9 @@ def test_clear_virtual_chunk_containers_persists_through_reopen() -> None:
 
     # VCCs should be cleared after reopen
     reopened_vccs = repo.config.virtual_chunk_containers or {}
-    assert reopened_vccs == {}, f"Expected no VCCs after reopen, got: {list(reopened_vccs.keys())}"
+    assert (
+        reopened_vccs == {}
+    ), f"Expected no VCCs after reopen, got: {list(reopened_vccs.keys())}"
 
 
 def test_can_change_deep_config_values() -> None:
