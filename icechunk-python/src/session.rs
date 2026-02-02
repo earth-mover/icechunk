@@ -5,7 +5,7 @@ use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Store,
     format::{ChunkIndices, Path, manifest::ChunkPayload},
-    session::{Session, SessionErrorKind},
+    session::{Session, SessionErrorKind, SessionMode},
     store::{StoreError, StoreErrorKind},
 };
 use pyo3::{
@@ -34,6 +34,25 @@ pub enum ChunkType {
     Native = 1,
     Virtual = 2,
     Inline = 3,
+}
+
+/// The mode of a session, determining what operations are allowed.
+#[pyclass(name = "SessionMode", module = "icechunk", eq, rename_all = "UPPERCASE")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PySessionMode {
+    Readonly,
+    Writable,
+    Rearrange,
+}
+
+impl From<SessionMode> for PySessionMode {
+    fn from(mode: SessionMode) -> Self {
+        match mode {
+            SessionMode::Readonly => PySessionMode::Readonly,
+            SessionMode::Writable => PySessionMode::Writable,
+            SessionMode::Rearrange => PySessionMode::Rearrange,
+        }
+    }
 }
 
 #[pymethods]
@@ -71,6 +90,12 @@ impl PySession {
     pub fn read_only(&self, py: Python<'_>) -> bool {
         // This is blocking function, we need to release the Gil
         py.detach(move || self.0.blocking_read().read_only())
+    }
+
+    #[getter]
+    pub fn mode(&self, py: Python<'_>) -> PySessionMode {
+        // This is blocking function, we need to release the Gil
+        py.detach(move || self.0.blocking_read().mode().into())
     }
 
     #[getter]
