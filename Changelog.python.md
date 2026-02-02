@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- Minor bug in merge conflict report.
+
 ## Python Icechunk Library 1.1.17
 
 ### Features
