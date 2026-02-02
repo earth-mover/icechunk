@@ -1,6 +1,6 @@
 [package]
 name = "icechunk-python"
-version = "1.1.17"
+version = "1.1.18"
 description = "Transactional storage engine for Zarr designed for use on cloud object storage"
 readme = "../README.md"
 repository = "https://github.com/earth-mover/icechunk"
@@ -21,7 +21,7 @@ crate-type = ["cdylib"]
 bytes = "1.11.0"
 chrono = { version = "0.4.42" }
 futures = "0.3.31"
-icechunk = { path = "../icechunk", version = "0.3.20", features = ["logs"] }
+icechunk = { path = "../icechunk", version = "0.3.21", features = ["logs"] }
 itertools = "0.14.0"
 pyo3 = { version = "0.27.2", features = [
   "chrono",
