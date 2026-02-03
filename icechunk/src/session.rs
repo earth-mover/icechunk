@@ -91,7 +91,9 @@ pub enum SessionErrorKind {
     NotAGroup { node: Box<NodeSnapshot>, message: String },
     #[error("node already exists at `{node:?}`: {message}")]
     AlreadyExists { node: Box<NodeSnapshot>, message: String },
-    #[error("cannot commit, no changes made to the session")]
+    #[error(
+        "cannot commit, no changes made to the session (use `allow_empty=true` to commit anyway)"
+    )]
     NoChangesToCommit,
     #[error("invalid snapshot timestamp ordering. parent: `{parent}`, child: `{child}` ")]
     InvalidSnapshotTimestampOrdering { parent: DateTime<Utc>, child: DateTime<Utc> },
