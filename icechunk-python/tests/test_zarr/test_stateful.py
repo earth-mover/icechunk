@@ -29,9 +29,6 @@ PROTOTYPE = default_buffer_prototype()
 
 Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 
-if Version(zarr.__version__) < Version("3.1.0"):
-    pytest.skip()
-
 # pytestmark = [
 #     pytest.mark.filterwarnings(
 #         "ignore::zarr.core.dtype.common.UnstableSpecificationWarning"
