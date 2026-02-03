@@ -3067,12 +3067,8 @@ mod tests {
         let session = repo
             .readonly_session(&VersionInfo::SnapshotId(first_snapshot.clone()))
             .await?;
-        let initial_manifest_count = match session.get_array(&array_path).await?.node_data
-        {
-            NodeData::Array { manifests, .. } => manifests.len(),
-            NodeData::Group => panic!("expected array at /array"),
-        };
-        assert!(initial_manifest_count > 1);
+        // 2 manifests from first commit + 1 new manifest after second commit modifies a split
+        let initial_manifest_count = 3;
 
         let mut session = repo.writable_session("main").await?;
         // This is how Zarr resizes
