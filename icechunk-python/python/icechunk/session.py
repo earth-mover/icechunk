@@ -8,6 +8,7 @@ from icechunk import (
     ConflictSolver,
     Diff,
     RepositoryConfig,
+    SessionMode,
 )
 from icechunk._icechunk_python import PySession
 from icechunk.store import IcechunkStore
@@ -72,6 +73,18 @@ class Session:
             True if the session is read-only, False otherwise.
         """
         return self._session.read_only
+
+    @property
+    def mode(self) -> SessionMode:
+        """
+        The mode of this session.
+
+        Returns
+        -------
+        SessionMode
+            The session mode - one of READONLY, WRITABLE, or REARRANGE.
+        """
+        return self._session.mode
 
     @property
     def snapshot_id(self) -> str:

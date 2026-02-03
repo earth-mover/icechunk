@@ -53,6 +53,17 @@ use crate::{
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
 
+/// The mode of a session, determining what operations are allowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionMode {
+    /// Cannot modify the repository.
+    Readonly,
+    /// Can modify arrays/groups but cannot move nodes.
+    Writable,
+    /// Can only move/rename nodes in the hierarchy.
+    Rearrange,
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum SessionErrorKind {
@@ -338,6 +349,18 @@ impl Session {
 
     pub fn read_only(&self) -> bool {
         self.branch_name.is_none()
+    }
+
+    /// Returns the mode of this session.
+    pub fn mode(&self) -> SessionMode {
+        if self.branch_name.is_none() {
+            SessionMode::Readonly
+        } else {
+            match &self.change_set {
+                ChangeSet::Edit(_) => SessionMode::Writable,
+                ChangeSet::Rearrange(_) => SessionMode::Rearrange,
+            }
+        }
     }
 
     pub fn snapshot_id(&self) -> &SnapshotId {
