@@ -23,6 +23,7 @@ import zarr
 from icechunk import Repository, SessionMode, Storage, in_memory_storage
 from icechunk.testing import strategies as icst
 from zarr.core.buffer import default_buffer_prototype
+from zarr.storage import MemoryStore
 from zarr.testing.stateful import ZarrHierarchyStateMachine
 from zarr.testing.strategies import (
     basic_indices,
@@ -32,6 +33,25 @@ from zarr.testing.strategies import (
 )
 
 PROTOTYPE = default_buffer_prototype()
+
+
+class ModelStore(MemoryStore):
+    """MemoryStore with a move method for testing."""
+
+    async def move(self, source: str, dest: str) -> None:
+        """Move all keys from source to dest.
+
+        Store keys always have form "node/zarr.json" or "node/c/...", never bare "node".
+        """
+        all_keys = [k async for k in self.list_prefix("")]
+        keys_to_move = [k for k in all_keys if k.startswith(source + "/")]
+        for old_key in keys_to_move:
+            new_key = dest + old_key[len(source) :]
+            data = await self.get(old_key, prototype=PROTOTYPE)
+            if data is not None:
+                await self.set(new_key, data)
+                await self.delete(old_key)
+
 
 Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 
@@ -103,6 +123,7 @@ def chunk_paths(
 # TODO: add "/" to self.all_groups, deleting "/" seems to be problematic
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     store: ic.IcechunkStore  # Override parent class type annotation
+    model: ModelStore  # Override to add move() method
 
     def __init__(self, storage: Storage) -> None:
         self.storage = storage
@@ -113,6 +134,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         temp_repo = Repository.create(in_memory_storage(), spec_version=1)
         temp_store = temp_repo.writable_session("main").store
         super().__init__(temp_store)
+        # Replace parent's MemoryStore with our ModelStore that has move()
+        self.model = ModelStore()
+        zarr.group(store=self.model)
 
     def new_session(self, rearrange: bool = False) -> ic.IcechunkStore:
         """Create a new session (rearrange if requested and spec_version >= 2)."""
@@ -281,8 +305,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # Perform move on store (paths need leading slash)
         self.store.session.move(f"/{source}", f"/{dest}")
 
-        # Update model - move in MemoryStore
-        self.move_in_model(source, dest)
+        # Update model
+        self._sync(self.model.move(source, dest))
 
         # Update tracking sets - remap paths from source to dest
         def remap(path: str) -> str:
@@ -297,25 +321,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         self.all_arrays = {remap(p) for p in self.all_arrays}
         self.all_groups = {remap(p) for p in self.all_groups}
-
-    def move_in_model(self, source: str, dest: str) -> None:
-        """Move all keys from source to dest in the model store.
-
-        We operate at the key level (list_prefix) rather than zarr object level because:
-        - MemoryStore has no native move/rename
-        - Key-level copy preserves raw bytes without re-encoding chunks
-
-        This means the names are a bit different:
-        - Store keys always have form "node/zarr.json" or "node/c/...", never bare "node"
-        """
-        all_keys = list(self._sync_iter(self.model.list_prefix("")))
-        keys_to_move = [k for k in all_keys if k.startswith(source + "/")]
-        for old_key in keys_to_move:
-            new_key = dest + old_key[len(source) :]
-            data = self._sync(self.model.get(old_key, prototype=PROTOTYPE))
-            if data is not None:
-                self._sync(self.model.set(new_key, data))
-                self._sync(self.model.delete(old_key))
 
     @rule(
         data=st.data(),
