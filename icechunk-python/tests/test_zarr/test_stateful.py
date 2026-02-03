@@ -294,7 +294,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         assume(array.size > 0)
         super().add_array(data, name, array_and_chunks)
 
-    @rule(data=st.data())
     def _compare_list_dir(
         self, model: ModelStore, store: ic.IcechunkStore, paths: set[str]
     ) -> None:
