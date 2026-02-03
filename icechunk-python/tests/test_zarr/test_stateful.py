@@ -239,8 +239,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     # NOTE:
     # Bundles (https://hypothesis.readthedocs.io/en/latest/stateful.html#rule-based-state-machines)
-    # may seem like the right way to draw the names in a rule rather than filterwarnings
-    # with assume. But unfortunately this would require some invasive changes inside
+    # may seem like a useful tool here to have drawing of paths and names in a rule rather
+    # than in the function. But unfortunately this would require some invasive changes inside
     # ZarrHierarchyStateMachine to track the all_array and all_groups in a bundle
     # and its add_*/delete_* methods don't return paths for bundle population.
     @rule(data=st.data(), new_name=node_names)
