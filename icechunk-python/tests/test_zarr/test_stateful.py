@@ -248,20 +248,29 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
     def move_node(self, data: st.DataObject, new_name: str) -> None:
         """Move a node to a new location (only in a rearrange session)."""
-        all_nodes = sorted(self.all_arrays | self.all_groups)
-        source = data.draw(st.sampled_from(all_nodes))
+        existing_nodes = self.all_arrays | self.all_groups
+        source = data.draw(st.sampled_from(sorted(existing_nodes)))
 
-        # Draw destination parent from existing groups (or root "")
+        # Draw destination parent from existing groups (or root ""), excluding:
+        # - source and its children (prevent moving into own subtree)
+        # - parents where dest would conflict with existing nodes or equal source
         # NOTE: Moving to a non-existent parent silently loses data (icechunk bug),
         # so we only test moves to existing groups.
-        dest_parents = sorted(self.all_groups | {""})
+        def is_valid_parent(g: str) -> bool:
+            dest = f"{g}/{new_name}".lstrip("/")
+            return (
+                # "foo" can't move under "foo/..." (parent can't be source)
+                g != source
+                # "foo" can't move under "foo/bar/..." (parent can't be under source)
+                and not g.startswith(source + "/")
+                # "bar/baz" can't overwrite existing "bar/baz"
+                and dest not in existing_nodes
+            )
+
+        dest_parents = sorted(filter(is_valid_parent, self.all_groups | {""}))
+        assume(dest_parents)  # skip if no valid destinations
         dest_parent = data.draw(st.sampled_from(dest_parents))
         dest = f"{dest_parent}/{new_name}".lstrip("/")
-
-        # Prevent moving into own subtree: "foo" -> "foo/bar/baz" is invalid
-        assume(not dest.startswith(source + "/"))
-        assume(dest not in self.all_arrays and dest not in self.all_groups)
-        assume(dest != source)
 
         note(f"moving {source!r} to {dest!r}")
 
