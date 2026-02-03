@@ -2111,10 +2111,7 @@ impl<'a> FlushProcess<'a> {
                         .new_array_chunk_iterator(node_id, node_path, extent.clone())
                         .map(Ok),
                 );
-                #[allow(clippy::expect_used)]
-                let new_ref = self.write_manifest_from_iterator(chunks).await.expect(
-                    "logic bug. for a new node, we must always write the manifest",
-                );
+                let new_ref = self.write_manifest_from_iterator(chunks).await?;
                 // new_ref is None if there were no chunks in the iterator
                 if let Some(new_ref) = new_ref {
                     self.manifest_refs.entry(node_id.clone()).or_default().push(new_ref);
