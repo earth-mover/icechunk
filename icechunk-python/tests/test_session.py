@@ -190,8 +190,5 @@ def test_session_mode() -> None:
     # after commit, session becomes readonly
     writable = repo.writable_session("main")
     assert writable.mode == SessionMode.WRITABLE
-    # opening a group to make a change is necessary
-    # until https://github.com/earth-mover/icechunk/issues/1595 fixed
-    zarr.group(writable.store)
-    writable.commit("test")
-    assert writable.mode == SessionMode.READONLY
+    writable.commit("test", allow_empty=True)
+    assert writable.mode == SessionMode.READONLY  # type: ignore[comparison-overlap]
