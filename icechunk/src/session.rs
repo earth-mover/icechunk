@@ -3064,7 +3064,7 @@ mod tests {
                 .await?;
         }
         let first_snapshot = session.commit("None", None).await?;
-        let session = repo
+        let _session = repo
             .readonly_session(&VersionInfo::SnapshotId(first_snapshot.clone()))
             .await?;
         // 2 manifests from first commit + 1 new manifest after second commit modifies a split
@@ -3119,7 +3119,7 @@ mod tests {
         );
 
         // write manifests, check number of references in manifest
-        let updated_snapshot = session.commit("updated", None).await?;
+        let _updated_snapshot = session.commit("updated", None).await?;
 
         // should still be deleted
         assert!(
@@ -3134,7 +3134,7 @@ mod tests {
 
         // empty commit should not alter manifests
         let mut session = repo.writable_session("main").await?;
-        let empty_snapshot = session.commit("empty commit", None).await?;
+        let _empty_snapshot = session.commit("empty commit", None).await?;
         assert_manifest_count(repo.asset_manager(), initial_manifest_count).await;
 
         Ok(())
