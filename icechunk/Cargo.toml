@@ -14,7 +14,7 @@ publish = true
 
 [dependencies]
 async-trait = "0.1.89"
-bytes = { version = "1.11.0", features = ["serde"] }
+bytes = { version = "1.11.1", features = ["serde"] }
 base64 = "0.22.1"
 futures = "0.3.31"
 itertools = "0.14.0"
