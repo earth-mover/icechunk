@@ -194,4 +194,4 @@ def test_session_mode() -> None:
     # until https://github.com/earth-mover/icechunk/issues/1595 fixed
     zarr.group(writable.store)
     writable.commit("test")
-    assert writable.mode == SessionMode.READONLY
+    assert writable.mode == SessionMode.READONLY  # type: ignore[comparison-overlap]
