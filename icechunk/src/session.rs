@@ -3056,7 +3056,8 @@ mod tests {
         let session = repo
             .readonly_session(&VersionInfo::SnapshotId(first_snapshot.clone()))
             .await?;
-        let initial_manifest_count = match session.get_array(&array_path).await?.node_data {
+        let initial_manifest_count = match session.get_array(&array_path).await?.node_data
+        {
             NodeData::Array { manifests, .. } => manifests.len(),
             NodeData::Group => panic!("expected array at /array"),
         };
@@ -3122,10 +3123,10 @@ mod tests {
             session.get_chunk_ref(&array_path, &ChunkIndices(vec![3])).await?.is_some()
         );
 
-        let session = repo
-            .readonly_session(&VersionInfo::SnapshotId(updated_snapshot))
-            .await?;
-        let updated_manifest_count = match session.get_array(&array_path).await?.node_data {
+        let session =
+            repo.readonly_session(&VersionInfo::SnapshotId(updated_snapshot)).await?;
+        let updated_manifest_count = match session.get_array(&array_path).await?.node_data
+        {
             NodeData::Array { manifests, .. } => manifests.len(),
             NodeData::Group => panic!("expected array at /array"),
         };
@@ -3134,9 +3135,8 @@ mod tests {
         // empty commit should not alter manifests
         let mut session = repo.writable_session("main").await?;
         let empty_snapshot = session.commit("empty commit", None).await?;
-        let session = repo
-            .readonly_session(&VersionInfo::SnapshotId(empty_snapshot))
-            .await?;
+        let session =
+            repo.readonly_session(&VersionInfo::SnapshotId(empty_snapshot)).await?;
         let empty_manifest_count = match session.get_array(&array_path).await?.node_data {
             NodeData::Array { manifests, .. } => manifests.len(),
             NodeData::Group => panic!("expected array at /array"),
