@@ -9,6 +9,7 @@ import pytest
 from hypothesis import assume, note, settings
 from hypothesis.stateful import (
     initialize,
+    invariant,
     precondition,
     rule,
     run_state_machine_as_test,
