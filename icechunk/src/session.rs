@@ -1128,7 +1128,18 @@ impl Session {
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
-        self._commit(message, properties, false, CommitMethod::NewCommit).await
+        self.commit_with_options(message, properties, false).await
+    }
+
+    #[instrument(skip(self, properties))]
+    pub async fn commit_with_options(
+        &mut self,
+        message: &str,
+        properties: Option<SnapshotProperties>,
+        allow_empty: bool,
+    ) -> SessionResult<SnapshotId> {
+        self._commit(message, properties, false, CommitMethod::NewCommit, allow_empty)
+            .await
     }
 
     #[instrument(skip(self, properties))]
@@ -1140,7 +1151,7 @@ impl Session {
         // Icechunk 1 doesn't support amend
         self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        self._commit(message, properties, false, CommitMethod::Amend).await
+        self._commit(message, properties, false, CommitMethod::Amend, false).await
     }
 
     async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
@@ -1251,7 +1262,8 @@ impl Session {
             serde_json::to_value(self.config.manifest().splitting())?;
         let mut properties = properties.unwrap_or_default();
         properties.insert("splitting_config".to_string(), splitting_config_serialized);
-        self._commit(message, Some(properties), true, commit_method).await
+
+        self._commit(message, Some(properties), true, commit_method, true).await
     }
 
     #[instrument(skip(self, properties))]
@@ -1261,6 +1273,7 @@ impl Session {
         properties: Option<SnapshotProperties>,
         rewrite_manifests: bool,
         commit_method: CommitMethod,
+        allow_empty: bool,
     ) -> SessionResult<SnapshotId> {
         let Some(branch_name) = &self.branch_name else {
             return Err(SessionErrorKind::ReadOnlySession.into());
@@ -1303,6 +1316,7 @@ impl Session {
             &self.splits,
             rewrite_manifests,
             commit_method,
+            allow_empty,
         )
         .await?;
 
@@ -2488,8 +2502,14 @@ async fn do_commit(
     splits: &HashMap<NodeId, ManifestSplits>,
     rewrite_manifests: bool,
     commit_method: CommitMethod,
+    allow_empty: bool,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
+
+    if !allow_empty && change_set.is_empty() {
+        return Err(SessionErrorKind::NoChangesToCommit.into());
+    }
+
     let properties = properties.unwrap_or_default();
     let flush_data =
         FlushProcess::new(Arc::clone(&asset_manager), change_set, snapshot_id, splits);
@@ -3134,7 +3154,8 @@ mod tests {
 
         // empty commit should not alter manifests
         let mut session = repo.writable_session("main").await?;
-        let _empty_snapshot = session.commit("empty commit", None).await?;
+        let _empty_snapshot =
+            session.commit_with_options("empty commit", None, true).await?;
         assert_manifest_count(repo.asset_manager(), initial_manifest_count).await;
 
         Ok(())
@@ -4315,7 +4336,14 @@ mod tests {
         let snap1 = session.commit("make root", None).await?;
 
         let mut session = repo.writable_session("main").await?;
-        let snap2 = session.commit("an empty commit", None).await?;
+        let result = session.commit("an empty commit", None).await;
+        assert!(matches!(
+            result,
+            Err(SessionError { kind: SessionErrorKind::NoChangesToCommit, .. })
+        ));
+
+        let mut session = repo.writable_session("main").await?;
+        let snap2 = session.commit_with_options("an empty commit", None, true).await?;
         let snap2_info = repo.lookup_snapshot(&snap2).await?;
         assert_eq!(snap2_info.parent_id, Some(snap1.clone()));
 

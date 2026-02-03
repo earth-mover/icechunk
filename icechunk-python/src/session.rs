@@ -384,7 +384,7 @@ impl PySession {
         })
     }
 
-    #[pyo3(signature = (message, metadata=None, rebase_with=None, rebase_tries=1_000))]
+    #[pyo3(signature = (message, metadata=None, rebase_with=None, rebase_tries=1_000, allow_empty=false))]
     pub fn commit(
         &self,
         py: Python<'_>,
@@ -392,6 +392,7 @@ impl PySession {
         metadata: Option<PySnapshotProperties>,
         rebase_with: Option<PyConflictSolver>,
         rebase_tries: Option<u16>,
+        allow_empty: bool,
     ) -> PyResult<String> {
         let metadata = metadata.map(|m| m.into());
         // This is blocking function, we need to release the Gil
@@ -410,7 +411,7 @@ impl PySession {
                         )
                         .await
                 } else {
-                    session.commit(message, metadata).await
+                    session.commit_with_options(message, metadata, allow_empty).await
                 }
                 .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())
@@ -418,6 +419,7 @@ impl PySession {
         })
     }
 
+    #[pyo3(signature = (message, metadata=None, rebase_with=None, rebase_tries=1_000, allow_empty=false))]
     pub fn commit_async<'py>(
         &'py self,
         py: Python<'py>,
@@ -425,6 +427,7 @@ impl PySession {
         metadata: Option<PySnapshotProperties>,
         rebase_with: Option<PyConflictSolver>,
         rebase_tries: Option<u16>,
+        allow_empty: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let session = self.0.clone();
         let message = message.to_owned();
@@ -444,7 +447,7 @@ impl PySession {
                     )
                     .await
             } else {
-                session.commit(&message, metadata).await
+                session.commit_with_options(&message, metadata, allow_empty).await
             }
             .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(snapshot_id.to_string())
