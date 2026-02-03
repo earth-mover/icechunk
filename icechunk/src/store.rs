@@ -362,6 +362,29 @@ impl Store {
 
     // alternate API would take array path, and a mapping from string coord to ChunkPayload
     #[instrument(skip(self))]
+    pub async fn get_virtual_ref(
+        &self,
+        key: &str,
+    ) -> StoreResult<Option<VirtualChunkRef>> {
+        match Key::parse(key)? {
+            Key::Chunk { node_path, coords } => {
+                let session = self.session.read().await;
+                match session.get_chunk_ref(&node_path, &coords).await? {
+                    Some(ChunkPayload::Virtual(vref)) => Ok(Some(vref)),
+                    Some(ChunkPayload::Ref(_)) | Some(ChunkPayload::Inline(_)) => {
+                        Ok(None)
+                    }
+                    None => Ok(None),
+                }
+            }
+            Key::Metadata { .. } | Key::ZarrV2(_) => Err(StoreErrorKind::NotAllowed(
+                format!("use .get to read metadata for key {key}"),
+            )
+            .into()),
+        }
+    }
+
+    #[instrument(skip(self))]
     pub async fn set_virtual_ref(
         &self,
         key: &str,
@@ -435,6 +458,29 @@ impl Store {
         } else {
             Ok(SetVirtualRefsResult::FailedRefs(failed))
         }
+    }
+
+    #[instrument(skip(self))]
+    pub async fn all_virtual_refs(&self) -> StoreResult<Vec<(String, VirtualChunkRef)>> {
+        let session = self.session.read().await;
+        let refs: Vec<_> = session
+            .all_chunks()
+            .await?
+            .try_filter_map(|(path, info)| match info.payload {
+                ChunkPayload::Virtual(reference) => {
+                    let coords = info.coord.0.iter().map(|c| c.to_string()).join("/");
+                    let key =
+                        [path.to_string()[1..].to_string(), "c".to_string(), coords]
+                            .iter()
+                            .filter(|s| !s.is_empty())
+                            .join("/");
+                    std::future::ready(Ok(Some((key, reference))))
+                }
+                _ => std::future::ready(Ok(None)),
+            })
+            .try_collect()
+            .await?;
+        Ok(refs)
     }
 
     #[instrument(skip(self))]
