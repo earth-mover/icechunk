@@ -4362,10 +4362,7 @@ mod tests {
             .map_ok(|si| si.id)
             .try_collect()
             .await?;
-        assert_eq!(ancestry.len(), 3);
-        assert_eq!(ancestry[0], snap2);
-        assert_eq!(ancestry[1], snap1);
-        assert_eq!(ancestry[2], Snapshot::INITIAL_SNAPSHOT_ID);
+        assert_eq!(ancestry, vec![snap2, snap1, Snapshot::INITIAL_SNAPSHOT_ID]);
 
         Ok(())
     }
