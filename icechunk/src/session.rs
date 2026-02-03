@@ -4354,6 +4354,18 @@ mod tests {
             )
             .await?;
         assert!(diff.is_empty());
+
+        // Verify ancestry includes both commits (plus initial snapshot)
+        let ancestry: Vec<_> = repo
+            .ancestry(&VersionInfo::SnapshotId(snap2.clone()))
+            .await?
+            .map_ok(|si| si.id)
+            .try_collect()
+            .await?;
+        assert_eq!(ancestry.len(), 3);
+        assert_eq!(ancestry[0], snap2);
+        assert_eq!(ancestry[1], snap1);
+
         Ok(())
     }
 
