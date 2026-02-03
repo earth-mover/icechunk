@@ -3052,7 +3052,15 @@ mod tests {
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
                 .await?;
         }
-        session.commit("None", None).await?;
+        let first_snapshot = session.commit("None", None).await?;
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(first_snapshot.clone()))
+            .await?;
+        let initial_manifest_count = match session.get_array(&array_path).await?.node_data {
+            NodeData::Array { manifests, .. } => manifests.len(),
+            NodeData::Group => panic!("expected array at /array"),
+        };
+        assert!(initial_manifest_count > 1);
 
         let mut session = repo.writable_session("main").await?;
         // This is how Zarr resizes
@@ -3103,7 +3111,7 @@ mod tests {
         );
 
         // write manifests, check number of references in manifest
-        session.commit("updated", None).await?;
+        let updated_snapshot = session.commit("updated", None).await?;
 
         // should still be deleted
         assert!(
@@ -3113,6 +3121,27 @@ mod tests {
         assert!(
             session.get_chunk_ref(&array_path, &ChunkIndices(vec![3])).await?.is_some()
         );
+
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(updated_snapshot))
+            .await?;
+        let updated_manifest_count = match session.get_array(&array_path).await?.node_data {
+            NodeData::Array { manifests, .. } => manifests.len(),
+            NodeData::Group => panic!("expected array at /array"),
+        };
+        assert_eq!(updated_manifest_count, initial_manifest_count);
+
+        // empty commit should not alter manifests
+        let mut session = repo.writable_session("main").await?;
+        let empty_snapshot = session.commit("empty commit", None).await?;
+        let session = repo
+            .readonly_session(&VersionInfo::SnapshotId(empty_snapshot))
+            .await?;
+        let empty_manifest_count = match session.get_array(&array_path).await?.node_data {
+            NodeData::Array { manifests, .. } => manifests.len(),
+            NodeData::Group => panic!("expected array at /array"),
+        };
+        assert_eq!(empty_manifest_count, initial_manifest_count);
 
         Ok(())
     }
