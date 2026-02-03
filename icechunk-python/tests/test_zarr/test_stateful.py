@@ -243,17 +243,21 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     # than in the function. But unfortunately this would require some invasive changes inside
     # ZarrHierarchyStateMachine to track the all_array and all_groups in a bundle
     # and its add_*/delete_* methods don't return paths for bundle population.
-    @rule(data=st.data(), new_name=node_names)
+    @rule(data=st.data())
     @precondition(lambda self: self.store.session.mode == SessionMode.REARRANGE)
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
-    def move_node(self, data: st.DataObject, new_name: str) -> None:
+    def move_node(self, data: st.DataObject) -> None:
         """Move a node to a new location (only in a rearrange session)."""
         existing_nodes = self.all_arrays | self.all_groups
         source = data.draw(st.sampled_from(sorted(existing_nodes)))
+        source_name = source.split("/")[-1]
+
+        # Sometimes keep the same name (pure move), sometimes rename
+        new_name = source_name if data.draw(st.booleans()) else data.draw(node_names)
 
         # Draw destination parent from existing groups (or root ""), excluding:
         # - source and its children (prevent moving into own subtree)
-        # - parents where dest would conflict with existing nodes or equal source
+        # - parents where dest would conflict with existing nodes
         # NOTE: Moving to a non-existent parent silently loses data (icechunk bug),
         # so we only test moves to existing groups.
         def is_valid_parent(g: str) -> bool:
@@ -268,7 +272,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             )
 
         dest_parents = sorted(filter(is_valid_parent, self.all_groups | {""}))
-        assume(dest_parents)  # skip if no valid destinations
+        # Even root "" can be invalid if new_name conflicts with existing top-level node
+        assume(dest_parents)
         dest_parent = data.draw(st.sampled_from(dest_parents))
         dest = f"{dest_parent}/{new_name}".lstrip("/")
 
