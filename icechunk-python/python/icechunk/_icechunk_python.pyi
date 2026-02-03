@@ -1862,6 +1862,23 @@ class ChunkType(Enum):
     VIRTUAL = 2
     INLINE = 3
 
+class SessionMode(Enum):
+    """Enum for session access modes
+
+    Attributes
+    ----------
+    READONLY: int
+        Session can only read data
+    WRITABLE: int
+        Session can read and write data
+    REARRANGE: int
+        Session can only move nodes and reindex arrays
+    """
+
+    READONLY = 0
+    WRITABLE = 1
+    REARRANGE = 2
+
 class PySession:
     @classmethod
     def from_bytes(cls, data: bytes) -> PySession: ...
@@ -1869,6 +1886,8 @@ class PySession:
     def as_bytes(self) -> bytes: ...
     @property
     def read_only(self) -> bool: ...
+    @property
+    def mode(self) -> SessionMode: ...
     @property
     def snapshot_id(self) -> str: ...
     @property
