@@ -4296,7 +4296,7 @@ mod tests {
         let snap2_info = repo.lookup_snapshot(&snap2).await?;
         assert_eq!(snap2_info.parent_id, Some(snap1.clone()));
 
-        let diff = repo.diff(&VersionInfo::SnapshotId(snap2.clone()), &VersionInfo::SnapshotId(snap1.clone())).await?;
+        let diff = repo.diff(&VersionInfo::SnapshotId(snap1.clone()), &VersionInfo::SnapshotId(snap2.clone())).await?;
         assert!(diff.is_empty());
         Ok(())
     }
