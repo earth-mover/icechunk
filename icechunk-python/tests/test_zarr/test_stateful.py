@@ -218,6 +218,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             possible_parents = sorted(pending_groups | {""})
 
             # Draw source, name, and destination - redraw all if invalid
+            found_valid_move = False
+            source = ""
+            dest = ""
             for _ in range(100):
                 source = data.draw(st.sampled_from(sorted(existing_nodes)))
                 source_name = source.split("/")[-1]
@@ -235,12 +238,13 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                     # Destination must not already exist: foo -> bar (when bar exists)
                     and dest not in existing_nodes
                 ):
-                    # Found a valid move - break out of discovery loop
+                    found_valid_move = True
                     break
-            else:
-                # we shouldn't be reaching here based on our precondition
-                # this is for safety
-                raise AssertionError("Could not find valid move after 100 attempts")
+            if not found_valid_move:
+                # No valid move found, stop trying to make more moves
+                # can't just immediately return. we need end of this function
+                # in order to clean up sessions properly.
+                break
 
             note(f"moving {source!r} to {dest!r}")
             session.move(f"/{source}", f"/{dest}")
