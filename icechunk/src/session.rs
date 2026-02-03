@@ -3123,12 +3123,12 @@ mod tests {
             session.get_chunk_ref(&array_path, &ChunkIndices(vec![3])).await?.is_some()
         );
 
-        assert_manifest_count(repo.asset_manager(), initial_manifest_count)
+        assert_manifest_count(repo.asset_manager(), initial_manifest_count);
 
         // empty commit should not alter manifests
         let mut session = repo.writable_session("main").await?;
         let empty_snapshot = session.commit("empty commit", None).await?;
-         assert_manifest_count(repo.asset_manager(), initial_manifest_count)
+        assert_manifest_count(repo.asset_manager(), initial_manifest_count);
 
         Ok(())
     }
