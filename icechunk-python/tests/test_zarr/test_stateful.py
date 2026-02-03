@@ -217,34 +217,29 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             existing_nodes = pending_arrays | pending_groups
             possible_parents = sorted(pending_groups | {""})
 
-            # Draw source, name, and destination - redraw all if invalid
-            found_valid_move = False
-            source = ""
-            dest = ""
-            for _ in range(100):
-                source = data.draw(st.sampled_from(sorted(existing_nodes)))
-                source_name = source.split("/")[-1]
-                new_name = (
-                    source_name if data.draw(st.booleans()) else data.draw(node_names)
+            # Draw source, dest_parent, then name (filtered to avoid conflicts)
+            source = data.draw(st.sampled_from(sorted(existing_nodes)))
+            source_name = source.split("/")[-1]
+
+            # Filter out invalid parents (root "" is always valid):
+            # - Can't move into itself: foo -> foo/bar
+            # - Can't move into a descendant: foo -> foo/bar/baz/foo
+            dest_parent = data.draw(
+                st.sampled_from(possible_parents).filter(
+                    lambda p, src=source: p != src and not p.startswith(src + "/")
                 )
-                dest_parent = data.draw(st.sampled_from(possible_parents))
-                dest = f"{dest_parent}/{new_name}".lstrip("/")
-                # Only move to existing groups (non-existent parent loses data)
-                if (
-                    # Can't move into itself: foo -> foo/bar
-                    dest_parent != source
-                    # Can't move into a descendant: foo -> foo/bar/baz/foo
-                    and not dest_parent.startswith(source + "/")
-                    # Destination must not already exist: foo -> bar (when bar exists)
-                    and dest not in existing_nodes
-                ):
-                    found_valid_move = True
-                    break
-            if not found_valid_move:
-                # No valid move found, stop trying to make more moves
-                # can't just immediately return. we need end of this function
-                # in order to clean up sessions properly.
-                break
+            )
+
+            # Filter name to avoid destination conflicts
+            # Destination must not already exist: foo -> bar (when bar exists)
+            new_name = data.draw(
+                st.one_of(st.just(source_name), node_names).filter(
+                    lambda n, dp=dest_parent, nodes=existing_nodes: (
+                        f"{dp}/{n}".lstrip("/") not in nodes
+                    )
+                )
+            )
+            dest = f"{dest_parent}/{new_name}".lstrip("/")
 
             note(f"moving {source!r} to {dest!r}")
             session.move(f"/{source}", f"/{dest}")
