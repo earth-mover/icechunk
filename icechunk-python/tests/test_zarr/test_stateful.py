@@ -20,7 +20,7 @@ from packaging.version import Version
 
 import icechunk as ic
 import zarr
-from icechunk import Repository, SessionMode, Storage, in_memory_storage
+from icechunk import Repository, Storage, in_memory_storage
 from icechunk.testing import strategies as icst
 from zarr.core.buffer import default_buffer_prototype
 from zarr.storage import MemoryStore
@@ -36,7 +36,7 @@ PROTOTYPE = default_buffer_prototype()
 
 
 class ModelStore(MemoryStore):
-    """MemoryStore with a move method for testing."""
+    """MemoryStore with move and copy methods for testing."""
 
     async def move(self, source: str, dest: str) -> None:
         """Move all keys from source to dest.
@@ -51,6 +51,15 @@ class ModelStore(MemoryStore):
             if data is not None:
                 await self.set(new_key, data)
                 await self.delete(old_key)
+
+    async def copy(self) -> "ModelStore":
+        """Create a copy of this store."""
+        new_store = ModelStore()
+        async for key in self.list_prefix(""):
+            data = await self.get(key, prototype=PROTOTYPE)
+            if data is not None:
+                await new_store.set(key, data)
+        return new_store
 
 
 Frequency = TypeVar("Frequency", bound=Callable[..., Any])
@@ -138,15 +147,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self.model = ModelStore()
         zarr.group(store=self.model)
 
-    def new_session(self, rearrange: bool = False) -> ic.IcechunkStore:
-        """Create a new session (rearrange if requested and spec_version >= 2)."""
-        if rearrange and self.repo.spec_version >= 2:
-            note("opening rearrange session")
-            return self.repo.rearrange_session("main").store
-        else:
-            note("opening writable session")
-            return self.repo.writable_session("main").store
-
     @initialize(spec_version=st.sampled_from([1, 2]))
     def init_store(self, spec_version: int) -> None:
         """Override parent's init_store to sample spec_version and create repository."""
@@ -178,7 +178,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self.repo = Repository.open(self.storage, config=config)
         if data.draw(st.booleans()):
             self.repo.save_config()
-        self.store = self.new_session(rearrange=data.draw(st.booleans()))
+        self.store = self.repo.writable_session("main").store
 
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
@@ -203,7 +203,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         )
         if data.draw(st.booleans()):
             self.repo.save_config()
-        self.store = self.new_session(rearrange=data.draw(st.booleans()))
+        self.store = self.repo.writable_session("main").store
 
     @precondition(lambda self: self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
@@ -217,7 +217,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         self.store.session.commit("foo")
 
-        self.store = self.new_session(rearrange=data.draw(st.booleans()))
+        self.store = self.repo.writable_session("main").store
 
         lsafter = sorted(self._sync_iter(self.store.list_prefix("")))
         get_after = self._sync(self.store.get(path, prototype=PROTOTYPE))
@@ -261,73 +261,88 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self.repo = Repository.open(self.storage)
         self.store = self.repo.writable_session("main").store
 
-    # NOTE:
-    # Bundles (https://hypothesis.readthedocs.io/en/latest/stateful.html#rule-based-state-machines)
-    # may seem like a useful tool here to have drawing of paths and names in a rule rather
-    # than in the function. But unfortunately this would require some invasive changes inside
-    # ZarrHierarchyStateMachine to track the all_array and all_groups in a bundle
-    # and its add_*/delete_* methods don't return paths for bundle population.
-    @rule(data=st.data())
-    @precondition(lambda self: self.store.session.mode == SessionMode.REARRANGE)
+    @rule(data=st.data(), num_moves=st.integers(min_value=0, max_value=5))
+    @precondition(lambda self: self.repo.spec_version >= 2)
+    @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
-    def move_node(self, data: st.DataObject) -> None:
-        """Move a node to a new location (only in a rearrange session)."""
-        existing_nodes = self.all_arrays | self.all_groups
-        source = data.draw(st.sampled_from(sorted(existing_nodes)))
-        source_name = source.split("/")[-1]
+    def move_operations(self, data: st.DataObject, num_moves: int) -> None:
+        """Perform moves in a single rearrange session, then commit or discard."""
+        note(f"starting rearrange session with {num_moves} moves")
+        session = self.repo.rearrange_session("main")
 
-        new_name = source_name if data.draw(st.booleans()) else data.draw(node_names)
+        # Copy model to track expected state - apply moves as we go
+        pending_model = self._sync(self.model.copy())
+        pending_arrays = self.all_arrays.copy()
+        pending_groups = self.all_groups.copy()
 
-        # Draw destination parent from existing groups (or root ""), excluding:
-        # - source and its children (prevent moving into own subtree)
-        # - parents where dest would conflict with existing nodes
-        # NOTE: Moving to a non-existent parent silently loses data (icechunk bug),
-        # so we only test moves to existing groups.
-        def is_valid_parent(g: str) -> bool:
-            dest = f"{g}/{new_name}".lstrip("/")
-            return (
-                # "foo" can't move under "foo/..." (parent can't be source)
-                g != source
-                # "foo" can't move under "foo/bar/..." (parent can't be under source)
-                and not g.startswith(source + "/")
-                # "bar/baz" can't overwrite existing "bar/baz"
-                and dest not in existing_nodes
-            )
+        for _ in range(num_moves):
+            existing_nodes = pending_arrays | pending_groups
+            possible_parents = sorted(pending_groups | {""})
 
-        dest_parents = sorted(filter(is_valid_parent, self.all_groups | {""}))
-        # Even root "" can be invalid if new_name conflicts with existing top-level node
-        assume(dest_parents)
-        dest_parent = data.draw(st.sampled_from(dest_parents))
-        dest = f"{dest_parent}/{new_name}".lstrip("/")
+            # Draw source, name, and destination - redraw all if invalid
+            for _ in range(100):
+                source = data.draw(st.sampled_from(sorted(existing_nodes)))
+                source_name = source.split("/")[-1]
+                new_name = (
+                    source_name if data.draw(st.booleans()) else data.draw(node_names)
+                )
+                dest_parent = data.draw(st.sampled_from(possible_parents))
+                dest = f"{dest_parent}/{new_name}".lstrip("/")
+                # Only move to existing groups (non-existent parent loses data)
+                if (
+                    # Can't move into itself: foo -> foo/bar
+                    dest_parent != source
+                    # Can't move into a descendant: foo -> foo/bar/baz/foo
+                    and not dest_parent.startswith(source + "/")
+                    # Destination must not already exist: foo -> bar (when bar exists)
+                    and dest not in existing_nodes
+                ):
+                    # Found a valid move - break out of discovery loop
+                    break
+            else:
+                # we shouldn't be reaching here based on our precondition
+                # this is for safety
+                raise AssertionError("Could not find valid move after 100 attempts")
 
-        note(f"moving {source!r} to {dest!r}")
+            note(f"moving {source!r} to {dest!r}")
+            session.move(f"/{source}", f"/{dest}")
+            self._sync(pending_model.move(source, dest))
 
-        # Perform move on store (paths need leading slash)
-        self.store.session.move(f"/{source}", f"/{dest}")
+            pending_arrays, pending_groups = [
+                {
+                    dest
+                    if p == source
+                    else dest + p[len(source) :]
+                    if p.startswith(source + "/")
+                    else p
+                    for p in s
+                }
+                for s in (pending_arrays, pending_groups)
+            ]
 
-        # Update model
-        self._sync(self.model.move(source, dest))
+            # Verify store matches pending model after each move
+            # failing due to https://github.com/earth-mover/icechunk/issues/1562#issuecomment-3755544352
+            # TODO: uncomment when that is fixed
+            # self._compare_list_dir(
+            #     pending_model, session.store, pending_arrays | pending_groups
+            # )
 
-        # Update tracking sets - remap paths from source to dest
-        def remap(path: str) -> str:
-            if path == source:
-                # exact match: "foo" -> "bar"
-                return dest
-            if path.startswith(source + "/"):
-                # child path: "foo/child" -> "bar/child"
-                return dest + path[len(source) :]
-            # unrelated path: "other" -> "other"
-            return path
-
-        self.all_arrays = {remap(p) for p in self.all_arrays}
-        self.all_groups = {remap(p) for p in self.all_groups}
+        if data.draw(st.booleans()):
+            note(f"committing {num_moves} moves")
+            self.model = pending_model
+            self.all_arrays = pending_arrays
+            self.all_groups = pending_groups
+            self.store = session.store
+            self.commit_with_check(data)
+        else:
+            note("discarding moves")
+            self.store = self.repo.writable_session("main").store
 
     @rule(
         data=st.data(),
         name=node_names,
         array_and_chunks=np_array_and_chunks(),
     )
-    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     def add_array(
         self,
         data: st.DataObject,
@@ -343,37 +358,21 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             assume(array.dtype.kind not in ("S", "U", "M", "m"))
         super().add_array(data, name, array_and_chunks)
 
-    @rule(name=node_names, data=st.data())
-    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
-    def add_group(self, name: str, data: st.DataObject) -> None:
-        super().add_group(name, data)
-
-    @rule(data=st.data())
-    @precondition(lambda self: bool(self.all_arrays))
-    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
-    def delete_array_using_del(self, data: st.DataObject) -> None:
-        super().delete_array_using_del(data)
-
     @rule(data=st.data())
     @precondition(
         # Parent filters to nested groups (containing "/"), so we need at least one
         lambda self: any("/" in g for g in self.all_groups)
     )
-    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     def delete_group_using_del(self, data: st.DataObject) -> None:
         super().delete_group_using_del(data)
 
-    @invariant()
-    def check_list_dir(self) -> None:
-        # known bug: list_dir returns empty for moved nodes before commit
-        is_rearrange = self.store.session.mode == SessionMode.REARRANGE
-        has_changes = self.store.session.has_uncommitted_changes
-        if is_rearrange and has_changes:
-            return
-
-        for path in self.all_groups | self.all_arrays:
-            model_ls = sorted(self._sync_iter(self.model.list_dir(path)))
-            store_ls = sorted(self._sync_iter(self.store.list_dir(path)))
+    def _compare_list_dir(
+        self, model: ModelStore, store: ic.IcechunkStore, paths: set[str]
+    ) -> None:
+        """Compare list_dir results between model and store for given paths."""
+        for path in paths:
+            model_ls = sorted(self._sync_iter(model.list_dir(path)))
+            store_ls = sorted(self._sync_iter(store.list_dir(path)))
             if model_ls != store_ls and set(model_ls).symmetric_difference(
                 set(store_ls)
             ) != {"c"}:
@@ -386,6 +385,10 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                     f"list_dir mismatch for {path=}: {model_ls=} != {store_ls=}"
                 )
 
+    @invariant()
+    def check_list_dir(self) -> None:
+        self._compare_list_dir(self.model, self.store, self.all_groups | self.all_arrays)
+
     #####  TODO: port everything below to zarr
     @precondition(lambda self: bool(self.all_arrays))
     @rule(data=st.data())
@@ -396,7 +399,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         np.testing.assert_equal(actual, expected)
 
     @precondition(lambda self: bool(self.all_arrays))
-    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     @rule(data=st.data())
     def overwrite_array_orthogonal_indexing(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
@@ -411,7 +413,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     #####  TODO: delete after next Zarr release (Jun 18, 2025)
     @rule()
-    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     @with_frequency(0.25)
     def clear(self) -> None:
         note("clearing")
@@ -456,7 +457,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         return path
 
     @precondition(lambda self: bool(self.all_arrays))
-    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     @rule(data=st.data())
     def delete_chunk(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
@@ -470,7 +470,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self._sync(self.store.delete(path))
 
     @precondition(lambda self: bool(self.all_arrays))
-    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     @rule(data=st.data())
     def overwrite_array_basic_indexing(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
@@ -484,7 +483,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         store_array[slicer] = new_data
 
     @precondition(lambda self: bool(self.all_arrays))
-    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     @rule(data=st.data())
     def resize_array(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
@@ -497,7 +495,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         store_array.resize(new_shape)
 
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
-    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     @rule(data=st.data())
     def delete_dir(self, data: st.DataObject) -> None:
         path = self.draw_directory(data)
