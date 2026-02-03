@@ -143,7 +143,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             self.repo.save_config()
         self.store = self.repo.writable_session("main").store
 
-    @precondition(lambda self: self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def commit_with_check(self, data: st.DataObject) -> None:
         note("committing and checking list_prefix")
@@ -153,7 +152,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         get_before = self._sync(self.store.get(path, prototype=PROTOTYPE))
         assert get_before
 
-        self.store.session.commit("foo")
+        allow_empty = not self.store.session.has_uncommitted_changes
+        self.store.session.commit("foo", allow_empty=allow_empty)
 
         self.store = self.repo.writable_session("main").store
 
