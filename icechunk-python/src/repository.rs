@@ -305,6 +305,18 @@ impl From<Diff> for PyDiff {
 
 #[pymethods]
 impl PyDiff {
+    /// Returns true if the diff contains no changes.
+    pub fn is_empty(&self) -> bool {
+        self.new_groups.is_empty()
+            && self.new_arrays.is_empty()
+            && self.deleted_groups.is_empty()
+            && self.deleted_arrays.is_empty()
+            && self.updated_groups.is_empty()
+            && self.updated_arrays.is_empty()
+            && self.updated_chunks.is_empty()
+            && self.moved_nodes.is_empty()
+    }
+
     #[allow(clippy::unwrap_used)]
     pub fn __repr__(&self) -> String {
         let mut res = String::new();
