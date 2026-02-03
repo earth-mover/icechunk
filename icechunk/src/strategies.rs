@@ -17,7 +17,7 @@ use crate::format::manifest::{
     VirtualChunkRef,
 };
 use crate::format::snapshot::{ArrayShape, DimensionName};
-use crate::format::{ChunkId, ChunkIndices, NodeId, Path, manifest};
+use crate::format::{ChunkId, ChunkIndices, NodeId, Path, SnapshotId, manifest};
 use crate::session::Session;
 use crate::storage::{
     ConcurrencySettings, ETag, RetriesSettings, Settings, new_in_memory_storage,
@@ -40,6 +40,7 @@ use std::ops::{Bound, Range};
 use std::path::PathBuf;
 
 use crate::change_set::{ArrayData, Move};
+use crate::refs::RefData;
 
 const MAX_NDIM: usize = 4;
 
@@ -654,4 +655,11 @@ prop_compose! {
     pub fn gen_move()(to in path(), from in path()) -> Move {
         Move{to, from}
     }
+}
+
+fn snapshot_id() -> impl Strategy<Value = SnapshotId> {
+    uniform12(any::<u8>()).prop_map(SnapshotId::new)
+}
+pub fn ref_data() -> impl Strategy<Value = RefData> {
+    snapshot_id().prop_map(|snapshot| RefData { snapshot })
 }

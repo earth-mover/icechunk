@@ -499,9 +499,12 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tempfile::{TempDir, tempdir};
 
-    use crate::storage::{new_in_memory_storage, new_local_filesystem_storage};
-
     use super::*;
+    use crate::storage::{new_in_memory_storage, new_local_filesystem_storage};
+    use crate::{roundtrip_serialization_tests, strategies::ref_data};
+    use proptest::prelude::*;
+
+    roundtrip_serialization_tests!(serialize_and_deserialize_ref_data - ref_data);
 
     /// Execute the passed block with all test implementations of Storage.
     ///
