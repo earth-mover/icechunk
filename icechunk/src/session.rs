@@ -4365,6 +4365,7 @@ mod tests {
         assert_eq!(ancestry.len(), 3);
         assert_eq!(ancestry[0], snap2);
         assert_eq!(ancestry[1], snap1);
+        assert_eq!(ancestry[2], Snapshot::INITIAL_SNAPSHOT_ID);
 
         Ok(())
     }
