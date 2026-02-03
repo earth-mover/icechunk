@@ -306,6 +306,7 @@ class Session:
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> str:
         """
         Commit the changes in the session to the repository.
@@ -324,6 +325,8 @@ class Session:
             If other session committed while the current session was writing, use Session.rebase with this solver.
         rebase_tries : int, optional
             If other session committed while the current session was writing, use Session.rebase up to this many times in a loop.
+        allow_empty : bool, optional
+            If True, allow creating a commit even if there are no changes. Default is False.
 
         Returns
         -------
@@ -334,6 +337,8 @@ class Session:
         ------
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
+        icechunk.NoChangesToCommitError
+            If there are no changes to commit and allow_empty is False.
         """
         if self._allow_changes:
             warnings.warn(
@@ -343,7 +348,11 @@ class Session:
                 stacklevel=2,
             )
         return self._session.commit(
-            message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
+            message,
+            metadata,
+            rebase_with=rebase_with,
+            rebase_tries=rebase_tries,
+            allow_empty=allow_empty,
         )
 
     async def commit_async(
@@ -352,6 +361,7 @@ class Session:
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> str:
         """
         Commit the changes in the session to the repository (async version).
@@ -370,6 +380,8 @@ class Session:
             If other session committed while the current session was writing, use Session.rebase with this solver.
         rebase_tries : int, optional
             If other session committed while the current session was writing, use Session.rebase up to this many times in a loop.
+        allow_empty : bool, optional
+            If True, allow creating a commit even if there are no changes. Default is False.
 
         Returns
         -------
@@ -380,6 +392,8 @@ class Session:
         ------
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
+        icechunk.NoChangesToCommitError
+            If there are no changes to commit and allow_empty is False.
         """
         if self._allow_changes:
             warnings.warn(
@@ -389,7 +403,11 @@ class Session:
                 stacklevel=2,
             )
         return await self._session.commit_async(
-            message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
+            message,
+            metadata,
+            rebase_with=rebase_with,
+            rebase_tries=rebase_tries,
+            allow_empty=allow_empty,
         )
 
     def amend(
@@ -654,6 +672,7 @@ class ForkSession(Session):
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> NoReturn:
         raise TypeError(
             "Cannot commit a fork of a Session. If you are using uncooperative writes, "
@@ -667,6 +686,7 @@ class ForkSession(Session):
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> NoReturn:
         raise TypeError(
             "Cannot commit a fork of a Session. If you are using uncooperative writes, "

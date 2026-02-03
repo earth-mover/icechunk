@@ -1429,6 +1429,11 @@ class RepositoryConfig:
 
 class Diff:
     """The result of comparing two snapshots"""
+    def is_empty(self) -> bool:
+        """
+        Returns True if the diff contains no changes.
+        """
+        ...
     @property
     def new_groups(self) -> set[str]:
         """
@@ -1927,6 +1932,7 @@ class PySession:
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> str: ...
     async def commit_async(
         self,
@@ -1934,6 +1940,7 @@ class PySession:
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> str: ...
     def flush(
         self,
