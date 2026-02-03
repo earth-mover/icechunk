@@ -224,20 +224,22 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             # Filter out invalid parents (root "" is always valid):
             # - Can't move into itself: foo -> foo/bar
             # - Can't move into a descendant: foo -> foo/bar/baz/foo
+            def valid_parent(p: str, src: str = source) -> bool:
+                return p != src and not p.startswith(src + "/")
+
             dest_parent = data.draw(
-                st.sampled_from(possible_parents).filter(
-                    lambda p, src=source: p != src and not p.startswith(src + "/")
-                )
+                st.sampled_from(possible_parents).filter(valid_parent)
             )
 
             # Filter name to avoid destination conflicts
             # Destination must not already exist: foo -> bar (when bar exists)
+            def valid_name(
+                n: str, dp: str = dest_parent, nodes: set[str] = existing_nodes
+            ) -> bool:
+                return f"{dp}/{n}".lstrip("/") not in nodes
+
             new_name = data.draw(
-                st.one_of(st.just(source_name), node_names).filter(
-                    lambda n, dp=dest_parent, nodes=existing_nodes: (
-                        f"{dp}/{n}".lstrip("/") not in nodes
-                    )
-                )
+                st.one_of(st.just(source_name), node_names).filter(valid_name)
             )
             dest = f"{dest_parent}/{new_name}".lstrip("/")
 
@@ -293,7 +295,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         super().add_array(data, name, array_and_chunks)
 
     @rule(data=st.data())
-
     def _compare_list_dir(
         self, model: ModelStore, store: ic.IcechunkStore, paths: set[str]
     ) -> None:
