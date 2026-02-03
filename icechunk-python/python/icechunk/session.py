@@ -659,6 +659,7 @@ class ForkSession(Session):
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> NoReturn:
         raise TypeError(
             "Cannot commit a fork of a Session. If you are using uncooperative writes, "
@@ -672,6 +673,7 @@ class ForkSession(Session):
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> NoReturn:
         raise TypeError(
             "Cannot commit a fork of a Session. If you are using uncooperative writes, "
