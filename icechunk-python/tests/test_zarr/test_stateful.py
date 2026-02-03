@@ -252,7 +252,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         source = data.draw(st.sampled_from(sorted(existing_nodes)))
         source_name = source.split("/")[-1]
 
-        # Sometimes keep the same name (pure move), sometimes rename
         new_name = source_name if data.draw(st.booleans()) else data.draw(node_names)
 
         # Draw destination parent from existing groups (or root ""), excluding:
