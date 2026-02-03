@@ -3123,14 +3123,7 @@ mod tests {
             session.get_chunk_ref(&array_path, &ChunkIndices(vec![3])).await?.is_some()
         );
 
-        let session =
-            repo.readonly_session(&VersionInfo::SnapshotId(updated_snapshot)).await?;
-        let updated_manifest_count = match session.get_array(&array_path).await?.node_data
-        {
-            NodeData::Array { manifests, .. } => manifests.len(),
-            NodeData::Group => panic!("expected array at /array"),
-        };
-        assert_eq!(updated_manifest_count, initial_manifest_count);
+        assert_manifest_count(repo.asset_manager(), initial_manifest_count)
 
         // empty commit should not alter manifests
         let mut session = repo.writable_session("main").await?;
