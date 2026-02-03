@@ -3128,13 +3128,7 @@ mod tests {
         // empty commit should not alter manifests
         let mut session = repo.writable_session("main").await?;
         let empty_snapshot = session.commit("empty commit", None).await?;
-        let session =
-            repo.readonly_session(&VersionInfo::SnapshotId(empty_snapshot)).await?;
-        let empty_manifest_count = match session.get_array(&array_path).await?.node_data {
-            NodeData::Array { manifests, .. } => manifests.len(),
-            NodeData::Group => panic!("expected array at /array"),
-        };
-        assert_eq!(empty_manifest_count, initial_manifest_count);
+         assert_manifest_count(repo.asset_manager(), initial_manifest_count)
 
         Ok(())
     }
