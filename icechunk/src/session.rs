@@ -2741,6 +2741,17 @@ mod tests {
     use super::*;
     use icechunk_macros::tokio_test;
     use itertools::{Itertools, assert_equal};
+
+    async fn assert_manifest_count(
+        asset_manager: &Arc<AssetManager>,
+        total_manifests: usize,
+    ) {
+        let expected = asset_manager.list_manifests().await.unwrap().count().await;
+        assert_eq!(
+            total_manifests, expected,
+            "Mismatch in manifest count: expected {expected}, but got {total_manifests}",
+        );
+    }
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
@@ -3123,12 +3134,12 @@ mod tests {
             session.get_chunk_ref(&array_path, &ChunkIndices(vec![3])).await?.is_some()
         );
 
-        assert_manifest_count(repo.asset_manager(), initial_manifest_count);
+        assert_manifest_count(repo.asset_manager(), initial_manifest_count).await;
 
         // empty commit should not alter manifests
         let mut session = repo.writable_session("main").await?;
         let empty_snapshot = session.commit("empty commit", None).await?;
-        assert_manifest_count(repo.asset_manager(), initial_manifest_count);
+        assert_manifest_count(repo.asset_manager(), initial_manifest_count).await;
 
         Ok(())
     }
