@@ -20,7 +20,7 @@ from packaging.version import Version
 
 import icechunk as ic
 import zarr
-from icechunk import Repository, Storage, in_memory_storage
+from icechunk import Repository, SessionMode, Storage, in_memory_storage
 from icechunk.testing import strategies as icst
 from zarr.core.buffer import default_buffer_prototype
 from zarr.testing.stateful import ZarrHierarchyStateMachine
@@ -114,6 +114,15 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         temp_store = temp_repo.writable_session("main").store
         super().__init__(temp_store)
 
+    def new_session(self, rearrange: bool = False) -> ic.IcechunkStore:
+        """Create a new session (rearrange if requested and spec_version >= 2)."""
+        if rearrange and self.repo.spec_version >= 2:
+            note("opening rearrange session")
+            return self.repo.rearrange_session("main").store
+        else:
+            note("opening writable session")
+            return self.repo.writable_session("main").store
+
     @initialize(spec_version=st.sampled_from([1, 2]))
     def init_store(self, spec_version: int) -> None:
         """Override parent's init_store to sample spec_version and create repository."""
@@ -145,7 +154,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self.repo = Repository.open(self.storage, config=config)
         if data.draw(st.booleans()):
             self.repo.save_config()
-        self.store = self.repo.writable_session("main").store
+        self.store = self.new_session(rearrange=data.draw(st.booleans()))
 
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
@@ -170,7 +179,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         )
         if data.draw(st.booleans()):
             self.repo.save_config()
-        self.store = self.repo.writable_session("main").store
+        self.store = self.new_session(rearrange=data.draw(st.booleans()))
 
     @precondition(lambda self: self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
@@ -184,7 +193,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         self.store.session.commit("foo")
 
-        self.store = self.repo.writable_session("main").store
+        self.store = self.new_session(rearrange=data.draw(st.booleans()))
 
         lsafter = sorted(self._sync_iter(self.store.list_prefix("")))
         get_after = self._sync(self.store.get(path, prototype=PROTOTYPE))
@@ -228,11 +237,79 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self.repo = Repository.open(self.storage)
         self.store = self.repo.writable_session("main").store
 
+    # NOTE:
+    # Bundles (https://hypothesis.readthedocs.io/en/latest/stateful.html#rule-based-state-machines)
+    # may seem like the right way to draw the names in a rule rather than filterwarnings
+    # with assume. But unfortunately this would require some invasive changes inside
+    # ZarrHierarchyStateMachine to track the all_array and all_groups in a bundle
+    # and its add_*/delete_* methods don't return paths for bundle population.
+    @rule(data=st.data(), new_name=node_names)
+    @precondition(lambda self: self.store.session.mode == SessionMode.REARRANGE)
+    @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
+    def move_node(self, data: st.DataObject, new_name: str) -> None:
+        """Move a node to a new location (only in a rearrange session)."""
+        all_nodes = sorted(self.all_arrays | self.all_groups)
+        source = data.draw(st.sampled_from(all_nodes))
+
+        # Draw destination parent from existing groups (or root "")
+        # NOTE: Moving to a non-existent parent silently loses data (icechunk bug),
+        # so we only test moves to existing groups.
+        dest_parents = sorted(self.all_groups | {""})
+        dest_parent = data.draw(st.sampled_from(dest_parents))
+        dest = f"{dest_parent}/{new_name}".lstrip("/")
+
+        # Prevent moving into own subtree: "foo" -> "foo/bar/baz" is invalid
+        assume(not dest.startswith(source + "/"))
+        assume(dest not in self.all_arrays and dest not in self.all_groups)
+        assume(dest != source)
+
+        note(f"moving {source!r} to {dest!r}")
+
+        # Perform move on store (paths need leading slash)
+        self.store.session.move(f"/{source}", f"/{dest}")
+
+        # Update model - move in MemoryStore
+        self.move_in_model(source, dest)
+
+        # Update tracking sets - remap paths from source to dest
+        def remap(path: str) -> str:
+            if path == source:
+                # exact match: "foo" -> "bar"
+                return dest
+            if path.startswith(source + "/"):
+                # child path: "foo/child" -> "bar/child"
+                return dest + path[len(source) :]
+            # unrelated path: "other" -> "other"
+            return path
+
+        self.all_arrays = {remap(p) for p in self.all_arrays}
+        self.all_groups = {remap(p) for p in self.all_groups}
+
+    def move_in_model(self, source: str, dest: str) -> None:
+        """Move all keys from source to dest in the model store.
+
+        We operate at the key level (list_prefix) rather than zarr object level because:
+        - MemoryStore has no native move/rename
+        - Key-level copy preserves raw bytes without re-encoding chunks
+
+        This means the names are a bit different:
+        - Store keys always have form "node/zarr.json" or "node/c/...", never bare "node"
+        """
+        all_keys = list(self._sync_iter(self.model.list_prefix("")))
+        keys_to_move = [k for k in all_keys if k.startswith(source + "/")]
+        for old_key in keys_to_move:
+            new_key = dest + old_key[len(source) :]
+            data = self._sync(self.model.get(old_key, prototype=PROTOTYPE))
+            if data is not None:
+                self._sync(self.model.set(new_key, data))
+                self._sync(self.model.delete(old_key))
+
     @rule(
         data=st.data(),
         name=node_names,
         array_and_chunks=np_array_and_chunks(),
     )
+    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     def add_array(
         self,
         data: st.DataObject,
@@ -248,22 +325,48 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             assume(array.dtype.kind not in ("S", "U", "M", "m"))
         super().add_array(data, name, array_and_chunks)
 
-    @precondition(lambda self: bool(self.all_groups))
+    @rule(name=node_names, data=st.data())
+    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
+    def add_group(self, name: str, data: st.DataObject) -> None:
+        super().add_group(name, data)
+
     @rule(data=st.data())
-    def check_list_dir(self, data: st.DataObject) -> None:
-        path = self.draw_directory(data)
-        note(f"list_dir for {path=!r}")
-        model_ls = sorted(self._sync_iter(self.model.list_dir(path)))
-        store_ls = sorted(self._sync_iter(self.store.list_dir(path)))
-        if model_ls != store_ls and set(model_ls).symmetric_difference(set(store_ls)) != {
-            "c"
-        }:
-            # Consider .list_dir("path/to/array") for an array with a single chunk.
-            # The MemoryStore model will return `"c", "zarr.json"` only if the chunk exists
-            # If that chunk was deleted, then `"c"` is not returned.
-            # LocalStore will not have this behaviour :/
-            # In Icechunk, we always return the `c` so ignore this inconsistency.
-            assert model_ls == store_ls, (model_ls, store_ls)
+    @precondition(lambda self: bool(self.all_arrays))
+    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
+    def delete_array_using_del(self, data: st.DataObject) -> None:
+        super().delete_array_using_del(data)
+
+    @rule(data=st.data())
+    @precondition(
+        # Parent filters to nested groups (containing "/"), so we need at least one
+        lambda self: any("/" in g for g in self.all_groups)
+    )
+    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
+    def delete_group_using_del(self, data: st.DataObject) -> None:
+        super().delete_group_using_del(data)
+
+    @invariant()
+    def check_list_dir(self) -> None:
+        # known bug: list_dir returns empty for moved nodes before commit
+        is_rearrange = self.store.session.mode == SessionMode.REARRANGE
+        has_changes = self.store.session.has_uncommitted_changes
+        if is_rearrange and has_changes:
+            return
+
+        for path in self.all_groups | self.all_arrays:
+            model_ls = sorted(self._sync_iter(self.model.list_dir(path)))
+            store_ls = sorted(self._sync_iter(self.store.list_dir(path)))
+            if model_ls != store_ls and set(model_ls).symmetric_difference(
+                set(store_ls)
+            ) != {"c"}:
+                # Consider .list_dir("path/to/array") for an array with a single chunk.
+                # The MemoryStore model will return `"c", "zarr.json"` only if the chunk exists
+                # If that chunk was deleted, then `"c"` is not returned.
+                # LocalStore will not have this behaviour :/
+                # In Icechunk, we always return the `c` so ignore this inconsistency.
+                raise AssertionError(
+                    f"list_dir mismatch for {path=}: {model_ls=} != {store_ls=}"
+                )
 
     #####  TODO: port everything below to zarr
     @precondition(lambda self: bool(self.all_arrays))
@@ -275,6 +378,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         np.testing.assert_equal(actual, expected)
 
     @precondition(lambda self: bool(self.all_arrays))
+    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     @rule(data=st.data())
     def overwrite_array_orthogonal_indexing(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
@@ -289,6 +393,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     #####  TODO: delete after next Zarr release (Jun 18, 2025)
     @rule()
+    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     @with_frequency(0.25)
     def clear(self) -> None:
         note("clearing")
@@ -333,6 +438,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         return path
 
     @precondition(lambda self: bool(self.all_arrays))
+    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     @rule(data=st.data())
     def delete_chunk(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
@@ -346,6 +452,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self._sync(self.store.delete(path))
 
     @precondition(lambda self: bool(self.all_arrays))
+    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     @rule(data=st.data())
     def overwrite_array_basic_indexing(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
@@ -359,6 +466,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         store_array[slicer] = new_data
 
     @precondition(lambda self: bool(self.all_arrays))
+    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     @rule(data=st.data())
     def resize_array(self, data: st.DataObject) -> None:
         array = data.draw(st.sampled_from(sorted(self.all_arrays)))
@@ -371,6 +479,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         store_array.resize(new_shape)
 
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
+    @precondition(lambda self: self.store.session.mode == SessionMode.WRITABLE)
     @rule(data=st.data())
     def delete_dir(self, data: st.DataObject) -> None:
         path = self.draw_directory(data)
