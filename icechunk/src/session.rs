@@ -2290,10 +2290,6 @@ async fn do_flush(
     rewrite_manifests: bool,
     commit_method: CommitMethod,
 ) -> SessionResult<Arc<Snapshot>> {
-    if !rewrite_manifests && flush_data.change_set.is_empty() {
-        return Err(SessionErrorKind::NoChangesToCommit.into());
-    }
-
     let old_snapshot =
         flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await?;
 
@@ -4285,6 +4281,23 @@ mod tests {
             ]
         );
 
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_empty_commit() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let snap1 = session.commit("make root", None).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        let snap2 = session.commit("an empty commit", None).await?;
+        let snap2_info = repo.lookup_snapshot(&snap2).await?;
+        assert_eq!(snap2_info.parent_id, Some(snap1.clone()));
+
+        let diff = repo.diff(&VersionInfo::SnapshotId(snap2.clone()), &VersionInfo::SnapshotId(snap1.clone())).await?;
+        assert!(diff.is_empty());
         Ok(())
     }
 
