@@ -53,9 +53,9 @@ jobs:
       matrix:
         deps-version:
           - name: minimum
-            xarray: "2025.01.2"
-            dask: "2024.11.0"
-            distributed: "2024.11.0"
+            xarray: "2025.07.1"
+            dask: "2025.2.0"
+            distributed: "2025.2.0"
             zarr: "3.1.0"
           - name: latest
             xarray: "latest-release"
@@ -147,8 +147,8 @@ jobs:
       matrix:
         xarray-version:
           - name: minimum
-            version: "2025.01.2"
-            zarr: "3.0.8"
+            version: "2025.07.1"
+            zarr: "3.1.0"
           - name: latest-release
             version: "latest-release"
             zarr: "latest-release"
