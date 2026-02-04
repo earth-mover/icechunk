@@ -2039,23 +2039,15 @@ impl<'a> FlushProcess<'a> {
         rewrite_manifests: bool,
         splits: &ManifestSplits,
     ) -> SessionResult<()> {
-        let init: HashMap<ManifestExtents, Vec<ChunkInfo>> = Default::default();
-        // FIXME: this duplicates chunk storage for the array
-        let classified_chunks = updated_node_chunks_iterator(
-            &self.asset_manager,
-            self.change_set,
-            self.parent_id,
-            node.clone(),
-        )
-        .await
-        .try_fold(init, |mut res, (_, chunk)| {
-            if let Some(extents) = splits.find(&chunk.coord) {
-                res.entry(extents.clone()).or_default().push(chunk);
-            }
+        let init: HashMap<ManifestExtents, Vec<ChunkIndices>> = Default::default();
+        let classified_chunks =
+            self.change_set.changed_node_chunks(&node.id).fold(init, |mut res, chunk| {
+                if let Some(extents) = splits.find(chunk) {
+                    res.entry(extents.clone()).or_default().push(chunk.clone());
+                }
 
-            ready(Ok(res))
-        })
-        .await?;
+                res
+            });
 
         let mut refs =
             HashMap::<ManifestExtents, Vec<ManifestRef>>::with_capacity(splits.len());
@@ -2063,13 +2055,7 @@ impl<'a> FlushProcess<'a> {
         let on_disk_extents =
             existing_manifests.iter().map(|m| m.extents.clone()).collect::<Vec<_>>();
 
-        //let modified_splits = classified_chunks.keys().collect::<HashSet<_>>();
-        // FIXME: this is another pass through all chunks
-        let modified_splits: HashSet<_> = self
-            .change_set
-            .changed_node_chunks(&node.id)
-            .filter_map(|idx| splits.find(idx))
-            .collect();
+        let modified_splits = classified_chunks.keys().collect::<HashSet<_>>();
 
         // ``modified_splits`` (i.e. splits used in this session)
         // must be a subset of ``splits`` (the splits set in the config)
@@ -2079,8 +2065,21 @@ impl<'a> FlushProcess<'a> {
         for extent in splits.iter() {
             if rewrite_manifests || modified_splits.contains(extent) {
                 // this split was modified in this session, rewrite it completely
-                let chunks = classified_chunks.get(extent).unwrap_or(&no_chunks);
-                self.write_manifest_for_updated_chunks(chunks)
+                let chunks: Vec<_> = classified_chunks
+                    .get(extent)
+                    .unwrap_or(&no_chunks)
+                    .iter()
+                    .filter_map(|coord| {
+                        let payload = self.change_set.get_chunk_ref(&node.id, coord)?;
+
+                        payload.clone().map(|p| ChunkInfo {
+                            node: node.id.clone(),
+                            coord: coord.clone(),
+                            payload: p,
+                        })
+                    })
+                    .collect();
+                self.write_manifest_for_updated_chunks(&chunks)
                     .await?
                     .map(|new_ref| refs.insert(extent.clone(), vec![new_ref]));
             } else {
@@ -2110,10 +2109,23 @@ impl<'a> FlushProcess<'a> {
                             // the splits have changed, but no refs in this split have been written in this session
                             // same as `if` block above
                             debug_assert!(on_disk_bbox.is_some());
-                            let chunks =
-                                classified_chunks.get(extent).unwrap_or(&no_chunks);
+                            let chunks: Vec<_> = classified_chunks
+                                .get(extent)
+                                .unwrap_or(&no_chunks)
+                                .iter()
+                                .filter_map(|coord| {
+                                    let payload =
+                                        self.change_set.get_chunk_ref(&node.id, coord)?;
+
+                                    payload.clone().map(|p| ChunkInfo {
+                                        node: node.id.clone(),
+                                        coord: coord.clone(),
+                                        payload: p,
+                                    })
+                                })
+                                .collect();
                             if let Some(new_ref) =
-                                self.write_manifest_for_updated_chunks(chunks).await?
+                                self.write_manifest_for_updated_chunks(&chunks).await?
                             {
                                 refs.entry(extent.clone()).or_default().push(new_ref);
                             }
