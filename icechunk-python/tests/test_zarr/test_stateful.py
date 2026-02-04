@@ -9,6 +9,7 @@ import pytest
 from hypothesis import assume, note, settings
 from hypothesis.stateful import (
     initialize,
+    invariant,
     precondition,
     rule,
     run_state_machine_as_test,
@@ -19,6 +20,7 @@ import zarr
 from icechunk import Repository, Storage, in_memory_storage
 from icechunk.testing import strategies as icst
 from zarr.core.buffer import default_buffer_prototype
+from zarr.storage import MemoryStore
 from zarr.testing.stateful import ZarrHierarchyStateMachine
 from zarr.testing.strategies import (
     node_names,
@@ -26,6 +28,34 @@ from zarr.testing.strategies import (
 )
 
 PROTOTYPE = default_buffer_prototype()
+
+
+class ModelStore(MemoryStore):
+    """MemoryStore with move and copy methods for testing."""
+
+    async def move(self, source: str, dest: str) -> None:
+        """Move all keys from source to dest.
+
+        Store keys always have form "node/zarr.json" or "node/c/...", never bare "node".
+        """
+        all_keys = [k async for k in self.list_prefix("")]
+        keys_to_move = [k for k in all_keys if k.startswith(source + "/")]
+        for old_key in keys_to_move:
+            new_key = dest + old_key[len(source) :]
+            data = await self.get(old_key, prototype=PROTOTYPE)
+            if data is not None:
+                await self.set(new_key, data)
+                await self.delete(old_key)
+
+    async def copy(self) -> "ModelStore":
+        """Create a copy of this store."""
+        new_store = ModelStore()
+        async for key in self.list_prefix(""):
+            data = await self.get(key, prototype=PROTOTYPE)
+            if data is not None:
+                await new_store.set(key, data)
+        return new_store
+
 
 Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 
@@ -40,6 +70,7 @@ Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 # TODO: add "/" to self.all_groups, deleting "/" seems to be problematic
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     store: ic.IcechunkStore  # Override parent class type annotation
+    model: ModelStore  # Override to add move() method
 
     def __init__(self, storage: Storage) -> None:
         self.storage = storage
@@ -50,6 +81,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         temp_repo = Repository.create(in_memory_storage(), spec_version=1)
         temp_store = temp_repo.writable_session("main").store
         super().__init__(temp_store)
+        # Replace parent's MemoryStore with our ModelStore that has move()
+        self.model = ModelStore()
+        zarr.group(store=self.model)
 
     @initialize(spec_version=st.sampled_from([1, 2]))
     def init_store(self, spec_version: int) -> None:
@@ -109,7 +143,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             self.repo.save_config()
         self.store = self.repo.writable_session("main").store
 
-    @precondition(lambda self: self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def commit_with_check(self, data: st.DataObject) -> None:
         note("committing and checking list_prefix")
@@ -119,7 +152,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         get_before = self._sync(self.store.get(path, prototype=PROTOTYPE))
         assert get_before
 
-        self.store.session.commit("foo")
+        allow_empty = not self.store.session.has_uncommitted_changes
+        self.store.session.commit("foo", allow_empty=allow_empty)
 
         self.store = self.repo.writable_session("main").store
 
@@ -165,6 +199,85 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self.repo = Repository.open(self.storage)
         self.store = self.repo.writable_session("main").store
 
+    @rule(data=st.data(), num_moves=st.integers(min_value=0, max_value=5))
+    @precondition(lambda self: self.repo.spec_version >= 2)
+    @precondition(lambda self: not self.store.session.has_uncommitted_changes)
+    @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
+    def move_operations(self, data: st.DataObject, num_moves: int) -> None:
+        """Perform moves in a single rearrange session, then commit or discard."""
+        note(f"starting rearrange session with {num_moves} moves")
+        session = self.repo.rearrange_session("main")
+
+        # Copy model to track expected state - apply moves as we go
+        pending_model = self._sync(self.model.copy())
+        pending_arrays = self.all_arrays.copy()
+        pending_groups = self.all_groups.copy()
+
+        for _ in range(num_moves):
+            existing_nodes = pending_arrays | pending_groups
+            possible_parents = sorted(pending_groups | {""})
+
+            # Draw source, dest_parent, then name (filtered to avoid conflicts)
+            source = data.draw(st.sampled_from(sorted(existing_nodes)))
+            source_name = source.split("/")[-1]
+
+            # Filter out invalid parents (root "" is always valid):
+            # - Can't move into itself: foo -> foo/bar
+            # - Can't move into a descendant: foo -> foo/bar/baz/foo
+            def valid_parent(p: str, src: str = source) -> bool:
+                return p != src and not p.startswith(src + "/")
+
+            dest_parent = data.draw(
+                st.sampled_from(possible_parents).filter(valid_parent)
+            )
+
+            # Filter name to avoid destination conflicts
+            # Destination must not already exist: foo -> bar (when bar exists)
+            def valid_name(
+                n: str, dp: str = dest_parent, nodes: set[str] = existing_nodes
+            ) -> bool:
+                return f"{dp}/{n}".lstrip("/") not in nodes
+
+            new_name = data.draw(
+                st.one_of(st.just(source_name), node_names).filter(valid_name)
+            )
+            dest = f"{dest_parent}/{new_name}".lstrip("/")
+
+            note(f"moving {source!r} to {dest!r}")
+            session.move(f"/{source}", f"/{dest}")
+            self._sync(pending_model.move(source, dest))
+
+            pending_arrays, pending_groups = [
+                {
+                    dest
+                    if p == source
+                    else dest + p[len(source) :]
+                    if p.startswith(source + "/")
+                    else p
+                    for p in s
+                }
+                for s in (pending_arrays, pending_groups)
+            ]
+
+            # Verify store matches pending model after each move
+            # failing due to https://github.com/earth-mover/icechunk/issues/1562#issuecomment-3755544352
+            # TODO: uncomment when that is fixed
+            # self._compare_list_dir(
+            #     pending_model, session.store, pending_arrays | pending_groups
+            # )
+
+        # Prefer commit (75%) over discard (25%)
+        if data.draw(st.sampled_from([True, True, True, False])):
+            note(f"committing {num_moves} moves")
+            self.model = pending_model
+            self.all_arrays = pending_arrays
+            self.all_groups = pending_groups
+            self.store = session.store
+            self.commit_with_check(data)
+        else:
+            note("discarding moves")
+            self.store = self.repo.writable_session("main").store
+
     @rule(
         data=st.data(),
         name=node_names,
@@ -181,22 +294,28 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         assume(array.size > 0)
         super().add_array(data, name, array_and_chunks)
 
-    @precondition(lambda self: bool(self.all_groups))
-    @rule(data=st.data())
-    def check_list_dir(self, data: st.DataObject) -> None:
-        path = self.draw_directory(data)
-        note(f"list_dir for {path=!r}")
-        model_ls = sorted(self._sync_iter(self.model.list_dir(path)))
-        store_ls = sorted(self._sync_iter(self.store.list_dir(path)))
-        if model_ls != store_ls and set(model_ls).symmetric_difference(set(store_ls)) != {
-            "c"
-        }:
-            # Consider .list_dir("path/to/array") for an array with a single chunk.
-            # The MemoryStore model will return `"c", "zarr.json"` only if the chunk exists
-            # If that chunk was deleted, then `"c"` is not returned.
-            # LocalStore will not have this behaviour :/
-            # In Icechunk, we always return the `c` so ignore this inconsistency.
-            assert model_ls == store_ls, (model_ls, store_ls)
+    def _compare_list_dir(
+        self, model: ModelStore, store: ic.IcechunkStore, paths: set[str]
+    ) -> None:
+        """Compare list_dir results between model and store for given paths."""
+        for path in paths:
+            model_ls = sorted(self._sync_iter(model.list_dir(path)))
+            store_ls = sorted(self._sync_iter(store.list_dir(path)))
+            if model_ls != store_ls and set(model_ls).symmetric_difference(
+                set(store_ls)
+            ) != {"c"}:
+                # Consider .list_dir("path/to/array") for an array with a single chunk.
+                # The MemoryStore model will return `"c", "zarr.json"` only if the chunk exists
+                # If that chunk was deleted, then `"c"` is not returned.
+                # LocalStore will not have this behaviour :/
+                # In Icechunk, we always return the `c` so ignore this inconsistency.
+                raise AssertionError(
+                    f"list_dir mismatch for {path=}: {model_ls=} != {store_ls=}"
+                )
+
+    @invariant()
+    def check_list_dir(self) -> None:
+        self._compare_list_dir(self.model, self.store, self.all_groups | self.all_arrays)
 
     @rule()
     def pickle_objects(self) -> None:

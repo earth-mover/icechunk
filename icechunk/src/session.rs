@@ -53,6 +53,17 @@ use crate::{
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
 
+/// The mode of a session, determining what operations are allowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionMode {
+    /// Cannot modify the repository.
+    Readonly,
+    /// Can modify arrays/groups but cannot move nodes.
+    Writable,
+    /// Can only move/rename nodes in the hierarchy.
+    Rearrange,
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum SessionErrorKind {
@@ -91,7 +102,9 @@ pub enum SessionErrorKind {
     NotAGroup { node: Box<NodeSnapshot>, message: String },
     #[error("node already exists at `{node:?}`: {message}")]
     AlreadyExists { node: Box<NodeSnapshot>, message: String },
-    #[error("cannot commit, no changes made to the session")]
+    #[error(
+        "cannot commit, no changes made to the session (use `allow_empty=true` to commit anyway)"
+    )]
     NoChangesToCommit,
     #[error("invalid snapshot timestamp ordering. parent: `{parent}`, child: `{child}` ")]
     InvalidSnapshotTimestampOrdering { parent: DateTime<Utc>, child: DateTime<Utc> },
@@ -336,6 +349,18 @@ impl Session {
 
     pub fn read_only(&self) -> bool {
         self.branch_name.is_none()
+    }
+
+    /// Returns the mode of this session.
+    pub fn mode(&self) -> SessionMode {
+        if self.branch_name.is_none() {
+            SessionMode::Readonly
+        } else {
+            match &self.change_set {
+                ChangeSet::Edit(_) => SessionMode::Writable,
+                ChangeSet::Rearrange(_) => SessionMode::Rearrange,
+            }
+        }
     }
 
     pub fn snapshot_id(&self) -> &SnapshotId {
@@ -2086,10 +2111,7 @@ impl<'a> FlushProcess<'a> {
                         .new_array_chunk_iterator(node_id, node_path, extent.clone())
                         .map(Ok),
                 );
-                #[allow(clippy::expect_used)]
-                let new_ref = self.write_manifest_from_iterator(chunks).await.expect(
-                    "logic bug. for a new node, we must always write the manifest",
-                );
+                let new_ref = self.write_manifest_from_iterator(chunks).await?;
                 // new_ref is None if there were no chunks in the iterator
                 if let Some(new_ref) = new_ref {
                     self.manifest_refs.entry(node_id.clone()).or_default().push(new_ref);
