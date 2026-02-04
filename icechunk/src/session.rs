@@ -1,3 +1,13 @@
+//! The transaction context for reading and writing data.
+//!
+//! A [`Session`] tracks a base snapshot, accumulates changes in a [`ChangeSet`],
+//! and handles committing them.
+//!
+//! Sessions come in three modes:
+//! - **Read-only**: Can read data, ChangeSet is unused
+//! - **Writable**: Can read and write chunks/metadata
+//! - **Rearrange**: Can move/rename nodes (no chunk writes)
+
 use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -243,6 +253,15 @@ impl ManifestSplits {
 
 pub type ReindexOperationResult = Result<Option<ChunkIndices>, SessionError>;
 
+/// A transaction context for reading and writing Icechunk data.
+///
+/// Sessions track a base snapshot, accumulate changes in a [`ChangeSet`],
+/// and handle committing them.
+///
+/// Three modes:
+/// - **Read-only**: Can read data, ChangeSet is unused
+/// - **Writable**: Can read and write chunks/metadata
+/// - **Rearrange**: Can move/rename nodes (no chunk writes)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     config: RepositoryConfig,
@@ -852,7 +871,7 @@ impl Session {
     ///
     /// This function doesn't return [`Bytes`] directly to avoid locking the ref to self longer
     /// than needed. We want the bytes to be pulled from object store without holding a ref to the
-    /// [`Repository`], that way, writes can happen concurrently.
+    /// [`crate::Repository`], that way, writes can happen concurrently.
     ///
     /// The result of calling this function is None, if the chunk reference is not present in the
     /// repository, or a [`Future`] that will fetch the bytes, possibly failing.
@@ -935,7 +954,7 @@ impl Session {
     /// The reason to use this design, instead of simple pass the [`Bytes`] is to avoid holding a
     /// reference to the repository while the payload is uploaded to object store. This way, the
     /// reference is hold very briefly, and then an owned object is obtained which can do the actual
-    /// upload without holding any [`Repository`] references.
+    /// upload without holding any [`crate::Repository`] references.
     ///
     /// Example usage:
     /// ```ignore
@@ -1392,13 +1411,13 @@ impl Session {
     /// Detect and optionally fix conflicts between the current [`ChangeSet`] (or session) and
     /// the tip of the branch.
     ///
-    /// When [`Repository::commit`] method is called, the system validates that the tip of the
+    /// When [`Session::commit`] method is called, the system validates that the tip of the
     /// passed branch is exactly the same as the `snapshot_id` for the current session. If that
-    /// is not the case, the commit operation fails with [`SessionError::Conflict`].
+    /// is not the case, the commit operation fails with [`SessionErrorKind::Conflict`].
     ///
     /// In that situation, the user has two options:
     /// 1. Abort the session and start a new one with using the new branch tip as a parent.
-    /// 2. Use [`Repository::rebase`] to try to "fast-forward" the session through the new
+    /// 2. Use [`Session::rebase`] to try to "fast-forward" the session through the new
     ///    commits.
     ///
     /// The issue with option 1 is that all the writes that have been done in the session,
@@ -1413,7 +1432,7 @@ impl Session {
     /// and a new commit both wrote to the same chunk, or both updated user attributes for
     /// the same group.
     ///
-    /// This is what [`Repository::rebase`] helps with. It can detect conflicts to let
+    /// This is what [`Session::rebase`] helps with. It can detect conflicts to let
     /// the user fix them manually, or it can attempt to fix conflicts based on a policy.
     ///
     /// Example:
@@ -1450,7 +1469,7 @@ impl Session {
     /// When there are more than one commit between the parent snapshot and the tip of
     /// the branch, `rebase` iterates over all of them, older first, trying to fast-forward.
     /// If at some point it finds a conflict it cannot recover from, `rebase` leaves the
-    /// `Repository` in a consistent state, that would successfully commit on top
+    /// `Session` in a consistent state, that would successfully commit on top
     /// of the latest successfully fast-forwarded commit.
     #[instrument(skip(self, solver))]
     pub async fn rebase(
@@ -1824,7 +1843,6 @@ pub async fn get_chunk(
     }
 }
 
-/// Yields nodes in the base snapshot, applying any relevant updates in the changeset
 async fn updated_existing_nodes<'a>(
     parent_group: &Path,
     asset_manager: &AssetManager,

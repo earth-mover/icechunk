@@ -1,3 +1,9 @@
+//! Object store abstraction layer.
+//!
+//! The [`Storage`] trait defines generic object store operations (get, put, delete,
+//! list) for persisting Icechunk data. Constructor functions like [`new_s3_storage`],
+//! [`new_gcs_storage`], [`new_in_memory_storage`] create configured storage instances.
+
 use ::object_store::{ClientConfigKey, azure::AzureConfigKey, gcp::GoogleConfigKey};
 use aws_sdk_s3::{
     config::http::HttpResponse,
@@ -45,8 +51,11 @@ use thiserror::Error;
 #[cfg(test)]
 pub mod logging;
 
+/// Storage using the `object_store` crate (local, in-memory, Azure, GCS).
 pub mod object_store;
+/// HTTP redirect-based storage for read-only access.
 pub mod redirect;
+/// Native S3 client implementation.
 pub mod s3;
 
 pub use object_store::ObjectStorage;
@@ -58,6 +67,7 @@ use crate::{
     storage::redirect::RedirectStorage,
 };
 
+/// Storage operation error types.
 #[derive(Debug, Error)]
 pub enum StorageErrorKind {
     #[error("object not found")]
@@ -223,6 +233,7 @@ impl ConcurrencySettings {
     }
 }
 
+/// Configuration for storage operations (retries, concurrency, storage classes).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
     #[serde(default)]

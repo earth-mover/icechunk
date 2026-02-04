@@ -1,3 +1,5 @@
+//! Helpers for async stream processing.
+
 use std::{
     collections::HashSet,
     sync::atomic::{AtomicUsize, Ordering},

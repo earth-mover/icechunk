@@ -1,3 +1,5 @@
+//! Change records for commits, enabling conflict detection during rebase.
+
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     iter,
