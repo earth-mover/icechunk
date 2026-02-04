@@ -14,7 +14,7 @@ on:
         default: false
         type: boolean
       use_git_version:
-        description: 'Use git-based version for nightly builds'
+        description: 'Use git-based version (e.g., 2.0.0-alpha.0-dev123+gabc1234). If false, uses Cargo.toml version.'
         required: true
         default: true
         type: boolean
