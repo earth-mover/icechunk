@@ -333,7 +333,7 @@ impl TryFrom<&Snapshot> for SnapshotInfo {
 
 impl SnapshotInfo {
     pub fn is_initial(&self) -> bool {
-        self.parent_id.is_none()
+        self.id == Snapshot::INITIAL_SNAPSHOT_ID
     }
 }
 
