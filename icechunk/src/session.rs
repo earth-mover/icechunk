@@ -63,6 +63,17 @@ use crate::{
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
 
+/// The mode of a session, determining what operations are allowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionMode {
+    /// Cannot modify the repository.
+    Readonly,
+    /// Can modify arrays/groups but cannot move nodes.
+    Writable,
+    /// Can only move/rename nodes in the hierarchy.
+    Rearrange,
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum SessionErrorKind {
@@ -101,7 +112,9 @@ pub enum SessionErrorKind {
     NotAGroup { node: Box<NodeSnapshot>, message: String },
     #[error("node already exists at `{node:?}`: {message}")]
     AlreadyExists { node: Box<NodeSnapshot>, message: String },
-    #[error("cannot commit, no changes made to the session")]
+    #[error(
+        "cannot commit, no changes made to the session (use `allow_empty=true` to commit anyway)"
+    )]
     NoChangesToCommit,
     #[error("invalid snapshot timestamp ordering. parent: `{parent}`, child: `{child}` ")]
     InvalidSnapshotTimestampOrdering { parent: DateTime<Utc>, child: DateTime<Utc> },
@@ -355,6 +368,18 @@ impl Session {
 
     pub fn read_only(&self) -> bool {
         self.branch_name.is_none()
+    }
+
+    /// Returns the mode of this session.
+    pub fn mode(&self) -> SessionMode {
+        if self.branch_name.is_none() {
+            SessionMode::Readonly
+        } else {
+            match &self.change_set {
+                ChangeSet::Edit(_) => SessionMode::Writable,
+                ChangeSet::Rearrange(_) => SessionMode::Rearrange,
+            }
+        }
     }
 
     pub fn snapshot_id(&self) -> &SnapshotId {
@@ -1147,7 +1172,18 @@ impl Session {
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
-        self._commit(message, properties, false, CommitMethod::NewCommit).await
+        self.commit_with_options(message, properties, false).await
+    }
+
+    #[instrument(skip(self, properties))]
+    pub async fn commit_with_options(
+        &mut self,
+        message: &str,
+        properties: Option<SnapshotProperties>,
+        allow_empty: bool,
+    ) -> SessionResult<SnapshotId> {
+        self._commit(message, properties, false, CommitMethod::NewCommit, allow_empty)
+            .await
     }
 
     #[instrument(skip(self, properties))]
@@ -1155,11 +1191,12 @@ impl Session {
         &mut self,
         message: &str,
         properties: Option<SnapshotProperties>,
+        allow_empty: bool,
     ) -> SessionResult<SnapshotId> {
         // Icechunk 1 doesn't support amend
         self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        self._commit(message, properties, false, CommitMethod::Amend).await
+        self._commit(message, properties, false, CommitMethod::Amend, allow_empty).await
     }
 
     async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
@@ -1270,7 +1307,8 @@ impl Session {
             serde_json::to_value(self.config.manifest().splitting())?;
         let mut properties = properties.unwrap_or_default();
         properties.insert("splitting_config".to_string(), splitting_config_serialized);
-        self._commit(message, Some(properties), true, commit_method).await
+
+        self._commit(message, Some(properties), true, commit_method, true).await
     }
 
     #[instrument(skip(self, properties))]
@@ -1280,6 +1318,7 @@ impl Session {
         properties: Option<SnapshotProperties>,
         rewrite_manifests: bool,
         commit_method: CommitMethod,
+        allow_empty: bool,
     ) -> SessionResult<SnapshotId> {
         let Some(branch_name) = &self.branch_name else {
             return Err(SessionErrorKind::ReadOnlySession.into());
@@ -1322,6 +1361,7 @@ impl Session {
             &self.splits,
             rewrite_manifests,
             commit_method,
+            allow_empty,
         )
         .await?;
 
@@ -2090,10 +2130,7 @@ impl<'a> FlushProcess<'a> {
                         .new_array_chunk_iterator(node_id, node_path, extent.clone())
                         .map(Ok),
                 );
-                #[allow(clippy::expect_used)]
-                let new_ref = self.write_manifest_from_iterator(chunks).await.expect(
-                    "logic bug. for a new node, we must always write the manifest",
-                );
+                let new_ref = self.write_manifest_from_iterator(chunks).await?;
                 // new_ref is None if there were no chunks in the iterator
                 if let Some(new_ref) = new_ref {
                     self.manifest_refs.entry(node_id.clone()).or_default().push(new_ref);
@@ -2308,10 +2345,6 @@ async fn do_flush(
     rewrite_manifests: bool,
     commit_method: CommitMethod,
 ) -> SessionResult<Arc<Snapshot>> {
-    if !rewrite_manifests && flush_data.change_set.is_empty() {
-        return Err(SessionErrorKind::NoChangesToCommit.into());
-    }
-
     let old_snapshot =
         flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await?;
 
@@ -2510,8 +2543,14 @@ async fn do_commit(
     splits: &HashMap<NodeId, ManifestSplits>,
     rewrite_manifests: bool,
     commit_method: CommitMethod,
+    allow_empty: bool,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
+
+    if !allow_empty && change_set.is_empty() {
+        return Err(SessionErrorKind::NoChangesToCommit.into());
+    }
+
     let properties = properties.unwrap_or_default();
     let flush_data =
         FlushProcess::new(Arc::clone(&asset_manager), change_set, snapshot_id, splits);
@@ -2763,6 +2802,17 @@ mod tests {
     use super::*;
     use icechunk_macros::tokio_test;
     use itertools::{Itertools, assert_equal};
+
+    async fn assert_manifest_count(
+        asset_manager: &Arc<AssetManager>,
+        total_manifests: usize,
+    ) {
+        let expected = asset_manager.list_manifests().await.unwrap().count().await;
+        assert_eq!(
+            total_manifests, expected,
+            "Mismatch in manifest count: expected {expected}, but got {total_manifests}",
+        );
+    }
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
@@ -3074,7 +3124,12 @@ mod tests {
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
                 .await?;
         }
-        session.commit("None", None).await?;
+        let first_snapshot = session.commit("None", None).await?;
+        let _session = repo
+            .readonly_session(&VersionInfo::SnapshotId(first_snapshot.clone()))
+            .await?;
+        // 2 manifests from first commit + 1 new manifest after second commit modifies a split
+        let initial_manifest_count = 3;
 
         let mut session = repo.writable_session("main").await?;
         // This is how Zarr resizes
@@ -3125,7 +3180,7 @@ mod tests {
         );
 
         // write manifests, check number of references in manifest
-        session.commit("updated", None).await?;
+        let _updated_snapshot = session.commit("updated", None).await?;
 
         // should still be deleted
         assert!(
@@ -3135,6 +3190,14 @@ mod tests {
         assert!(
             session.get_chunk_ref(&array_path, &ChunkIndices(vec![3])).await?.is_some()
         );
+
+        assert_manifest_count(repo.asset_manager(), initial_manifest_count).await;
+
+        // empty commit should not alter manifests
+        let mut session = repo.writable_session("main").await?;
+        let _empty_snapshot =
+            session.commit_with_options("empty commit", None, true).await?;
+        assert_manifest_count(repo.asset_manager(), initial_manifest_count).await;
 
         Ok(())
     }
@@ -4220,7 +4283,7 @@ mod tests {
         let before_amend1 = session.commit("will be amended", None).await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
-        let before_amend2 = session.amend("first amend", None).await?;
+        let before_amend2 = session.amend("first amend", None, false).await?;
 
         let main_version = VersionInfo::BranchTipRef("main".to_string());
         let anc: Vec<_> = repo
@@ -4248,7 +4311,7 @@ mod tests {
         session
             .add_group("/error".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        let after_amend2 = session.amend("second amend", None).await?;
+        let after_amend2 = session.amend("second amend", None, false).await?;
 
         let anc_from_tag: Vec<_> = repo
             .ancestry(&VersionInfo::TagRef("tag".to_string()))
@@ -4302,6 +4365,45 @@ mod tests {
                 RepoInitializedUpdate,
             ]
         );
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_empty_commit() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let snap1 = session.commit("make root", None).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        let result = session.commit("an empty commit", None).await;
+        assert!(matches!(
+            result,
+            Err(SessionError { kind: SessionErrorKind::NoChangesToCommit, .. })
+        ));
+
+        let mut session = repo.writable_session("main").await?;
+        let snap2 = session.commit_with_options("an empty commit", None, true).await?;
+        let snap2_info = repo.lookup_snapshot(&snap2).await?;
+        assert_eq!(snap2_info.parent_id, Some(snap1.clone()));
+
+        let diff = repo
+            .diff(
+                &VersionInfo::SnapshotId(snap1.clone()),
+                &VersionInfo::SnapshotId(snap2.clone()),
+            )
+            .await?;
+        assert!(diff.is_empty());
+
+        // Verify ancestry includes both commits (plus initial snapshot)
+        let ancestry: Vec<_> = repo
+            .ancestry(&VersionInfo::SnapshotId(snap2.clone()))
+            .await?
+            .map_ok(|si| si.id)
+            .try_collect()
+            .await?;
+        assert_eq!(ancestry, vec![snap2, snap1, Snapshot::INITIAL_SNAPSHOT_ID]);
 
         Ok(())
     }

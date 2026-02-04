@@ -8,6 +8,7 @@ from icechunk import (
     ConflictSolver,
     Diff,
     RepositoryConfig,
+    SessionMode,
 )
 from icechunk._icechunk_python import PySession
 from icechunk.store import IcechunkStore
@@ -33,9 +34,12 @@ class Session:
             raise ValueError(
                 "You must opt-in to pickle writable sessions in a distributed context "
                 "using Session.fork(). "
-                # link to docs
+                "See https://icechunk.io/en/stable/parallel/#distributed-writes for more. "
                 "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
                 "please use `icechunk.xarray.to_icechunk` instead. "
+                "If you are using dask & distributed or multi-processing to read/write from the same repository, "
+                "then pass a readonly session created using Repository.readonly_session for the read step. "
+                "Alternatively, make sure to pass the ForkSession created by Session.fork() for the read step. "
             )
         state = {
             "_session": self._session.as_bytes(),
@@ -72,6 +76,18 @@ class Session:
             True if the session is read-only, False otherwise.
         """
         return self._session.read_only
+
+    @property
+    def mode(self) -> SessionMode:
+        """
+        The mode of this session.
+
+        Returns
+        -------
+        SessionMode
+            The session mode - one of READONLY, WRITABLE, or REARRANGE.
+        """
+        return self._session.mode
 
     @property
     def snapshot_id(self) -> str:
@@ -293,6 +309,7 @@ class Session:
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> str:
         """
         Commit the changes in the session to the repository.
@@ -311,6 +328,8 @@ class Session:
             If other session committed while the current session was writing, use Session.rebase with this solver.
         rebase_tries : int, optional
             If other session committed while the current session was writing, use Session.rebase up to this many times in a loop.
+        allow_empty : bool, optional
+            If True, allow creating a commit even if there are no changes. Default is False.
 
         Returns
         -------
@@ -321,6 +340,8 @@ class Session:
         ------
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
+        icechunk.NoChangesToCommitError
+            If there are no changes to commit and allow_empty is False.
         """
         if self._allow_changes:
             warnings.warn(
@@ -330,7 +351,11 @@ class Session:
                 stacklevel=2,
             )
         return self._session.commit(
-            message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
+            message,
+            metadata,
+            rebase_with=rebase_with,
+            rebase_tries=rebase_tries,
+            allow_empty=allow_empty,
         )
 
     async def commit_async(
@@ -339,6 +364,7 @@ class Session:
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> str:
         """
         Commit the changes in the session to the repository (async version).
@@ -357,6 +383,8 @@ class Session:
             If other session committed while the current session was writing, use Session.rebase with this solver.
         rebase_tries : int, optional
             If other session committed while the current session was writing, use Session.rebase up to this many times in a loop.
+        allow_empty : bool, optional
+            If True, allow creating a commit even if there are no changes. Default is False.
 
         Returns
         -------
@@ -367,6 +395,8 @@ class Session:
         ------
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
+        icechunk.NoChangesToCommitError
+            If there are no changes to commit and allow_empty is False.
         """
         if self._allow_changes:
             warnings.warn(
@@ -376,13 +406,18 @@ class Session:
                 stacklevel=2,
             )
         return await self._session.commit_async(
-            message, metadata, rebase_with=rebase_with, rebase_tries=rebase_tries
+            message,
+            metadata,
+            rebase_with=rebase_with,
+            rebase_tries=rebase_tries,
+            allow_empty=allow_empty,
         )
 
     def amend(
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        allow_empty: bool = False,
     ) -> str:
         """
         Commit the changes in the session to the repository, by amending/overwriting the previous commit.
@@ -401,6 +436,9 @@ class Session:
             The message to write with the commit.
         metadata : dict[str, Any] | None, optional
             Additional metadata to store with the commit snapshot.
+        allow_empty : bool, optional
+            If True, allow amending even if no data changes have been made to the session.
+            This is useful when you only want to update the commit message. Default is False.
 
         Returns
         -------
@@ -419,12 +457,13 @@ class Session:
                 UserWarning,
                 stacklevel=2,
             )
-        return self._session.amend(message, metadata)
+        return self._session.amend(message, metadata, allow_empty=allow_empty)
 
     async def amend_async(
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        allow_empty: bool = False,
     ) -> str:
         """
         Commit the changes in the session to the repository, by amending/overwriting the previous commit.
@@ -443,6 +482,9 @@ class Session:
             The message to write with the commit.
         metadata : dict[str, Any] | None, optional
             Additional metadata to store with the commit snapshot.
+        allow_empty : bool, optional
+            If True, allow amending even if no data changes have been made to the session.
+            This is useful when you only want to update the commit message. Default is False.
 
         Returns
         -------
@@ -461,7 +503,7 @@ class Session:
                 UserWarning,
                 stacklevel=2,
             )
-        return await self._session.amend_async(message, metadata)
+        return await self._session.amend_async(message, metadata, allow_empty=allow_empty)
 
     def flush(
         self,
@@ -641,6 +683,7 @@ class ForkSession(Session):
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> NoReturn:
         raise TypeError(
             "Cannot commit a fork of a Session. If you are using uncooperative writes, "
@@ -654,6 +697,7 @@ class ForkSession(Session):
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> NoReturn:
         raise TypeError(
             "Cannot commit a fork of a Session. If you are using uncooperative writes, "

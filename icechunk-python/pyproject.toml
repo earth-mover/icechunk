@@ -21,7 +21,7 @@ license = { file = "LICENSE" }
 dynamic = ["version"]
 authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
-dependencies = ["zarr>=3,!=3.0.3"]
+dependencies = ["zarr>=3.1.0"]
 
 [dependency-groups]
 dev = [
@@ -40,9 +40,9 @@ test = [
   "pytest-asyncio",
   "pytest-xdist",
   "pytest-reportlog",
-  "dask>=2024.11.0",
-  "distributed>=2024.11.0",
-  "xarray>=2025.01.2",
+  "dask>=2025.2.0",
+  "distributed>=2025.2.0",
+  "xarray>=2025.07.1",
   "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
@@ -68,9 +68,9 @@ docs = [
   "scipy",
   "cftime",
   "pooch",
-  "dask>=2024.11.0",
-  "distributed>=2024.11.0",
-  "xarray>=2025.01.2",
+  "dask>=2025.2.0",
+  "distributed>=2025.2.0",
+  "xarray>=2025.07.1",
   "myst_nb",
   "pydata_sphinx_theme",
   "mkdocs-awesome-pages-plugin",

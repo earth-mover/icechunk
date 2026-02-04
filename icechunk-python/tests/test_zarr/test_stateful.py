@@ -1,10 +1,8 @@
-import functools
 import json
 import pickle
 from collections.abc import Callable
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 
-import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -16,22 +14,48 @@ from hypothesis.stateful import (
     rule,
     run_state_machine_as_test,
 )
-from packaging.version import Version
 
 import icechunk as ic
 import zarr
 from icechunk import Repository, Storage, in_memory_storage
 from icechunk.testing import strategies as icst
 from zarr.core.buffer import default_buffer_prototype
+from zarr.storage import MemoryStore
 from zarr.testing.stateful import ZarrHierarchyStateMachine
 from zarr.testing.strategies import (
-    basic_indices,
     node_names,
     np_array_and_chunks,
-    orthogonal_indices,
 )
 
 PROTOTYPE = default_buffer_prototype()
+
+
+class ModelStore(MemoryStore):
+    """MemoryStore with move and copy methods for testing."""
+
+    async def move(self, source: str, dest: str) -> None:
+        """Move all keys from source to dest.
+
+        Store keys always have form "node/zarr.json" or "node/c/...", never bare "node".
+        """
+        all_keys = [k async for k in self.list_prefix("")]
+        keys_to_move = [k for k in all_keys if k.startswith(source + "/")]
+        for old_key in keys_to_move:
+            new_key = dest + old_key[len(source) :]
+            data = await self.get(old_key, prototype=PROTOTYPE)
+            if data is not None:
+                await self.set(new_key, data)
+                await self.delete(old_key)
+
+    async def copy(self) -> "ModelStore":
+        """Create a copy of this store."""
+        new_store = ModelStore()
+        async for key in self.list_prefix(""):
+            data = await self.get(key, prototype=PROTOTYPE)
+            if data is not None:
+                await new_store.set(key, data)
+        return new_store
+
 
 Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 
@@ -42,67 +66,11 @@ Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 # ]
 
 
-def with_frequency(frequency: float) -> Callable[[Frequency], Frequency]:
-    """
-    Decorator to control how frequently a rule runs in Hypothesis stateful tests.
-
-    Args:
-        frequency: Float between 0 and 1, where 1.0 means always run,
-                  0.1 means run ~10% of the time, etc.
-
-    Usage:
-        @rule()
-        @with_frequency(0.1)  # Run ~10% of the time
-        def rare_operation(self):
-            pass
-    """
-
-    def decorator(func: Frequency) -> Frequency:
-        # Create a counter attribute name specific to this function
-        counter_attr = f"__{func.__name__}_counter"
-
-        @functools.wraps(func)
-        def wrapper(self: object, *args: Any, **kwargs: Any) -> Any:
-            return func(self, *args, **kwargs)
-
-        # Add precondition that checks frequency
-        @precondition
-        def frequency_check(self: object) -> bool:
-            # Initialize counter if it doesn't exist
-            if not hasattr(self, counter_attr):
-                setattr(self, counter_attr, 0)
-
-            # Increment counter
-            current_count = cast(int, getattr(self, counter_attr)) + 1
-            setattr(self, counter_attr, current_count)
-
-            # Check if we should run based on frequency
-            # This gives roughly the right frequency over many calls
-            return (current_count * frequency) % 1.0 >= (1.0 - frequency)
-
-        # Apply the precondition to the wrapped function
-        return frequency_check(wrapper)  # type: ignore [return-value]
-
-    return decorator
-
-
-@st.composite
-def chunk_paths(
-    draw: st.DrawFn, ndim: int, numblocks: tuple[int, ...], subset: bool = True
-) -> str:
-    blockidx = draw(
-        st.tuples(*tuple(st.integers(min_value=0, max_value=b - 1) for b in numblocks))
-    )
-    subset_slicer = (
-        slice(draw(st.integers(min_value=0, max_value=ndim))) if subset else slice(None)
-    )
-    return "/".join(map(str, blockidx[subset_slicer]))
-
-
 # TODO: more before/after commit invariants?
 # TODO: add "/" to self.all_groups, deleting "/" seems to be problematic
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     store: ic.IcechunkStore  # Override parent class type annotation
+    model: ModelStore  # Override to add move() method
 
     def __init__(self, storage: Storage) -> None:
         self.storage = storage
@@ -113,6 +81,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         temp_repo = Repository.create(in_memory_storage(), spec_version=1)
         temp_store = temp_repo.writable_session("main").store
         super().__init__(temp_store)
+        # Replace parent's MemoryStore with our ModelStore that has move()
+        self.model = ModelStore()
+        zarr.group(store=self.model)
 
     @initialize(spec_version=st.sampled_from([1, 2]))
     def init_store(self, spec_version: int) -> None:
@@ -172,7 +143,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             self.repo.save_config()
         self.store = self.repo.writable_session("main").store
 
-    @precondition(lambda self: self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def commit_with_check(self, data: st.DataObject) -> None:
         note("committing and checking list_prefix")
@@ -182,7 +152,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         get_before = self._sync(self.store.get(path, prototype=PROTOTYPE))
         assert get_before
 
-        self.store.session.commit("foo")
+        allow_empty = not self.store.session.has_uncommitted_changes
+        self.store.session.commit("foo", allow_empty=allow_empty)
 
         self.store = self.repo.writable_session("main").store
 
@@ -228,6 +199,85 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self.repo = Repository.open(self.storage)
         self.store = self.repo.writable_session("main").store
 
+    @rule(data=st.data(), num_moves=st.integers(min_value=0, max_value=5))
+    @precondition(lambda self: self.repo.spec_version >= 2)
+    @precondition(lambda self: not self.store.session.has_uncommitted_changes)
+    @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
+    def move_operations(self, data: st.DataObject, num_moves: int) -> None:
+        """Perform moves in a single rearrange session, then commit or discard."""
+        note(f"starting rearrange session with {num_moves} moves")
+        session = self.repo.rearrange_session("main")
+
+        # Copy model to track expected state - apply moves as we go
+        pending_model = self._sync(self.model.copy())
+        pending_arrays = self.all_arrays.copy()
+        pending_groups = self.all_groups.copy()
+
+        for _ in range(num_moves):
+            existing_nodes = pending_arrays | pending_groups
+            possible_parents = sorted(pending_groups | {""})
+
+            # Draw source, dest_parent, then name (filtered to avoid conflicts)
+            source = data.draw(st.sampled_from(sorted(existing_nodes)))
+            source_name = source.split("/")[-1]
+
+            # Filter out invalid parents (root "" is always valid):
+            # - Can't move into itself: foo -> foo/bar
+            # - Can't move into a descendant: foo -> foo/bar/baz/foo
+            def valid_parent(p: str, src: str = source) -> bool:
+                return p != src and not p.startswith(src + "/")
+
+            dest_parent = data.draw(
+                st.sampled_from(possible_parents).filter(valid_parent)
+            )
+
+            # Filter name to avoid destination conflicts
+            # Destination must not already exist: foo -> bar (when bar exists)
+            def valid_name(
+                n: str, dp: str = dest_parent, nodes: set[str] = existing_nodes
+            ) -> bool:
+                return f"{dp}/{n}".lstrip("/") not in nodes
+
+            new_name = data.draw(
+                st.one_of(st.just(source_name), node_names).filter(valid_name)
+            )
+            dest = f"{dest_parent}/{new_name}".lstrip("/")
+
+            note(f"moving {source!r} to {dest!r}")
+            session.move(f"/{source}", f"/{dest}")
+            self._sync(pending_model.move(source, dest))
+
+            pending_arrays, pending_groups = [
+                {
+                    dest
+                    if p == source
+                    else dest + p[len(source) :]
+                    if p.startswith(source + "/")
+                    else p
+                    for p in s
+                }
+                for s in (pending_arrays, pending_groups)
+            ]
+
+            # Verify store matches pending model after each move
+            # failing due to https://github.com/earth-mover/icechunk/issues/1562#issuecomment-3755544352
+            # TODO: uncomment when that is fixed
+            # self._compare_list_dir(
+            #     pending_model, session.store, pending_arrays | pending_groups
+            # )
+
+        # Prefer commit (75%) over discard (25%)
+        if data.draw(st.sampled_from([True, True, True, False])):
+            note(f"committing {num_moves} moves")
+            self.model = pending_model
+            self.all_arrays = pending_arrays
+            self.all_groups = pending_groups
+            self.store = session.store
+            self.commit_with_check(data)
+        else:
+            note("discarding moves")
+            self.store = self.repo.writable_session("main").store
+
     @rule(
         data=st.data(),
         name=node_names,
@@ -242,148 +292,30 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         array, _ = array_and_chunks
         # TODO: support size-0 arrays GH392
         assume(array.size > 0)
-        # Skip bytes, unicode string, and datetime dtypes with zarr < 3.1.0
-        # These have codec/dtype issues that were fixed in 3.1.0's dtype refactor
-        if Version(zarr.__version__) < Version("3.1.0"):
-            assume(array.dtype.kind not in ("S", "U", "M", "m"))
         super().add_array(data, name, array_and_chunks)
 
-    @precondition(lambda self: bool(self.all_groups))
-    @rule(data=st.data())
-    def check_list_dir(self, data: st.DataObject) -> None:
-        path = self.draw_directory(data)
-        note(f"list_dir for {path=!r}")
-        model_ls = sorted(self._sync_iter(self.model.list_dir(path)))
-        store_ls = sorted(self._sync_iter(self.store.list_dir(path)))
-        if model_ls != store_ls and set(model_ls).symmetric_difference(set(store_ls)) != {
-            "c"
-        }:
-            # Consider .list_dir("path/to/array") for an array with a single chunk.
-            # The MemoryStore model will return `"c", "zarr.json"` only if the chunk exists
-            # If that chunk was deleted, then `"c"` is not returned.
-            # LocalStore will not have this behaviour :/
-            # In Icechunk, we always return the `c` so ignore this inconsistency.
-            assert model_ls == store_ls, (model_ls, store_ls)
-
-    #####  TODO: port everything below to zarr
-    @precondition(lambda self: bool(self.all_arrays))
-    @rule(data=st.data())
-    def check_array(self, data: st.DataObject) -> None:
-        path = data.draw(st.sampled_from(sorted(self.all_arrays)))
-        actual = zarr.open_array(self.store, path=path)[:]
-        expected = zarr.open_array(self.model, path=path)[:]
-        np.testing.assert_equal(actual, expected)
-
-    @precondition(lambda self: bool(self.all_arrays))
-    @rule(data=st.data())
-    def overwrite_array_orthogonal_indexing(self, data: st.DataObject) -> None:
-        array = data.draw(st.sampled_from(sorted(self.all_arrays)))
-        model_array = zarr.open_array(path=array, store=self.model)
-        store_array = zarr.open_array(path=array, store=self.store)
-        indexer, _ = data.draw(orthogonal_indices(shape=model_array.shape))
-        note(f"overwriting array orthogonal {indexer=}")
-        shape = model_array.oindex[indexer].shape  # type: ignore[union-attr]
-        new_data = data.draw(npst.arrays(shape=shape, dtype=model_array.dtype))
-        model_array.oindex[indexer] = new_data
-        store_array.oindex[indexer] = new_data
-
-    #####  TODO: delete after next Zarr release (Jun 18, 2025)
-    @rule()
-    @with_frequency(0.25)
-    def clear(self) -> None:
-        note("clearing")
-        import zarr
-
-        self._sync(self.store.clear())
-        self._sync(self.model.clear())
-
-        assert self._sync(self.store.is_empty("/"))
-        assert self._sync(self.model.is_empty("/"))
-
-        self.all_groups.clear()
-        self.all_arrays.clear()
-
-        zarr.group(store=self.store)
-        zarr.group(store=self.model)
-
-        assert not self._sync(self.store.is_empty("/"))
-        # TODO: MemoryStore is broken?
-        # assert not self._sync(self.model.is_empty("/"))
-
-    def draw_directory(self, data: st.DataObject) -> str:
-        group_st = (
-            st.sampled_from(sorted(self.all_groups)) if self.all_groups else st.nothing()
-        )
-        array_st = (
-            st.sampled_from(sorted(self.all_arrays)) if self.all_arrays else st.nothing()
-        )
-        array_or_group = data.draw(st.one_of(group_st, array_st))
-        if data.draw(st.booleans()) and array_or_group in self.all_arrays:
-            arr = zarr.open_array(path=array_or_group, store=self.model)
-            path = data.draw(
-                st.one_of(
-                    st.sampled_from([array_or_group]),
-                    chunk_paths(ndim=arr.ndim, numblocks=arr.cdata_shape).map(
-                        lambda x: f"{array_or_group}/c/"
-                    ),
+    def _compare_list_dir(
+        self, model: ModelStore, store: ic.IcechunkStore, paths: set[str]
+    ) -> None:
+        """Compare list_dir results between model and store for given paths."""
+        for path in paths:
+            model_ls = sorted(self._sync_iter(model.list_dir(path)))
+            store_ls = sorted(self._sync_iter(store.list_dir(path)))
+            if model_ls != store_ls and set(model_ls).symmetric_difference(
+                set(store_ls)
+            ) != {"c"}:
+                # Consider .list_dir("path/to/array") for an array with a single chunk.
+                # The MemoryStore model will return `"c", "zarr.json"` only if the chunk exists
+                # If that chunk was deleted, then `"c"` is not returned.
+                # LocalStore will not have this behaviour :/
+                # In Icechunk, we always return the `c` so ignore this inconsistency.
+                raise AssertionError(
+                    f"list_dir mismatch for {path=}: {model_ls=} != {store_ls=}"
                 )
-            )
-        else:
-            path = array_or_group
-        return path
 
-    @precondition(lambda self: bool(self.all_arrays))
-    @rule(data=st.data())
-    def delete_chunk(self, data: st.DataObject) -> None:
-        array = data.draw(st.sampled_from(sorted(self.all_arrays)))
-        arr = zarr.open_array(path=array, store=self.model)
-        chunk_path = data.draw(
-            chunk_paths(ndim=arr.ndim, numblocks=arr.cdata_shape, subset=False)
-        )
-        path = f"{array}/c/{chunk_path}"
-        note(f"deleting chunk {path=!r}")
-        self._sync(self.model.delete(path))
-        self._sync(self.store.delete(path))
-
-    @precondition(lambda self: bool(self.all_arrays))
-    @rule(data=st.data())
-    def overwrite_array_basic_indexing(self, data: st.DataObject) -> None:
-        array = data.draw(st.sampled_from(sorted(self.all_arrays)))
-        model_array = zarr.open_array(path=array, store=self.model)
-        store_array = zarr.open_array(path=array, store=self.store)
-        slicer = data.draw(basic_indices(shape=model_array.shape))
-        note(f"overwriting array basic {slicer=}")
-        shape = model_array[slicer].shape  # type: ignore [union-attr]
-        new_data = data.draw(npst.arrays(shape=shape, dtype=model_array.dtype))
-        model_array[slicer] = new_data
-        store_array[slicer] = new_data
-
-    @precondition(lambda self: bool(self.all_arrays))
-    @rule(data=st.data())
-    def resize_array(self, data: st.DataObject) -> None:
-        array = data.draw(st.sampled_from(sorted(self.all_arrays)))
-        model_array = zarr.open_array(path=array, store=self.model)
-        store_array = zarr.open_array(path=array, store=self.store)
-        ndim = model_array.ndim
-        new_shape = data.draw(npst.array_shapes(max_dims=ndim, min_dims=ndim, min_side=1))
-        note(f"resizing array from {model_array.shape} to {new_shape}")
-        model_array.resize(new_shape)
-        store_array.resize(new_shape)
-
-    @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
-    @rule(data=st.data())
-    def delete_dir(self, data: st.DataObject) -> None:
-        path = self.draw_directory(data)
-        note(f"delete_dir with {path=!r}")
-        self._sync(self.model.delete_dir(path))
-        self._sync(self.store.delete_dir(path))
-
-        matches = set()
-        for node in self.all_groups | self.all_arrays:
-            if node.startswith(path):
-                matches.add(node)
-        self.all_groups = self.all_groups - matches
-        self.all_arrays = self.all_arrays - matches
+    @invariant()
+    def check_list_dir(self) -> None:
+        self._compare_list_dir(self.model, self.store, self.all_groups | self.all_arrays)
 
     @rule()
     def pickle_objects(self) -> None:
@@ -392,26 +324,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             pickle.loads(pickle.dumps(session))
 
         pickle.loads(pickle.dumps(self.repo))
-
-    @invariant()
-    def check_list_prefix_from_root(self) -> None:
-        model_list = self._sync_iter(self.model.list_prefix(""))
-        store_list = self._sync_iter(self.store.list_prefix(""))
-        note(f"Checking {len(model_list)} expected keys vs {len(store_list)} actual keys")
-        assert sorted(model_list) == sorted(store_list), (
-            sorted(model_list),
-            sorted(store_list),
-        )
-
-        # check that our internal state matches that of the store and model
-        assert all(
-            f"{path}/zarr.json" in model_list
-            for path in self.all_groups | self.all_arrays
-        )
-        assert all(
-            f"{path}/zarr.json" in store_list
-            for path in self.all_groups | self.all_arrays
-        )
 
 
 def test_zarr_hierarchy() -> None:
