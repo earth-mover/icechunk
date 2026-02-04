@@ -13,8 +13,8 @@ use crate::config::{
 use crate::config::{GcsBearerCredential, GcsStaticCredentials};
 use crate::format::format_constants::SpecVersionBin;
 use crate::format::manifest::{
-    ChunkPayload, ChunkRef, ManifestExtents, ManifestRef, SecondsSinceEpoch,
-    VirtualChunkLocation, VirtualChunkRef,
+    ChunkPayload, ChunkRef, ManifestExtents, ManifestRef, ManifestSplits,
+    SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef,
 };
 use crate::format::snapshot::{ArrayShape, DimensionName};
 use crate::format::{
@@ -678,4 +678,10 @@ prop_compose! {
     ) -> ManifestRef {
         ManifestRef{ object_id, extents }
     }
+}
+
+pub fn manifest_splits() -> impl Strategy<Value = ManifestSplits> {
+    (1..10usize)
+        .prop_flat_map(|dim_size| vec(manifest_extents(dim_size), 1..10))
+        .prop_map(ManifestSplits::from_extents)
 }
