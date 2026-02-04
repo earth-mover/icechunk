@@ -1196,13 +1196,6 @@ impl Session {
         // Icechunk 1 doesn't support amend
         self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        // Cannot amend the initial commit (which has no parent and no transaction log)
-        let (repo_info, _) = self.asset_manager.fetch_repo_info().await?;
-        let current_snapshot_info = repo_info.find_snapshot(self.snapshot_id())?;
-        if current_snapshot_info.is_initial() {
-            return Err(SessionErrorKind::NoAmendForInitialCommit.into());
-        }
-
         self._commit(message, properties, false, CommitMethod::Amend, allow_empty).await
     }
 
@@ -2558,6 +2551,11 @@ async fn do_commit(
         return Err(SessionErrorKind::NoChangesToCommit.into());
     }
 
+    // Cannot amend the initial commit
+    if commit_method == CommitMethod::Amend && snapshot_id.is_initial() {
+        return Err(SessionErrorKind::NoAmendForInitialCommit.into());
+    }
+
     let properties = properties.unwrap_or_default();
     let flush_data =
         FlushProcess::new(Arc::clone(&asset_manager), change_set, snapshot_id, splits);
@@ -2670,7 +2668,7 @@ async fn do_commit_v2(
             (CommitMethod::NewCommit, _) => parent_snapshot_id.clone(),
             (CommitMethod::Amend, Some(parent_id)) => parent_id,
             (CommitMethod::Amend, None) => {
-                unreachable!("amend() checks for initial commit before calling _commit")
+                unreachable!("do_commit() disallows amend on initial commit")
             }
         };
 
@@ -4282,10 +4280,15 @@ mod tests {
     async fn test_amend() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
 
-        // Test that amending the initial commit fails
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        let amend_result = session.amend("cannot amend initial commit", None).await;
+        let amend_result =
+            session.amend("cannot amend initial commit", None, false).await;
+        assert!(amend_result.is_err());
+        assert!(amend_result.unwrap_err().to_string().contains("first commit"));
+
+        let mut session = repo.writable_session("main").await?;
+        let amend_result = session.amend("cannot amend initial commit", None, true).await;
         assert!(amend_result.is_err());
         assert!(amend_result.unwrap_err().to_string().contains("first commit"));
 
