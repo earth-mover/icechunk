@@ -348,6 +348,48 @@ class Repository:
         """
         return await PyRepository.exists_async(storage)
 
+    @staticmethod
+    def fetch_spec_version(storage: Storage) -> int | None:
+        """
+        Fetch the spec version of a repository without fully opening it.
+
+        This is useful for checking the repository format version before opening,
+        for example to determine if a migration is needed.
+
+        Parameters
+        ----------
+        storage : Storage
+            The storage configuration for the repository.
+
+        Returns
+        -------
+        int | None
+            The spec version of the repository if it exists, None if no repository
+            exists at the given location.
+        """
+        return PyRepository.fetch_spec_version(storage)
+
+    @staticmethod
+    async def fetch_spec_version_async(storage: Storage) -> int | None:
+        """
+        Fetch the spec version of a repository without fully opening it (async version).
+
+        This is useful for checking the repository format version before opening,
+        for example to determine if a migration is needed.
+
+        Parameters
+        ----------
+        storage : Storage
+            The storage configuration for the repository.
+
+        Returns
+        -------
+        int | None
+            The spec version of the repository if it exists, None if no repository
+            exists at the given location.
+        """
+        return await PyRepository.fetch_spec_version_async(storage)
+
     def __getstate__(self) -> object:
         return {
             "_repository": self._repository.as_bytes(),
