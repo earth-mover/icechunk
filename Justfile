@@ -3,18 +3,18 @@ alias pre := pre-commit
 
 # run all tests
 test *args='':
-  cargo test --all --all-targets {{args}}
+  cargo nextest run --all --all-targets {{args}}
 
 doctest *args='':
-  cargo test --doc {{args}}
+  cargo nextest run --doc {{args}}
 
 # run all tests with logs enabled
 test-logs level *args='':
-  RUST_LOG=icechunk={{level}} cargo test --all --all-targets {{args}} -- --nocapture
+  RUST_LOG=icechunk={{level}} cargo nextest run --all --all-targets {{args}} -- --nocapture
 
 # compile but don't run all tests
 compile-tests *args='':
-  cargo test --no-run {{args}}
+  cargo nextest run --no-run --all --all-targets {{args}}
 
 # build debug version
 build *args='':
