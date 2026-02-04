@@ -1,3 +1,13 @@
+//! The entry point for Icechunk operations.
+//!
+//! A [`Repository`] is a handle to a versioned data store. It holds shared resources
+//! (storage, configuration) and provides methods to create [`Session`]s and
+//! manage branches, tags, and snapshot history.
+//!
+//! Key types:
+//! - [`Repository`] - Handle to a versioned data store
+//! - [`VersionInfo`] - Specifies which version to access (snapshot ID, branch, tag, or timestamp)
+
 use async_stream::try_stream;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
@@ -171,6 +181,11 @@ impl From<IcechunkFormatError> for RepositoryError {
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
+/// Handle to a versioned Icechunk data store.
+///
+/// Provides methods to create [`Session`]s and manage branches, tags, and history.
+///
+/// [`Session`]: crate::session::Session
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Repository {
     spec_version: SpecVersionBin,
@@ -299,7 +314,7 @@ impl Repository {
         );
 
         let storage_c = Arc::clone(&storage);
-        let find_spec_version = tokio::spawn(Self::repo_spec_version(storage_c));
+        let find_spec_version = tokio::spawn(Self::fetch_spec_version(storage_c));
 
         let (config_res, spec_version_res) = try_join!(fetch_config, find_spec_version)?;
 
@@ -417,11 +432,11 @@ impl Repository {
     pub async fn exists(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<bool> {
-        Ok(Self::repo_spec_version(storage).await?.is_some())
+        Ok(Self::fetch_spec_version(storage).await?.is_some())
     }
 
     #[instrument(skip_all)]
-    async fn repo_spec_version(
+    pub async fn fetch_spec_version(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<Option<SpecVersionBin>> {
         let storage_c = Arc::clone(&storage);
@@ -748,15 +763,21 @@ impl Repository {
         self.snapshot_info_ancestry_v1(&snapshot_id).await
     }
 
+    /// This method uses the repo info object to obtain the ops log.
+    /// The repo info object is mutable, so it may change while this operation happens.
+    /// For reproducibility, this method returns the repo object used to calculate the log.
     #[instrument(skip(self))]
     pub async fn ops_log(
         &self,
-    ) -> RepositoryResult<
+    ) -> RepositoryResult<(
         impl Stream<Item = RepositoryResult<(DateTime<Utc>, UpdateType, Option<String>)>>
         + Send
         + use<>,
-    > {
-        let (repo_info, _) = self.get_repo_info().await?;
+        Arc<RepoInfo>,
+        storage::VersionInfo,
+    )> {
+        let (repo_info, version_root) = self.get_repo_info().await?;
+        let repo_info_root = Arc::clone(&repo_info);
         let mut repo_info = Some(repo_info);
         // When we change to a new repo file, it will have the first backup_file = None, because
         // all files have this. We need to use the previous element in the sequence to know the
@@ -793,7 +814,7 @@ impl Repository {
 
         };
 
-        Ok(stream)
+        Ok((stream, repo_info_root, version_root))
     }
 
     /// Create a new branch in the repository at the given snapshot id

@@ -349,6 +349,36 @@ async def test_default_commit_metadata(any_spec_version: int | None) -> None:
     assert snap.metadata == {"user": "test"}
 
 
+def test_empty_commit(any_spec_version: int | None) -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+        spec_version=any_spec_version,
+    )
+
+    # First create a commit with actual changes
+    session = repo.writable_session("main")
+    root = zarr.group(store=session.store, overwrite=True)
+    root.create_group("child")
+    snap1 = session.commit("initial")
+
+    # Empty commit should fail by default
+    session = repo.writable_session("main")
+    with pytest.raises(ic.IcechunkError, match="no changes made to the session"):
+        session.commit("empty commit")
+
+    # Empty commit should succeed with allow_empty=True
+    session = repo.writable_session("main")
+    snap2 = session.commit("empty commit", allow_empty=True)
+
+    # Verify the empty commit was created with correct parent
+    snap2_info = repo.lookup_snapshot(snap2)
+    assert snap2_info.parent_id == snap1
+
+    # Verify there are no changes between the two snapshots
+    diff = repo.diff(from_snapshot_id=snap1, to_snapshot_id=snap2)
+    assert diff.is_empty()
+
+
 def test_set_metadata() -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
@@ -998,7 +1028,13 @@ def test_amend(spec_version: int | None) -> None:
     air_temp = group.create_array(
         "foo", shape=(1000, 1000), chunks=(100, 100), dtype="i4"
     )
-    new_snapshot_id = session.amend("the only commit")
+    new_snapshot_id = session.amend("the onyl timmoc - no tpyos!")  # codespell:ignore
+
+    # Test amend with allow_empty=True (message-only change)
+    session = repo.writable_session("main")
+    new_snapshot_id = session.amend("the only commit", allow_empty=True)
+    parents = list(repo.ancestry(snapshot_id=new_snapshot_id))
+    assert parents[0].message == "the only commit"
 
     session = repo.readonly_session(snapshot_id=new_snapshot_id)
     store = session.store
@@ -1070,3 +1106,44 @@ async def test_long_ops_log(spec_version: int | None) -> None:
         assert t == ic.BranchCreatedUpdate
 
     # TODO: add check for next updates page path
+
+
+def test_ops_log_commit_snap_id() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+
+    session = repo.writable_session("main")
+    group = zarr.group(store=session.store, overwrite=True)
+    array = group.create_array("array", shape=(10,), chunks=(5,), dtype="i4")
+    array[:] = 42
+    snap_id = session.commit("commit 1")
+
+    change = next(repo.ops_log())
+    assert isinstance(change, ic.NewCommitUpdate)
+    assert change.new_snap_id == snap_id
+    assert change.branch == "main"
+
+
+def test_ops_log_amend_snap_id() -> None:
+    repo = ic.Repository.create(
+        storage=ic.in_memory_storage(),
+    )
+
+    session = repo.writable_session("main")
+    group = zarr.group(store=session.store, overwrite=True)
+    array = group.create_array("array", shape=(10,), chunks=(5,), dtype="i4")
+    array[:] = 42
+    old_snap_id = session.commit("commit 1")
+
+    session = repo.writable_session("main")
+    group = zarr.open_group(store=session.store)
+    array = cast("zarr.core.array.Array[Any]", group["array"])
+    array[:] = 43
+    new_snap_id = session.amend("amended")
+
+    change = next(repo.ops_log())
+    assert isinstance(change, ic.CommitAmendedUpdate)
+    assert change.new_snap_id == new_snap_id
+    assert change.previous_snap_id == old_snap_id
+    assert change.branch == "main"

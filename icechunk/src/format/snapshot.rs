@@ -1,3 +1,5 @@
+//! Repository state at a point in time (arrays, groups, and manifest references).
+
 use std::{collections::BTreeMap, convert::Infallible, num::NonZeroU64, sync::Arc};
 
 use bytes::Bytes;
@@ -331,7 +333,7 @@ impl TryFrom<&Snapshot> for SnapshotInfo {
 
 impl SnapshotInfo {
     pub fn is_initial(&self) -> bool {
-        self.parent_id.is_none()
+        self.id == Snapshot::INITIAL_SNAPSHOT_ID
     }
 }
 

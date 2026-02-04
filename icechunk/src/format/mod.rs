@@ -1,3 +1,9 @@
+//! Icechunk data types and serialization.
+//!
+//! Defines ID types ([`SnapshotId`], [`ManifestId`], [`ChunkId`], [`NodeId`]),
+//! [`Path`] for normalized Zarr paths, and [`ByteRange`]/[`ChunkIndices`] for
+//! chunk addressing. Submodules define snapshots, manifests, and transaction logs.
+
 use core::fmt;
 use std::{
     cmp::Ordering,
@@ -21,9 +27,12 @@ use typed_path::Utf8UnixPathBuf;
 
 use crate::{error::ICError, private};
 
+/// User attributes stored on arrays and groups.
 pub mod attributes;
+/// Chunk reference tables.
 pub mod manifest;
 
+/// Generated Flatbuffer types for binary serialization.
 #[allow(
     dead_code,
     unused_imports,
@@ -38,9 +47,13 @@ pub mod manifest;
 #[path = "./flatbuffers/all_generated.rs"]
 pub mod flatbuffers;
 
+/// Repository metadata (version, properties).
 pub mod repo_info;
+/// Flatbuffer serialization.
 pub mod serializers;
+/// Repository state at a point in time.
 pub mod snapshot;
+/// Change records for commits.
 pub mod transaction_log;
 
 pub const CONFIG_FILE_PATH: &str = "config.yaml";
@@ -52,10 +65,12 @@ pub const TRANSACTION_LOGS_FILE_PATH: &str = "transactions";
 pub const OVERWRITTEN_FILES_PATH: &str = "overwritten";
 pub const V1_REFS_FILE_PATH: &str = "refs";
 
+/// A normalized Zarr path: absolute (starts with `/`) and no trailing slash.
 #[serde_as]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
 pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
 
+/// Marker trait for object ID type tags (sealed).
 #[allow(dead_code)]
 pub trait FileTypeTag: private::Sealed {}
 
@@ -66,18 +81,23 @@ pub struct ObjectId<const SIZE: usize, T: FileTypeTag>(
     PhantomData<T>,
 );
 
+/// Type tag for [`SnapshotId`].
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SnapshotTag;
 
+/// Type tag for [`ManifestId`].
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ManifestTag;
 
+/// Type tag for [`ChunkId`].
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkTag;
 
+/// Type tag for [`AttributesId`].
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AttributesTag;
 
+/// Type tag for [`NodeId`].
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NodeTag;
 
@@ -94,9 +114,14 @@ impl FileTypeTag for NodeTag {}
 
 // A 1e-9 conflict probability requires 2^33 ~ 8.5 bn chunks
 // using this site for the calculations: https://www.bdayprob.com/
+
+/// Unique identifier for a snapshot.
 pub type SnapshotId = ObjectId<12, SnapshotTag>;
+/// Unique identifier for a manifest file.
 pub type ManifestId = ObjectId<12, ManifestTag>;
+/// Unique identifier for a chunk.
 pub type ChunkId = ObjectId<12, ChunkTag>;
+/// Unique identifier for an attributes blob.
 pub type AttributesId = ObjectId<12, AttributesTag>;
 
 // A 1e-9 conflict probability requires 2^17.55 ~ 200k nodes
@@ -149,6 +174,12 @@ impl<const SIZE: usize, T: FileTypeTag> From<&ObjectId<SIZE, T>> for String {
     }
 }
 
+impl<const SIZE: usize, T: FileTypeTag> From<[u8; SIZE]> for ObjectId<SIZE, T> {
+    fn from(value: [u8; SIZE]) -> Self {
+        ObjectId::new(value)
+    }
+}
+
 impl<const SIZE: usize, T: FileTypeTag> TryInto<String> for ObjectId<SIZE, T> {
     type Error = Infallible;
 
@@ -171,11 +202,13 @@ impl<const SIZE: usize, T: FileTypeTag> Display for ObjectId<SIZE, T> {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 /// An ND index to an element in a chunk grid.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ChunkIndices(pub Vec<u32>);
 
+/// Byte offset within a chunk.
 pub type ChunkOffset = u64;
+/// Size of a chunk in bytes.
 pub type ChunkLength = u64;
 
 impl<'a> From<generated::ChunkIndices<'a>> for ChunkIndices {
@@ -184,6 +217,7 @@ impl<'a> From<generated::ChunkIndices<'a>> for ChunkIndices {
     }
 }
 
+/// A byte range within a chunk or object.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ByteRange {
     /// The fixed length range represented by the given `Range`
@@ -245,8 +279,10 @@ impl From<(Option<ChunkOffset>, Option<ChunkOffset>)> for ByteRange {
     }
 }
 
+/// Offset within a manifest table.
 pub type TableOffset = u32;
 
+/// Format-level error types.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum IcechunkFormatErrorKind {
@@ -326,11 +362,13 @@ impl From<Infallible> for IcechunkFormatErrorKind {
 
 pub type IcechunkResult<T> = Result<T, IcechunkFormatError>;
 
+/// Binary format constants (file types, spec versions, compression).
 pub mod format_constants {
     use std::sync::LazyLock;
 
     use serde::{Deserialize, Serialize};
 
+    /// Binary file type identifier in the file header.
     #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum FileTypeBin {
@@ -360,6 +398,7 @@ pub mod format_constants {
         }
     }
 
+    /// Icechunk format specification version.
     #[repr(u8)]
     #[derive(
         Debug,
@@ -407,6 +446,7 @@ pub mod format_constants {
         }
     }
 
+    /// Compression algorithm used for metadata files.
     #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum CompressionAlgorithmBin {
@@ -456,6 +496,7 @@ impl Display for Path {
     }
 }
 
+/// Errors when constructing a [`Path`].
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PathError {

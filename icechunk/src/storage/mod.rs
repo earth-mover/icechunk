@@ -1,3 +1,4 @@
+<<<<<<< composable-storage
 #[cfg(feature = "object-store-http")]
 use ::object_store::ClientConfigKey;
 #[cfg(feature = "object-store-azure")]
@@ -6,6 +7,15 @@ use ::object_store::azure::AzureConfigKey;
 use ::object_store::gcp::GoogleConfigKey;
 
 #[cfg(feature = "s3")]
+=======
+//! Object store abstraction layer.
+//!
+//! The [`Storage`] trait defines generic object store operations (get, put, delete,
+//! list) for persisting Icechunk data. Constructor functions like [`new_s3_storage`],
+//! [`new_gcs_storage`], [`new_in_memory_storage`] create configured storage instances.
+
+use ::object_store::{ClientConfigKey, azure::AzureConfigKey, gcp::GoogleConfigKey};
+>>>>>>> main
 use aws_sdk_s3::{
     config::http::HttpResponse,
     error::SdkError,
@@ -56,10 +66,16 @@ use thiserror::Error;
 #[cfg(test)]
 pub mod logging;
 
+/// Storage using the `object_store` crate (local, in-memory, Azure, GCS).
 pub mod object_store;
+/// HTTP redirect-based storage for read-only access.
 pub mod redirect;
+<<<<<<< composable-storage
 
 #[cfg(feature = "s3")]
+=======
+/// Native S3 client implementation.
+>>>>>>> main
 pub mod s3;
 
 pub use object_store::ObjectStorage;
@@ -71,6 +87,7 @@ use crate::{
     storage::redirect::RedirectStorage,
 };
 
+<<<<<<< composable-storage
 #[cfg(any(feature = "s3", feature = "object-store-s3"))]
 use crate::config::S3Credentials;
 
@@ -83,6 +100,9 @@ use crate::config::AzureCredentials;
 #[cfg(feature = "object-store-gcs")]
 use crate::config::GcsCredentials;
 
+=======
+/// Storage operation error types.
+>>>>>>> main
 #[derive(Debug, Error)]
 pub enum StorageErrorKind {
     #[error("object not found")]
@@ -260,6 +280,7 @@ impl ConcurrencySettings {
     }
 }
 
+/// Configuration for storage operations (retries, concurrency, storage classes).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
     #[serde(default)]

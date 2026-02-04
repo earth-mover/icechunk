@@ -1,3 +1,7 @@
+//! Branch and tag management.
+//!
+//! This module handles named references (branches and tags) that point to snapshots.
+
 use std::{collections::BTreeSet, future::ready, pin::Pin};
 
 use async_recursion::async_recursion;
@@ -68,9 +72,12 @@ impl From<StorageError> for RefError {
 
 pub type RefResult<A> = Result<A, RefError>;
 
+/// A named reference to a snapshot: either a branch or a tag.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum Ref {
+    /// Immutable reference to a specific snapshot.
     Tag(String),
+    /// Mutable reference that advances with new commits.
     Branch(String),
 }
 
@@ -120,6 +127,7 @@ impl Ref {
     }
 }
 
+/// Data stored for a reference: the snapshot ID it points to.
 #[serde_as]
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RefData {

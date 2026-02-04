@@ -1429,6 +1429,11 @@ class RepositoryConfig:
 
 class Diff:
     """The result of comparing two snapshots"""
+    def is_empty(self) -> bool:
+        """
+        Returns True if the diff contains no changes.
+        """
+        ...
     @property
     def new_groups(self) -> set[str]:
         """
@@ -1567,12 +1572,16 @@ class BranchResetUpdate(UpdateType):
 class NewCommitUpdate(UpdateType):
     @property
     def branch(self) -> str: ...
+    @property
+    def new_snap_id(self) -> str: ...
 
 class CommitAmendedUpdate(UpdateType):
     @property
-    def name(self) -> str: ...
+    def branch(self) -> str: ...
     @property
     def previous_snap_id(self) -> str: ...
+    @property
+    def new_snap_id(self) -> str: ...
 
 class NewDetachedSnapshotUpdate(UpdateType):
     @property
@@ -1657,6 +1666,10 @@ class PyRepository:
     def exists(storage: Storage) -> bool: ...
     @staticmethod
     async def exists_async(storage: Storage) -> bool: ...
+    @staticmethod
+    def fetch_spec_version(storage: Storage) -> int | None: ...
+    @staticmethod
+    async def fetch_spec_version_async(storage: Storage) -> int | None: ...
     @classmethod
     def from_bytes(cls, data: bytes) -> PyRepository: ...
     def as_bytes(self) -> bytes: ...
@@ -1858,6 +1871,23 @@ class ChunkType(Enum):
     VIRTUAL = 2
     INLINE = 3
 
+class SessionMode(Enum):
+    """Enum for session access modes
+
+    Attributes
+    ----------
+    READONLY: int
+        Session can only read data
+    WRITABLE: int
+        Session can read and write data
+    REARRANGE: int
+        Session can only move nodes and reindex arrays
+    """
+
+    READONLY = 0
+    WRITABLE = 1
+    REARRANGE = 2
+
 class PySession:
     @classmethod
     def from_bytes(cls, data: bytes) -> PySession: ...
@@ -1865,6 +1895,8 @@ class PySession:
     def as_bytes(self) -> bytes: ...
     @property
     def read_only(self) -> bool: ...
+    @property
+    def mode(self) -> SessionMode: ...
     @property
     def snapshot_id(self) -> str: ...
     @property
@@ -1904,6 +1936,7 @@ class PySession:
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> str: ...
     async def commit_async(
         self,
@@ -1911,6 +1944,7 @@ class PySession:
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> str: ...
     def flush(
         self,
@@ -1926,11 +1960,13 @@ class PySession:
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        allow_empty: bool = False,
     ) -> str: ...
     async def amend_async(
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        allow_empty: bool = False,
     ) -> str: ...
     def rebase(self, solver: ConflictSolver) -> None: ...
     async def rebase_async(self, solver: ConflictSolver) -> None: ...

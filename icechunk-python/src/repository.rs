@@ -305,6 +305,18 @@ impl From<Diff> for PyDiff {
 
 #[pymethods]
 impl PyDiff {
+    /// Returns true if the diff contains no changes.
+    pub fn is_empty(&self) -> bool {
+        self.new_groups.is_empty()
+            && self.new_arrays.is_empty()
+            && self.deleted_groups.is_empty()
+            && self.deleted_arrays.is_empty()
+            && self.updated_groups.is_empty()
+            && self.updated_arrays.is_empty()
+            && self.updated_chunks.is_empty()
+            && self.moved_nodes.is_empty()
+    }
+
     #[allow(clippy::unwrap_used)]
     pub fn __repr__(&self) -> String {
         let mut res = String::new();
@@ -519,6 +531,8 @@ pub(crate) struct PyBranchResetUpdate {
 pub(crate) struct PyNewCommitUpdate {
     #[pyo3(get)]
     branch: String,
+    #[pyo3(get)]
+    new_snap_id: String,
 }
 
 #[pyclass(name = "CommitAmendedUpdate", eq, extends=PyUpdateType)]
@@ -528,6 +542,8 @@ pub(crate) struct PyCommitAmendedUpdate {
     branch: String,
     #[pyo3(get)]
     previous_snap_id: String,
+    #[pyo3(get)]
+    new_snap_id: String,
 }
 
 #[pyclass(name = "NewDetachedSnapshotUpdate", eq, extends=PyUpdateType)]
@@ -605,7 +621,10 @@ impl PyBranchResetUpdate {
 #[pymethods]
 impl PyNewCommitUpdate {
     fn __repr__(&self) -> PyResult<String> {
-        Ok(format!("NewCommitUpdate(branch={})", self.branch))
+        Ok(format!(
+            "NewCommitUpdate(branch={}, new_snap_id={})",
+            self.branch, self.new_snap_id
+        ))
     }
 }
 
@@ -613,8 +632,8 @@ impl PyNewCommitUpdate {
 impl PyCommitAmendedUpdate {
     fn __repr__(&self) -> PyResult<String> {
         Ok(format!(
-            "CommitAmendedUpdate(branch={}, previous_snap_id={})",
-            self.branch, self.previous_snap_id
+            "CommitAmendedUpdate(branch={}, previous_snap_id={}, new_snap_id={})",
+            self.branch, self.previous_snap_id, self.new_snap_id,
         ))
     }
 }
@@ -734,27 +753,33 @@ fn mk_update_type(
             )?
             .into_any()
             .unbind(),
-            UpdateType::NewCommitUpdate { branch } => Bound::new(
+            UpdateType::NewCommitUpdate { branch, new_snap_id } => Bound::new(
                 py,
                 (
-                    PyNewCommitUpdate { branch: branch.clone() },
-                    PyUpdateType { updated_at, backup_path },
-                ),
-            )?
-            .into_any()
-            .unbind(),
-            UpdateType::CommitAmendedUpdate { branch, previous_snap_id } => Bound::new(
-                py,
-                (
-                    PyCommitAmendedUpdate {
+                    PyNewCommitUpdate {
                         branch: branch.clone(),
-                        previous_snap_id: previous_snap_id.to_string(),
+                        new_snap_id: new_snap_id.to_string(),
                     },
                     PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
             .unbind(),
+            UpdateType::CommitAmendedUpdate { branch, previous_snap_id, new_snap_id } => {
+                Bound::new(
+                    py,
+                    (
+                        PyCommitAmendedUpdate {
+                            branch: branch.clone(),
+                            previous_snap_id: previous_snap_id.to_string(),
+                            new_snap_id: new_snap_id.to_string(),
+                        },
+                        PyUpdateType { updated_at, backup_path },
+                    ),
+                )?
+                .into_any()
+                .unbind()
+            }
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id } => Bound::new(
                 py,
                 (
@@ -1020,6 +1045,32 @@ impl PyRepository {
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(exists)
+        })
+    }
+
+    #[staticmethod]
+    fn fetch_spec_version(py: Python<'_>, storage: PyStorage) -> PyResult<Option<u8>> {
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let spec_version = Repository::fetch_spec_version(storage.0)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(spec_version.map(|v| v as u8))
+            })
+        })
+    }
+
+    #[staticmethod]
+    fn fetch_spec_version_async(
+        py: Python<'_>,
+        storage: PyStorage,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        pyo3_async_runtimes::tokio::future_into_py::<_, Option<u8>>(py, async move {
+            let spec_version = Repository::fetch_spec_version(storage.0)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(spec_version.map(|v| v as u8))
         })
     }
 
@@ -1345,7 +1396,7 @@ impl PyRepository {
             let ops = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move {
                     let repo = self.0.read().await;
-                    repo.ops_log().await
+                    repo.ops_log().await.map(|(stream, _, _)| stream)
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?
                 .map_err(PyIcechunkStoreError::RepositoryError)
