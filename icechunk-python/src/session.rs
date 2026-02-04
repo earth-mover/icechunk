@@ -479,11 +479,13 @@ impl PySession {
         })
     }
 
+    #[pyo3(signature = (message, metadata=None, allow_empty=false))]
     pub fn amend(
         &self,
         py: Python<'_>,
         message: &str,
         metadata: Option<PySnapshotProperties>,
+        allow_empty: bool,
     ) -> PyResult<String> {
         let metadata = metadata.map(|m| m.into());
         // This is blocking function, we need to release the Gil
@@ -491,7 +493,7 @@ impl PySession {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
                 let snapshot_id = session
-                    .amend(message, metadata)
+                    .amend(message, metadata, allow_empty)
                     .await
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())
@@ -499,11 +501,13 @@ impl PySession {
         })
     }
 
+    #[pyo3(signature = (message, metadata=None, allow_empty=false))]
     pub fn amend_async<'py>(
         &'py self,
         py: Python<'py>,
         message: &str,
         metadata: Option<PySnapshotProperties>,
+        allow_empty: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let session = self.0.clone();
         let message = message.to_owned();
@@ -512,7 +516,7 @@ impl PySession {
             let metadata = metadata.map(|m| m.into());
             let mut session = session.write().await;
             let snapshot_id = session
-                .amend(&message, metadata)
+                .amend(&message, metadata, allow_empty)
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(snapshot_id.to_string())

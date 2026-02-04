@@ -417,6 +417,7 @@ class Session:
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        allow_empty: bool = False,
     ) -> str:
         """
         Commit the changes in the session to the repository, by amending/overwriting the previous commit.
@@ -435,6 +436,9 @@ class Session:
             The message to write with the commit.
         metadata : dict[str, Any] | None, optional
             Additional metadata to store with the commit snapshot.
+        allow_empty : bool, optional
+            If True, allow amending even if no data changes have been made to the session.
+            This is useful when you only want to update the commit message. Default is False.
 
         Returns
         -------
@@ -453,12 +457,13 @@ class Session:
                 UserWarning,
                 stacklevel=2,
             )
-        return self._session.amend(message, metadata)
+        return self._session.amend(message, metadata, allow_empty=allow_empty)
 
     async def amend_async(
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        allow_empty: bool = False,
     ) -> str:
         """
         Commit the changes in the session to the repository, by amending/overwriting the previous commit.
@@ -477,6 +482,9 @@ class Session:
             The message to write with the commit.
         metadata : dict[str, Any] | None, optional
             Additional metadata to store with the commit snapshot.
+        allow_empty : bool, optional
+            If True, allow amending even if no data changes have been made to the session.
+            This is useful when you only want to update the commit message. Default is False.
 
         Returns
         -------
@@ -495,7 +503,7 @@ class Session:
                 UserWarning,
                 stacklevel=2,
             )
-        return await self._session.amend_async(message, metadata)
+        return await self._session.amend_async(message, metadata, allow_empty=allow_empty)
 
     def flush(
         self,

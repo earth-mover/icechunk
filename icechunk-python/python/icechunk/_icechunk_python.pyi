@@ -1956,11 +1956,13 @@ class PySession:
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        allow_empty: bool = False,
     ) -> str: ...
     async def amend_async(
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        allow_empty: bool = False,
     ) -> str: ...
     def rebase(self, solver: ConflictSolver) -> None: ...
     async def rebase_async(self, solver: ConflictSolver) -> None: ...

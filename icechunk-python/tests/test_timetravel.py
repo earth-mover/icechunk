@@ -1028,7 +1028,13 @@ def test_amend(spec_version: int | None) -> None:
     air_temp = group.create_array(
         "foo", shape=(1000, 1000), chunks=(100, 100), dtype="i4"
     )
-    new_snapshot_id = session.amend("the only commit")
+    new_snapshot_id = session.amend("the onyl timmoc - no tpyos!")  # codespell:ignore
+
+    # Test amend with allow_empty=True (message-only change)
+    session = repo.writable_session("main")
+    new_snapshot_id = session.amend("the only commit", allow_empty=True)
+    parents = list(repo.ancestry(snapshot_id=new_snapshot_id))
+    assert parents[0].message == "the only commit"
 
     session = repo.readonly_session(snapshot_id=new_snapshot_id)
     store = session.store

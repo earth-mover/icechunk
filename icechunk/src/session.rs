@@ -1172,11 +1172,12 @@ impl Session {
         &mut self,
         message: &str,
         properties: Option<SnapshotProperties>,
+        allow_empty: bool,
     ) -> SessionResult<SnapshotId> {
         // Icechunk 1 doesn't support amend
         self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        self._commit(message, properties, false, CommitMethod::Amend, false).await
+        self._commit(message, properties, false, CommitMethod::Amend, allow_empty).await
     }
 
     async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
@@ -4264,7 +4265,7 @@ mod tests {
         let before_amend1 = session.commit("will be amended", None).await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
-        let before_amend2 = session.amend("first amend", None).await?;
+        let before_amend2 = session.amend("first amend", None, false).await?;
 
         let main_version = VersionInfo::BranchTipRef("main".to_string());
         let anc: Vec<_> = repo
@@ -4292,7 +4293,7 @@ mod tests {
         session
             .add_group("/error".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        let after_amend2 = session.amend("second amend", None).await?;
+        let after_amend2 = session.amend("second amend", None, false).await?;
 
         let anc_from_tag: Vec<_> = repo
             .ancestry(&VersionInfo::TagRef("tag".to_string()))
