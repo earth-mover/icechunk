@@ -13,11 +13,13 @@ use crate::config::{
 use crate::config::{GcsBearerCredential, GcsStaticCredentials};
 use crate::format::format_constants::SpecVersionBin;
 use crate::format::manifest::{
-    ChunkPayload, ChunkRef, ManifestExtents, SecondsSinceEpoch, VirtualChunkLocation,
-    VirtualChunkRef,
+    ChunkPayload, ChunkRef, ManifestExtents, ManifestRef, SecondsSinceEpoch,
+    VirtualChunkLocation, VirtualChunkRef,
 };
 use crate::format::snapshot::{ArrayShape, DimensionName};
-use crate::format::{ChunkId, ChunkIndices, NodeId, Path, SnapshotId, manifest};
+use crate::format::{
+    ChunkId, ChunkIndices, ManifestId, NodeId, Path, SnapshotId, manifest,
+};
 use crate::session::Session;
 use crate::storage::{
     ConcurrencySettings, ETag, RetriesSettings, Settings, new_in_memory_storage,
@@ -662,4 +664,18 @@ fn snapshot_id() -> impl Strategy<Value = SnapshotId> {
 }
 pub fn ref_data() -> impl Strategy<Value = RefData> {
     snapshot_id().prop_map(|snapshot| RefData { snapshot })
+}
+
+fn manifest_id() -> impl Strategy<Value = ManifestId> {
+    uniform12(any::<u8>()).prop_map(ManifestId::new)
+}
+
+prop_compose! {
+    pub fn manifest_ref()
+    (ndim in any::<u8>().prop_map(usize::from))
+    (object_id in manifest_id(),
+     extents in manifest_extents(ndim),
+    ) -> ManifestRef {
+        ManifestRef{ object_id, extents }
+    }
 }
