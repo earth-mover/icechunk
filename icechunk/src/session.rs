@@ -4357,9 +4357,9 @@ mod tests {
         let repo = create_memory_store_repository().await;
         let asset_manager = repo.asset_manager();
 
-        // Initial snapshot should be marked as initial
-        let initial_info =
-            asset_manager.fetch_snapshot_info(&Snapshot::INITIAL_SNAPSHOT_ID).await?;
+        // Look up the initial snapshot via the branch
+        let initial_snap_id = repo.lookup_branch("main").await?;
+        let initial_info = asset_manager.fetch_snapshot_info(&initial_snap_id).await?;
         assert!(initial_info.is_initial());
 
         // Non-initial snapshot should NOT be marked as initial
