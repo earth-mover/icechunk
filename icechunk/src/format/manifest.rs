@@ -653,7 +653,7 @@ mod tests {
     use crate::roundtrip_serialization_tests;
     use crate::strategies::{
         ShapeDim, limited_width_manifest_extents, manifest_extents, manifest_ref,
-        shapes_and_dims,
+        manifest_splits, shapes_and_dims,
     };
     use icechunk_macros;
     use itertools::{all, multizip};
@@ -662,7 +662,10 @@ mod tests {
     use std::error::Error;
     use test_strategy::proptest as alt_proptest;
 
-    roundtrip_serialization_tests!(serialize_and_deserialize_manifest_ref - manifest_ref);
+    roundtrip_serialization_tests!(
+        serialize_and_deserialize_manifest_ref - manifest_ref,
+        serialize_and_deserialize_manifest_splits - manifest_splits
+    );
 
     #[alt_proptest]
     fn test_property_extents_set_ops_same(
