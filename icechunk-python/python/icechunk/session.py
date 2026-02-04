@@ -8,6 +8,7 @@ from icechunk import (
     ConflictSolver,
     Diff,
     RepositoryConfig,
+    SessionMode,
 )
 from icechunk._icechunk_python import PySession
 from icechunk.store import IcechunkStore
@@ -33,9 +34,12 @@ class Session:
             raise ValueError(
                 "You must opt-in to pickle writable sessions in a distributed context "
                 "using Session.fork(). "
-                # link to docs
+                "See https://icechunk.io/en/stable/parallel/#distributed-writes for more. "
                 "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
                 "please use `icechunk.xarray.to_icechunk` instead. "
+                "If you are using dask & distributed or multi-processing to read/write from the same repository, "
+                "then pass a readonly session created using Repository.readonly_session for the read step. "
+                "Alternatively, make sure to pass the ForkSession created by Session.fork() for the read step. "
             )
         state = {
             "_session": self._session.as_bytes(),
@@ -72,6 +76,18 @@ class Session:
             True if the session is read-only, False otherwise.
         """
         return self._session.read_only
+
+    @property
+    def mode(self) -> SessionMode:
+        """
+        The mode of this session.
+
+        Returns
+        -------
+        SessionMode
+            The session mode - one of READONLY, WRITABLE, or REARRANGE.
+        """
+        return self._session.mode
 
     @property
     def snapshot_id(self) -> str:
