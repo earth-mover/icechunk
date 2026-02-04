@@ -1048,6 +1048,32 @@ impl PyRepository {
         })
     }
 
+    #[staticmethod]
+    fn fetch_spec_version(py: Python<'_>, storage: PyStorage) -> PyResult<Option<u8>> {
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let spec_version = Repository::fetch_spec_version(storage.0)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(spec_version.map(|v| v as u8))
+            })
+        })
+    }
+
+    #[staticmethod]
+    fn fetch_spec_version_async(
+        py: Python<'_>,
+        storage: PyStorage,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        pyo3_async_runtimes::tokio::future_into_py::<_, Option<u8>>(py, async move {
+            let spec_version = Repository::fetch_spec_version(storage.0)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(spec_version.map(|v| v as u8))
+        })
+    }
+
     /// Reopen the repository changing its config and or virtual chunk credentials
     ///
     /// If config is None, it will use the same value as self
