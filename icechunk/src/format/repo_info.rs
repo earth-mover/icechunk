@@ -1,3 +1,5 @@
+//! Version info, branches, and tags for a repository.
+
 use err_into::ErrorInto;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};

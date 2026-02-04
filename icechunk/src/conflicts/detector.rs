@@ -1,3 +1,5 @@
+//! Detects conflicts between concurrent changes during rebase.
+
 use std::{
     collections::{HashMap, HashSet},
     ops::DerefMut,

@@ -1,3 +1,5 @@
+//! Repository statistics (chunk counts, sizes, etc.).
+
 use futures::{StreamExt, TryStream, TryStreamExt, future::ready, stream};
 use std::{
     collections::HashSet,

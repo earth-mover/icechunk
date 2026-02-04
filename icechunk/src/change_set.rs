@@ -1,3 +1,9 @@
+//! Tracks uncommitted modifications during a session.
+//!
+//! Key types:
+//! - [`ChangeSet`] - Enum with variants for the two writable session modes
+//! - [`ArrayData`] - Array metadata (shape, dimension names, user attributes)
+
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
@@ -151,6 +157,11 @@ impl MoveTracker {
     }
 }
 
+/// Uncommitted modifications accumulated during a session.
+///
+/// Two variants for the two writable session modes:
+/// - [`Edit`](ChangeSet::Edit) - New/updated/deleted arrays, groups, and chunks
+/// - [`Rearrange`](ChangeSet::Rearrange) - Move/rename operations
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 // we only keep one of this, their size difference doesn't affect us
 #[allow(clippy::large_enum_variant)]

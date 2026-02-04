@@ -1,3 +1,12 @@
+//! Configuration types for repositories and storage.
+//!
+//! Key types:
+//! - [`RepositoryConfig`] - Main configuration for a repository
+//! - [`ObjectStoreConfig`] - Storage backend selection (S3, GCS, Azure, local, etc.)
+//! - [`S3Credentials`], [`GcsCredentials`], [`AzureCredentials`] - Cloud authentication
+//! - [`CachingConfig`] - Cache size limits
+//! - [`ManifestSplittingConfig`] - Controls how manifests are partitioned
+
 use core::fmt;
 use std::{
     collections::HashMap,
@@ -51,6 +60,7 @@ impl fmt::Display for S3Options {
     }
 }
 
+/// Storage backend configuration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectStoreConfig {
@@ -98,6 +108,7 @@ impl CompressionConfig {
     }
 }
 
+/// Cache size configuration for in-memory caches.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct CachingConfig {
     #[serde(default)]
@@ -374,6 +385,7 @@ impl ManifestConfig {
     }
 }
 
+/// Configuration options for a repository.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepositoryConfig {
     /// Chunks smaller than this will be stored inline in the manifest
@@ -552,6 +564,7 @@ pub trait S3CredentialsFetcher: fmt::Debug + Sync + Send {
     async fn get(&self) -> Result<S3StaticCredentials, String>;
 }
 
+/// S3 authentication credentials.
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(tag = "s3_credential_type")]
 #[serde(rename_all = "snake_case")]
@@ -592,6 +605,7 @@ pub trait GcsCredentialsFetcher: fmt::Debug + Sync + Send {
     async fn get(&self) -> Result<GcsBearerCredential, String>;
 }
 
+/// Google Cloud Storage authentication credentials.
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(tag = "gcs_credential_type")]
 #[serde(rename_all = "snake_case")]
@@ -613,6 +627,7 @@ pub enum AzureStaticCredentials {
     BearerToken(String),
 }
 
+/// Azure Blob Storage authentication credentials.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "az_credential_type")]
 #[serde(rename_all = "snake_case")]
