@@ -331,7 +331,7 @@ impl TryFrom<&Snapshot> for SnapshotInfo {
 
 impl SnapshotInfo {
     pub fn is_initial(&self) -> bool {
-        self.parent_id.is_none()
+        self.id == Snapshot::INITIAL_SNAPSHOT_ID
     }
 }
 
@@ -945,5 +945,32 @@ mod tests {
         assert!(!shape1.valid_chunk_coord(&coord2));
 
         assert!(shape2.valid_chunk_coord(&coord3));
+    }
+
+    #[test]
+    fn test_is_initial() {
+        use super::{Snapshot, SnapshotInfo};
+        use chrono::Utc;
+
+        // Initial snapshot should be identified as initial
+        let initial = SnapshotInfo {
+            id: Snapshot::INITIAL_SNAPSHOT_ID,
+            parent_id: None,
+            flushed_at: Utc::now(),
+            message: "test".to_string(),
+            metadata: Default::default(),
+        };
+        assert!(initial.is_initial());
+
+        // Non-initial snapshot should NOT be identified as initial,
+        // even if parent_id is None (as in v2 snapshots)
+        let non_initial = SnapshotInfo {
+            id: ObjectId::random(),
+            parent_id: None, // This is None in v2, but it's not the initial snapshot
+            flushed_at: Utc::now(),
+            message: "test".to_string(),
+            metadata: Default::default(),
+        };
+        assert!(!non_initial.is_initial());
     }
 }

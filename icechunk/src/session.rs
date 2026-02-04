@@ -4351,6 +4351,28 @@ mod tests {
         Ok(())
     }
 
+    /// Integration test that fetch_snapshot_info correctly identifies initial vs non-initial.
+    #[tokio_test]
+    async fn test_fetch_snapshot_info_is_initial() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+        let asset_manager = repo.asset_manager();
+
+        // Initial snapshot should be marked as initial
+        let initial_info =
+            asset_manager.fetch_snapshot_info(&Snapshot::INITIAL_SNAPSHOT_ID).await?;
+        assert!(initial_info.is_initial());
+
+        // Non-initial snapshot should NOT be marked as initial
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let snap1 = session.commit("first commit", None).await?;
+
+        let snap1_info = asset_manager.fetch_snapshot_info(&snap1).await?;
+        assert!(!snap1_info.is_initial());
+
+        Ok(())
+    }
+
     #[tokio_test]
     async fn test_empty_commit() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
