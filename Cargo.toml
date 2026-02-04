@@ -21,3 +21,11 @@ push = false
 [profile.perf]
 inherits = "release"
 debug = 1
+
+# Enable a small amount of optimization in debug mode
+[profile.dev]
+opt-level = 1
+
+# Enable high optimizations for dependencies, but not our code
+[profile.dev.package."*"]
+opt-level = 3
