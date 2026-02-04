@@ -354,7 +354,7 @@ class Repository:
         Fetch the spec version of a repository without fully opening it.
 
         This is useful for checking the repository format version before opening,
-        for example to determine if a migration is needed.
+        for example to know what version of the library is needed to open it.
 
         Parameters
         ----------
@@ -375,7 +375,7 @@ class Repository:
         Fetch the spec version of a repository without fully opening it (async version).
 
         This is useful for checking the repository format version before opening,
-        for example to determine if a migration is needed.
+        for example to know what version of the library is needed to open it.
 
         Parameters
         ----------
