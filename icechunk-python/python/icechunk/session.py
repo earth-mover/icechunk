@@ -171,9 +171,21 @@ class Session:
         return self._session.config
 
     def move(self, from_path: str, to_path: str) -> None:
+        """Move or rename a node (array or group) in the hierarchy.
+
+        This is a metadata-only operation—no data is copied. Requires a rearrange session.
+
+        Parameters
+        ----------
+        from_path : str
+            The current path of the node (e.g., "/data/raw").
+        to_path : str
+            The new path for the node (e.g., "/data/v1").
+        """
         return self._session.move_node(from_path, to_path)
 
     async def move_async(self, from_path: str, to_path: str) -> None:
+        """Async version of :meth:`move`."""
         return await self._session.move_node_async(from_path, to_path)
 
     def all_virtual_chunk_locations(self) -> list[str]:
