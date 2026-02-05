@@ -313,7 +313,7 @@ impl Repository {
         );
 
         let storage_c = Arc::clone(&storage);
-        let find_spec_version = tokio::spawn(Self::repo_spec_version(storage_c));
+        let find_spec_version = tokio::spawn(Self::fetch_spec_version(storage_c));
 
         let (config_res, spec_version_res) = try_join!(fetch_config, find_spec_version)?;
 
@@ -431,11 +431,11 @@ impl Repository {
     pub async fn exists(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<bool> {
-        Ok(Self::repo_spec_version(storage).await?.is_some())
+        Ok(Self::fetch_spec_version(storage).await?.is_some())
     }
 
     #[instrument(skip_all)]
-    async fn repo_spec_version(
+    pub async fn fetch_spec_version(
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<Option<SpecVersionBin>> {
         let storage_c = Arc::clone(&storage);
