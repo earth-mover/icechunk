@@ -33,6 +33,7 @@ from hypothesis.stateful import (
     invariant,
     precondition,
     rule,
+    run_state_machine_as_test,
 )
 
 import zarr.testing.strategies as zrst
@@ -315,17 +316,18 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     tags = Bundle("tags")
     branches = Bundle("branches")
 
-    def __init__(self) -> None:
+    def __init__(self, actor: Any = None) -> None:
         super().__init__()
 
         note("----------")
         self.model = Model()
         self.storage: Storage | None = None
+        self.actor = actor or Repository
 
     @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
     def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
         self.storage = in_memory_storage()
-        self.repo = Repository.create(self.storage, spec_version=spec_version)
+        self.repo = self.actor.create(self.storage, spec_version=spec_version)
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         snap = next(iter(self.repo.ancestry(branch=DEFAULT_BRANCH)))
@@ -381,7 +383,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         This discards any uncommitted changes.
         """
         assert self.storage is not None, "storage must be initialized"
-        self.repo = Repository.open(self.storage)
+        self.repo = self.actor.open(self.storage)
         note(f"Reopened repository (spec_version={self.repo.spec_version})")
 
         # Reopening discards uncommitted changes - reset model to last committed state
@@ -742,6 +744,42 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             # the initial snapshot is in every possible branch
             # this is a python-only invariant
             assert ancestry[-1] == self.initial_snapshot
+
+
+class TwoActorVersionControlStateMachine(VersionControlStateMachine):
+    actors: dict[str, type[Repository]]
+
+    def __init__(self) -> None:
+        super().__init__(actor=None)
+        self.actors = {"one": Repository, "two": Repository}
+
+    @initialize(data=st.data(), target=VersionControlStateMachine.branches)
+    def initialize(self, data: st.DataObject) -> str:
+        choice = data.draw(st.sampled_from(list(self.actors.keys())))
+        note(f"initializing with actor {choice!r}")
+        self.actor = self.actors[choice]
+        return super().initialize(data, spec_version=1)
+
+    @rule(data=st.data())
+    def reopen_repository(self, data: st.DataObject) -> None:
+        choice = data.draw(st.sampled_from(tuple(self.actors)))
+        self.actor = self.actors[choice]
+        note(f"reopening with actor {choice!r}")
+        super().reopen_repository()
+
+    @rule()
+    @precondition(lambda self: False)
+    def upgrade_spec_version(self) -> None:
+        pass
+
+
+def test_two_actors() -> None:
+    def mk_test_instance_sync() -> TwoActorVersionControlStateMachine:
+        return TwoActorVersionControlStateMachine()
+
+    run_state_machine_as_test(  # type: ignore[no-untyped-call]
+        mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
+    )
 
 
 VersionControlStateMachine.TestCase.settings = settings(
