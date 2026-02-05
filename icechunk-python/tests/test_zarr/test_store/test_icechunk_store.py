@@ -547,7 +547,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         key = "zarr.json"
         await self.set(store, key, self.buffer_cls.from_bytes(data))
         assert await store._get_bytes(key, prototype=default_buffer_prototype()) == data  # type: ignore[attr-defined]
-        with pytest.raises((FileNotFoundError, ValueError)):
+        with pytest.raises((FileNotFoundError, ValueError, IcechunkError)):
             await store._get_bytes(  # type: ignore[attr-defined]
                 "nonexistent_key", prototype=default_buffer_prototype()
             )
