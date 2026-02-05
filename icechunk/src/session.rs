@@ -4388,6 +4388,29 @@ mod tests {
         Ok(())
     }
 
+    /// Test that the initial snapshot has an empty transaction log that can be fetched.
+    #[tokio_test]
+    async fn test_initial_snapshot_has_empty_transaction_log()
+    -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+        let asset_manager = repo.asset_manager();
+
+        let initial_snap_id = repo.lookup_branch("main").await?;
+        let tx_log = asset_manager.fetch_transaction_log(&initial_snap_id).await?;
+
+        // The transaction log should exist and be empty (no changes)
+        assert_eq!(tx_log.new_groups().count(), 0);
+        assert_eq!(tx_log.new_arrays().count(), 0);
+        assert_eq!(tx_log.deleted_groups().count(), 0);
+        assert_eq!(tx_log.deleted_arrays().count(), 0);
+        assert_eq!(tx_log.updated_groups().count(), 0);
+        assert_eq!(tx_log.updated_arrays().count(), 0);
+        assert_eq!(tx_log.updated_chunks().count(), 0);
+        assert_eq!(tx_log.moves().count(), 0);
+
+        Ok(())
+    }
+
     #[tokio_test]
     async fn test_empty_commit() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;

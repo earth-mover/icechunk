@@ -32,6 +32,7 @@ use tracing::{Instrument, debug, error, instrument, trace};
 use crate::{
     Storage, StorageError,
     asset_manager::AssetManager,
+    change_set::ChangeSet,
     config::{
         Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestPreloadCondition,
         RepositoryConfig,
@@ -46,7 +47,7 @@ use crate::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
         },
-        transaction_log::{Diff, DiffBuilder},
+        transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
     refs::{self, Ref, RefError, RefErrorKind},
     session::{Session, SessionErrorKind, SessionResult},
@@ -252,6 +253,17 @@ impl Repository {
             asset_manager_c.write_snapshot(Arc::clone(&new_snapshot)).await?;
 
             if spec_version >= SpecVersionBin::V2dot0 {
+                // Write an empty transaction log for the initial snapshot
+                let empty_tx_log = TransactionLog::new(
+                    &Snapshot::INITIAL_SNAPSHOT_ID,
+                    &ChangeSet::for_edits(),
+                );
+                asset_manager_c
+                    .write_transaction_log(
+                        Snapshot::INITIAL_SNAPSHOT_ID,
+                        Arc::new(empty_tx_log),
+                    )
+                    .await?;
                 let snap_info = new_snapshot.as_ref().try_into()?;
                 let repo_info =
                     Arc::new(RepoInfo::initial(spec_version, snap_info, num_updates));
@@ -1481,7 +1493,8 @@ impl Repository {
         let fut: FuturesOrdered<_> = all_snaps
             .iter()
             .filter_map(|snap_info| {
-                if snap_info.is_initial() {
+                // v1 repos don't have transaction logs for initial snapshots
+                if self.spec_version == SpecVersionBin::V1dot0 && snap_info.is_initial() {
                     None
                 } else {
                     Some(
