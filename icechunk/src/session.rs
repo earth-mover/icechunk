@@ -74,12 +74,10 @@ pub enum SessionMode {
     Rearrange,
 }
 
-/// The mode for shifting array chunks, determining how out-of-bounds chunks are handled.
+/// Internal mode for the shift_by helper function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShiftMode {
-    /// Circular buffer - chunks wrap around to the other side, shape unchanged.
+enum ShiftMode {
     Wrap,
-    /// Out-of-bounds chunks are discarded, vacated positions return fill_value.
     Discard,
 }
 
@@ -615,14 +613,10 @@ impl Session {
     /// - `Ok(None)` to discard the chunk
     /// - `Err(...)` to abort the operation
     ///
-    /// The `delete_vacated` parameter controls what happens to source positions after chunks move:
-    /// - `true`: Source positions that aren't also destinations are cleared (return fill value)
-    /// - `false`: Source positions retain their chunk refs (stale data may be readable)
     pub async fn reindex_array<F>(
         &mut self,
         array_path: &Path,
         calculate_new_index: F,
-        delete_vacated: bool,
     ) -> SessionResult<()>
     where
         F: Fn(&ChunkIndices) -> ReindexOperationResult,
@@ -642,8 +636,6 @@ impl Session {
 
         let mut original_chunks = self.chunk_coordinates(array_path).await?.boxed();
         let mut change_set = ChangeSet::for_edits();
-        let mut source_positions: HashSet<ChunkIndices> = HashSet::new();
-        let mut dest_positions: HashSet<ChunkIndices> = HashSet::new();
 
         // TODO: concurrency
         while let Some(old_chunk_index) = original_chunks.try_next().await? {
@@ -657,7 +649,6 @@ impl Session {
                         new_payload,
                         &splits,
                     )?;
-                    dest_positions.insert(new_chunk_index);
                 } else {
                     return Err(SessionErrorKind::InvalidIndex {
                         coords: new_chunk_index,
@@ -666,27 +657,17 @@ impl Session {
                     .into());
                 }
             }
-            source_positions.insert(old_chunk_index);
         }
         drop(original_chunks);
         self.change_set_mut()?.merge(change_set)?;
-
-        if delete_vacated {
-            self.delete_chunks(
-                array_path,
-                source_positions.difference(&dest_positions).cloned(),
-            )
-            .await?;
-        }
 
         Ok(())
     }
 
     /// Shift all chunks in an array by the given chunk offset.
     ///
-    /// The `mode` parameter controls how out-of-bounds chunks are handled:
-    /// - `Wrap`: Chunks wrap to the other side
-    /// - `Discard`: Out-of-bounds chunks are discarded, vacated positions return fill_value
+    /// Chunks that shift out of bounds are discarded. Vacated positions retain
+    /// stale chunk references (the caller typically writes new data there).
     ///
     /// Returns the index shift in element space (chunk_offset * chunk_size for each dimension).
     /// This tells you how many elements the data moved, useful for knowing where to write new data.
@@ -695,6 +676,29 @@ impl Session {
         &mut self,
         array_path: &Path,
         chunk_offset: &[i64], // FIXME: overflow
+    ) -> SessionResult<Vec<i64>> {
+        self.shift_or_roll(array_path, chunk_offset, ShiftMode::Discard).await
+    }
+
+    /// Roll (circular shift) all chunks in an array by the given chunk offset.
+    ///
+    /// Chunks that shift out of one end wrap around to the other side.
+    /// No data is lost — this is a circular buffer operation.
+    ///
+    /// Returns the index shift in element space (chunk_offset * chunk_size for each dimension).
+    #[instrument(skip(self))]
+    pub async fn roll_array(
+        &mut self,
+        array_path: &Path,
+        chunk_offset: &[i64], // FIXME: overflow
+    ) -> SessionResult<Vec<i64>> {
+        self.shift_or_roll(array_path, chunk_offset, ShiftMode::Wrap).await
+    }
+
+    async fn shift_or_roll(
+        &mut self,
+        array_path: &Path,
+        chunk_offset: &[i64],
         mode: ShiftMode,
     ) -> SessionResult<Vec<i64>> {
         let node = self.get_array(array_path).await?;
@@ -706,21 +710,13 @@ impl Session {
             _ => unreachable!("get_array returned non-array"),
         };
 
-        // Calculate element_shift = chunk_offset * chunk_size for each dimension
         let element_shift: Vec<i64> = chunk_offset
             .iter()
             .zip(chunk_sizes.iter())
             .map(|(&offset, &chunk_size)| offset * chunk_size as i64)
             .collect();
 
-        let delete_vacated = matches!(mode, ShiftMode::Discard);
-
-        self.reindex_array(
-            array_path,
-            shift_by(chunk_offset, &num_chunks, mode),
-            delete_vacated,
-        )
-        .await?;
+        self.reindex_array(array_path, shift_by(chunk_offset, &num_chunks, mode)).await?;
 
         Ok(element_shift)
     }
@@ -2089,7 +2085,7 @@ pub fn construct_valid_byte_range(
 /// The `mode` parameter controls how out-of-bounds chunks are handled:
 /// - `Wrap`: Chunks wrap around using modular arithmetic
 /// - `Discard`: Out-of-bounds chunks return `None` (will be discarded)
-pub fn shift_by(
+fn shift_by(
     offset: &[i64],
     num_chunks: &[u32],
     mode: ShiftMode,
@@ -4754,9 +4750,7 @@ mod tests {
         session.commit("first commit", None).await?;
 
         let mut session = repo.writable_session("main").await?;
-        session
-            .reindex_array(&apath, shift_by(&[-1], &[10], ShiftMode::Discard), false)
-            .await?;
+        session.reindex_array(&apath, shift_by(&[-1], &[10], ShiftMode::Discard)).await?;
         assert_eq!(
             session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?,
             Some(ChunkPayload::Inline("1".into()))
