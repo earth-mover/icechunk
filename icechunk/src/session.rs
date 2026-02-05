@@ -73,6 +73,15 @@ pub enum SessionMode {
     Rearrange,
 }
 
+/// The mode for shifting array chunks, determining how out-of-bounds chunks are handled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShiftMode {
+    /// Circular buffer - chunks wrap around to the other side, shape unchanged.
+    Wrap,
+    /// Out-of-bounds chunks are discarded, vacated positions return fill_value.
+    Discard,
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum SessionErrorKind {
@@ -598,10 +607,21 @@ impl Session {
     }
 
     #[instrument(skip(self, calculate_new_index))]
+    /// Reindex chunks in an array by applying a transformation function to each chunk's coordinates.
+    ///
+    /// The `calculate_new_index` function receives each chunk's current coordinates and returns:
+    /// - `Ok(Some(new_coords))` to move the chunk to new coordinates
+    /// - `Ok(None)` to discard the chunk
+    /// - `Err(...)` to abort the operation
+    ///
+    /// The `delete_vacated` parameter controls what happens to source positions after chunks move:
+    /// - `true`: Source positions that aren't also destinations are cleared (return fill value)
+    /// - `false`: Source positions retain their chunk refs (stale data may be readable)
     pub async fn reindex_array<F>(
         &mut self,
         array_path: &Path,
         calculate_new_index: F,
+        delete_vacated: bool,
     ) -> SessionResult<()>
     where
         F: Fn(&ChunkIndices) -> ReindexOperationResult,
@@ -621,6 +641,9 @@ impl Session {
 
         let mut original_chunks = self.chunk_coordinates(array_path).await?.boxed();
         let mut change_set = ChangeSet::for_edits();
+        let mut source_positions: HashSet<ChunkIndices> = HashSet::new();
+        let mut dest_positions: HashSet<ChunkIndices> = HashSet::new();
+
         // TODO: concurrency
         while let Some(old_chunk_index) = original_chunks.try_next().await? {
             if let Some(new_chunk_index) = calculate_new_index(&old_chunk_index)? {
@@ -629,10 +652,11 @@ impl Session {
                 if shape.valid_chunk_coord(&new_chunk_index) {
                     change_set.set_chunk_ref(
                         node.id.clone(),
-                        new_chunk_index,
+                        new_chunk_index.clone(),
                         new_payload,
                         &splits,
                     )?;
+                    dest_positions.insert(new_chunk_index);
                 } else {
                     return Err(SessionErrorKind::InvalidIndex {
                         coords: new_chunk_index,
@@ -641,20 +665,63 @@ impl Session {
                     .into());
                 }
             }
+            source_positions.insert(old_chunk_index);
         }
         drop(original_chunks);
         self.change_set_mut()?.merge(change_set)?;
 
+        if delete_vacated {
+            self.delete_chunks(
+                array_path,
+                source_positions.difference(&dest_positions).cloned(),
+            )
+            .await?;
+        }
+
         Ok(())
     }
 
+    /// Shift all chunks in an array by the given chunk offset.
+    ///
+    /// The `mode` parameter controls how out-of-bounds chunks are handled:
+    /// - `Wrap`: Chunks wrap to the other side
+    /// - `Discard`: Out-of-bounds chunks are discarded, vacated positions return fill_value
+    ///
+    /// Returns the index shift in element space (chunk_offset * chunk_size for each dimension).
+    /// This tells you how many elements the data moved, useful for knowing where to write new data.
     #[instrument(skip(self))]
     pub async fn shift_array(
         &mut self,
         array_path: &Path,
-        offset: &[i64], // FIXME: overflow
-    ) -> SessionResult<()> {
-        self.reindex_array(array_path, shift_by(offset)).await
+        chunk_offset: &[i64], // FIXME: overflow
+        mode: ShiftMode,
+    ) -> SessionResult<Vec<i64>> {
+        let node = self.get_array(array_path).await?;
+        let (num_chunks, chunk_sizes): (Vec<u32>, Vec<u64>) = match &node.node_data {
+            NodeData::Array { shape, .. } => (
+                shape.num_chunks().collect(),
+                shape.iter().map(|dim| dim.chunk_length()).collect(),
+            ),
+            _ => unreachable!("get_array returned non-array"),
+        };
+
+        // Calculate index_shift = chunk_offset * chunk_size for each dimension
+        let index_shift: Vec<i64> = chunk_offset
+            .iter()
+            .zip(chunk_sizes.iter())
+            .map(|(&offset, &chunk_size)| offset * chunk_size as i64)
+            .collect();
+
+        let delete_vacated = matches!(mode, ShiftMode::Discard);
+
+        self.reindex_array(
+            array_path,
+            shift_by(chunk_offset, &num_chunks, mode),
+            delete_vacated,
+        )
+        .await?;
+
+        Ok(index_shift)
     }
 
     #[instrument(skip(self, coords))]
@@ -2009,27 +2076,41 @@ pub fn construct_valid_byte_range(
     }
 }
 
-pub fn shift_by(offset: &[i64]) -> impl Fn(&ChunkIndices) -> ReindexOperationResult {
-    |index: &ChunkIndices| {
-        let res: Option<Vec<u32>> = index
+/// Creates a chunk index transformation function for shifting chunks by a fixed offset.
+///
+/// The `mode` parameter controls how out-of-bounds chunks are handled:
+/// - `Wrap`: Chunks wrap around using modular arithmetic
+/// - `Discard`: Out-of-bounds chunks return `None` (will be discarded)
+pub fn shift_by(
+    offset: &[i64],
+    num_chunks: &[u32],
+    mode: ShiftMode,
+) -> impl Fn(&ChunkIndices) -> ReindexOperationResult {
+    let offset = offset.to_vec();
+    let num_chunks = num_chunks.to_vec();
+    move |index: &ChunkIndices| {
+        let new_indices: Option<Vec<u32>> = index
             .0
             .iter()
-            .zip(offset.iter())
-            .map(|(index, offset)| {
-                let new_index = *index as i64 + offset;
-                if new_index < 0 {
-                    return Ok(None);
+            .enumerate()
+            .map(|(dim, &idx)| {
+                let n = num_chunks[dim] as i64;
+                let new_idx = idx as i64 + offset[dim];
+                match mode {
+                    ShiftMode::Wrap => Some(new_idx.rem_euclid(n) as u32),
+                    ShiftMode::Discard => {
+                        if new_idx < 0 || new_idx >= n {
+                            None
+                        } else {
+                            Some(new_idx as u32)
+                        }
+                    }
                 }
-                let new_index: u32 = new_index
-                    .try_into()
-                    .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
-                Ok::<_, SessionError>(Some(new_index))
             })
-            .try_collect()?;
-        Ok(res.map(ChunkIndices))
+            .collect();
+        Ok(new_indices.map(ChunkIndices))
     }
 }
-
 struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
@@ -4736,7 +4817,9 @@ mod tests {
         session.commit("first commit", None).await?;
 
         let mut session = repo.writable_session("main").await?;
-        session.reindex_array(&apath, shift_by(&[-1])).await?;
+        session
+            .reindex_array(&apath, shift_by(&[-1], &[10], ShiftMode::Discard), false)
+            .await?;
         assert_eq!(
             session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?,
             Some(ChunkPayload::Inline("1".into()))
