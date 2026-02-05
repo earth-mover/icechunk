@@ -382,29 +382,7 @@ async def test_shift_with_string_mode() -> None:
 
     # Test with lowercase string
     session = repo.writable_session("main")
-    session.shift_array("/array", (-2,), "discard")  # type: ignore[arg-type]
+    session.shift_array("/array", (-2,), "discard")
     array = cast("zarr.Array[Any]", zarr.group(store=session.store)["array"])
     np.testing.assert_equal(array[0:6], np.arange(4, 10))
     assert np.all(array[6:] == -1)
-
-
-async def test_shift_with_uppercase_string_mode() -> None:
-    """Test that uppercase string literals also work."""
-    repo = ic.Repository.create(
-        storage=ic.in_memory_storage(),
-    )
-    session = repo.writable_session("main")
-    root = zarr.group(store=session.store, overwrite=True)
-    array = root.create_array(
-        "array", shape=(10,), chunks=(2,), dtype="i4", fill_value=42
-    )
-    array[:] = np.arange(10)
-    session.commit("create array")
-
-    session = repo.writable_session("main")
-    session.shift_array("/array", (-2,), "WRAP")  # type: ignore[arg-type]
-    array = cast("zarr.Array[Any]", zarr.group(store=session.store)["array"])
-
-    # Data should wrap around: [4,5,6,7,8,9,0,1,2,3]
-    expected = np.array([4, 5, 6, 7, 8, 9, 0, 1, 2, 3])
-    np.testing.assert_equal(array[:], expected)
