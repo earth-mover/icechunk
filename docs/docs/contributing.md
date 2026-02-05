@@ -214,8 +214,11 @@ uv sync --group docs
 
 # Start the MkDocs development server
 cd ../docs
-uv run mkdocs serve
+uv run mkdocs serve --livereload
 ```
+
+!!! note "Use `--livereload` for file watching"
+    Due to a [Click 8.3.x bug](https://github.com/mkdocs/mkdocs/issues/4032), file watching may not work without the `--livereload` flag. Always use `mkdocs serve --livereload` to ensure automatic rebuilds when you edit files.
 
 The development server will start at `http://127.0.0.1:8000` with live reload enabled.
 
