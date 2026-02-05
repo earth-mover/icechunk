@@ -6,7 +6,7 @@ test *args='':
   cargo nextest run --all --all-targets {{args}}
 
 doctest *args='':
-  cargo nextest run --doc {{args}}
+  cargo test --doc {{args}}
 
 # run all tests with logs enabled
 test-logs level *args='':
