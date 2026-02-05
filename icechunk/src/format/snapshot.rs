@@ -337,6 +337,12 @@ impl SnapshotInfo {
     }
 }
 
+impl SnapshotId {
+    pub fn is_initial(&self) -> bool {
+        *self == Snapshot::INITIAL_SNAPSHOT_ID
+    }
+}
+
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     max_depth: 64,
     max_tables: 50_000_000,
