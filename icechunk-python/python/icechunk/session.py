@@ -1,7 +1,7 @@
 import contextlib
 import warnings
 from collections.abc import AsyncIterator, Callable, Generator, Iterable, Sequence
-from typing import Any, NoReturn, Self
+from typing import Any, Literal, NoReturn, Self
 
 from icechunk import (
     ChunkType,
@@ -9,6 +9,7 @@ from icechunk import (
     Diff,
     RepositoryConfig,
     SessionMode,
+    ShiftMode,
 )
 from icechunk._icechunk_python import PySession
 from icechunk.store import IcechunkStore
@@ -190,11 +191,61 @@ class Session:
         self,
         array_path: str,
         shift_chunk: Callable[[Iterable[int]], Iterable[int] | None],
+        delete_vacated: bool,
     ) -> None:
-        return self._session.reindex_array(array_path, shift_chunk)
+        """Reindex chunks in an array by applying a transformation function.
 
-    def shift_array(self, array_path: str, offset: Iterable[int]) -> None:
-        return self._session.shift_array(array_path, offset)
+        Parameters
+        ----------
+        array_path : str
+            Path to the array.
+        shift_chunk : Callable
+            Function that receives chunk coordinates and returns new coordinates,
+            or None to discard the chunk.
+        delete_vacated : bool
+            If True, source positions that don't receive new chunks are deleted
+            (reads return fill value). If False, source positions retain stale data.
+        """
+        return self._session.reindex_array(array_path, shift_chunk, delete_vacated)
+
+    def shift_array(
+        self,
+        array_path: str,
+        chunk_offset: Iterable[int],
+        mode: ShiftMode | Literal["wrap", "discard"],
+    ) -> tuple[int, ...]:
+        """Shift all chunks in an array by the given chunk offset.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array to shift.
+        chunk_offset : Iterable[int]
+            The number of chunks to shift by in each dimension. Positive values
+            shift right/down, negative values shift left/up.
+        mode : ShiftMode or str
+            How to handle out-of-bounds chunks. Can be a ShiftMode enum or one of:
+            - "wrap": Circular buffer - chunks wrap to the other side, no data loss
+            - "discard": Out-of-bounds chunks are dropped, vacated positions return fill_value
+
+        Returns
+        -------
+        tuple[int, ...]
+            The index shift in element space (chunk_offset * chunk_size for each dimension).
+            Useful for knowing where to write new data after a shift.
+
+        Notes
+        -----
+        To shift right while preserving all data, first resize the array using zarr's
+        array.resize(), then use shift_array with "discard" mode.
+        """
+        if isinstance(mode, str):
+            mode_map = {
+                "wrap": ShiftMode.WRAP,
+                "discard": ShiftMode.DISCARD,
+            }
+            mode = mode_map[mode.lower()]
+        return tuple(self._session.shift_array(array_path, list(chunk_offset), mode))
 
     async def all_virtual_chunk_locations_async(self) -> list[str]:
         """

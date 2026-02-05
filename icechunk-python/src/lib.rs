@@ -35,7 +35,7 @@ use repository::{
     PyDiff, PyFeatureFlag, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo,
     PyUpdate, PyUpdateType,
 };
-use session::{ChunkType, PySession, PySessionMode};
+use session::{ChunkType, PySession, PySessionMode, PyShiftMode};
 use stats::PyChunkStorageStats;
 use store::{PyStore, VirtualChunkSpec};
 
@@ -164,6 +164,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySession>()?;
     m.add_class::<ChunkType>()?;
     m.add_class::<PySessionMode>()?;
+    m.add_class::<PyShiftMode>()?;
     m.add_class::<PyStore>()?;
     m.add_class::<PySnapshotInfo>()?;
     m.add_class::<PyManifestFileInfo>()?;
