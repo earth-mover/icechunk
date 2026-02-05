@@ -7,6 +7,7 @@ from typing import Any, TypeVar
 
 import pytest
 
+import zarr
 from icechunk import IcechunkError, IcechunkStore, local_filesystem_storage
 from icechunk.repository import Repository
 from zarr.abc.store import OffsetByteRequest, RangeByteRequest, Store, SuffixByteRequest
@@ -536,6 +537,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         with pytest.raises(IcechunkError):
             await store.getsize("not-a-real-key")
 
+    @pytest.mark.skipif(
+        zarr.__version__ < "3.1.6", reason="Store._get_bytes added in zarr 3.1.6"
+    )
     async def test_get_bytes(self, store: IcechunkStore) -> None:
         # Override: icechunk validates metadata on zarr.json keys,
         # so we must use valid zarr metadata instead of arbitrary bytes
@@ -548,6 +552,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
                 "nonexistent_key", prototype=default_buffer_prototype()
             )
 
+    @pytest.mark.skipif(
+        zarr.__version__ < "3.1.6", reason="Store._get_bytes_sync added in zarr 3.1.6"
+    )
     def test_get_bytes_sync(self, store: IcechunkStore) -> None:
         # Override: icechunk validates metadata on zarr.json keys
         data = DEFAULT_GROUP_METADATA
@@ -555,6 +562,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         sync(self.set(store, key, self.buffer_cls.from_bytes(data)))
         assert store._get_bytes_sync(key, prototype=default_buffer_prototype()) == data
 
+    @pytest.mark.skipif(
+        zarr.__version__ < "3.1.6", reason="Store._get_json added in zarr 3.1.6"
+    )
     async def test_get_json(self, store: IcechunkStore) -> None:
         # Override: icechunk validates metadata on zarr.json keys,
         # so we must use valid zarr metadata instead of arbitrary JSON
@@ -564,6 +574,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         await self.set(store, key, self.buffer_cls.from_bytes(data_bytes))
         assert await store._get_json(key, prototype=default_buffer_prototype()) == data
 
+    @pytest.mark.skipif(
+        zarr.__version__ < "3.1.6", reason="Store._get_json_sync added in zarr 3.1.6"
+    )
     def test_get_json_sync(self, store: IcechunkStore) -> None:
         # Override: icechunk validates metadata on zarr.json keys
         data = json.loads(DEFAULT_GROUP_METADATA)
