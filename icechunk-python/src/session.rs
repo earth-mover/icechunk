@@ -259,11 +259,11 @@ impl PySession {
         // TODO: detach
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let mut session = self.0.write().await;
-            let index_shift = session
+            let element_shift = session
                 .shift_array(&array_path, chunk_offset.as_slice(), mode.into())
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
-            Ok(index_shift)
+            Ok(element_shift)
         })
     }
 

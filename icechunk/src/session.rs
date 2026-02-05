@@ -705,8 +705,8 @@ impl Session {
             _ => unreachable!("get_array returned non-array"),
         };
 
-        // Calculate index_shift = chunk_offset * chunk_size for each dimension
-        let index_shift: Vec<i64> = chunk_offset
+        // Calculate element_shift = chunk_offset * chunk_size for each dimension
+        let element_shift: Vec<i64> = chunk_offset
             .iter()
             .zip(chunk_sizes.iter())
             .map(|(&offset, &chunk_size)| offset * chunk_size as i64)
@@ -721,7 +721,7 @@ impl Session {
         )
         .await?;
 
-        Ok(index_shift)
+        Ok(element_shift)
     }
 
     #[instrument(skip(self, coords))]
