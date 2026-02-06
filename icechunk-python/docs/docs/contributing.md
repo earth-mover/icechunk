@@ -211,6 +211,14 @@ Or using other package managers:
 
 Ensure you have navigated to the root directory of the cloned repo (i.e. not the `icechunk-python` subdirectory).
 
+For running the tests we also leverage [cargo-nextest](https://nexte.st/),
+for building it from source run
+```bash
+cargo install cargo-nextest
+```
+or check the [installation instructions](https://nexte.st/docs/installation/)
+for pre-built binaries or using package managers.
+
 #### WASM Compiler Setup (macOS)
 
 To compile `icechunk` for `wasm32-wasip1-threads`, you need the Rust target and a C toolchain with WebAssembly support (needed by `zstd-sys`).
