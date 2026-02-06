@@ -562,27 +562,42 @@ store:
 These are structurally incompatible — a typetag deserializer won't read the old format
 and vice versa.
 
-### Migration strategy: custom `Deserialize` on `VirtualChunkContainer`
+### Migration strategy: target-specific serde behavior on `VirtualChunkContainer`
 
-Since `VirtualChunkContainer` is the type that directly holds `ObjectStoreConfig`, it
-gets a custom `Deserialize` implementation that handles both formats:
+Since `VirtualChunkContainer` directly holds `ObjectStoreConfig`, compatibility logic
+is implemented there.
+
+**Native targets (`not(target_arch = "wasm32")`)**:
+
+Use a custom `Deserialize` implementation that handles both formats:
 
 1. Deserialize the `store` field as a raw `serde_value::Value` (or similar)
 2. If it contains an `object_store_type` key → delegate to typetag (new format)
 3. Otherwise → parse as old externally-tagged enum, convert to the matching trait object
 
-Serialization always writes the new format (typetag). This makes migration transparent
-and automatic:
+Serialization writes the new typetag format by default. If we need a temporary
+legacy-write mode for native backward interop, that serializer path is native-only.
+
+**WASM targets (`target_arch = "wasm32"`)**:
+
+No backward-compat serializer/deserializer is required. WASM uses only the new typetag
+shape for both serialization and deserialization.
+
+This keeps WASM simple and avoids carrying legacy enum conversion code into the WASM
+build.
+
+For native repos, migration remains transparent and automatic:
 - Old `config.yaml` files are read correctly
 - On next `save_config()`, they're rewritten in new format (old version backed up)
-- The same serde logic handles both YAML and MessagePack paths
+- The same compatibility serde logic handles both YAML and MessagePack paths
 
-**One-way migration**: Once rewritten, old icechunk versions cannot read the config.
-This matches the existing v1→v2 migration precedent. No data loss is possible since
-old configs are backed up.
+**One-way migration**: Once rewritten in typetag format, old icechunk versions cannot
+read the config. This matches the existing v1→v2 migration precedent. No data loss is
+possible since old configs are backed up.
 
-**No format version field needed**: The deserializer can distinguish old from new format
-by inspecting the structure of the `store` value (presence of `object_store_type` key).
+**No format version field needed**: The native compat deserializer can distinguish old
+from new format by inspecting the structure of the `store` value (presence of
+`object_store_type` key).
 
 ### Open question: `S3Error(String)` vs `S3Error(Box<dyn Error>)`
 
