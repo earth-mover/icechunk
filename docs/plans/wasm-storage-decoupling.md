@@ -6,6 +6,19 @@ Enable the core `icechunk` crate to compile for `wasm32-wasip1-threads` by decou
 built-in storage backends from core types. This also lets Rust users bring their own
 `Storage` implementations without pulling in heavy cloud SDK dependencies.
 
+## Delivery Priority
+
+This plan is executed in two phases:
+
+- **Phase 1 (first pass, current priority)**: achieve WASM compilation and clean module
+  boundaries, even if virtual chunks are unsupported on WASM.
+- **Phase 2 (follow-up)**: complete the full virtual-chunk serialization transition and
+  compatibility behavior.
+
+For Phase 1, virtual chunks can be explicitly disabled on WASM (compile-time gating and
+clear runtime errors for unsupported operations) while we keep the architecture aligned
+with the eventual trait/typetag model.
+
 ## Current Coupling
 
 The core crate unconditionally depends on the AWS SDK, cloud-specific `object_store`
@@ -129,6 +142,21 @@ This separation means:
 - No awkward `make_storage()` method that some impls don't need
 
 ## Steps
+
+### Phase 1 (WASM compile-first)
+
+1. Implement Step 1 (`StorageErrorKind` decoupling).
+2. Perform the structural reorganization needed to remove unconditional backend coupling
+   from core modules and make feature gating effective.
+3. Ensure WASM builds without cloud backends and with virtual chunks unsupported (by
+   design in this phase), returning explicit unsupported/backend-unavailable errors.
+4. Keep Python user-facing API unchanged.
+
+### Phase 2 (Virtual chunk transition follow-up)
+
+Complete the full `ObjectStoreConfig` enum→trait migration and serde compatibility
+strategy described below. This includes spec-version-driven serialization policy,
+legacy/native compatibility handling, and typetag-backed representations.
 
 ### Step 1: Genericize `StorageErrorKind`
 
@@ -488,6 +516,10 @@ reorganizations with no impact on public API behavior. Step 4 adds Cargo feature
 
 `ObjectStoreConfig` is serialized through three paths. Understanding these is critical
 for backward compatibility.
+
+Note: this section is the **Phase 2** target behavior. In **Phase 1**, WASM can ship
+with virtual chunks unsupported and therefore does not need to implement this migration
+yet.
 
 ### Path 1: `config.yaml` (YAML) — persistent, per-repository
 
