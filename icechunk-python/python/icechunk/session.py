@@ -180,6 +180,12 @@ class Session:
             The current path of the node (e.g., "/data/raw").
         to_path : str
             The new path for the node (e.g., "/data/v1").
+
+        Examples
+        --------
+        >>> session = repo.rearrange_session("main")
+        >>> session.move("/data/raw", "/data/v1")
+        >>> session.commit("Renamed raw to v1")
         """
         return self._session.move_node(from_path, to_path)
 
@@ -230,14 +236,16 @@ class Session:
         array_path : str
             The path to the array to shift.
         chunk_offset : Iterable[int]
-            The number of chunks to shift by in each dimension. Positive values
-            shift right/down, negative values shift left/up.
+            Offset added to each chunk coordinate. A chunk at index ``x`` moves
+            to ``x + chunk_offset``. For a 3D array, ``chunk_offset=(1, 0, -2)``
+            moves the chunk at ``(i, j, k)`` to ``(i+1, j, k-2)``.
 
         Returns
         -------
         tuple[int, ...]
-            The index shift in element space (chunk_offset * chunk_size for each dimension).
-            Useful for knowing where to write new data after a shift.
+            The shift in element space (``chunk_offset * chunk_size`` per dimension).
+            For example, with ``chunk_size=10`` and ``chunk_offset=(2,)``, returns
+            ``(20,)`` — useful for slicing the region that needs new data.
 
         Notes
         -----
@@ -261,8 +269,8 @@ class Session:
         array_path : str
             The path to the array to roll.
         chunk_offset : Iterable[int]
-            The number of chunks to roll by in each dimension. Positive values
-            roll right/down, negative values roll left/up.
+            Offset added to each chunk coordinate (with wraparound). A chunk at
+            index ``x`` moves to ``(x + chunk_offset) % num_chunks``.
 
         Returns
         -------
