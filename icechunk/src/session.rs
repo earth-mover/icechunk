@@ -4408,6 +4408,26 @@ mod tests {
         assert_eq!(tx_log.updated_chunks().count(), 0);
         assert_eq!(tx_log.moves().count(), 0);
 
+        // Diff from initial snapshot to first real commit should show the new group
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let snap1 = session.commit("first commit", None).await?;
+
+        let diff = repo
+            .diff(
+                &VersionInfo::SnapshotId(initial_snap_id),
+                &VersionInfo::SnapshotId(snap1),
+            )
+            .await?;
+        assert!(!diff.is_empty());
+        assert_eq!(&diff.new_groups, &[Path::root()].into());
+        assert!(diff.new_arrays.is_empty());
+        assert!(diff.deleted_groups.is_empty());
+        assert!(diff.deleted_arrays.is_empty());
+        assert!(diff.updated_groups.is_empty());
+        assert!(diff.updated_arrays.is_empty());
+        assert!(diff.updated_chunks.is_empty());
+
         Ok(())
     }
 
