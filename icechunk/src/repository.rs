@@ -250,33 +250,39 @@ impl Repository {
         let create_repo_info = async move {
             // On create we need to create the default branch
             let new_snapshot = Arc::new(Snapshot::initial(spec_version)?);
-            asset_manager_c.write_snapshot(Arc::clone(&new_snapshot)).await?;
+            let write_snap = asset_manager_c.write_snapshot(Arc::clone(&new_snapshot));
 
             if spec_version >= SpecVersionBin::V2dot0 {
-                // Write an empty transaction log for the initial snapshot
                 let empty_tx_log = TransactionLog::new(
                     &Snapshot::INITIAL_SNAPSHOT_ID,
                     &ChangeSet::for_edits(),
                 );
-                asset_manager_c
-                    .write_transaction_log(
-                        Snapshot::INITIAL_SNAPSHOT_ID,
-                        Arc::new(empty_tx_log),
-                    )
-                    .await?;
                 let snap_info = new_snapshot.as_ref().try_into()?;
                 let repo_info =
                     Arc::new(RepoInfo::initial(spec_version, snap_info, num_updates));
-                let _ = asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
+
+                // Write snapshot, transaction log, and repo info concurrently
+                // since they target independent storage keys
+                let write_tx = asset_manager_c.write_transaction_log(
+                    Snapshot::INITIAL_SNAPSHOT_ID,
+                    Arc::new(empty_tx_log),
+                );
+                let write_repo = asset_manager_c.create_repo_info(Arc::clone(&repo_info));
+                try_join!(write_snap, write_tx, write_repo)?;
             } else {
-                refs::update_branch(
-                    storage_c.as_ref(),
-                    settings_ref,
-                    Ref::DEFAULT_BRANCH,
-                    new_snapshot.id().clone(),
-                    None,
-                )
-                .await?;
+                // Write snapshot and branch ref concurrently
+                let write_branch = async {
+                    refs::update_branch(
+                        storage_c.as_ref(),
+                        settings_ref,
+                        Ref::DEFAULT_BRANCH,
+                        new_snapshot.id().clone(),
+                        None,
+                    )
+                    .await
+                    .map_err(RepositoryError::from)
+                };
+                try_join!(write_snap, write_branch)?;
             }
 
             Ok::<_, RepositoryError>(())
