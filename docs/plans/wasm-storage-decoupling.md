@@ -82,7 +82,7 @@ dependencies are still unconditionally compiled.
 │  ChunkFetcher trait (unchanged)                              │
 │  ObjectStoreConfig trait (replaces enum, typetag-serializable│
 │    - make_storage(): required                                │
-│    - mk_fetcher():   optional (returns None if unsupported)  │
+│    - mk_fetcher():   default returns Err (not all support it)│
 │  VirtualChunkContainer { store: Arc<dyn ObjectStoreConfig> } │
 │  VirtualChunkResolver  (calls store.mk_fetcher())            │
 │  StorageErrorKind (no AWS types)                             │
@@ -147,7 +147,7 @@ and optionally creating `ChunkFetcher` instances for virtual chunks.
 
 Not all backends support virtual chunks (e.g. `InMemory`, `Redirect`). Rather than
 forcing every impl to provide a fetcher, `mk_fetcher()` has a default implementation
-that returns `None`. Backends that support virtual chunks return `Some(Ok(...))`.
+that returns an error. Backends that support virtual chunks override it.
 
 ```rust
 #[async_trait]
@@ -169,14 +169,14 @@ pub trait ObjectStoreConfig: fmt::Debug + Send + Sync {
     fn is_bucket_constrained(&self) -> bool { false }
 
     /// Construct a ChunkFetcher for virtual chunk access.
-    /// Returns None if this backend does not support virtual chunk fetching.
+    /// Default returns an error; backends that support virtual chunks override this.
     async fn mk_fetcher(
         &self,
-        credentials: Option<&Credentials>,
-        settings: &storage::Settings,
-        chunk_location: &Url,
-    ) -> Option<Result<Arc<dyn ChunkFetcher>, VirtualReferenceError>> {
-        None
+        _credentials: Option<&Credentials>,
+        _settings: &storage::Settings,
+        _chunk_location: &Url,
+    ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
+        Err(VirtualReferenceErrorKind::VirtualChunksNotSupported.into())
     }
 }
 ```
@@ -185,7 +185,7 @@ Each backend implements this trait. Backends that support virtual chunks overrid
 `mk_fetcher()`:
 
 ```rust
-// In storage/s3.rs
+// In storage/s3.rs -- supports virtual chunks
 #[derive(Debug, Serialize, Deserialize)]
 pub struct S3StoreConfig {
     pub options: S3Options,
@@ -205,17 +205,14 @@ impl ObjectStoreConfig for S3StoreConfig {
         credentials: Option<&Credentials>,
         settings: &storage::Settings,
         chunk_location: &Url,
-    ) -> Option<Result<Arc<dyn ChunkFetcher>, VirtualReferenceError>> {
-        let creds = match extract_s3_credentials(credentials) {
-            Ok(c) => c,
-            Err(e) => return Some(Err(e)),
-        };
-        Some(Ok(Arc::new(S3Fetcher::new(&self.options, &creds, settings.clone()).await)))
+    ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
+        let creds = extract_s3_credentials(credentials)?;
+        Ok(Arc::new(S3Fetcher::new(&self.options, &creds, settings.clone()).await))
     }
     // ...
 }
 
-// InMemory just uses the default mk_fetcher() -> None
+// InMemory -- inherits default mk_fetcher() which returns Err(VirtualChunksNotSupported)
 #[typetag::serde(name = "in_memory")]
 impl ObjectStoreConfig for InMemoryConfig {
     async fn make_storage(&self, _credentials: Option<&Credentials>) -> StorageResult<Arc<dyn Storage>> {
@@ -223,7 +220,6 @@ impl ObjectStoreConfig for InMemoryConfig {
     }
     fn validate_credentials(&self, cred: Option<&Credentials>) -> Result<(), String> { ... }
     fn validate_url(&self, _url: &Url) -> Result<(), String> { ... }
-    // mk_fetcher() inherits the default -> None
 }
 ```
 
@@ -236,9 +232,6 @@ pub struct VirtualChunkContainer {
 }
 ```
 
-`VirtualChunkContainer::new()` validates at construction time that the provided config
-actually supports virtual chunks (i.e. `mk_fetcher()` won't return `None`).
-
 **The 160-line match in `mk_fetcher_for()`** collapses to:
 
 ```rust
@@ -246,12 +239,7 @@ async fn mk_fetcher_for(&self, cont: &VirtualChunkContainer, chunk_location: &Ur
     -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError>
 {
     let creds = self.credentials.get(&cont.url_prefix).and_then(|c| c.as_ref());
-    cont.store
-        .mk_fetcher(creds, &self.settings, chunk_location)
-        .await
-        .unwrap_or_else(|| Err(VirtualReferenceErrorKind::Other(
-            "this storage backend does not support virtual chunk fetching".to_string(),
-        ).into()))
+    cont.store.mk_fetcher(creds, &self.settings, chunk_location).await
 }
 ```
 
