@@ -575,8 +575,18 @@ Use a custom `Deserialize` implementation that handles both formats:
 2. If it contains an `object_store_type` key → delegate to typetag (new format)
 3. Otherwise → parse as old externally-tagged enum, convert to the matching trait object
 
-Serialization writes the new typetag format by default. If we need a temporary
-legacy-write mode for native backward interop, that serializer path is native-only.
+Use a custom native `Serialize` policy that preserves the original on-disk shape by
+default:
+
+- If a container was read from legacy enum shape, serialize it back in legacy enum shape
+  (no automatic rewrite on `save_config()`).
+- If a container was read/created in typetag shape, serialize in typetag shape.
+- If a container cannot be represented in legacy enum shape (future/custom backend),
+  serialize in typetag shape (or fail fast with a clear error if strict legacy mode is
+  enabled).
+
+Implementation detail: track per-container wire origin in a `#[serde(skip)]` internal
+field set during deserialization.
 
 **WASM targets (`target_arch = "wasm32"`)**:
 
@@ -586,14 +596,14 @@ shape for both serialization and deserialization.
 This keeps WASM simple and avoids carrying legacy enum conversion code into the WASM
 build.
 
-For native repos, migration remains transparent and automatic:
+For native repos, migration is read-compatible and non-destructive by default:
 - Old `config.yaml` files are read correctly
-- On next `save_config()`, they're rewritten in new format (old version backed up)
+- `save_config()` preserves legacy shape when the config was legacy on input
 - The same compatibility serde logic handles both YAML and MessagePack paths
 
-**One-way migration**: Once rewritten in typetag format, old icechunk versions cannot
-read the config. This matches the existing v1→v2 migration precedent. No data loss is
-possible since old configs are backed up.
+**Explicit one-way migration**: rewriting to typetag should be opt-in (CLI/tooling flag
+or explicit migration path). Once rewritten in typetag format, old icechunk versions
+cannot read the config. No data loss is possible since old configs are backed up.
 
 **No format version field needed**: The native compat deserializer can distinguish old
 from new format by inspecting the structure of the `store` value (presence of
