@@ -110,23 +110,23 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          just compile-tests "--locked"
-          just test
+          just profile=ci compile-tests "--locked"
+          just profile=ci test
 
       - name: Run doc tests
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          just doctest
+          just profile=ci doctest
 
       - name: Run examples
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
-          just run-all-examples
+          just profile=ci run-all-examples
 
       - name: Run unit tests only
         if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
         run: |
-          cargo test --lib
+          cargo test --lib --profile ci
 
       - name: Run integration tests against object stores
         if: github.event_name == 'cron'
@@ -147,7 +147,7 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          cargo test --all --all-targets -- --ignored
+          cargo test --profile ci --workspace --all-targets -- --ignored
 
   wasm-build:
     name: WASM Build

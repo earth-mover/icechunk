@@ -17,6 +17,9 @@ sign-commit = true
 sign-tag = true
 push = false
 
+[profile.release]
+lto = "thin"
+codegen-units = 1
 
 [profile.perf]
 inherits = "release"
@@ -25,7 +28,16 @@ debug = 1
 # Enable a small amount of optimization in debug mode
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only" # allow file:line info in backtraces
 
-# Enable high optimizations for dependencies, but not our code
+# Enable higher optimizations for dependencies, but not our code
 [profile.dev.package."*"]
-opt-level = 3
+opt-level = 2
+
+[profile.ci]
+inherits = "dev"
+opt-level = 0
+debug = 0
+
+[profile.ci.package."*"]
+opt-level = 1

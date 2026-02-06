@@ -422,6 +422,21 @@ We provide a docker compose `compose.yaml` file, which you can run with `docker 
 
 After testing you can clean up with `docker compose down`. To verify that all containers are down use `docker ps` again.
 
+#### Faster linking for incremental builds with mold
+
+On Linux you can use the mold linker for
+significantly faster linking (~5-10x improvement on incremental builds).
+It can be installed with `apt install mold` or `dnf install mold`
+
+Then edit your `~/.cargo/config.toml` to include these configs:
+```toml
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+```
+
 ## Roadmap
 
 ### Features
