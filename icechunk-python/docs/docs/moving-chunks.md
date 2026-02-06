@@ -124,7 +124,7 @@ arr[:] = np.arange(24).reshape(6, 4)
 print("Original 6x4 array:")
 print(arr[:])
 
-session.shift_array("/arr2d", (1, 0))  # Shift down 1 chunk
+session.shift_array("/arr2d", (1, 0))  # Shift +1 chunk along dim 0
 print("\nAfter shift (1, 0):")
 print(arr[:])
 ```
