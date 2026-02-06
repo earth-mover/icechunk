@@ -43,9 +43,18 @@ pub enum ObjectStoreConfig {
 }
 ```
 
-This enum is held by `VirtualChunkContainer` and stored in `RepositoryConfig`. It is the
-dispatch mechanism for virtual chunk fetcher construction. Adding or removing a backend
-requires modifying core types.
+This enum is used in two key roles:
+
+1. **Primary storage creation** -- The Python bindings expose it as `PyObjectStoreConfig`
+   and use the factory functions in `storage/mod.rs` (`new_s3_storage`, `new_gcs_storage`,
+   etc.) to construct `Arc<dyn Storage>` for opening/creating repositories.
+   `RedirectStorage` also dispatches on URL scheme to call these same factory functions.
+
+2. **Virtual chunk containers** -- Held by `VirtualChunkContainer` in `RepositoryConfig`
+   and matched in `virtual_chunks.rs::mk_fetcher_for()` to construct `ChunkFetcher`
+   instances for reading external data.
+
+Adding or removing a backend requires modifying this core enum and every match site.
 
 ### 3. `virtual_chunks.rs` (lines 16, 39-43, 342-508)
 
@@ -71,8 +80,8 @@ dependencies are still unconditionally compiled.
 ┌──────────────────────────────────────────────────────────────┐
 │  Storage trait (unchanged)                                   │
 │  ChunkFetcher trait (unchanged)                              │
-│  VirtualStoreConfig trait (new, typetag-serializable)        │
-│  VirtualChunkContainer { store: Arc<dyn VirtualStoreConfig> }│
+│  ObjectStoreConfig trait (replaces enum, typetag-serializable│
+│  VirtualChunkContainer { store: Arc<dyn ObjectStoreConfig> } │
 │  VirtualChunkResolver  (calls store.mk_fetcher())            │
 │  StorageErrorKind (no AWS types)                             │
 │  RepositoryConfig, CachingConfig, etc. (backend-agnostic)    │
@@ -82,17 +91,18 @@ dependencies are still unconditionally compiled.
    ┌──────┴──────┐    ┌───────┴──────┐    ┌───────┴───────┐
    │ s3 feature  │    │ gcs feature  │    │ azure feature │  ...
    │             │    │              │    │               │
+   │ S3Config    │    │ GcsConfig    │    │ AzureConfig   │
    │ S3Storage   │    │ GcsBackend   │    │ AzureBackend  │
-   │ S3Options   │    │ GcsCredentials│   │ AzureCredentials│
    │ S3Fetcher   │    │ GcsFetcher   │    │ AzureFetcher  │
+   │ S3Options   │    │ GcsCredentials│   │ AzureCredentials│
    │ impl Storage│    │ impl Storage │    │ impl Storage  │
-   │ impl VirtCfg│    │ impl VirtCfg │    │ impl VirtCfg  │
+   │ impl ObjCfg │    │ impl ObjCfg  │    │ impl ObjCfg   │
    └─────────────┘    └──────────────┘    └───────────────┘
 ```
 
 Each backend is a self-contained module that registers itself via `typetag`. Core has
 zero knowledge of specific backends. Users can add their own by implementing `Storage`
-and/or `VirtualStoreConfig`.
+and/or `ObjectStoreConfig`.
 
 ## Steps
 
@@ -125,17 +135,32 @@ S3Error(String),
 **Why first**: Smallest change, isolated to two files, no behavioral impact. Removes AWS
 SDK types from the core error path that every consumer touches.
 
-### Step 2: Introduce `VirtualStoreConfig` trait
+### Step 2: Convert `ObjectStoreConfig` from enum to trait
 
-**Scope**: `virtual_chunks.rs`, new trait definition
+**Scope**: `config.rs`, `virtual_chunks.rs`, `storage/mod.rs`, backend modules
 
-Create a `typetag`-serializable trait that replaces `ObjectStoreConfig` for virtual chunk
-dispatch:
+Replace the closed `ObjectStoreConfig` enum with a `typetag`-serializable trait. The
+trait serves both roles the enum currently fills: creating primary `Storage` backends
+and creating `ChunkFetcher` instances for virtual chunks.
 
 ```rust
 #[async_trait]
-#[typetag::serde(tag = "virtual_store_type")]
-pub trait VirtualStoreConfig: fmt::Debug + Send + Sync {
+#[typetag::serde(tag = "object_store_type")]
+pub trait ObjectStoreConfig: fmt::Debug + Send + Sync {
+    /// Create a Storage backend from this configuration.
+    async fn make_storage(
+        &self,
+        credentials: Option<&Credentials>,
+    ) -> StorageResult<Arc<dyn Storage>>;
+
+    /// Construct a ChunkFetcher for virtual chunk access.
+    async fn mk_fetcher(
+        &self,
+        credentials: Option<&Credentials>,
+        settings: &storage::Settings,
+        chunk_location: &Url,
+    ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError>;
+
     /// Validate that this config is appropriate for the given URL scheme.
     fn validate_url(&self, url: &Url) -> Result<(), String>;
 
@@ -144,43 +169,71 @@ pub trait VirtualStoreConfig: fmt::Debug + Send + Sync {
 
     /// Whether the fetcher cache key needs a bucket/host component.
     fn is_bucket_constrained(&self) -> bool { false }
-
-    /// Construct a ChunkFetcher for this store.
-    async fn mk_fetcher(
-        &self,
-        credentials: Option<&Credentials>,
-        settings: &storage::Settings,
-        chunk_location: &Url,
-    ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError>;
 }
 ```
 
-`VirtualChunkContainer` changes from holding `ObjectStoreConfig` (closed enum) to
-`Arc<dyn VirtualStoreConfig>` (open trait object).
-
-The 160-line `mk_fetcher_for()` match collapses to a single trait method call:
+Each backend implements this trait:
 
 ```rust
-async fn mk_fetcher_for(
-    &self,
-    cont: &VirtualChunkContainer,
-    chunk_location: &Url,
-) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
+// In storage/s3.rs
+#[derive(Debug, Serialize, Deserialize)]
+pub struct S3StoreConfig {
+    pub options: S3Options,
+    pub bucket: String,
+    pub prefix: Option<String>,
+}
+
+#[typetag::serde(name = "s3")]
+impl ObjectStoreConfig for S3StoreConfig {
+    async fn make_storage(&self, credentials: Option<&Credentials>) -> StorageResult<Arc<dyn Storage>> {
+        let creds = extract_s3_credentials(credentials)?;
+        new_s3_storage(self.options.clone(), self.bucket.clone(), self.prefix.clone(), creds)
+    }
+
+    async fn mk_fetcher(&self, credentials: Option<&Credentials>, settings: &storage::Settings, chunk_location: &Url)
+        -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError>
+    {
+        let creds = extract_s3_credentials(credentials)?;
+        Ok(Arc::new(S3Fetcher::new(&self.options, &creds, settings.clone()).await))
+    }
+    // ...
+}
+```
+
+**`VirtualChunkContainer`** changes from holding the enum to a trait object:
+
+```rust
+pub struct VirtualChunkContainer {
+    url_prefix: String,
+    pub store: Arc<dyn ObjectStoreConfig>,
+}
+```
+
+**The 160-line match in `mk_fetcher_for()`** collapses to:
+
+```rust
+async fn mk_fetcher_for(&self, cont: &VirtualChunkContainer, chunk_location: &Url)
+    -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError>
+{
     let creds = self.credentials.get(&cont.url_prefix).and_then(|c| c.as_ref());
     cont.store.mk_fetcher(creds, &self.settings, chunk_location).await
 }
 ```
 
-Each backend implements `VirtualStoreConfig` in its own module. The `S3Fetcher` and
-`ObjectStoreFetcher` types move to their respective modules.
+**The factory functions in `storage/mod.rs`** (`new_s3_storage`, `new_gcs_storage`, etc.)
+remain as convenience constructors but now live in their backend modules. They can also
+be expressed as thin wrappers around `ObjectStoreConfig::make_storage()`.
+
+**`RedirectStorage::mk_storage()`** constructs backend-specific config structs and calls
+`make_storage()` instead of calling factory functions directly.
 
 **`Credentials` enum**: Stays as-is for now. It is a small enum at the `Repository` API
-boundary with no heavy dependencies. Each `VirtualStoreConfig` impl matches on the
+boundary with no heavy dependencies. Each `ObjectStoreConfig` impl matches on the
 variant it expects. This can be further decoupled later.
 
 **Serde migration**: The old `ObjectStoreConfig` used serde's built-in enum tagging
 (`#[serde(rename_all = "snake_case")]`). The new approach uses typetag's tag field
-(`"virtual_store_type": "s3"`). A migration adapter can deserialize the old format and
+(`"object_store_type": "s3"`). A migration adapter can deserialize the old format and
 produce new trait objects if needed.
 
 ### Step 3: Move backend-specific types to their modules
@@ -199,8 +252,8 @@ produce new trait objects if needed.
 After this step `config.rs` retains only backend-agnostic types: `RepositoryConfig`,
 `CachingConfig`, `CompressionConfig`, `ManifestConfig`, `Credentials`.
 
-Each backend module becomes self-contained: its `Storage` impl, its
-`VirtualStoreConfig` impl, its config types, and its fetcher.
+Each backend module becomes self-contained: its `ObjectStoreConfig` impl, its
+`Storage` impl, its config types, and its fetcher.
 
 ### Step 4: Feature-gate the backends
 
@@ -236,12 +289,12 @@ smaller. Remaining work:
 
 | File | Step 1 | Step 2 | Step 3 | Step 4 |
 |------|--------|--------|--------|--------|
-| `storage/mod.rs` | Remove AWS SDK error types + imports | Remove factory fn cloud imports | | Gate cloud factory fns |
-| `storage/s3.rs` | Wrap errors before returning | Add `VirtualStoreConfig` impl | Receive types from config.rs | Gate module |
-| `storage/object_store.rs` | | Add per-backend `VirtualStoreConfig` impls | Receive credential types | Gate cloud backends |
-| `storage/redirect.rs` | | | | Gate module |
-| `virtual_chunks.rs` | | Replace enum with trait, collapse match | Move fetcher impls out | |
-| `config.rs` | | Remove `ObjectStoreConfig` enum | Move backend types out | |
+| `storage/mod.rs` | Remove AWS SDK error types + imports | Replace factory fns with trait calls | | Gate cloud factory fns |
+| `storage/s3.rs` | Wrap errors before returning | Add `ObjectStoreConfig` impl | Receive types from config.rs | Gate module |
+| `storage/object_store.rs` | | Add per-backend `ObjectStoreConfig` impls | Receive credential types | Gate cloud backends |
+| `storage/redirect.rs` | | Use `ObjectStoreConfig::make_storage()` | | Gate module |
+| `virtual_chunks.rs` | | Replace enum with trait call, collapse match | Move fetcher impls out | |
+| `config.rs` | | Replace enum with trait def | Move backend types out | |
 | `lib.rs` | | | Update exports | |
 | `Cargo.toml` | | | | Add features, make deps optional |
 
@@ -257,3 +310,7 @@ reorganizations with no impact on public API behavior. Step 4 adds Cargo feature
   established in the codebase.
 - `Repository`, `Session`, `Store`, and `AssetManager` already use
   `Arc<dyn Storage + Send + Sync>` and need no changes.
+- The Python bindings (`PyObjectStoreConfig`) will need updating in step 2 to construct
+  backend-specific config structs instead of the enum. The `PyStorage` class methods
+  (`new_s3`, `new_gcs`, etc.) can stay as-is since they already call backend-specific
+  factory functions directly.
