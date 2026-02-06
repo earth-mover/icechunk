@@ -394,19 +394,12 @@ boundary with no heavy dependencies. Each `ObjectStoreConfig` impl matches on th
 variant it expects. This does not break WASM compilation since `Credentials` contains
 only our own lightweight types. Can be further decoupled later if needed.
 
-**Serde migration**: The old `ObjectStoreConfig` used serde's built-in enum tagging
-(`#[serde(rename_all = "snake_case")]`). The new approach uses typetag's tag field
-(`"object_store_type": "s3"`). This is serialized into repository config files, so
-**backward compatibility is critical**:
-
-- A custom `Deserialize` implementation (or serde container attribute) must read both
-  old enum format and new typetag format.
-- Writing should use the new format (typetag).
-- Existing repositories opened with new code will have their config re-written in new
-  format on next commit. This means old code cannot read configs written by new code.
-- This is a **one-way migration** -- document it clearly and consider gating behind a
-  format version field if simultaneous old/new access is required.
-- Test with real serialized configs from existing ic1 repositories.
+**Serde migration**: `ObjectStoreConfig` is serialized into `config.yaml` (YAML) and
+into transient Session/Repository MessagePack bytes. The enum-to-trait change alters
+the format (see **Serialization Impact** section for full details). A custom
+`Deserialize` on `VirtualChunkContainer` handles both old and new formats transparently.
+This is a one-way migration: once rewritten, old icechunk versions cannot read the
+config (old version backed up to `overwritten/`).
 
 ### Step 3: Move backend-specific types to their modules
 
@@ -495,24 +488,103 @@ Each step is independently shippable and testable. Steps 1-3 are internal
 reorganizations with no impact on public API behavior. Step 4 adds Cargo features with
 `default` enabling all, so existing users are unaffected.
 
-## Open Questions
+## Serialization Impact
 
-### Serde backward compatibility strategy
+`ObjectStoreConfig` is serialized through three paths. Understanding these is critical
+for backward compatibility.
 
-`ObjectStoreConfig` is serialized into repository config files (msgpack via rmp_serde).
-The enum-to-trait change alters the serialization format. We need to decide:
+### Path 1: `config.yaml` (YAML) — persistent, per-repository
 
-1. **Migration adapter**: Custom deserializer that handles both old enum format and new
-   typetag format? Or a one-time migration on first read?
-2. **Format versioning**: Should `RepositoryConfig` gain a format version field to
-   disambiguate?
-3. **Bidirectional compat**: Is it acceptable that repos written by new code cannot be
-   read by old code? (Probably yes -- this is normal for upgrades.)
+```
+RepositoryConfig
+  → virtual_chunk_containers: HashMap<String, VirtualChunkContainer>
+    → VirtualChunkContainer.store: ObjectStoreConfig
+      → serde_yaml_ng::to_string() / from_slice()
+      → stored as "config.yaml" in the repository's object store
+```
 
-This must be designed concretely before Step 2 begins. Test against real serialized
-configs from existing repositories.
+Code: `asset_manager.rs:252-311`. Written on `save_config()`, read on every
+`Repository::open()`. Old versions are backed up to `overwritten/` before updates.
 
-### `S3Error(String)` vs `S3Error(Box<dyn Error>)`
+**This is the critical path.** Every existing repository with virtual chunk containers
+has a `config.yaml` containing `ObjectStoreConfig` in the old enum format.
+
+### Path 2: Session/Repository `as_bytes()` (MessagePack) — transient
+
+```
+Session { config: RepositoryConfig, virtual_resolver: VirtualChunkResolver }
+  → RepositoryConfig.virtual_chunk_containers → VirtualChunkContainer.store
+  → VirtualChunkResolver.containers → VirtualChunkContainer.store
+  → rmp_serde::to_vec() / from_slice()
+```
+
+Used for marshalling between processes (distributed writers). Both `Session` and
+`Repository` derive `Serialize`/`Deserialize` and contain `ObjectStoreConfig` through
+both `RepositoryConfig` and `VirtualChunkResolver`. This is transient (not stored on
+disk), so cross-version compat is less critical — both sides typically run the same
+version.
+
+### Path 3: Proptest roundtrips (MessagePack) — tests only
+
+The `roundtrip_serialization_tests!` macro in `config.rs` roundtrips `RepositoryConfig`
+through `rmp_serde`. These tests just need to keep passing.
+
+### What is NOT affected
+
+Snapshots (flatbuffer), manifests, transaction logs, and repo info do NOT contain
+`ObjectStoreConfig` or `RepositoryConfig`. Only `config.yaml` and transient
+Session/Repository byte marshalling are affected.
+
+### Format difference: old vs new
+
+**Old format** (serde externally-tagged enum with `#[serde(rename_all = "snake_case")]`):
+```yaml
+store:
+  s3:                              # variant name is a key wrapping the content
+    region: us-east-1
+    endpoint_url: null
+    anonymous: false
+    ...
+```
+Unit variants: `store: in_memory`
+Newtype variants: `store: { local_file_system: /some/path }`
+
+**New format** (typetag internally-tagged with `#[typetag::serde(tag = "object_store_type")]`):
+```yaml
+store:
+  object_store_type: s3            # tag is a field alongside content
+  region: us-east-1
+  endpoint_url: null
+  anonymous: false
+  ...
+```
+
+These are structurally incompatible — a typetag deserializer won't read the old format
+and vice versa.
+
+### Migration strategy: custom `Deserialize` on `VirtualChunkContainer`
+
+Since `VirtualChunkContainer` is the type that directly holds `ObjectStoreConfig`, it
+gets a custom `Deserialize` implementation that handles both formats:
+
+1. Deserialize the `store` field as a raw `serde_value::Value` (or similar)
+2. If it contains an `object_store_type` key → delegate to typetag (new format)
+3. Otherwise → parse as old externally-tagged enum, convert to the matching trait object
+
+Serialization always writes the new format (typetag). This makes migration transparent
+and automatic:
+- Old `config.yaml` files are read correctly
+- On next `save_config()`, they're rewritten in new format (old version backed up)
+- The same serde logic handles both YAML and MessagePack paths
+
+**One-way migration**: Once rewritten, old icechunk versions cannot read the config.
+This matches the existing v1→v2 migration precedent. No data loss is possible since
+old configs are backed up.
+
+**No format version field needed**: The deserializer can distinguish old from new format
+by inspecting the structure of the `store` value (presence of `object_store_type` key).
+
+### Open question: `S3Error(String)` vs `S3Error(Box<dyn Error>)`
 
 Need to check whether any code inspects specific S3 error variants for retry logic.
 `String` is simplest and most WASM-friendly; `Box<dyn Error>` preserves more diagnostic
