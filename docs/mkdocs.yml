@@ -210,6 +210,8 @@ nav:
   - Guides:
     - Configuration: configuration.md
     - Storage: storage.md
+    - Moving Chunks: moving-chunks.md
+    - Moving Nodes: moving-nodes.md
     - Dask: dask.md
     - Xarray: xarray.md
     - Tuning Performance: performance.md
