@@ -150,15 +150,11 @@ S3DeleteObjectError(..),
 S3StreamError(..),
 
 // AFTER
-S3Error(String),
+S3Error(Box<dyn std::error::Error + Send + Sync>),
 ```
 
-`S3Storage` converts SDK errors to strings before returning `StorageError`. All
+`S3Storage` wraps SDK errors before returning `StorageError`. All
 `aws_sdk_s3` imports are removed from `storage/mod.rs`.
-
-**Check first**: Verify no code matches on specific S3 error variants for retry logic or
-error classification. If so, consider `S3Error(Box<dyn std::error::Error + Send + Sync>)`
-to preserve error inspection capability.
 
 **Why first**: Smallest change, isolated to two files, no behavioral impact. Removes AWS
 SDK types from the core error path that every consumer touches.
@@ -521,8 +517,8 @@ Session { config: RepositoryConfig, virtual_resolver: VirtualChunkResolver }
 Used for marshalling between processes (distributed writers). Both `Session` and
 `Repository` derive `Serialize`/`Deserialize` and contain `ObjectStoreConfig` through
 both `RepositoryConfig` and `VirtualChunkResolver`. This is transient (not stored on
-disk), so cross-version compat is less critical — both sides typically run the same
-version.
+disk). For this change set we only support same-version marshalling; mixed-version
+compatibility is not guaranteed.
 
 ### Path 3: Proptest roundtrips (MessagePack) — tests only
 
@@ -575,18 +571,15 @@ Use a custom `Deserialize` implementation that handles both formats:
 2. If it contains an `object_store_type` key → delegate to typetag (new format)
 3. Otherwise → parse as old externally-tagged enum, convert to the matching trait object
 
-Use a custom native `Serialize` policy that preserves the original on-disk shape by
-default:
+Use a custom native `Serialize` policy keyed by repository spec version:
 
-- If a container was read from legacy enum shape, serialize it back in legacy enum shape
-  (no automatic rewrite on `save_config()`).
-- If a container was read/created in typetag shape, serialize in typetag shape.
-- If a container cannot be represented in legacy enum shape (future/custom backend),
-  serialize in typetag shape (or fail fast with a clear error if strict legacy mode is
-  enabled).
+- If `spec_version == 1`, serialize in legacy enum shape for backward compatibility.
+- If `spec_version >= 2`, serialize in typetag shape.
+- If `spec_version == 1` but a container cannot be represented in legacy enum shape
+  (future/custom backend), fail the config write with a clear error.
 
-Implementation detail: track per-container wire origin in a `#[serde(skip)]` internal
-field set during deserialization.
+This avoids automatic format rewrites for v1 repositories and keeps serialization
+behavior stable by spec version.
 
 **WASM targets (`target_arch = "wasm32"`)**:
 
@@ -596,24 +589,24 @@ shape for both serialization and deserialization.
 This keeps WASM simple and avoids carrying legacy enum conversion code into the WASM
 build.
 
-For native repos, migration is read-compatible and non-destructive by default:
+For native repos, behavior is:
 - Old `config.yaml` files are read correctly
-- `save_config()` preserves legacy shape when the config was legacy on input
-- The same compatibility serde logic handles both YAML and MessagePack paths
+- `save_config()` on spec v1 writes legacy shape (if representable)
+- `save_config()` on spec v2+ writes typetag shape
+- MessagePack `Session`/`Repository` bytes are same-version only
 
-**Explicit one-way migration**: rewriting to typetag should be opt-in (CLI/tooling flag
-or explicit migration path). Once rewritten in typetag format, old icechunk versions
-cannot read the config. No data loss is possible since old configs are backed up.
+**One-way migration**: Once a repo writes typetag config (e.g. under spec v2), old
+icechunk versions cannot read that config. No data loss is possible since old configs
+are backed up.
 
 **No format version field needed**: The native compat deserializer can distinguish old
 from new format by inspecting the structure of the `store` value (presence of
 `object_store_type` key).
 
-### Open question: `S3Error(String)` vs `S3Error(Box<dyn Error>)`
+### Decision: S3 Error Shape
 
-Need to check whether any code inspects specific S3 error variants for retry logic.
-`String` is simplest and most WASM-friendly; `Box<dyn Error>` preserves more diagnostic
-info. Check before implementing Step 1.
+Use `S3Error(Box<dyn std::error::Error + Send + Sync>)` to preserve diagnostics and
+allow downstream inspection/classification where needed.
 
 ## Notes
 
@@ -629,4 +622,6 @@ info. Check before implementing Step 1.
   since they call factory functions directly, not `ObjectStoreConfig`.
 - `PyObjectStoreConfig` needs updating in Step 2 to construct backend-specific config
   structs (e.g. `S3StoreConfig`, `GcsStoreConfig`) instead of the removed enum.
-  Its API surface to Python can remain identical.
+  This is an internal bridge change only; the user-facing Python API remains identical.
+- If deserialization encounters a backend whose feature is not enabled in the current
+  build, fail with an explicit "storage backend is not available" error.
