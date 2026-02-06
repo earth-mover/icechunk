@@ -305,8 +305,19 @@ smaller. Remaining work:
 
 - Target-conditional tokio features for `wasm32-wasip1-threads`
 - Verify `object_store` base (`InMemory`, `LocalFileSystem`) compiles
-- Call `__wasm_call_ctors` for `typetag`/`inventory` initialization on wasm
 - Fix any remaining platform-specific issues
+
+**`typetag`/`inventory` WASM compatibility -- confirmed via napi-rs spike**:
+
+`typetag` works end-to-end under napi-rs's `wasm32-wasip1-threads` target. A
+`#[typetag::serde(tag = "type")]` trait with multiple implementations round-trips
+correctly through `serde_json` -- serialization produces the correct `"type"`
+discriminator and deserialization resolves to the right concrete type.
+
+No special `__wasm_call_ctors` call is needed. The napi-rs WASM loader automatically
+calls all `__napi_register__*` exports during module instantiation, which triggers
+`inventory`/`ctor` initialization. The existing `#[typetag::serde]` annotations will
+work as-is in WASM -- no code changes needed for typetag compatibility.
 
 ## Change Matrix
 
@@ -327,8 +338,10 @@ reorganizations with no impact on public API behavior. Step 4 adds Cargo feature
 
 ## Notes
 
-- `typetag` supports wasm via the `inventory` crate's `__wasm_call_ctors` mechanism.
-  See <https://github.com/dtolnay/typetag/pull/96>.
+- `typetag` works under `wasm32-wasip1-threads` with napi-rs -- **confirmed via spike**.
+  Registration happens automatically through napi-rs's `__napi_register__*` export calls
+  at module init time. No manual `__wasm_call_ctors` needed.
+  See also <https://github.com/dtolnay/typetag/pull/96>.
 - The `Storage` trait already uses `typetag` for serialization, so this pattern is
   established in the codebase.
 - `Repository`, `Session`, `Store`, and `AssetManager` already use
