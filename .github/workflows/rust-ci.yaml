@@ -179,8 +179,10 @@ jobs:
       - name: Show wasm clang include search paths
         run: |
           echo | clang --target=wasm32-wasi -E -x c - -v
+          echo '#include <limits.h>' | clang --target=wasm32-wasi -E -x c - -v > /dev/null
           ls -la /usr/include/wasm32-wasi || true
           ls -la /usr/lib/wasm32-wasi || true
+          test -f /usr/include/wasm32-wasi/limits.h && echo "found /usr/include/wasm32-wasi/limits.h"
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
@@ -192,8 +194,13 @@ jobs:
           CC_wasm32_wasip1_threads: clang
           CXX_wasm32_wasip1_threads: clang++
           AR_wasm32_wasip1_threads: llvm-ar
+          CC_wasm32_wasi: clang
+          CXX_wasm32_wasi: clang++
+          AR_wasm32_wasi: llvm-ar
           WASI_SYSROOT: /usr
           CFLAGS_wasm32_wasip1_threads: --sysroot=/usr -isystem /usr/include/wasm32-wasi
           CXXFLAGS_wasm32_wasip1_threads: --sysroot=/usr -isystem /usr/include/wasm32-wasi
+          CFLAGS_wasm32_wasi: --sysroot=/usr -isystem /usr/include/wasm32-wasi
+          CXXFLAGS_wasm32_wasi: --sysroot=/usr -isystem /usr/include/wasm32-wasi
         run: |
           cargo check -p icechunk --no-default-features --target wasm32-wasip1-threads
