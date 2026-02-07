@@ -174,7 +174,13 @@ jobs:
       - name: Install LLVM toolchain for wasm C deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm
+          sudo apt-get install -y --no-install-recommends clang llvm wasi-libc libc++-dev
+
+      - name: Show wasm clang include search paths
+        run: |
+          echo | clang --target=wasm32-wasi -E -x c - -v
+          ls -la /usr/include/wasm32-wasi || true
+          ls -la /usr/lib/wasm32-wasi || true
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
@@ -186,5 +192,8 @@ jobs:
           CC_wasm32_wasip1_threads: clang
           CXX_wasm32_wasip1_threads: clang++
           AR_wasm32_wasip1_threads: llvm-ar
+          WASI_SYSROOT: /usr
+          CFLAGS_wasm32_wasip1_threads: --sysroot=/usr -isystem /usr/include/wasm32-wasi
+          CXXFLAGS_wasm32_wasip1_threads: --sysroot=/usr -isystem /usr/include/wasm32-wasi
         run: |
           cargo check -p icechunk --no-default-features --target wasm32-wasip1-threads
