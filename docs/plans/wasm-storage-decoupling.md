@@ -6,6 +6,99 @@ Enable the core `icechunk` crate to compile for `wasm32-wasip1-threads` by decou
 built-in storage backends from core types. This also lets Rust users bring their own
 `Storage` implementations without pulling in heavy cloud SDK dependencies.
 
+## Implementation Progress
+
+Phase 1 is partially complete. Steps 1, 3, and 4 are done. Step 2 is Phase 2 (deferred).
+Step 5 (WASM compile) is next.
+
+### Step 1: Genericize `StorageErrorKind` — DONE
+
+Commit: `b85e2f42` (check `git log --oneline` for exact hash on this branch)
+
+- Removed all `aws_sdk_s3` imports from `storage/mod.rs`.
+- Replaced 10 specific AWS SDK error variants with a single
+  `S3Error(Box<dyn std::error::Error + Send + Sync>)`.
+- Added `s3_err()` helper in `storage/s3.rs`; updated all 9 error conversion call sites.
+- All 126 lib tests pass.
+
+### Step 3: Move backend-specific types to their modules — DONE
+
+Commit: follows Step 1 on this branch.
+
+- Moved `S3Options`, `S3StaticCredentials`, `S3CredentialsFetcher`, `S3Credentials` from
+  `config.rs` → `storage/s3.rs`.
+- Moved `GcsStaticCredentials`, `GcsBearerCredential`, `GcsCredentialsFetcher`,
+  `GcsCredentials`, `AzureStaticCredentials`, `AzureCredentials` from `config.rs` →
+  `storage/object_store.rs`.
+- Added `pub use` re-exports in `config.rs` so all downstream consumers (Python bindings,
+  tests, CLI) continue to compile without import changes.
+- Updated internal imports in `storage/mod.rs` and `storage/s3.rs` tests.
+- All 126 lib tests pass.
+
+### Step 4: Feature-gate the backends — DONE
+
+Commit: `636c94ef` (latest on this branch).
+
+Added six Cargo features, all enabled by default:
+
+```toml
+default = ["s3", "gcs", "azure", "http-store", "redirect", "local-store"]
+```
+
+| Feature | What it gates |
+|---------|---------------|
+| `s3` | AWS SDK deps, `object_store/aws`, `S3Storage`, `S3Fetcher`, S3/Tigris/S3Compatible config variants |
+| `gcs` | `object_store/gcp`, GCS config variant, `GcsCredentials`, GCS fetcher |
+| `azure` | `object_store/azure`, Azure config variant, `AzureCredentials`, Azure fetcher |
+| `http-store` | `object_store/http`, HTTP config variant, HTTP fetcher |
+| `local-store` | `LocalFileSystem` from `object_store`, `LocalFileSystem` config variant, `new_local_filesystem_storage` |
+| `redirect` | `reqwest` dep, `RedirectStorage` |
+
+Files modified with `#[cfg(feature = "...")]` gates:
+
+- **`Cargo.toml`**: Feature definitions, optional deps.
+- **`config.rs`**: `ObjectStoreConfig` enum variants, `Credentials` enum variants,
+  re-exports.
+- **`lib.rs`**: Re-exports of gated factory functions.
+- **`storage/mod.rs`**: Module declarations, imports, factory functions.
+- **`storage/object_store.rs`**: Imports, backend structs/impls/constructors,
+  `LocalFileSystemObjectStoreBackend`.
+- **`virtual_chunks.rs`**: Imports, match arms in `new()`, `validate_credentials()`,
+  `mk_fetcher_for()`, `is_fetcher_bucket_constrained()`; `S3Fetcher` struct/impls;
+  `ObjectStoreFetcher` struct/impls with per-method feature gates.
+- **`strategies.rs`**: Proptest strategy generation for `ObjectStoreConfig` and
+  `VirtualChunkContainer`.
+
+Build verification:
+- `cargo check -p icechunk --no-default-features` compiles cleanly (warnings only for
+  unused imports, expected).
+- `cargo check -p icechunk` (default features) compiles cleanly.
+- All 126 lib tests pass with default features.
+
+**Note for `--no-default-features` build**: The `object_store` crate itself remains a
+non-optional dependency (it provides `InMemory` storage which is always available). Only
+its cloud feature flags (`aws`, `gcp`, `azure`, `http`) are activated per-feature. The
+`local-store` feature gates `object_store::local::LocalFileSystem` usage, which won't be
+available on WASM.
+
+### Step 5: WASM target support — NOT STARTED
+
+This is the next step. The `wasm32-wasip1-threads` target is already installed.
+To pick up:
+
+1. Try `cargo check -p icechunk --no-default-features --target wasm32-wasip1-threads`.
+2. Fix any remaining platform-specific issues:
+   - `tokio` features may need target-conditional configuration for WASM.
+   - `object_store` base crate (InMemory) may have platform issues.
+   - Any `std::fs`, `std::net`, or other platform-specific APIs in core code.
+3. Verify the minimal dependency tree compiles for WASM.
+
+### Step 2: Convert `ObjectStoreConfig` enum to trait — DEFERRED (Phase 2)
+
+This is the full enum→trait migration with typetag serialization. Not needed for Phase 1
+WASM compilation since virtual chunks are unsupported on WASM in Phase 1. See the
+detailed design below in the original plan.
+
 ## Delivery Priority
 
 This plan is executed in two phases:
