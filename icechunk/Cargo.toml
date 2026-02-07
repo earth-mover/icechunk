@@ -24,7 +24,6 @@ thiserror = "2.0.18"
 serde_json = "1.0.149"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_with = { version = "3.16.1", features = ["hex"] }
-tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros"] }
 quick_cache = "0.6.18"
 base32 = "0.5.1"
 chrono = { version = "0.4.43", features = ["serde"] }
@@ -72,6 +71,13 @@ reqwest = { version = "0.12.28", default-features = false, features = [
   "http2",
   "system-proxy",
 ], optional = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros"] }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+tokio = { version = "1.49.0", features = ["rt", "macros"] }
+
 [dev-dependencies]
 clap = { version = "4.5", features = ["derive"] }
 assert_fs = "1.1.3"
