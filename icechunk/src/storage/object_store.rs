@@ -2,13 +2,7 @@
 //!
 //! Supports local filesystem, in-memory, Azure Blob, and Google Cloud Storage.
 
-use crate::{
-    config::{
-        AzureCredentials, AzureStaticCredentials, GcsBearerCredential, GcsCredentials,
-        GcsCredentialsFetcher, GcsStaticCredentials, S3Credentials, S3Options,
-    },
-    private,
-};
+use crate::{private, storage::s3::{S3Credentials, S3Options}};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -49,6 +43,70 @@ use super::{
     RetriesSettings, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
     VersionInfo, VersionedUpdateResult,
 };
+
+// --- GCS credential types ---
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+// We need to adjacently tag because we more than one variant with matching inner types https://github.com/serde-rs/serde/issues/1307
+#[serde(tag = "gcs_static_credential_type", content = "__field0")]
+#[serde(rename_all = "snake_case")]
+pub enum GcsStaticCredentials {
+    ServiceAccount(PathBuf),
+    ServiceAccountKey(String),
+    ApplicationCredentials(PathBuf),
+    BearerToken(GcsBearerCredential),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct GcsBearerCredential {
+    pub bearer: String,
+    pub expires_after: Option<DateTime<Utc>>,
+}
+
+impl From<&GcsBearerCredential> for GcpCredential {
+    fn from(value: &GcsBearerCredential) -> Self {
+        GcpCredential { bearer: value.bearer.clone() }
+    }
+}
+
+#[async_trait]
+#[typetag::serde(tag = "gcs_credentials_fetcher_type")]
+pub trait GcsCredentialsFetcher: fmt::Debug + Sync + Send {
+    async fn get(&self) -> Result<GcsBearerCredential, String>;
+}
+
+/// Google Cloud Storage authentication credentials.
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[serde(tag = "gcs_credential_type")]
+#[serde(rename_all = "snake_case")]
+pub enum GcsCredentials {
+    #[default]
+    FromEnv,
+    Anonymous,
+    Static(GcsStaticCredentials),
+    Refreshable(Arc<dyn GcsCredentialsFetcher>),
+}
+
+// --- Azure credential types ---
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+// We need to adjacently tag because we more than one variant with matching inner types https://github.com/serde-rs/serde/issues/1307
+#[serde(tag = "az_static_credential_type", content = "__field0")]
+#[serde(rename_all = "snake_case")]
+pub enum AzureStaticCredentials {
+    AccessKey(String),
+    SASToken(String),
+    BearerToken(String),
+}
+
+/// Azure Blob Storage authentication credentials.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "az_credential_type")]
+#[serde(rename_all = "snake_case")]
+pub enum AzureCredentials {
+    FromEnv,
+    Static(AzureStaticCredentials),
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ObjectStorage {

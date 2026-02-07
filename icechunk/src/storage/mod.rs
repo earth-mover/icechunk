@@ -47,12 +47,9 @@ pub mod s3;
 
 pub use object_store::ObjectStorage;
 
-use crate::{
-    config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options},
-    error::ICError,
-    private,
-    storage::redirect::RedirectStorage,
-};
+use crate::{error::ICError, private, storage::redirect::RedirectStorage};
+use object_store::{AzureCredentials, GcsCredentials};
+use s3::{S3Credentials, S3Options};
 
 /// Storage operation error types.
 #[derive(Debug, Error)]
