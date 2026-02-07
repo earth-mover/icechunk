@@ -277,7 +277,9 @@ To compile `icechunk` for `wasm32-wasip1-threads`, you need the Rust target and 
     export AR_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/llvm-ar
     ```
 
-4. Verify the build:
+4. `tokio` on WASM currently requires the unstable cfg. This repository sets it automatically for `wasm32-wasip1-threads` in `.cargo/config.toml`.
+
+5. Verify the build:
 
     ```bash
     cargo check -p icechunk --no-default-features --target wasm32-wasip1-threads
