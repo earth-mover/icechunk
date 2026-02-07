@@ -8,8 +8,8 @@ built-in storage backends from core types. This also lets Rust users bring their
 
 ## Implementation Progress
 
-Phase 1 is partially complete. Steps 1, 3, and 4 are done. Step 2 is Phase 2 (deferred).
-Step 5 (WASM compile) is next.
+Phase 1 is in the final stretch. Steps 1, 3, and 4 are done. Step 2 is Phase 2
+(deferred). Step 5 (WASM compile) is in progress with CI compile checks now passing.
 
 ### Step 1: Genericize `StorageErrorKind` — DONE
 
@@ -81,17 +81,27 @@ its cloud feature flags (`aws`, `gcp`, `azure`, `http`) are activated per-featur
 `local-store` feature gates `object_store::local::LocalFileSystem` usage, which won't be
 available on WASM.
 
-### Step 5: WASM target support — NOT STARTED
+### Step 5: WASM target support — IN PROGRESS
 
-This is the next step. The `wasm32-wasip1-threads` target is already installed.
-To pick up:
+The `wasm32-wasip1-threads` compile path is now wired and validated in CI.
 
-1. Try `cargo check -p icechunk --no-default-features --target wasm32-wasip1-threads`.
-2. Fix any remaining platform-specific issues:
-   - `tokio` features may need target-conditional configuration for WASM.
-   - `object_store` base crate (InMemory) may have platform issues.
-   - Any `std::fs`, `std::net`, or other platform-specific APIs in core code.
-3. Verify the minimal dependency tree compiles for WASM.
+Completed so far:
+
+1. Added a dedicated GitHub Actions job (`WASM Build`) that runs:
+   `cargo check -p icechunk --no-default-features --target wasm32-wasip1-threads`.
+2. Fixed Linux CI toolchain setup for `zstd-sys` C compilation by installing WASI
+   toolchain components and wiring target-specific C/C++ compiler env vars.
+3. Fixed WASM-incompatible tokio feature selection by making `tokio` dependency
+   target-conditional in `icechunk/Cargo.toml`:
+   - non-wasm: `rt-multi-thread`, `macros`
+   - wasm: `rt`, `macros`
+4. Verified the WASM build now passes in CI.
+
+Remaining in this step:
+
+1. Keep monitoring follow-up regressions in the new WASM CI job as feature work lands.
+2. Decide whether to add an additional WASM test/build matrix variant beyond
+   `--no-default-features` (for example, selected feature combinations).
 
 ### Step 2: Convert `ObjectStoreConfig` enum to trait — DEFERRED (Phase 2)
 
