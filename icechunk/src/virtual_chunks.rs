@@ -13,20 +13,27 @@ use std::{
 };
 
 use async_trait::async_trait;
+#[cfg(feature = "s3")]
 use aws_sdk_s3::{Client, error::SdkError, operation::get_object::GetObjectError};
 use bytes::{Buf, Bytes};
 use futures::{TryStreamExt, stream::FuturesOrdered};
-use object_store::{
-    ClientConfigKey, GetOptions, ObjectStore, azure::AzureConfigKey,
-    gcp::GoogleConfigKey, local::LocalFileSystem, path::Path,
-};
+#[cfg(any(feature = "local-store", feature = "gcs", feature = "azure", feature = "http-store"))]
+use object_store::{GetOptions, ObjectStore, path::Path};
+#[cfg(feature = "local-store")]
+use object_store::local::LocalFileSystem;
+#[cfg(feature = "azure")]
+use object_store::azure::AzureConfigKey;
+#[cfg(any(feature = "gcs", feature = "azure", feature = "http-store"))]
+use object_store::ClientConfigKey;
+#[cfg(feature = "gcs")]
+use object_store::gcp::GoogleConfigKey;
 use quick_cache::sync::Cache;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::{
     ObjectStoreConfig,
-    config::{AzureCredentials, Credentials, GcsCredentials, S3Credentials, S3Options},
+    config::Credentials,
     format::{
         ChunkOffset,
         manifest::{
@@ -34,16 +41,24 @@ use crate::{
         },
     },
     private,
-    storage::{
-        self,
-        object_store::{
-            AzureObjectStoreBackend, GcsObjectStoreBackend, HttpObjectStoreBackend,
-            ObjectStoreBackend as _,
-        },
-        s3::{mk_client, range_to_header},
-        split_in_multiple_requests,
-    },
+    storage::{self, split_in_multiple_requests},
 };
+#[cfg(feature = "s3")]
+use crate::config::{S3Credentials, S3Options};
+#[cfg(feature = "gcs")]
+use crate::config::GcsCredentials;
+#[cfg(feature = "azure")]
+use crate::config::AzureCredentials;
+#[cfg(feature = "azure")]
+use crate::storage::object_store::AzureObjectStoreBackend;
+#[cfg(feature = "gcs")]
+use crate::storage::object_store::GcsObjectStoreBackend;
+#[cfg(feature = "http-store")]
+use crate::storage::object_store::HttpObjectStoreBackend;
+#[cfg(any(feature = "gcs", feature = "azure", feature = "http-store"))]
+use crate::storage::object_store::ObjectStoreBackend as _;
+#[cfg(feature = "s3")]
+use crate::storage::s3::{mk_client, range_to_header};
 
 pub type ContainerName = String;
 
@@ -74,6 +89,7 @@ impl VirtualChunkContainer {
 
         let url = Url::parse(url_prefix.as_str()).map_err(|e| e.to_string())?;
         match (url.scheme(), &store) {
+            #[cfg(feature = "s3")]
             (
                 "s3",
                 ObjectStoreConfig::S3(_)
@@ -86,6 +102,7 @@ impl VirtualChunkContainer {
                     );
                 }
             }
+            #[cfg(feature = "gcs")]
             ("gcs" | "gs", ObjectStoreConfig::Gcs(_)) => {
                 if !url.has_host() {
                     return Err(
@@ -93,6 +110,7 @@ impl VirtualChunkContainer {
                     );
                 }
             }
+            #[cfg(feature = "azure")]
             ("az" | "azure" | "abfs", ObjectStoreConfig::Azure(..)) => {
                 if !url.has_host() {
                     return Err(
@@ -100,6 +118,7 @@ impl VirtualChunkContainer {
                     );
                 }
             }
+            #[cfg(feature = "s3")]
             ("tigris", ObjectStoreConfig::Tigris(_)) => {
                 if !url.has_host() {
                     return Err(
@@ -108,6 +127,7 @@ impl VirtualChunkContainer {
                     );
                 }
             }
+            #[cfg(feature = "http-store")]
             ("http" | "https", ObjectStoreConfig::Http(_)) => {
                 if !url.has_host() {
                     return Err(
@@ -116,6 +136,7 @@ impl VirtualChunkContainer {
                     );
                 }
             }
+            #[cfg(feature = "local-store")]
             ("file", ObjectStoreConfig::LocalFileSystem(_)) => {
                 if !url.has_host() && url.path().len() < 2 {
                     return Err("Url prefix for file:// containers must include a path"
@@ -152,23 +173,32 @@ impl VirtualChunkContainer {
         cred: Option<&Credentials>,
     ) -> Result<(), VirtualChunkCredentialsError> {
         match (&self.store, cred) {
+            #[cfg(feature = "s3")]
             (ObjectStoreConfig::S3Compatible(_), Some(Credentials::S3(_)) | None) => {
                 Ok(())
             }
+            #[cfg(feature = "s3")]
             (ObjectStoreConfig::S3(_), Some(Credentials::S3(_)) | None) => Ok(()),
+            #[cfg(feature = "gcs")]
             (ObjectStoreConfig::Gcs(_), Some(Credentials::Gcs(_)) | None) => Ok(()),
+            #[cfg(feature = "azure")]
             (ObjectStoreConfig::Azure(_), Some(Credentials::Azure(_))) => Ok(()),
+            #[cfg(feature = "s3")]
             (ObjectStoreConfig::Tigris(_), Some(Credentials::S3(_)) | None) => Ok(()),
             (ObjectStoreConfig::InMemory, None) => Ok(()),
+            #[cfg(feature = "local-store")]
             (ObjectStoreConfig::LocalFileSystem(_), None) => Ok(()),
+            #[cfg(feature = "http-store")]
             (ObjectStoreConfig::Http(_), None) => Ok(()),
 
             (ObjectStoreConfig::InMemory, Some(_)) => {
                 Err("in memory storage does not accept credentials".to_string())
             }
+            #[cfg(feature = "local-store")]
             (ObjectStoreConfig::LocalFileSystem(..), Some(_)) => {
-                Err("in memory storage does not accept credentials".to_string())
+                Err("local file storage does not accept credentials".to_string())
             }
+            #[cfg(feature = "http-store")]
             (ObjectStoreConfig::Http(_), Some(_)) => {
                 // TODO: Support basic and bearer auth
                 Err("http storage does not support credentials yet".to_string())
@@ -346,6 +376,7 @@ impl VirtualChunkResolver {
     ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
         #[allow(clippy::unimplemented)]
         match &cont.store {
+            #[cfg(feature = "s3")]
             ObjectStoreConfig::S3(opts) | ObjectStoreConfig::S3Compatible(opts) => {
                 let creds = match self.credentials.get(&cont.url_prefix) {
                     Some(Some(Credentials::S3(creds))) => creds,
@@ -367,6 +398,7 @@ impl VirtualChunkResolver {
                 };
                 Ok(Arc::new(S3Fetcher::new(opts, creds, self.settings.clone()).await))
             }
+            #[cfg(feature = "s3")]
             ObjectStoreConfig::Tigris(opts) => {
                 let creds = match self.credentials.get(&cont.url_prefix) {
                     Some(Some(Credentials::S3(creds))) => creds,
@@ -396,6 +428,7 @@ impl VirtualChunkResolver {
                 };
                 Ok(Arc::new(S3Fetcher::new(opts, creds, self.settings.clone()).await))
             }
+            #[cfg(feature = "local-store")]
             ObjectStoreConfig::LocalFileSystem { .. } => {
                 match self.credentials.get(&cont.url_prefix) {
                     Some(None) => Ok(Arc::new(ObjectStoreFetcher::new_local())),
@@ -409,6 +442,7 @@ impl VirtualChunkResolver {
                     )?,
                 }
             }
+            #[cfg(feature = "gcs")]
             ObjectStoreConfig::Gcs(opts) => {
                 let creds = match self.credentials.get(&cont.url_prefix) {
                     Some(Some(Credentials::Gcs(creds))) => creds,
@@ -441,6 +475,7 @@ impl VirtualChunkResolver {
                     .await?,
                 ))
             }
+            #[cfg(feature = "http-store")]
             ObjectStoreConfig::Http(opts) => {
                 match self.credentials.get(&cont.url_prefix) {
                     // FIXME: support http auth
@@ -465,6 +500,7 @@ impl VirtualChunkResolver {
                 let root_url = format!("{}://{}", chunk_location.scheme(), hostname);
                 Ok(Arc::new(ObjectStoreFetcher::new_http(&root_url, opts).await?))
             }
+            #[cfg(feature = "azure")]
             ObjectStoreConfig::Azure(config) => {
                 let account = config.get("account").ok_or(
                     VirtualReferenceErrorKind::AzureConfigurationMustIncludeAccount,
@@ -509,12 +545,15 @@ impl VirtualChunkResolver {
 }
 
 fn is_fetcher_bucket_constrained(store: &ObjectStoreConfig) -> bool {
-    matches!(
-        store,
-        ObjectStoreConfig::Gcs(_)
-            | ObjectStoreConfig::Http(_)
-            | ObjectStoreConfig::Azure(_)
-    )
+    match store {
+        #[cfg(feature = "gcs")]
+        ObjectStoreConfig::Gcs(_) => true,
+        #[cfg(feature = "http-store")]
+        ObjectStoreConfig::Http(_) => true,
+        #[cfg(feature = "azure")]
+        ObjectStoreConfig::Azure(_) => true,
+        _ => false,
+    }
 }
 
 fn fetcher_cache_key(
@@ -538,12 +577,14 @@ fn fetcher_cache_key(
     }
 }
 
+#[cfg(feature = "s3")]
 #[derive(Debug)]
 pub struct S3Fetcher {
     client: Arc<Client>,
     settings: storage::Settings,
 }
 
+#[cfg(feature = "s3")]
 impl S3Fetcher {
     pub async fn new(
         opts: &S3Options,
@@ -556,8 +597,10 @@ impl S3Fetcher {
     }
 }
 
+#[cfg(feature = "s3")]
 impl private::Sealed for S3Fetcher {}
 
+#[cfg(feature = "s3")]
 #[async_trait]
 impl ChunkFetcher for S3Fetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
@@ -651,14 +694,19 @@ impl ChunkFetcher for S3Fetcher {
     }
 }
 
+#[cfg(any(feature = "local-store", feature = "gcs", feature = "azure", feature = "http-store"))]
 #[derive(Debug)]
 pub struct ObjectStoreFetcher {
     client: Arc<dyn ObjectStore>,
     settings: storage::Settings,
 }
+
+#[cfg(any(feature = "local-store", feature = "gcs", feature = "azure", feature = "http-store"))]
 impl private::Sealed for ObjectStoreFetcher {}
 
+#[cfg(any(feature = "local-store", feature = "gcs", feature = "azure", feature = "http-store"))]
 impl ObjectStoreFetcher {
+    #[cfg(feature = "local-store")]
     fn new_local() -> Self {
         ObjectStoreFetcher {
             client: Arc::new(LocalFileSystem::new()),
@@ -678,6 +726,7 @@ impl ObjectStoreFetcher {
         }
     }
 
+    #[cfg(feature = "http-store")]
     pub async fn new_http(
         url: &str,
         opts: &HashMap<String, String>,
@@ -697,6 +746,7 @@ impl ObjectStoreFetcher {
         Ok(ObjectStoreFetcher { client, settings })
     }
 
+    #[cfg(feature = "gcs")]
     pub async fn new_gcs(
         bucket: String,
         prefix: Option<String>,
@@ -719,6 +769,7 @@ impl ObjectStoreFetcher {
         Ok(ObjectStoreFetcher { client, settings })
     }
 
+    #[cfg(feature = "azure")]
     pub async fn new_azure(
         account: String,
         container: String,
@@ -749,6 +800,7 @@ impl ObjectStoreFetcher {
     }
 }
 
+#[cfg(any(feature = "local-store", feature = "gcs", feature = "azure", feature = "http-store"))]
 #[async_trait]
 impl ChunkFetcher for ObjectStoreFetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {

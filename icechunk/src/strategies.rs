@@ -232,33 +232,51 @@ prop_compose! {
         use ObjectStoreConfig::*;
         match &store {
             InMemory => panic!("assumed not to be in memory"),
+            #[cfg(feature = "local-store")]
             LocalFileSystem(path_buf) => {
                 VirtualChunkContainer::new(format!("file:///{}/", path_buf.to_string_lossy()),store).unwrap()
             }
+            #[cfg(feature = "http-store")]
             Http(_) => VirtualChunkContainer::new("http://example.com/".to_string(),store).unwrap(),
+            #[cfg(feature = "s3")]
             S3Compatible(_) => VirtualChunkContainer::new("s3://somebucket/".to_string(),store).unwrap(),
+            #[cfg(feature = "s3")]
             S3(_) => VirtualChunkContainer::new("s3://somebucket/".to_string(),store).unwrap(),
+            #[cfg(feature = "gcs")]
             Gcs(_) => VirtualChunkContainer::new("gcs://somebucket/".to_string(),store).unwrap(),
+            #[cfg(feature = "azure")]
             Azure(_) => VirtualChunkContainer::new("az://somebucket/".to_string(),store).unwrap(),
+            #[cfg(feature = "s3")]
             Tigris(_) => VirtualChunkContainer::new("tigris://somebucket/".to_string(),store).unwrap(),
+            #[allow(unreachable_patterns)]
+            _ => panic!("unsupported store config for this feature set"),
         }
     }
 }
 
 pub fn object_store_config() -> BoxedStrategy<ObjectStoreConfig> {
     use ObjectStoreConfig::*;
-    prop_oneof![
-        Just(InMemory),
+    let mut strategies: Vec<BoxedStrategy<ObjectStoreConfig>> =
+        vec![Just(InMemory).boxed()];
+    #[cfg(feature = "local-store")]
+    strategies.push(
         vec(string_regex("[a-zA-Z0-9\\-_]+").unwrap(), 1..4)
-            .prop_map(|s| LocalFileSystem(PathBuf::from(s.join("/")))),
-        s3_options().prop_map(S3),
-        s3_options().prop_map(S3Compatible),
-        s3_options().prop_map(Tigris),
-        any::<HashMap<String, String>>().prop_map(Gcs),
-        any::<HashMap<String, String>>().prop_map(Http),
-        azure_options().prop_map(Azure),
-    ]
-    .boxed()
+            .prop_map(|s| LocalFileSystem(PathBuf::from(s.join("/"))))
+            .boxed(),
+    );
+    #[cfg(feature = "s3")]
+    {
+        strategies.push(s3_options().prop_map(S3).boxed());
+        strategies.push(s3_options().prop_map(S3Compatible).boxed());
+        strategies.push(s3_options().prop_map(Tigris).boxed());
+    }
+    #[cfg(feature = "gcs")]
+    strategies.push(any::<HashMap<String, String>>().prop_map(Gcs).boxed());
+    #[cfg(feature = "http-store")]
+    strategies.push(any::<HashMap<String, String>>().prop_map(Http).boxed());
+    #[cfg(feature = "azure")]
+    strategies.push(azure_options().prop_map(Azure).boxed());
+    proptest::strategy::Union::new(strategies).boxed()
 }
 
 pub fn bound<T>(inner: impl Strategy<Value = T>) -> impl Strategy<Value = Bound<T>>
