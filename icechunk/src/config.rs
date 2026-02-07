@@ -7,72 +7,49 @@
 //! - [`CachingConfig`] - Cache size limits
 //! - [`ManifestSplittingConfig`] - Controls how manifests are partitioned
 
-use core::fmt;
-use std::{
-    collections::HashMap,
-    ops::Bound,
-    path::PathBuf,
-    sync::{Arc, OnceLock},
-};
+use std::{collections::HashMap, ops::Bound, path::PathBuf, sync::OnceLock};
 
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use itertools::Either;
-pub use object_store::gcp::GcpCredential;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::{format::Path, storage, virtual_chunks::VirtualChunkContainer};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct S3Options {
-    pub region: Option<String>,
-    pub endpoint_url: Option<String>,
-    pub anonymous: bool,
-    pub allow_http: bool,
-    // field was added in v0.2.6
-    #[serde(default = "default_force_path_style")]
-    pub force_path_style: bool,
-    pub network_stream_timeout_seconds: Option<u32>,
-    #[serde(default)]
-    pub requester_pays: bool,
-}
-
-fn default_force_path_style() -> bool {
-    false
-}
-
-impl fmt::Display for S3Options {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "S3Options(region={}, endpoint_url={}, anonymous={}, allow_http={}, force_path_style={}, network_stream_timeout_seconds={}, requester_pays={})",
-            self.region.as_deref().unwrap_or("None"),
-            self.endpoint_url.as_deref().unwrap_or("None"),
-            self.anonymous,
-            self.allow_http,
-            self.force_path_style,
-            self.network_stream_timeout_seconds
-                .map(|n| n.to_string())
-                .unwrap_or("None".to_string()),
-            self.requester_pays,
-        )
-    }
-}
+// Re-export backend-specific types from their canonical modules so that existing
+// consumers (`crate::config::S3Options`, etc.) continue to work.
+#[cfg(feature = "azure")]
+pub use crate::storage::object_store::{AzureCredentials, AzureStaticCredentials};
+#[cfg(feature = "gcs")]
+pub use crate::storage::object_store::{
+    GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
+};
+#[cfg(feature = "s3")]
+pub use crate::storage::s3::{
+    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
+};
+#[cfg(feature = "gcs")]
+pub use ::object_store::gcp::GcpCredential;
 
 /// Storage backend configuration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectStoreConfig {
     InMemory,
+    #[cfg(feature = "local-store")]
     LocalFileSystem(PathBuf),
+    #[cfg(feature = "http-store")]
     Http(HashMap<String, String>),
+    #[cfg(feature = "s3")]
     S3Compatible(S3Options),
+    #[cfg(feature = "s3")]
     S3(S3Options),
+    #[cfg(feature = "gcs")]
     Gcs(HashMap<String, String>),
     /// For compatibility reason we cannot change this structure,
     /// but a key in this map should be "account"
+    #[cfg(feature = "azure")]
     Azure(HashMap<String, String>),
+    #[cfg(feature = "s3")]
     Tigris(S3Options),
 }
 
@@ -550,98 +527,15 @@ impl RepositoryConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct S3StaticCredentials {
-    pub access_key_id: String,
-    pub secret_access_key: String,
-    pub session_token: Option<String>,
-    pub expires_after: Option<DateTime<Utc>>,
-}
-
-#[async_trait]
-#[typetag::serde(tag = "s3_credentials_fetcher_type")]
-pub trait S3CredentialsFetcher: fmt::Debug + Sync + Send {
-    async fn get(&self) -> Result<S3StaticCredentials, String>;
-}
-
-/// S3 authentication credentials.
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
-#[serde(tag = "s3_credential_type")]
-#[serde(rename_all = "snake_case")]
-pub enum S3Credentials {
-    #[default]
-    FromEnv,
-    Anonymous,
-    Static(S3StaticCredentials),
-    Refreshable(Arc<dyn S3CredentialsFetcher>),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-// We need to adjacently tag because we more than one variant with matching inner types https://github.com/serde-rs/serde/issues/1307
-#[serde(tag = "gcs_static_credential_type", content = "__field0")]
-#[serde(rename_all = "snake_case")]
-pub enum GcsStaticCredentials {
-    ServiceAccount(PathBuf),
-    ServiceAccountKey(String),
-    ApplicationCredentials(PathBuf),
-    BearerToken(GcsBearerCredential),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct GcsBearerCredential {
-    pub bearer: String,
-    pub expires_after: Option<DateTime<Utc>>,
-}
-
-impl From<&GcsBearerCredential> for GcpCredential {
-    fn from(value: &GcsBearerCredential) -> Self {
-        GcpCredential { bearer: value.bearer.clone() }
-    }
-}
-
-#[async_trait]
-#[typetag::serde(tag = "gcs_credentials_fetcher_type")]
-pub trait GcsCredentialsFetcher: fmt::Debug + Sync + Send {
-    async fn get(&self) -> Result<GcsBearerCredential, String>;
-}
-
-/// Google Cloud Storage authentication credentials.
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
-#[serde(tag = "gcs_credential_type")]
-#[serde(rename_all = "snake_case")]
-pub enum GcsCredentials {
-    #[default]
-    FromEnv,
-    Anonymous,
-    Static(GcsStaticCredentials),
-    Refreshable(Arc<dyn GcsCredentialsFetcher>),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-// We need to adjacently tag because we more than one variant with matching inner types https://github.com/serde-rs/serde/issues/1307
-#[serde(tag = "az_static_credential_type", content = "__field0")]
-#[serde(rename_all = "snake_case")]
-pub enum AzureStaticCredentials {
-    AccessKey(String),
-    SASToken(String),
-    BearerToken(String),
-}
-
-/// Azure Blob Storage authentication credentials.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "az_credential_type")]
-#[serde(rename_all = "snake_case")]
-pub enum AzureCredentials {
-    FromEnv,
-    Static(AzureStaticCredentials),
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum Credentials {
+    #[cfg(feature = "s3")]
     S3(S3Credentials),
+    #[cfg(feature = "gcs")]
     Gcs(GcsCredentials),
+    #[cfg(feature = "azure")]
     Azure(AzureCredentials),
 }
 
