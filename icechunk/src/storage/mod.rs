@@ -5,19 +5,6 @@
 //! [`new_gcs_storage`], [`new_in_memory_storage`] create configured storage instances.
 
 use ::object_store::{ClientConfigKey, azure::AzureConfigKey, gcp::GoogleConfigKey};
-use aws_sdk_s3::{
-    config::http::HttpResponse,
-    error::SdkError,
-    operation::{
-        complete_multipart_upload::CompleteMultipartUploadError,
-        copy_object::CopyObjectError,
-        create_multipart_upload::CreateMultipartUploadError,
-        delete_objects::DeleteObjectsError, get_object::GetObjectError,
-        head_object::HeadObjectError, list_objects_v2::ListObjectsV2Error,
-        put_object::PutObjectError, upload_part::UploadPartError,
-    },
-    primitives::ByteStreamError,
-};
 use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{
@@ -76,30 +63,8 @@ pub enum StorageErrorKind {
     ObjectStore(#[from] Box<::object_store::Error>),
     #[error("bad object store prefix {0:?}")]
     BadPrefix(OsString),
-    #[error("error getting object from object store {0}")]
-    S3GetObjectError(#[from] Box<SdkError<GetObjectError, HttpResponse>>),
-    #[error("error writing object to object store {0}")]
-    S3PutObjectError(#[from] Box<SdkError<PutObjectError, HttpResponse>>),
-    #[error("error creating multipart upload {0}")]
-    S3CreateMultipartUploadError(
-        #[from] Box<SdkError<CreateMultipartUploadError, HttpResponse>>,
-    ),
-    #[error("error uploading multipart part {0}")]
-    S3UploadPartError(#[from] Box<SdkError<UploadPartError, HttpResponse>>),
-    #[error("error completing multipart upload {0}")]
-    S3CompleteMultipartUploadError(
-        #[from] Box<SdkError<CompleteMultipartUploadError, HttpResponse>>,
-    ),
-    #[error("error copying object in object store {0}")]
-    S3CopyObjectError(#[from] Box<SdkError<CopyObjectError, HttpResponse>>),
-    #[error("error getting object metadata from object store {0}")]
-    S3HeadObjectError(#[from] Box<SdkError<HeadObjectError, HttpResponse>>),
-    #[error("error listing objects in object store {0}")]
-    S3ListObjectError(#[from] Box<SdkError<ListObjectsV2Error, HttpResponse>>),
-    #[error("error deleting objects in object store {0}")]
-    S3DeleteObjectError(#[from] Box<SdkError<DeleteObjectsError, HttpResponse>>),
-    #[error("error streaming bytes from object store {0}")]
-    S3StreamError(#[from] Box<ByteStreamError>),
+    #[error("S3 error: {0}")]
+    S3Error(Box<dyn std::error::Error + Send + Sync>),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
     #[error("storage configuration error: {0}")]
