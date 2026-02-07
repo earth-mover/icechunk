@@ -12,19 +12,13 @@ use futures::{
     Stream, StreamExt, TryStreamExt,
     stream::{self, BoxStream},
 };
-use object_store::{
-    Attribute, AttributeValue, Attributes, GetOptions, ObjectMeta, ObjectStore,
-    ObjectStoreExt as _, PutMode, PutOptions, UpdateVersion, memory::InMemory,
-    path::Path as ObjectPath,
-};
-#[cfg(feature = "local-store")]
-use object_store::local::LocalFileSystem;
-#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http-store"))]
-use object_store::{BackoffConfig, RetryConfig};
-#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http-store"))]
+#[cfg(any(
+    feature = "s3",
+    feature = "gcs",
+    feature = "azure",
+    feature = "http-store"
+))]
 use object_store::ClientConfigKey;
-#[cfg(any(feature = "gcs", feature = "azure"))]
-use object_store::{CredentialProvider, StaticCredentialProvider};
 #[cfg(feature = "s3")]
 use object_store::aws::AmazonS3Builder;
 #[cfg(feature = "azure")]
@@ -33,6 +27,22 @@ use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
 use object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey};
 #[cfg(feature = "http-store")]
 use object_store::http::HttpBuilder;
+#[cfg(feature = "local-store")]
+use object_store::local::LocalFileSystem;
+use object_store::{
+    Attribute, AttributeValue, Attributes, GetOptions, ObjectMeta, ObjectStore,
+    ObjectStoreExt as _, PutMode, PutOptions, UpdateVersion, memory::InMemory,
+    path::Path as ObjectPath,
+};
+#[cfg(any(
+    feature = "s3",
+    feature = "gcs",
+    feature = "azure",
+    feature = "http-store"
+))]
+use object_store::{BackoffConfig, RetryConfig};
+#[cfg(any(feature = "gcs", feature = "azure"))]
+use object_store::{CredentialProvider, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,

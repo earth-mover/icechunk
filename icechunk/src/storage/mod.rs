@@ -55,9 +55,9 @@ pub mod s3;
 
 pub use object_store::ObjectStorage;
 
-use crate::{error::ICError, private};
 #[cfg(feature = "redirect")]
 use crate::storage::redirect::RedirectStorage;
+use crate::{error::ICError, private};
 #[cfg(feature = "azure")]
 use object_store::AzureCredentials;
 #[cfg(feature = "gcs")]

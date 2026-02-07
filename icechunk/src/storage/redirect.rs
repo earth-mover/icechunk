@@ -13,17 +13,17 @@ use tokio::sync::OnceCell;
 use tracing::{debug, trace};
 use url::Url;
 
-use crate::{private, storage::StorageErrorKind};
-#[cfg(feature = "gcs")]
-use crate::{config::GcsCredentials, storage::new_gcs_storage};
 #[cfg(feature = "http-store")]
 use crate::storage::new_http_storage;
+#[cfg(feature = "gcs")]
+use crate::{config::GcsCredentials, storage::new_gcs_storage};
 #[cfg(feature = "s3")]
 use crate::{
     config::{S3Credentials, S3Options},
     new_s3_storage,
     storage::{new_r2_storage, new_tigris_storage},
 };
+use crate::{private, storage::StorageErrorKind};
 
 use super::{
     DeleteObjectsResult, ListInfo, Settings, Storage, StorageError, StorageResult,

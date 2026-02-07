@@ -17,20 +17,41 @@ use async_trait::async_trait;
 use aws_sdk_s3::{Client, error::SdkError, operation::get_object::GetObjectError};
 use bytes::{Buf, Bytes};
 use futures::{TryStreamExt, stream::FuturesOrdered};
-#[cfg(any(feature = "local-store", feature = "gcs", feature = "azure", feature = "http-store"))]
-use object_store::{GetOptions, ObjectStore, path::Path};
-#[cfg(feature = "local-store")]
-use object_store::local::LocalFileSystem;
-#[cfg(feature = "azure")]
-use object_store::azure::AzureConfigKey;
 #[cfg(any(feature = "gcs", feature = "azure", feature = "http-store"))]
 use object_store::ClientConfigKey;
+#[cfg(feature = "azure")]
+use object_store::azure::AzureConfigKey;
 #[cfg(feature = "gcs")]
 use object_store::gcp::GoogleConfigKey;
+#[cfg(feature = "local-store")]
+use object_store::local::LocalFileSystem;
+#[cfg(any(
+    feature = "local-store",
+    feature = "gcs",
+    feature = "azure",
+    feature = "http-store"
+))]
+use object_store::{GetOptions, ObjectStore, path::Path};
 use quick_cache::sync::Cache;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+#[cfg(feature = "azure")]
+use crate::config::AzureCredentials;
+#[cfg(feature = "gcs")]
+use crate::config::GcsCredentials;
+#[cfg(feature = "s3")]
+use crate::config::{S3Credentials, S3Options};
+#[cfg(feature = "azure")]
+use crate::storage::object_store::AzureObjectStoreBackend;
+#[cfg(feature = "gcs")]
+use crate::storage::object_store::GcsObjectStoreBackend;
+#[cfg(feature = "http-store")]
+use crate::storage::object_store::HttpObjectStoreBackend;
+#[cfg(any(feature = "gcs", feature = "azure", feature = "http-store"))]
+use crate::storage::object_store::ObjectStoreBackend as _;
+#[cfg(feature = "s3")]
+use crate::storage::s3::{mk_client, range_to_header};
 use crate::{
     ObjectStoreConfig,
     config::Credentials,
@@ -43,22 +64,6 @@ use crate::{
     private,
     storage::{self, split_in_multiple_requests},
 };
-#[cfg(feature = "s3")]
-use crate::config::{S3Credentials, S3Options};
-#[cfg(feature = "gcs")]
-use crate::config::GcsCredentials;
-#[cfg(feature = "azure")]
-use crate::config::AzureCredentials;
-#[cfg(feature = "azure")]
-use crate::storage::object_store::AzureObjectStoreBackend;
-#[cfg(feature = "gcs")]
-use crate::storage::object_store::GcsObjectStoreBackend;
-#[cfg(feature = "http-store")]
-use crate::storage::object_store::HttpObjectStoreBackend;
-#[cfg(any(feature = "gcs", feature = "azure", feature = "http-store"))]
-use crate::storage::object_store::ObjectStoreBackend as _;
-#[cfg(feature = "s3")]
-use crate::storage::s3::{mk_client, range_to_header};
 
 pub type ContainerName = String;
 
@@ -694,17 +699,32 @@ impl ChunkFetcher for S3Fetcher {
     }
 }
 
-#[cfg(any(feature = "local-store", feature = "gcs", feature = "azure", feature = "http-store"))]
+#[cfg(any(
+    feature = "local-store",
+    feature = "gcs",
+    feature = "azure",
+    feature = "http-store"
+))]
 #[derive(Debug)]
 pub struct ObjectStoreFetcher {
     client: Arc<dyn ObjectStore>,
     settings: storage::Settings,
 }
 
-#[cfg(any(feature = "local-store", feature = "gcs", feature = "azure", feature = "http-store"))]
+#[cfg(any(
+    feature = "local-store",
+    feature = "gcs",
+    feature = "azure",
+    feature = "http-store"
+))]
 impl private::Sealed for ObjectStoreFetcher {}
 
-#[cfg(any(feature = "local-store", feature = "gcs", feature = "azure", feature = "http-store"))]
+#[cfg(any(
+    feature = "local-store",
+    feature = "gcs",
+    feature = "azure",
+    feature = "http-store"
+))]
 impl ObjectStoreFetcher {
     #[cfg(feature = "local-store")]
     fn new_local() -> Self {
@@ -800,7 +820,12 @@ impl ObjectStoreFetcher {
     }
 }
 
-#[cfg(any(feature = "local-store", feature = "gcs", feature = "azure", feature = "http-store"))]
+#[cfg(any(
+    feature = "local-store",
+    feature = "gcs",
+    feature = "azure",
+    feature = "http-store"
+))]
 #[async_trait]
 impl ChunkFetcher for ObjectStoreFetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {

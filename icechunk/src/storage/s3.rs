@@ -561,7 +561,9 @@ impl S3Storage {
                 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    Err(s3_err(SdkError::<CompleteMultipartUploadError>::ServiceError(err)))
+                    Err(s3_err(SdkError::<CompleteMultipartUploadError>::ServiceError(
+                        err,
+                    )))
                 }
             }
             // S3 API documents this

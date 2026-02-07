@@ -7,12 +7,7 @@
 //! - [`CachingConfig`] - Cache size limits
 //! - [`ManifestSplittingConfig`] - Controls how manifests are partitioned
 
-use std::{
-    collections::HashMap,
-    ops::Bound,
-    path::PathBuf,
-    sync::OnceLock,
-};
+use std::{collections::HashMap, ops::Bound, path::PathBuf, sync::OnceLock};
 
 use itertools::Either;
 use regex::bytes::Regex;
@@ -22,16 +17,16 @@ use crate::{format::Path, storage, virtual_chunks::VirtualChunkContainer};
 
 // Re-export backend-specific types from their canonical modules so that existing
 // consumers (`crate::config::S3Options`, etc.) continue to work.
-#[cfg(feature = "s3")]
-pub use crate::storage::s3::{
-    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
-};
+#[cfg(feature = "azure")]
+pub use crate::storage::object_store::{AzureCredentials, AzureStaticCredentials};
 #[cfg(feature = "gcs")]
 pub use crate::storage::object_store::{
     GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
 };
-#[cfg(feature = "azure")]
-pub use crate::storage::object_store::{AzureCredentials, AzureStaticCredentials};
+#[cfg(feature = "s3")]
+pub use crate::storage::s3::{
+    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
+};
 #[cfg(feature = "gcs")]
 pub use ::object_store::gcp::GcpCredential;
 
