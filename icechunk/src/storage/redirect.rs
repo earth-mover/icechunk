@@ -13,13 +13,16 @@ use tokio::sync::OnceCell;
 use tracing::{debug, trace};
 use url::Url;
 
+use crate::{private, storage::StorageErrorKind};
+#[cfg(feature = "gcs")]
+use crate::{config::GcsCredentials, storage::new_gcs_storage};
+#[cfg(feature = "http-store")]
+use crate::storage::new_http_storage;
+#[cfg(feature = "s3")]
 use crate::{
-    config::{GcsCredentials, S3Credentials, S3Options},
-    new_s3_storage, private,
-    storage::{
-        StorageErrorKind, new_gcs_storage, new_http_storage, new_r2_storage,
-        new_tigris_storage,
-    },
+    config::{S3Credentials, S3Options},
+    new_s3_storage,
+    storage::{new_r2_storage, new_tigris_storage},
 };
 
 use super::{
@@ -110,6 +113,7 @@ impl RedirectStorage {
             )))
         })?;
         match url.scheme() {
+            #[cfg(feature = "s3")]
             "s3" => {
                 let (bucket, prefix) = repo_location(&url)?;
                 // TODO: figure out the region for the bucket using HeadBucket or something
@@ -132,6 +136,13 @@ impl RedirectStorage {
                     Some(S3Credentials::Anonymous),
                 )
             }
+            #[cfg(not(feature = "s3"))]
+            "s3" => Err(StorageErrorKind::BadRedirect(
+                "Redirect target uses `s3://` but the `s3` feature is disabled"
+                    .to_string(),
+            )
+            .into()),
+            #[cfg(feature = "s3")]
             "r2" => {
                 let (bucket, prefix) = repo_location(&url)?;
                 let region = repo_region(&url).ok();
@@ -154,6 +165,13 @@ impl RedirectStorage {
                     Some(S3Credentials::Anonymous),
                 )
             }
+            #[cfg(not(feature = "s3"))]
+            "r2" => Err(StorageErrorKind::BadRedirect(
+                "Redirect target uses `r2://` but the `s3` feature is disabled"
+                    .to_string(),
+            )
+            .into()),
+            #[cfg(feature = "s3")]
             "tigris" => {
                 let (bucket, prefix) = repo_location(&url)?;
                 let region = repo_region(&url).ok();
@@ -175,7 +193,14 @@ impl RedirectStorage {
                     true,
                 )
             }
+            #[cfg(not(feature = "s3"))]
+            "tigris" => Err(StorageErrorKind::BadRedirect(
+                "Redirect target uses `tigris://` but the `s3` feature is disabled"
+                    .to_string(),
+            )
+            .into()),
 
+            #[cfg(feature = "http-store")]
             "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => {
                 let mut base_url = url.clone();
                 // we can expect here because the scheme is already matched as http[s]
@@ -192,6 +217,14 @@ impl RedirectStorage {
                     .expect("Internal error, cannot set url scheme");
                 new_http_storage(base_url.to_string().as_str(), None)
             }
+            #[cfg(not(feature = "http-store"))]
+            "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => Err(
+                StorageErrorKind::BadRedirect(
+                    "Redirect target uses `http+icechunk://` or `https+icechunk://`, but the `http-store` feature is disabled".to_string(),
+                )
+                .into(),
+            ),
+            #[cfg(feature = "gcs")]
             "gs" | "gcs" => {
                 let (bucket, prefix) = repo_location(&url)?;
                 new_gcs_storage(
@@ -201,6 +234,12 @@ impl RedirectStorage {
                     None,
                 )
             }
+            #[cfg(not(feature = "gcs"))]
+            "gs" | "gcs" => Err(StorageErrorKind::BadRedirect(
+                "Redirect target uses `gs://`/`gcs://` but the `gcs` feature is disabled"
+                    .to_string(),
+            )
+            .into()),
             _ => Err(StorageErrorKind::BadRedirect(format!(
                 "Bad URL for redirect Storage, unknown scheme: {url}"
             ))
