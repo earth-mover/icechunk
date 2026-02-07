@@ -252,6 +252,37 @@ Or using other package managers:
 
 Ensure you have navigated to the root directory of the cloned repo (i.e. not the `icechunk-python` subdirectory).
 
+#### WASM Compiler Setup (macOS)
+
+To compile `icechunk` for `wasm32-wasip1-threads`, you need the Rust target and a C toolchain with WebAssembly support (needed by `zstd-sys`).
+
+1. Install the Rust target:
+
+    ```bash
+    rustup target add wasm32-wasip1-threads
+    ```
+
+2. Install a WASM-capable C toolchain. Apple CLT `clang` does not include WASM targets by default:
+
+    ```bash
+    brew install llvm
+    ```
+
+3. Configure Cargo to use LLVM tools for this target:
+
+    ```bash
+    export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+    export CC_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/clang
+    export CXX_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/clang++
+    export AR_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/llvm-ar
+    ```
+
+4. Verify the build:
+
+    ```bash
+    cargo check -p icechunk --no-default-features --target wasm32-wasip1-threads
+    ```
+
 #### Building
 
 Build the Rust workspace:
