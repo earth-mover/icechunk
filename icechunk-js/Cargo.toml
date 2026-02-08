@@ -12,6 +12,12 @@ crate-type = ["cdylib"]
 napi = "3.0.0"
 napi-derive = "3.0.0"
 
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+icechunk = { path = "../icechunk" }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+icechunk = { path = "../icechunk", default-features = false }
+
 [build-dependencies]
 napi-build = "2"
 
