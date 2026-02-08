@@ -24,19 +24,17 @@ pub struct JsRepository(pub(crate) Arc<RwLock<Repository>>);
 impl JsRepository {
     #[napi(factory)]
     pub async fn create(storage: &JsStorage) -> napi::Result<JsRepository> {
-        let repo =
-            Repository::create(None, Arc::clone(&storage.0), HashMap::new(), None)
-                .await
-                .map_napi_err()?;
+        let repo = Repository::create(None, Arc::clone(&storage.0), HashMap::new(), None)
+            .await
+            .map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 
     #[napi(factory)]
     pub async fn open(storage: &JsStorage) -> napi::Result<JsRepository> {
-        let repo =
-            Repository::open(None, Arc::clone(&storage.0), HashMap::new())
-                .await
-                .map_napi_err()?;
+        let repo = Repository::open(None, Arc::clone(&storage.0), HashMap::new())
+            .await
+            .map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 
