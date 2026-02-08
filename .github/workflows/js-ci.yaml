@@ -45,6 +45,20 @@ jobs:
           - host: ubuntu-latest
             target: wasm32-wasip1-threads
             build: yarn build --target wasm32-wasip1-threads
+            setup: |
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends clang llvm wasi-libc libc++-dev
+              echo "CC_wasm32_wasip1_threads=clang" >> $GITHUB_ENV
+              echo "CXX_wasm32_wasip1_threads=clang++" >> $GITHUB_ENV
+              echo "AR_wasm32_wasip1_threads=llvm-ar" >> $GITHUB_ENV
+              echo "CC_wasm32_wasi=clang" >> $GITHUB_ENV
+              echo "CXX_wasm32_wasi=clang++" >> $GITHUB_ENV
+              echo "AR_wasm32_wasi=llvm-ar" >> $GITHUB_ENV
+              echo "WASI_SYSROOT=/usr" >> $GITHUB_ENV
+              echo "CFLAGS_wasm32_wasip1_threads=--sysroot=/usr -isystem /usr/include/wasm32-wasi" >> $GITHUB_ENV
+              echo "CXXFLAGS_wasm32_wasip1_threads=--sysroot=/usr -isystem /usr/include/wasm32-wasi" >> $GITHUB_ENV
+              echo "CFLAGS_wasm32_wasi=--sysroot=/usr -isystem /usr/include/wasm32-wasi" >> $GITHUB_ENV
+              echo "CXXFLAGS_wasm32_wasi=--sysroot=/usr -isystem /usr/include/wasm32-wasi" >> $GITHUB_ENV
     name: stable - ${{ matrix.settings.target }} - node@22
     runs-on: ${{ matrix.settings.host }}
     steps:
