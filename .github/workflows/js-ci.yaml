@@ -158,9 +158,12 @@ jobs:
         run: yarn test
 
   test-linux-binding:
-    name: Test ${{ matrix.target }} - node@${{ matrix.node }}
+    name: Test bindings on ${{ matrix.target }} - node@${{ matrix.node }}
     needs:
       - build
+    defaults:
+      run:
+        working-directory: ./icechunk-js
     strategy:
       fail-fast: false
       matrix:
@@ -169,7 +172,7 @@ jobs:
         node:
           - "20"
           - "22"
-    runs-on: ${{ contains(matrix.target, 'aarch64') && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Setup node
@@ -178,31 +181,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: yarn
           cache-dependency-path: icechunk-js/yarn.lock
-      - name: Output docker params
-        id: docker
-        run: |
-          node -e "
-            if ('${{ matrix.target }}'.startsWith('aarch64')) {
-              console.log('PLATFORM=linux/arm64')
-            } else if ('${{ matrix.target }}'.startsWith('armv7')) {
-              console.log('PLATFORM=linux/arm/v7')
-            } else {
-              console.log('PLATFORM=linux/amd64')
-            }
-          " >> $GITHUB_OUTPUT
-          node -e "
-            if ('${{ matrix.target }}'.endsWith('-musl')) {
-              console.log('IMAGE=node:${{ matrix.node }}-alpine')
-            } else {
-              console.log('IMAGE=node:${{ matrix.node }}-slim')
-            }
-          " >> $GITHUB_OUTPUT
       - name: Install dependencies
-        run: |
-          yarn config set --json supportedArchitectures.cpu '["current", "arm64", "x64", "arm"]'
-          yarn config set --json supportedArchitectures.libc '["current", "musl", "gnu"]'
-          yarn install
-        working-directory: ./icechunk-js
+        run: yarn install
       - name: Download artifacts
         uses: actions/download-artifact@v7
         with:
@@ -211,20 +191,8 @@ jobs:
       - name: List packages
         run: ls -R .
         shell: bash
-        working-directory: ./icechunk-js
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        if: ${{ contains(matrix.target, 'armv7') }}
-        with:
-          platforms: all
-      - run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-        if: ${{ contains(matrix.target, 'armv7') }}
       - name: Test bindings
-        uses: addnab/docker-run-action@v3
-        with:
-          image: ${{ steps.docker.outputs.IMAGE }}
-          options: "-v ${{ github.workspace }}:${{ github.workspace }} --platform ${{ steps.docker.outputs.PLATFORM }}"
-          run: cd icechunk-js && yarn test
+        run: yarn test
 
   test-wasi:
     name: Test WASI target
