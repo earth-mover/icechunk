@@ -56,4 +56,11 @@ const {
   },
 })
 export default __napiModule.exports
-export const plus100 = __napiModule.exports.plus100
+export const Repository = __napiModule.exports.Repository
+export const JsRepository = __napiModule.exports.JsRepository
+export const Session = __napiModule.exports.Session
+export const JsSession = __napiModule.exports.JsSession
+export const Storage = __napiModule.exports.Storage
+export const JsStorage = __napiModule.exports.JsStorage
+export const Store = __napiModule.exports.Store
+export const JsStore = __napiModule.exports.JsStore

@@ -39,7 +39,7 @@ if (__nodeFs.existsSync(__wasmDebugFilePath)) {
   __wasmFilePath = __wasmDebugFilePath
 } else if (!__nodeFs.existsSync(__wasmFilePath)) {
   try {
-    __wasmFilePath = require.resolve('@earthmover/icechunk-wasm32-wasi/icechunk.wasm32-wasi.wasm')
+    __wasmFilePath = __nodePath.resolve('@earthmover/icechunk-wasm32-wasi')
   } catch {
     throw new Error('Cannot find icechunk.wasm32-wasi.wasm file, and @earthmover/icechunk-wasm32-wasi package is not installed.')
   }
@@ -108,4 +108,11 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
   },
 })
 module.exports = __napiModule.exports
-module.exports.plus100 = __napiModule.exports.plus100
+module.exports.Repository = __napiModule.exports.Repository
+module.exports.JsRepository = __napiModule.exports.JsRepository
+module.exports.Session = __napiModule.exports.Session
+module.exports.JsSession = __napiModule.exports.JsSession
+module.exports.Storage = __napiModule.exports.Storage
+module.exports.JsStorage = __napiModule.exports.JsStorage
+module.exports.Store = __napiModule.exports.Store
+module.exports.JsStore = __napiModule.exports.JsStore
