@@ -1,49 +1,34 @@
-name: CI
+name: JS CI
+
 env:
   DEBUG: napi:*
   APP_NAME: icechunk
-  MACOSX_DEPLOYMENT_TARGET: '10.13'
-  CARGO_INCREMENTAL: '1'
-'on':
+  MACOSX_DEPLOYMENT_TARGET: "10.13"
+  CARGO_INCREMENTAL: "1"
+
+on:
   push:
     branches:
       - main
-    tags-ignore:
-      - '**'
-    paths-ignore:
-      - '**/*.md'
-      - LICENSE
-      - '**/*.gitignore'
-      - .editorconfig
-      - docs/**
-  pull_request: null
+      - "support/**"
+    paths:
+      - "icechunk/**"
+      - "icechunk-js/**"
+  pull_request:
+    paths:
+      - "icechunk/**"
+      - "icechunk-js/**"
+  workflow_dispatch:
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Setup node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: yarn
-      - name: Install
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - name: Install dependencies
-        run: yarn install
-      - name: Oxlint
-        run: yarn lint
-      - name: Cargo fmt
-        run: cargo fmt -- --check
-      - name: Clippy
-        run: cargo clippy
   build:
+    defaults:
+      run:
+        working-directory: ./icechunk-js
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +54,7 @@ jobs:
         with:
           node-version: 24
           cache: yarn
+          cache-dependency-path: icechunk-js/yarn.lock
       - name: Install
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -110,13 +96,17 @@ jobs:
         with:
           name: bindings-${{ matrix.settings.target }}
           path: |
-            ${{ env.APP_NAME }}.*.node
-            ${{ env.APP_NAME }}.*.wasm
+            icechunk-js/${{ env.APP_NAME }}.*.node
+            icechunk-js/${{ env.APP_NAME }}.*.wasm
           if-no-files-found: error
+
   test-macOS-windows-binding:
     name: Test bindings on ${{ matrix.settings.target }} - node@${{ matrix.node }}
     needs:
       - build
+    defaults:
+      run:
+        working-directory: ./icechunk-js
     strategy:
       fail-fast: false
       matrix:
@@ -128,8 +118,8 @@ jobs:
             target: aarch64-apple-darwin
             architecture: arm64
         node:
-          - '20'
-          - '22'
+          - "20"
+          - "22"
     runs-on: ${{ matrix.settings.host }}
     steps:
       - uses: actions/checkout@v6
@@ -138,6 +128,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: yarn
+          cache-dependency-path: icechunk-js/yarn.lock
           architecture: ${{ matrix.settings.architecture }}
       - name: Install dependencies
         run: yarn install
@@ -145,12 +136,13 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: bindings-${{ matrix.settings.target }}
-          path: .
+          path: ./icechunk-js
       - name: List packages
         run: ls -R .
         shell: bash
       - name: Test bindings
         run: yarn test
+
   test-linux-binding:
     name: Test ${{ matrix.target }} - node@${{ matrix.node }}
     needs:
@@ -161,8 +153,8 @@ jobs:
         target:
           - x86_64-unknown-linux-gnu
         node:
-          - '20'
-          - '22'
+          - "20"
+          - "22"
     runs-on: ${{ contains(matrix.target, 'aarch64') && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v6
@@ -171,6 +163,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: yarn
+          cache-dependency-path: icechunk-js/yarn.lock
       - name: Output docker params
         id: docker
         run: |
@@ -195,14 +188,16 @@ jobs:
           yarn config set --json supportedArchitectures.cpu '["current", "arm64", "x64", "arm"]'
           yarn config set --json supportedArchitectures.libc '["current", "musl", "gnu"]'
           yarn install
+        working-directory: ./icechunk-js
       - name: Download artifacts
         uses: actions/download-artifact@v7
         with:
           name: bindings-${{ matrix.target }}
-          path: .
+          path: ./icechunk-js
       - name: List packages
         run: ls -R .
         shell: bash
+        working-directory: ./icechunk-js
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         if: ${{ contains(matrix.target, 'armv7') }}
@@ -214,13 +209,17 @@ jobs:
         uses: addnab/docker-run-action@v3
         with:
           image: ${{ steps.docker.outputs.IMAGE }}
-          options: '-v ${{ github.workspace }}:${{ github.workspace }} -w ${{ github.workspace }} --platform ${{ steps.docker.outputs.PLATFORM }}'
+          options: "-v ${{ github.workspace }}:${{ github.workspace }} -w ${{ github.workspace }}/icechunk-js --platform ${{ steps.docker.outputs.PLATFORM }}"
           run: yarn test
+
   test-wasi:
     name: Test WASI target
     needs:
       - build
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./icechunk-js
     steps:
       - uses: actions/checkout@v6
       - name: Setup node
@@ -228,6 +227,7 @@ jobs:
         with:
           node-version: 24
           cache: yarn
+          cache-dependency-path: icechunk-js/yarn.lock
       - name: Install dependencies
         run: |
           yarn config set supportedArchitectures.cpu "wasm32"
@@ -236,7 +236,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: bindings-wasm32-wasip1-threads
-          path: .
+          path: ./icechunk-js
       - name: List packages
         run: ls -R .
         shell: bash
@@ -244,14 +244,18 @@ jobs:
         run: yarn test
         env:
           NAPI_RS_FORCE_WASI: 1
+
   publish:
     name: Publish
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./icechunk-js
     permissions:
       contents: write
       id-token: write
     needs:
-      - lint
       - test-macOS-windows-binding
       - test-linux-binding
       - test-wasi
@@ -262,14 +266,15 @@ jobs:
         with:
           node-version: 24
           cache: yarn
+          cache-dependency-path: icechunk-js/yarn.lock
       - name: Install dependencies
         run: yarn install
-      - name: create npm dirs
+      - name: Create npm dirs
         run: yarn napi create-npm-dirs
       - name: Download all artifacts
         uses: actions/download-artifact@v7
         with:
-          path: artifacts
+          path: ./icechunk-js/artifacts
       - name: Move artifacts
         run: yarn artifacts
       - name: List packages
@@ -278,17 +283,8 @@ jobs:
       - name: Publish
         run: |
           npm config set provenance true
-          if git log -1 --pretty=%B | grep "^[0-9]\+\.[0-9]\+\.[0-9]\+$";
-          then
-            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-            npm publish --access public
-          elif git log -1 --pretty=%B | grep "^[0-9]\+\.[0-9]\+\.[0-9]\+";
-          then
-            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-            npm publish --tag next --access public
-          else
-            echo "Not a release, skipping publish"
-          fi
+          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+          npm publish --access public
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
