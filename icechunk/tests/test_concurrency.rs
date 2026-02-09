@@ -10,7 +10,7 @@ use icechunk::{
 };
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
