@@ -6,9 +6,9 @@ use icechunk::repository::{Repository, VersionInfo};
 use napi_derive::napi;
 use tokio::sync::RwLock;
 
-use crate::config::JsStorage;
 use crate::errors::IntoNapiResult;
 use crate::session::JsSession;
+use crate::storage::JsStorage;
 
 #[napi(object)]
 pub struct ReadonlySessionOptions {
