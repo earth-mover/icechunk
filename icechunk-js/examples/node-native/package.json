@@ -9,6 +9,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@earthmover/icechunk": "^2.0.0-alpha.2"
+    "@earthmover/icechunk": "^2.0.0-alpha.3"
   }
 }
