@@ -232,7 +232,7 @@ jobs:
     name: Publish
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event.action == 'labeled' && github.event.label.name == 'js-publish')
+      (github.event.action == 'labeled' && github.event.label.name == 'publish-npm')
     runs-on: ubuntu-latest
     defaults:
       run:
