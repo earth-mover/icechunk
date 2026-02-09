@@ -19,7 +19,7 @@ use bytes::Bytes;
 use flatbuffers::generated;
 use format_constants::FileTypeBin;
 use manifest::{VirtualReferenceError, VirtualReferenceErrorKind};
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use serde::{Deserialize, Serialize};
 use serde_with::{TryFromInto, serde_as};
 use thiserror::Error;
