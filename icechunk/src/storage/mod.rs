@@ -75,7 +75,7 @@ pub enum StorageErrorKind {
     #[error("bad object store prefix {0:?}")]
     BadPrefix(OsString),
     #[error("S3 error: {0}")]
-    S3Error(Box<dyn std::error::Error + Send + Sync>),
+    S3Error(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
     #[error("storage configuration error: {0}")]
