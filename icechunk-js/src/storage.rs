@@ -202,7 +202,7 @@ mod native {
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub use native::*;
+pub(crate) use native::*;
 
 #[napi]
 impl JsStorage {
@@ -211,8 +211,11 @@ impl JsStorage {
         let storage = icechunk::storage::new_in_memory_storage().await.map_napi_err()?;
         Ok(JsStorage(storage))
     }
+}
 
-    #[cfg(not(target_family = "wasm"))]
+#[cfg(not(target_family = "wasm"))]
+#[napi]
+impl JsStorage {
     #[napi(factory)]
     pub async fn new_local_filesystem(path: String) -> napi::Result<JsStorage> {
         let storage =
@@ -222,7 +225,6 @@ impl JsStorage {
         Ok(JsStorage(storage))
     }
 
-    #[cfg(not(target_family = "wasm"))]
     #[napi(factory)]
     pub fn new_s3(
         bucket: String,
@@ -245,7 +247,6 @@ impl JsStorage {
         Ok(JsStorage(storage))
     }
 
-    #[cfg(not(target_family = "wasm"))]
     #[napi(factory)]
     pub fn new_r2(
         bucket: Option<String>,
@@ -270,7 +271,6 @@ impl JsStorage {
         Ok(JsStorage(storage))
     }
 
-    #[cfg(not(target_family = "wasm"))]
     #[napi(factory)]
     pub fn new_tigris(
         bucket: String,
@@ -301,7 +301,6 @@ impl JsStorage {
         Ok(JsStorage(storage))
     }
 
-    #[cfg(not(target_family = "wasm"))]
     #[napi(factory)]
     pub async fn new_s3_object_store(
         bucket: String,
@@ -326,7 +325,6 @@ impl JsStorage {
         Ok(JsStorage(storage))
     }
 
-    #[cfg(not(target_family = "wasm"))]
     #[napi(factory)]
     pub fn new_gcs(
         bucket: String,
@@ -340,7 +338,6 @@ impl JsStorage {
         Ok(JsStorage(storage))
     }
 
-    #[cfg(not(target_family = "wasm"))]
     #[napi(factory)]
     pub async fn new_azure_blob(
         account: String,
@@ -358,7 +355,6 @@ impl JsStorage {
         Ok(JsStorage(storage))
     }
 
-    #[cfg(not(target_family = "wasm"))]
     #[napi(factory)]
     pub fn new_http(
         base_url: String,
