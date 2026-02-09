@@ -47,9 +47,7 @@ mod native {
         fn from(creds: JsS3Credentials) -> Self {
             match creds {
                 JsS3Credentials::FromEnv => icechunk::config::S3Credentials::FromEnv,
-                JsS3Credentials::Anonymous => {
-                    icechunk::config::S3Credentials::Anonymous
-                }
+                JsS3Credentials::Anonymous => icechunk::config::S3Credentials::Anonymous,
                 JsS3Credentials::Static(c) => {
                     icechunk::config::S3Credentials::Static(c.into())
                 }
