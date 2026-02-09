@@ -271,7 +271,7 @@ jobs:
           echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
           VERSION=$(node -p "require('./package.json').version")
           if echo "$VERSION" | grep -q "-"; then
-            TAG=$(echo "$VERSION" | sed 's/.*-\([a-zA-Z]*\).*/\1/')
+            TAG=${VERSION%%-*}; TAG=${VERSION#"$TAG"-}; TAG=${TAG%%.*}
             npm publish --access public --tag "$TAG"
           else
             npm publish --access public
