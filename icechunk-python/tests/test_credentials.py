@@ -52,7 +52,7 @@ def test_refreshable_credentials_grant_access(scatter_initial_credentials: bool)
 
     assert not Repository.exists(good_storage)
 
-    with pytest.raises(IcechunkError, match="S3 error"):
+    with pytest.raises(IcechunkError, match="InvalidAccessKeyId"):
         assert not Repository.exists(bad_storage)
 
 
@@ -91,7 +91,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
             scatter_initial_credentials=scatter_initial_credentials,
         )
 
-        with pytest.raises(IcechunkError, match="S3 error"):
+        with pytest.raises(IcechunkError, match="bad creds"):
             assert not Repository.exists(st)
 
     st = Storage.new_s3(
@@ -106,7 +106,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
         # we intentionally pass something that has the wrong type
         credentials=s3_refreshable_credentials(42),  # type: ignore [arg-type]
     )
-    with pytest.raises(IcechunkError, match="S3 error"):
+    with pytest.raises(IcechunkError, match="object is not callable"):
         assert not Repository.exists(st)
 
     st = Storage.new_s3(
@@ -121,7 +121,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
         # we intentionally pass something that has the wrong type
         credentials=s3_refreshable_credentials(returns_something_else),  # type: ignore [arg-type]
     )
-    with pytest.raises(IcechunkError, match="S3 error"):
+    with pytest.raises(IcechunkError, match="cannot be cast"):
         assert not Repository.exists(st)
 
 
