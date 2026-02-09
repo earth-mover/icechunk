@@ -685,20 +685,21 @@ pub fn manifest_splits() -> impl Strategy<Value = ManifestSplits> {
         .prop_flat_map(|dim_size| vec(manifest_extents(dim_size), 1..10))
         .prop_map(ManifestSplits::from_extents)
 }
+
+type ArrayInfo = (ArrayShape, Option<Vec<DimensionName>>, Vec<ManifestRef>);
+fn array_info() -> impl Strategy<Value = ArrayInfo> {
+    (array_shape(), option::of(vec(dimension_name(), 5..10)), vec(manifest_ref(), 1..8))
+}
+
 fn node_data() -> impl Strategy<Value = NodeData> {
     use NodeData::*;
     prop_oneof![
         Just(Group),
-        (
-            array_shape(),
-            option::of(vec(dimension_name(), 5..10)),
-            vec(manifest_ref(), 1..8)
-        )
-            .prop_map(|(shape, dimension_names, manifests)| Array {
-                shape,
-                dimension_names,
-                manifests
-            }),
+        array_info().prop_map(|(shape, dimension_names, manifests)| Array {
+            shape,
+            dimension_names,
+            manifests
+        }),
     ]
 }
 
