@@ -778,8 +778,14 @@ mod tests {
     use crate::format::{IcechunkFormatError, ObjectId};
 
     use super::*;
+    use crate::{roundtrip_serialization_tests, strategies::node_snapshot};
     use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
     use std::iter::{self};
+
+    roundtrip_serialization_tests!(
+        serialize_and_deserialize_node_snapshot - node_snapshot
+    );
 
     #[icechunk_macros::test]
     fn test_get_node() -> Result<(), Box<dyn std::error::Error>> {
