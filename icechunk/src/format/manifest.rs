@@ -373,17 +373,14 @@ impl Manifest {
         Ok(Manifest { buffer })
     }
 
-    pub async fn from_stream<E>(
+    pub fn from_sorted_vec(
         manifest_id: &ManifestId,
-        stream: impl Stream<Item = Result<ChunkInfo, E>>,
-    ) -> Result<Option<Self>, E> {
+        sorted_chunks: Vec<ChunkInfo>,
+    ) -> Option<Self> {
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024 * 1024);
-        let mut all = stream.try_collect::<Vec<_>>().await?;
-        // FIXME: should we sort here or can we sort outside?
-        all.sort_by(|a, b| (&a.node, &a.coord).cmp(&(&b.node, &b.coord)));
 
-        let mut all = all.iter().peekable();
+        let mut all = sorted_chunks.iter().peekable();
 
         let mut array_manifests = Vec::with_capacity(1);
         while let Some(current_node) = all.peek().map(|chunk| &chunk.node).cloned() {
@@ -404,7 +401,7 @@ impl Manifest {
 
         if array_manifests.is_empty() {
             // empty manifest
-            return Ok(None);
+            return None;
         }
 
         let arrays = builder.create_vector(array_manifests.as_slice());
@@ -419,7 +416,17 @@ impl Manifest {
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Ok(Some(Manifest { buffer }))
+        Some(Manifest { buffer })
+    }
+
+    pub async fn from_stream<E>(
+        manifest_id: &ManifestId,
+        stream: impl Stream<Item = Result<ChunkInfo, E>>,
+    ) -> Result<Option<Self>, E> {
+        let mut all = stream.try_collect::<Vec<_>>().await?;
+        // FIXME: should we sort here or can we sort outside?
+        all.sort_by(|a, b| (&a.node, &a.coord).cmp(&(&b.node, &b.coord)));
+        Ok(Self::from_sorted_vec(manifest_id, all))
     }
 
     /// Used for tests
