@@ -16,7 +16,7 @@ use crate::format::manifest::{
     ChunkPayload, ChunkRef, ManifestExtents, ManifestRef, ManifestSplits,
     SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef,
 };
-use crate::format::snapshot::{ArrayShape, DimensionName};
+use crate::format::snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot};
 use crate::format::{
     ChunkId, ChunkIndices, ManifestId, NodeId, Path, SnapshotId, manifest,
 };
@@ -684,4 +684,30 @@ pub fn manifest_splits() -> impl Strategy<Value = ManifestSplits> {
     (1..10usize)
         .prop_flat_map(|dim_size| vec(manifest_extents(dim_size), 1..10))
         .prop_map(ManifestSplits::from_extents)
+}
+fn node_data() -> impl Strategy<Value = NodeData> {
+    use NodeData::*;
+    prop_oneof![
+        Just(Group),
+        (
+            array_shape(),
+            option::of(vec(dimension_name(), 5..10)),
+            vec(manifest_ref(), 1..8)
+        )
+            .prop_map(|(shape, dimension_names, manifests)| Array {
+                shape,
+                dimension_names,
+                manifests
+            }),
+    ]
+}
+
+prop_compose! {
+   pub fn node_snapshot()
+    (id in node_id(),
+        path in path(),
+        user_data in bytes(),
+        node_data in node_data()) -> NodeSnapshot {
+        NodeSnapshot{id, path, user_data, node_data}
+    }
 }
