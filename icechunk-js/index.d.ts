@@ -27,6 +27,14 @@ export type JsSession = Session
 
 export declare class Storage {
   static newInMemory(): Promise<Storage>
+  static newLocalFilesystem(path: string): Promise<Storage>
+  static newS3(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
+  static newR2(bucket?: string | undefined | null, prefix?: string | undefined | null, accountId?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
+  static newTigris(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null, useWeakConsistency?: boolean | undefined | null): Storage
+  static newS3ObjectStore(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Promise<Storage>
+  static newGcs(bucket: string, prefix?: string | undefined | null, credentials?: GcsCredentials | undefined | null, config?: Record<string, string> | undefined | null): Storage
+  static newAzureBlob(account: string, container: string, prefix?: string | undefined | null, credentials?: AzureCredentials | undefined | null, config?: Record<string, string> | undefined | null): Promise<Storage>
+  static newHttp(baseUrl: string, config?: Record<string, string> | undefined | null): Storage
 }
 export type JsStorage = Storage
 
@@ -45,8 +53,56 @@ export declare class Store {
 }
 export type JsStore = Store
 
+/** Azure credentials */
+export type AzureCredentials =
+  | { type: 'FromEnv' }
+  | { type: 'Static', field0: AzureStaticCredentials }
+
+/** Azure static credentials */
+export type AzureStaticCredentials =
+  | { type: 'AccessKey', field0: string }
+  | { type: 'SasToken', field0: string }
+  | { type: 'BearerToken', field0: string }
+
+/** GCS credentials */
+export type GcsCredentials =
+  | { type: 'Anonymous' }
+  | { type: 'FromEnv' }
+  | { type: 'Static', field0: GcsStaticCredentials }
+
+/** GCS static credentials */
+export type GcsStaticCredentials =
+  | { type: 'ServiceAccount', field0: string }
+  | { type: 'ServiceAccountKey', field0: string }
+  | { type: 'ApplicationCredentials', field0: string }
+  | { type: 'BearerToken', field0: string }
+
 export interface ReadonlySessionOptions {
   branch?: string
   tag?: string
   snapshotId?: string
+}
+
+/** S3 credentials */
+export type S3Credentials =
+  | { type: 'FromEnv' }
+  | { type: 'Anonymous' }
+  | { type: 'Static', field0: S3StaticCredentials }
+
+/** S3 options */
+export interface S3Options {
+  region?: string
+  endpointUrl?: string
+  allowHttp?: boolean
+  anonymous?: boolean
+  forcePathStyle?: boolean
+  networkStreamTimeoutSeconds?: number
+  requesterPays?: boolean
+}
+
+/** S3 static credentials */
+export interface S3StaticCredentials {
+  accessKeyId: string
+  secretAccessKey: string
+  sessionToken?: string
 }
