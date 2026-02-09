@@ -16,7 +16,9 @@ use crate::format::manifest::{
     ChunkPayload, ChunkRef, ManifestExtents, ManifestRef, ManifestSplits,
     SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef,
 };
-use crate::format::snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot};
+use crate::format::snapshot::{
+    ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
+};
 use crate::format::{
     ChunkId, ChunkIndices, ManifestId, NodeId, Path, SnapshotId, manifest,
 };
@@ -711,4 +713,13 @@ prop_compose! {
         node_data in node_data()) -> NodeSnapshot {
         NodeSnapshot{id, path, user_data, node_data}
     }
+}
+
+prop_compose! {
+pub fn manifest_file_info()
+(id in manifest_id(),
+size_bytes in any::<u64>(),
+num_chunk_refs in any::<u32>()) -> ManifestFileInfo  {
+    ManifestFileInfo{id, size_bytes, num_chunk_refs}
+}
 }
