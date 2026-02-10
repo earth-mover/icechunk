@@ -127,7 +127,7 @@ impl ManifestExtents {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct ManifestRef {
     pub object_id: ManifestId,
     pub extents: ManifestExtents,
