@@ -74,8 +74,26 @@ pub enum StorageErrorKind {
     ObjectStore(#[from] Box<::object_store::Error>),
     #[error("bad object store prefix {0:?}")]
     BadPrefix(OsString),
-    #[error("S3 error: {0}")]
-    S3Error(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("error getting object from object store {0}")]
+    S3GetObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("error writing object to object store {0}")]
+    S3PutObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("error creating multipart upload {0}")]
+    S3CreateMultipartUploadError(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("error uploading multipart part {0}")]
+    S3UploadPartError(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("error completing multipart upload {0}")]
+    S3CompleteMultipartUploadError(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("error copying object in object store {0}")]
+    S3CopyObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("error getting object metadata from object store {0}")]
+    S3HeadObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("error listing objects in object store {0}")]
+    S3ListObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("error deleting objects in object store {0}")]
+    S3DeleteObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("error streaming bytes from object store {0}")]
+    S3StreamError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
     #[error("storage configuration error: {0}")]
