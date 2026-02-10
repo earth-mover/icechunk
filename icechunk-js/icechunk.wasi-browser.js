@@ -64,3 +64,5 @@ export const Storage = __napiModule.exports.Storage
 export const JsStorage = __napiModule.exports.JsStorage
 export const Store = __napiModule.exports.Store
 export const JsStore = __napiModule.exports.JsStore
+export const CompressionAlgorithm = __napiModule.exports.CompressionAlgorithm
+export const JsCompressionAlgorithm = __napiModule.exports.JsCompressionAlgorithm

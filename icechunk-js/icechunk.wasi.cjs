@@ -116,3 +116,5 @@ module.exports.Storage = __napiModule.exports.Storage
 module.exports.JsStorage = __napiModule.exports.JsStorage
 module.exports.Store = __napiModule.exports.Store
 module.exports.JsStore = __napiModule.exports.JsStore
+module.exports.CompressionAlgorithm = __napiModule.exports.CompressionAlgorithm
+module.exports.JsCompressionAlgorithm = __napiModule.exports.JsCompressionAlgorithm

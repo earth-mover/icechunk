@@ -1,14 +1,25 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use icechunk::config::RepositoryConfig;
 use icechunk::format::SnapshotId;
+use icechunk::format::format_constants::SpecVersionBin;
 use icechunk::repository::{Repository, VersionInfo};
 use napi_derive::napi;
 use tokio::sync::RwLock;
 
+use crate::config::JsRepositoryConfig;
 use crate::errors::IntoNapiResult;
 use crate::session::JsSession;
 use crate::storage::JsStorage;
+
+fn convert_config(
+    config: Option<JsRepositoryConfig>,
+) -> napi::Result<Option<RepositoryConfig>> {
+    config
+        .map(|c| RepositoryConfig::try_from(c).map_err(napi::Error::from_reason))
+        .transpose()
+}
 
 #[napi(object)]
 pub struct ReadonlySessionOptions {
@@ -23,28 +34,51 @@ pub struct JsRepository(pub(crate) Arc<RwLock<Repository>>);
 #[napi]
 impl JsRepository {
     #[napi(factory)]
-    pub async fn create(storage: &JsStorage) -> napi::Result<JsRepository> {
-        let repo = Repository::create(None, Arc::clone(&storage.0), HashMap::new(), None)
+    pub async fn create(
+        storage: &JsStorage,
+        config: Option<JsRepositoryConfig>,
+        spec_version: Option<u32>,
+    ) -> napi::Result<JsRepository> {
+        let config = convert_config(config)?;
+        let version = spec_version
+            .map(|v| SpecVersionBin::try_from(v as u8))
+            .transpose()
+            .map_napi_err()?;
+        let repo =
+            Repository::create(config, Arc::clone(&storage.0), HashMap::new(), version)
+                .await
+                .map_napi_err()?;
+        Ok(JsRepository(Arc::new(RwLock::new(repo))))
+    }
+
+    #[napi(factory)]
+    pub async fn open(
+        storage: &JsStorage,
+        config: Option<JsRepositoryConfig>,
+    ) -> napi::Result<JsRepository> {
+        let config = convert_config(config)?;
+        let repo = Repository::open(config, Arc::clone(&storage.0), HashMap::new())
             .await
             .map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 
     #[napi(factory)]
-    pub async fn open(storage: &JsStorage) -> napi::Result<JsRepository> {
-        let repo = Repository::open(None, Arc::clone(&storage.0), HashMap::new())
-            .await
+    pub async fn open_or_create(
+        storage: &JsStorage,
+        config: Option<JsRepositoryConfig>,
+        spec_version: Option<u32>,
+    ) -> napi::Result<JsRepository> {
+        let config = convert_config(config)?;
+        let version = spec_version
+            .map(|v| SpecVersionBin::try_from(v as u8))
+            .transpose()
             .map_napi_err()?;
-        Ok(JsRepository(Arc::new(RwLock::new(repo))))
-    }
-
-    #[napi(factory)]
-    pub async fn open_or_create(storage: &JsStorage) -> napi::Result<JsRepository> {
         let repo = Repository::open_or_create(
-            None,
+            config,
             Arc::clone(&storage.0),
             HashMap::new(),
-            None,
+            version,
         )
         .await
         .map_napi_err()?;
@@ -124,4 +158,28 @@ impl JsRepository {
         let repo = self.0.read().await;
         repo.create_tag(&name, &id).await.map_napi_err()
     }
+
+    #[napi]
+    pub async fn lookup_manifest_files(
+        &self,
+        snapshot_id: String,
+    ) -> napi::Result<Vec<JsManifestFileInfo>> {
+        let id = SnapshotId::try_from(snapshot_id.as_str()).map_napi_err()?;
+        let repo = self.0.read().await;
+        let files = repo.lookup_manifest_files(&id).await.map_napi_err()?;
+        Ok(files
+            .map(|f| JsManifestFileInfo {
+                id: f.id.to_string(),
+                size_bytes: f.size_bytes as i64,
+                num_chunk_refs: f.num_chunk_refs,
+            })
+            .collect())
+    }
+}
+
+#[napi(object, js_name = "ManifestFileInfo")]
+pub struct JsManifestFileInfo {
+    pub id: String,
+    pub size_bytes: i64,
+    pub num_chunk_refs: u32,
 }
