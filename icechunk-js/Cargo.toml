@@ -1,7 +1,7 @@
 
 [package]
-authors = ["LongYinan <lynweklm@gmail.com>"]
-edition = "2021"
+authors = ["Matt Iannucci <matt@earthmover.io>"]
+edition = "2024"
 name = "icechunk-js"
 version = "0.1.0"
 

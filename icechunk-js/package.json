@@ -1,7 +1,7 @@
 {
   "name": "@earthmover/icechunk",
   "version": "2.0.0-alpha.3",
-  "description": "JavaScript/TypeScript library for Icechunk Zarr Stores",
+  "description": "JavaScript/TypeScript bindings for Icechunk",
   "main": "index.js",
   "repository": {
     "type": "git",
