@@ -269,6 +269,10 @@ just compile-tests
 
 #### Testing
 
+The full Python test suite depends on S3 and Azure compatible object stores.
+
+They can be run from the root of the repo with `docker compose up` (`ctrl-c` then `docker compose down` once done to clean up.).
+
 ```bash
 # Run all tests
 just test
