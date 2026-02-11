@@ -18,7 +18,7 @@ bytes = { version = "1.11.1", features = ["serde"] }
 base64 = "0.22.1"
 futures = "0.3.31"
 itertools = "0.14.0"
-object_store = { version = "0.13.1", features = [
+object_store = { version = "0.13.1", default-features = false, features = [
   "aws",
   "gcp",
   "azure",
