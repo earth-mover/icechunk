@@ -23,6 +23,7 @@ object_store = { version = "0.13.1", features = [
   "gcp",
   "azure",
   "http",
+  "fs"
 ] }
 rand = "0.10.0"
 thiserror = "2.0.18"
@@ -117,7 +118,7 @@ s3 = [
 gcs = ["object_store/gcp"]
 azure = ["object_store/azure"]
 http-store = ["object_store/http"]
-local-store = []
+local-store = ["object_store/fs"]
 redirect = ["dep:reqwest"]
 logs = ["dep:tracing-subscriber"]
 cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs"]
