@@ -12,7 +12,9 @@ use crate::errors::IntoNapiResult;
 #[cfg(not(target_family = "wasm"))]
 use chrono::{DateTime, Utc};
 #[cfg(not(target_family = "wasm"))]
-use icechunk::format::manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef};
+use icechunk::format::manifest::{
+    Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef,
+};
 #[cfg(not(target_family = "wasm"))]
 use icechunk::format::{ChunkIndices, Path};
 #[cfg(not(target_family = "wasm"))]
@@ -23,11 +25,13 @@ use icechunk::store::SetVirtualRefsResult;
 #[cfg(not(target_family = "wasm"))]
 /// Create a checksum from either an etag string or a last-modified datetime
 /// etag_checksum takes precedence if both are provided
-fn create_checksum(etag: Option<String>, last_modified: Option<DateTime<Utc>>) -> Option<Checksum> {
+fn create_checksum(
+    etag: Option<String>,
+    last_modified: Option<DateTime<Utc>>,
+) -> Option<Checksum> {
     etag.map(|e| Checksum::ETag(ETag(e))).or_else(|| {
-        last_modified.map(|dt| {
-            Checksum::LastModified(SecondsSinceEpoch(dt.timestamp() as u32))
-        })
+        last_modified
+            .map(|dt| Checksum::LastModified(SecondsSinceEpoch(dt.timestamp() as u32)))
     })
 }
 
@@ -134,10 +138,11 @@ impl JsStore {
 #[napi]
 impl JsStore {
     /// Set a single virtual reference to a chunk
-    /// 
+    ///
     /// For checksum validation, provide either etag_checksum (string) or last_modified (JS Date object).
     /// If both are provided, etag_checksum takes precedence.
     #[napi]
+    #[allow(clippy::too_many_arguments)]
     pub async fn set_virtual_ref(
         &self,
         key: String,
