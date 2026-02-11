@@ -2047,6 +2047,54 @@ impl<'a> FlushProcess<'a> {
                 - modified_extents.flat_map(|e| load chunks for e, for all manifests containing e (check existing_manifests))
         })
         */
+        /*
+        modified_extents: HashSet<ManifestExtents> = change_set.get_modified_extents();
+
+        fn modified_manifests(modified_extents):
+           modified_extents.iter(|ext| finds_the_manifest_for_these_extents(ext))
+
+
+        classfied_chunks: HashMap<MannifestExtents, HashMap<ChunkIndices, ChunkInfo>>> = {}
+
+        for each modified_manifest(modified_extents)  |manifest| do
+            manifest = load_manifest(manifest)
+            extents = get_manifest_ext(manifest)
+            classfied_chunks[extenst] = manifest.iter().collect()]
+
+
+        for each (chunk_index, Option<chunk_info>) in change_set do
+            extents = extents_for (chunk_index)
+
+            if chunk_info is none:
+              del classfied_chunks[extents][chunk_index]
+            else:
+              classfied_chunks[extents][chunk_index]  = chunk_info.unwrap()
+        */
+
+        /*
+        modified_extents: HashSet<ManifestExtents> = HashSet::new()
+        classfied_chunks: HashMap<MannifestExtents, HashMap<ChunkIndices, Option<ChunkPayload>>>> = {}
+
+        * In a sigle pass through every chunk in the change set:
+          * we compute a Set of manifests extents that were modified
+          * we add the chunk, either deleted, or midified, to the classfied_chunks
+
+
+
+
+        for each modified_manifest(modified_extents)  |manifest| do
+            manifest = load_manifest(manifest)
+            extents = get_manifest_ext(manifest)
+            for each chunk in the manifest:
+                if the chunk is already in the classified_chunks -> do nothing
+                if the chunk is not in the classified_chunks -> add to it
+
+
+
+
+        fn modified_manifests(modified_extents):
+           modified_extents.iter(|ext| finds_the_manifest_for_these_extents(ext))
+        */
         let new_chunk_indices: HashSet<&ChunkIndices> = self
             .change_set
             .changed_node_chunks(&node.id)
@@ -2054,9 +2102,9 @@ impl<'a> FlushProcess<'a> {
             .collect();
 
         let modified_extents: Vec<_> =
-            new_chunk_indices.iter().flat_map(|coord| splits.find(coord)).collect();
+            new_chunk_indices.iter().filter_map(|coord| splits.find(coord)).collect();
 
-        let overlapping_manifests: Vec<_> = modified_extents
+        let modified_manifests: HashMap<ManifestExtents, ManifestRef> = modified_extents
             .iter()
             .flat_map(|e| {
                 existing_manifests.iter().filter_map(|manifest| {
@@ -2068,61 +2116,88 @@ impl<'a> FlushProcess<'a> {
                     }
                 })
             })
-            .unique()
             .collect();
 
+        /*
         dbg!(
             &overlapping_manifests,
             overlapping_manifests.len(),
             existing_manifests.len()
         );
+        */
+
         let init: HashMap<ManifestExtents, Vec<ChunkInfo>> = Default::default();
-        let classified_chunks = futures::stream::iter(modified_extents)
-            .flat_map(|extent| {
-                futures::stream::iter(existing_manifests).filter_map(
-                    async move |manifest_ref| {
-                        if extent.overlap_with(&manifest_ref.extents) != Overlap::None {
-                            //if manifest.extents.overlap_with(*extent) != Overlap::None {
-                            // TODO: load overlapping chunks from manifest, plus chunks from extent
-                            let manifest = fetch_manifest(
-                                &manifest_ref.object_id,
-                                &old_snapshot.id(),
-                                &self.asset_manager,
-                            )
-                            .await;
+        let asset_manager = &self.asset_manager;
+        let classified_chunks: HashMap<ManifestExtents, Vec<ChunkInfo>> =
+            futures::stream::iter(modified_extents)
+                .flat_map(|extent| {
+                    futures::stream::iter(&existing_manifests).filter_map(
+                        async |manifest_ref| {
+                            if extent.overlap_with(&manifest_ref.extents) != Overlap::None
+                            {
+                                //if manifest.extents.overlap_with(*extent) != Overlap::None {
+                                // load overlapping chunks from manifest, plus chunks from extent
+                                //TODO: put this in a box
+                                let new_chunk_indices = new_chunk_indices.clone();
+                                let node_id_1 = node.id.clone();
+                                let node_id_2 = node.id.clone();
+                                let node_id_3 = node.id.clone();
 
-                            match manifest {
-                                Ok(manifest) => {
-                                    let old_chunks = manifest
-                                        .iter(node.id)
-                                        .filter_ok(move |(coord, _)| {
-                                            !new_chunk_indices.contains(coord)
-                                        })
-                                        .map_ok(move |(coord, payload)| ChunkInfo {
-                                            node: node.id,
-                                            coord,
-                                            payload,
-                                        });
+                                let manifest = fetch_manifest(
+                                    &manifest_ref.object_id,
+                                    &old_snapshot.id(),
+                                    &asset_manager,
+                                )
+                                .await;
 
-                                    let old_chunks = futures::stream::iter(
-                                        self.change_set
-                                            .update_existing_chunks(node.id, old_chunks),
-                                    );
+                                match manifest {
+                                    Ok(manifest) => {
+                                        let old_chunks = manifest
+                                            .iter(node_id_1)
+                                            .filter_ok(move |(coord, _)| {
+                                                !new_chunk_indices.contains(coord)
+                                            })
+                                            .map_ok(move |(coord, payload)| ChunkInfo {
+                                                node: node_id_2.clone(),
+                                                coord,
+                                                payload,
+                                            });
 
-                                    Some(old_chunks)
+                                        /*
+                                           let old_chunks = futures::stream::iter(
+                                           self.change_set.update_existing_chunks(
+                                           node_id_3, old_chunks,
+                                           ),
+                                                                                );
+                                        */
+
+                                        Some(old_chunks)
+                                    }
+                                    Err(_) => todo!("error"),
                                 }
-                                Err(_) => todo!("error"),
+                            } else {
+                                // TODO: return just chunks from extent
+                                None
                             }
-                        } else {
-                            // TODO: return just chunks from extent
-                            None
-                        }
-                    },
-                )
-            })
-            .try_fold(init, |mut res, (_, chunk)| res)
-            .await?;
+                        },
+                    )
+                })
+                .fold(init, async |mut res, chunks| {
+                    chunks
+                        .for_each(|chunk| {
+                            let chunk = chunk.unwrap();
+                            if let Some(extents) = splits.find(&chunk.coord) {
+                                res.entry(extents.clone()).or_default().push(chunk);
+                            };
+                            ready(())
+                        })
+                        .await;
 
+                    res
+                })
+                .await;
+
+        /*
         let init: HashMap<ManifestExtents, Vec<ChunkInfo>> = Default::default();
         // FIXME: this duplicates chunk storage for the array
         let classified_chunks_3 = updated_node_chunks_iterator(
@@ -2139,6 +2214,7 @@ impl<'a> FlushProcess<'a> {
             ready(Ok(res))
         })
         .await?;
+        */
 
         let mut refs =
             HashMap::<ManifestExtents, Vec<ManifestRef>>::with_capacity(splits.len());
@@ -2146,7 +2222,7 @@ impl<'a> FlushProcess<'a> {
         let on_disk_extents =
             existing_manifests.iter().map(|m| m.extents.clone()).collect::<Vec<_>>();
 
-        let modified_splits_2 = classified_chunks.keys().collect::<HashSet<_>>();
+        //let modified_splits = classified_chunks.keys().collect::<HashSet<_>>();
         // FIXME: this is another pass through all chunks
         let modified_splits: HashSet<_> = self
             .change_set
