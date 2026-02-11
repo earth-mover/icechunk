@@ -29,7 +29,7 @@ use icechunk::{
 };
 use pyo3::{
     Bound, FromPyObject, Py, PyErr, PyResult, Python, pyclass, pymethods,
-    types::{PyAnyMethods, PyModule, PyType},
+    types::{PyAny, PyAnyMethods, PyModule, PyType},
 };
 
 use crate::errors::PyIcechunkStoreError;
@@ -141,25 +141,49 @@ pub(crate) fn datetime_repr(d: &DateTime<Utc>) -> String {
 struct PythonCredentialsFetcher<CredType> {
     pub pickled_function: Vec<u8>,
     pub initial: Option<CredType>,
+    #[serde(skip, default)]
+    pub task_locals: Option<pyo3_async_runtimes::TaskLocals>,
 }
 
 impl<CredType> PythonCredentialsFetcher<CredType> {
     fn new(pickled_function: Vec<u8>) -> Self {
-        PythonCredentialsFetcher { pickled_function, initial: None }
+        PythonCredentialsFetcher {
+            pickled_function,
+            initial: None,
+            task_locals: current_task_locals(),
+        }
     }
 
     fn new_with_initial<C>(pickled_function: Vec<u8>, current: C) -> Self
     where
         C: Into<CredType>,
     {
-        PythonCredentialsFetcher { pickled_function, initial: Some(current.into()) }
+        PythonCredentialsFetcher {
+            pickled_function,
+            initial: Some(current.into()),
+            task_locals: current_task_locals(),
+        }
     }
+}
+
+fn current_task_locals() -> Option<pyo3_async_runtimes::TaskLocals> {
+    Python::attach(|py| pyo3_async_runtimes::tokio::get_current_locals(py).ok())
+}
+
+enum PythonCallbackResult<PyCred> {
+    Value(PyCred),
+    Awaitable(Py<PyAny>),
+}
+
+fn is_awaitable(py: Python<'_>, value: &Bound<'_, PyAny>) -> Result<bool, PyErr> {
+    let inspect = PyModule::import(py, "inspect")?;
+    inspect.getattr("isawaitable")?.call1((value,))?.extract()
 }
 
 fn call_pickled<PyCred>(
     py: Python<'_>,
-    pickled_function: Vec<u8>,
-) -> Result<PyCred, PyErr>
+    pickled_function: &[u8],
+) -> Result<PythonCallbackResult<PyCred>, PyErr>
 where
     PyCred: for<'a, 'py> FromPyObject<'a, 'py>,
     for<'a, 'py> <PyCred as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
@@ -167,8 +191,44 @@ where
     let pickle_module = PyModule::import(py, "pickle")?;
     let loads_function = pickle_module.getattr("loads")?;
     let fetcher = loads_function.call1((pickled_function,))?;
-    let creds: PyCred = fetcher.call0()?.extract().map_err(Into::into)?;
-    Ok(creds)
+    let value = fetcher.call0()?;
+    let value_for_extract = value.clone();
+    let extract_err = match value_for_extract.extract::<PyCred>() {
+        Ok(creds) => return Ok(PythonCallbackResult::Value(creds)),
+        Err(extract_err) => extract_err,
+    };
+
+    if is_awaitable(py, &value)? {
+        Ok(PythonCallbackResult::Awaitable(value.unbind()))
+    } else {
+        Err(extract_err.into())
+    }
+}
+
+async fn await_python_callback<PyCred>(
+    awaitable: Py<PyAny>,
+    task_locals: Option<pyo3_async_runtimes::TaskLocals>,
+) -> Result<PyCred, PyErr>
+where
+    PyCred: for<'a, 'py> FromPyObject<'a, 'py>,
+    for<'a, 'py> <PyCred as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
+{
+    if let Some(task_locals) = task_locals {
+        let fut = Python::attach(|py| {
+            pyo3_async_runtimes::into_future_with_locals(
+                &task_locals,
+                awaitable.bind(py).clone(),
+            )
+        })?;
+        let value = fut.await?;
+        return Python::attach(|py| value.bind(py).extract().map_err(Into::into));
+    }
+
+    Python::attach(|py| {
+        let asyncio = PyModule::import(py, "asyncio")?;
+        let value = asyncio.getattr("run")?.call1((awaitable.bind(py),))?;
+        value.extract().map_err(Into::into)
+    })
 }
 
 #[async_trait]
@@ -190,11 +250,23 @@ impl S3CredentialsFetcher for PythonCredentialsFetcher<S3StaticCredentials> {
                 _ => {}
             }
         }
-        Python::attach(|py| {
-            call_pickled::<PyS3StaticCredentials>(py, self.pickled_function.clone())
-                .map(|c| c.into())
-        })
-        .map_err(|e: PyErr| e.to_string())
+        let callback_result = Python::attach(|py| {
+            call_pickled::<PyS3StaticCredentials>(py, &self.pickled_function)
+        });
+
+        let creds = match callback_result {
+            Ok(PythonCallbackResult::Value(creds)) => Ok(creds),
+            Ok(PythonCallbackResult::Awaitable(awaitable)) => {
+                await_python_callback::<PyS3StaticCredentials>(
+                    awaitable,
+                    self.task_locals.clone(),
+                )
+                .await
+            }
+            Err(err) => Err(err),
+        };
+
+        creds.map(Into::into).map_err(|e: PyErr| e.to_string())
     }
 }
 
@@ -217,11 +289,23 @@ impl GcsCredentialsFetcher for PythonCredentialsFetcher<GcsBearerCredential> {
                 _ => {}
             }
         }
-        Python::attach(|py| {
-            call_pickled::<PyGcsBearerCredential>(py, self.pickled_function.clone())
-                .map(|c| c.into())
-        })
-        .map_err(|e: PyErr| e.to_string())
+        let callback_result = Python::attach(|py| {
+            call_pickled::<PyGcsBearerCredential>(py, &self.pickled_function)
+        });
+
+        let creds = match callback_result {
+            Ok(PythonCallbackResult::Value(creds)) => Ok(creds),
+            Ok(PythonCallbackResult::Awaitable(awaitable)) => {
+                await_python_callback::<PyGcsBearerCredential>(
+                    awaitable,
+                    self.task_locals.clone(),
+                )
+                .await
+            }
+            Err(err) => Err(err),
+        };
+
+        creds.map(Into::into).map_err(|e: PyErr| e.to_string())
     }
 }
 

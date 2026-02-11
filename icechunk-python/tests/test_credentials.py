@@ -1,3 +1,5 @@
+import asyncio
+import contextvars
 import pickle
 import time
 from datetime import UTC, datetime
@@ -62,6 +64,31 @@ def throws() -> S3StaticCredentials:
 
 def returns_something_else() -> int:
     return 42
+
+
+ASYNC_CREDENTIALS_CONTEXT: contextvars.ContextVar[str | None] = (
+    contextvars.ContextVar("ASYNC_CREDENTIALS_CONTEXT", default=None)
+)
+
+
+class AsyncGoodCredentials:
+    def __init__(self, path: Path, expected_context: str | None = None) -> None:
+        self.path = path
+        self.expected_context = expected_context
+
+    async def __call__(self) -> S3StaticCredentials:
+        try:
+            calls = self.path.read_text()
+        except Exception:
+            calls = ""
+        self.path.write_text(calls + ".")
+
+        if self.expected_context is not None:
+            if ASYNC_CREDENTIALS_CONTEXT.get() != self.expected_context:
+                raise IcechunkError("missing callback context")
+
+        await asyncio.sleep(0)
+        return S3StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
 
 
 @pytest.mark.parametrize(
@@ -222,3 +249,78 @@ def test_s3_refreshable_credentials_pickle_with_optimization(
 
     called_only_once = path.read_text() == "."
     assert called_only_once == scatter_initial_credentials
+
+
+def test_async_refreshable_credentials_with_sync_repository_api(
+    tmp_path: Path, any_spec_version: int | None
+) -> None:
+    prefix = "test_async_refreshable_sync_api-" + str(int(time.time() * 1000))
+
+    create_storage = s3_storage(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id="minio123",
+        secret_access_key="minio123",
+    )
+    Repository.create(storage=create_storage, spec_version=any_spec_version)
+
+    calls_path = tmp_path / "async_sync_calls.txt"
+    callback_storage = s3_storage(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        bucket="testbucket",
+        prefix=prefix,
+        get_credentials=AsyncGoodCredentials(calls_path),
+    )
+
+    repo = Repository.open(callback_storage)
+    assert "main" in repo.list_branches()
+    assert calls_path.read_text() != ""
+
+
+@pytest.mark.asyncio
+async def test_async_refreshable_credentials_with_async_repository_api(
+    tmp_path: Path, any_spec_version: int | None
+) -> None:
+    prefix = "test_async_refreshable_async_api-" + str(int(time.time() * 1000))
+
+    create_storage = s3_storage(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id="minio123",
+        secret_access_key="minio123",
+    )
+    Repository.create(storage=create_storage, spec_version=any_spec_version)
+
+    calls_path = tmp_path / "async_async_calls.txt"
+    context_value = "expected-refresh-context"
+    reset_token = ASYNC_CREDENTIALS_CONTEXT.set(context_value)
+    try:
+        callback_storage = s3_storage(
+            region="us-east-1",
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+            force_path_style=True,
+            bucket="testbucket",
+            prefix=prefix,
+            get_credentials=AsyncGoodCredentials(
+                calls_path, expected_context=context_value
+            ),
+        )
+
+        repo = await Repository.open_async(callback_storage)
+        assert "main" in await repo.list_branches_async()
+    finally:
+        ASYNC_CREDENTIALS_CONTEXT.reset(reset_token)
+
+    assert calls_path.read_text() != ""
