@@ -23,21 +23,11 @@ export declare class Session {
   get store(): JsStore
   commit(message: string): Promise<string>
   discardChanges(): Promise<void>
-  /** Get all virtual chunk locations referenced by this session */
-  allVirtualChunkLocations(): Promise<Array<string>>
 }
 export type JsSession = Session
 
 export declare class Storage {
   static newInMemory(): Promise<Storage>
-  static newLocalFilesystem(path: string): Promise<Storage>
-  static newS3(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
-  static newR2(bucket?: string | undefined | null, prefix?: string | undefined | null, accountId?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
-  static newTigris(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null, useWeakConsistency?: boolean | undefined | null): Storage
-  static newS3ObjectStore(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Promise<Storage>
-  static newGcs(bucket: string, prefix?: string | undefined | null, credentials?: GcsCredentials | undefined | null, config?: Record<string, string> | undefined | null): Storage
-  static newAzureBlob(account: string, container: string, prefix?: string | undefined | null, credentials?: AzureCredentials | undefined | null, config?: Record<string, string> | undefined | null): Promise<Storage>
-  static newHttp(baseUrl: string, config?: Record<string, string> | undefined | null): Storage
 }
 export type JsStorage = Storage
 
@@ -53,31 +43,8 @@ export declare class Store {
   get supportsWrites(): boolean
   get supportsDeletes(): boolean
   get supportsListing(): boolean
-  /**
-   * Set a single virtual reference to a chunk
-   *
-   * For checksum validation, provide either etag_checksum (string) or last_modified (JS Date object).
-   * If both are provided, etag_checksum takes precedence.
-   */
-  setVirtualRef(key: string, location: string, offset: number, length: number, etagChecksum: string | undefined | null, lastModified: Date | undefined | null, validateContainer: boolean): Promise<void>
-  /**
-   * Set multiple virtual references for the same array
-   * Returns the indices of failed chunk references if any
-   */
-  setVirtualRefs(arrayPath: string, chunks: Array<VirtualChunkSpec>, validateContainers: boolean): Promise<Array<Array<number>> | null>
 }
 export type JsStore = Store
-
-/** Azure credentials */
-export type AzureCredentials =
-  | { type: 'FromEnv' }
-  | { type: 'Static', field0: AzureStaticCredentials }
-
-/** Azure static credentials */
-export type AzureStaticCredentials =
-  | { type: 'AccessKey', field0: string }
-  | { type: 'SasToken', field0: string }
-  | { type: 'BearerToken', field0: string }
 
 /** Caching configuration */
 export interface CachingConfig {
@@ -99,41 +66,11 @@ export interface CompressionConfig {
   level?: number
 }
 
-/** Credentials for virtual chunk access */
-export type Credentials =
-  | { type: 'S3', field0: S3Credentials }
-  | { type: 'Gcs', field0: GcsCredentials }
-  | { type: 'Azure', field0: AzureCredentials }
-
-/** GCS credentials */
-export type GcsCredentials =
-  | { type: 'Anonymous' }
-  | { type: 'FromEnv' }
-  | { type: 'Static', field0: GcsStaticCredentials }
-
-/** GCS static credentials */
-export type GcsStaticCredentials =
-  | { type: 'ServiceAccount', field0: string }
-  | { type: 'ServiceAccountKey', field0: string }
-  | { type: 'ApplicationCredentials', field0: string }
-  | { type: 'BearerToken', field0: string }
-
 export interface ManifestFileInfo {
   id: string
   sizeBytes: number
   numChunkRefs: number
 }
-
-/** Object store configuration for virtual chunk containers */
-export type ObjectStoreConfig =
-  | { type: 'InMemory' }
-  | { type: 'LocalFileSystem', field0: string }
-  | { type: 'Http', field0: Record<string, string> }
-  | { type: 'S3Compatible', field0: S3Options }
-  | { type: 'S3', field0: S3Options }
-  | { type: 'Gcs', field0: Record<string, string> }
-  | { type: 'Azure', field0: Record<string, string> }
-  | { type: 'Tigris', field0: S3Options }
 
 export interface ReadonlySessionOptions {
   branch?: string
@@ -141,28 +78,7 @@ export interface ReadonlySessionOptions {
   snapshotId?: string
 }
 
-/**
- * Repository configuration
- *
- * The `manifest` field accepts a JSON object matching the serde serialization
- * of `ManifestConfig`. Example:
- * ```js
- * {
- *   manifest: {
- *     preload: {
- *       max_total_refs: 1000,
- *       preload_if: { true: null },
- *       max_arrays_to_scan: 10
- *     },
- *     splitting: {
- *       split_sizes: [
- *         [{ path_matches: { regex: ".*" } }, [{ condition: "any", num_chunks: 100 }]]
- *       ]
- *     }
- *   }
- * }
- * ```
- */
+/** Repository configuration (WASM build — no virtual chunk support) */
 export interface RepositoryConfig {
   inlineChunkThresholdBytes?: number
   getPartialValuesConcurrency?: number
@@ -175,32 +91,6 @@ export interface RepositoryConfig {
    * The object is deserialized using serde, matching the Rust ManifestConfig structure.
    */
   manifest?: any
-  /** Virtual chunk containers configuration (non-WASM only) */
-  virtualChunkContainers?: Record<string, VirtualChunkContainer>
-}
-
-/** S3 credentials */
-export type S3Credentials =
-  | { type: 'FromEnv' }
-  | { type: 'Anonymous' }
-  | { type: 'Static', field0: S3StaticCredentials }
-
-/** S3 options */
-export interface S3Options {
-  region?: string
-  endpointUrl?: string
-  allowHttp?: boolean
-  anonymous?: boolean
-  forcePathStyle?: boolean
-  networkStreamTimeoutSeconds?: number
-  requesterPays?: boolean
-}
-
-/** S3 static credentials */
-export interface S3StaticCredentials {
-  accessKeyId: string
-  secretAccessKey: string
-  sessionToken?: string
 }
 
 /** Storage concurrency settings */
@@ -227,22 +117,4 @@ export interface StorageSettings {
   metadataStorageClass?: string
   chunksStorageClass?: string
   minimumSizeForMultipartUpload?: number
-}
-
-/** Virtual chunk container configuration */
-export interface VirtualChunkContainer {
-  name?: string
-  urlPrefix: string
-  store: JsObjectStoreConfig
-}
-
-/** Specification for a virtual chunk reference */
-export interface VirtualChunkSpec {
-  index: Array<number>
-  location: string
-  offset: number
-  length: number
-  etagChecksum?: string
-  /** Last modified datetime (accepts JS Date object) */
-  lastModified?: Date
 }

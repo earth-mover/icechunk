@@ -22,6 +22,7 @@ mod native {
         pub access_key_id: String,
         pub secret_access_key: String,
         pub session_token: Option<String>,
+        pub expires_after: Option<chrono::DateTime<chrono::Utc>>,
     }
 
     impl From<JsS3StaticCredentials> for icechunk::config::S3StaticCredentials {
@@ -30,7 +31,7 @@ mod native {
                 access_key_id: creds.access_key_id,
                 secret_access_key: creds.secret_access_key,
                 session_token: creds.session_token,
-                expires_after: None,
+                expires_after: creds.expires_after,
             }
         }
     }
@@ -135,6 +136,23 @@ mod native {
                         },
                     )
                 }
+            }
+        }
+    }
+
+    /// GCS bearer credential with optional expiry
+    #[napi(object, js_name = "GcsBearerCredential")]
+    #[derive(Clone, Debug)]
+    pub struct JsGcsBearerCredential {
+        pub bearer: String,
+        pub expires_after: Option<chrono::DateTime<chrono::Utc>>,
+    }
+
+    impl From<JsGcsBearerCredential> for icechunk::config::GcsBearerCredential {
+        fn from(cred: JsGcsBearerCredential) -> Self {
+            icechunk::config::GcsBearerCredential {
+                bearer: cred.bearer,
+                expires_after: cred.expires_after,
             }
         }
     }
@@ -258,6 +276,159 @@ mod native {
             }
         }
     }
+    // --- Refreshable credentials support ---
+
+    use async_trait::async_trait;
+    use chrono::{TimeDelta, Utc};
+    use napi::threadsafe_function::ThreadsafeFunction;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use tokio::sync::RwLock;
+
+    /// A credentials fetcher that calls back into JS to get fresh S3 credentials.
+    ///
+    /// The JS callback is held via `ThreadsafeFunction` which is `Send + Sync`.
+    /// This struct is NOT fully serializable — only the cached credential is
+    /// persisted. The JS callback cannot survive serialization.
+    pub(crate) struct JsS3CredentialsFetcher {
+        pub(crate) tsfn: ThreadsafeFunction<(), JsS3StaticCredentials>,
+        pub(crate) last_credential: RwLock<Option<icechunk::config::S3StaticCredentials>>,
+    }
+
+    impl std::fmt::Debug for JsS3CredentialsFetcher {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("JsS3CredentialsFetcher").finish()
+        }
+    }
+
+    impl Serialize for JsS3CredentialsFetcher {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            #[derive(Serialize)]
+            struct Helper {
+                last_credential: Option<icechunk::config::S3StaticCredentials>,
+            }
+            let cached = self.last_credential.blocking_read().clone();
+            Helper { last_credential: cached }.serialize(serializer)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for JsS3CredentialsFetcher {
+        fn deserialize<D: Deserializer<'de>>(_deserializer: D) -> Result<Self, D::Error> {
+            Err(serde::de::Error::custom(
+                "JsS3CredentialsFetcher cannot be deserialized: JS callback is not serializable",
+            ))
+        }
+    }
+
+    #[async_trait]
+    #[typetag::serde(name = "js_s3_credentials_fetcher")]
+    impl icechunk::config::S3CredentialsFetcher for JsS3CredentialsFetcher {
+        async fn get(&self) -> Result<icechunk::config::S3StaticCredentials, String> {
+            // Check if cached credentials are still valid
+            {
+                let cached = self.last_credential.read().await;
+                if let Some(creds) = cached.as_ref() {
+                    match creds.expires_after {
+                        None => return Ok(creds.clone()),
+                        Some(expiration)
+                            if expiration
+                                > Utc::now()
+                                    + TimeDelta::seconds(rand::random_range(
+                                        120..=180,
+                                    )) =>
+                        {
+                            return Ok(creds.clone());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Call the JS function to get fresh credentials
+            let js_creds: JsS3StaticCredentials =
+                self.tsfn.call_async(Ok(())).await.map_err(|e| {
+                    format!("Failed to call JS S3 credentials fetcher: {e}")
+                })?;
+
+            let creds: icechunk::config::S3StaticCredentials = js_creds.into();
+
+            // Cache the fresh credentials
+            let mut cached = self.last_credential.write().await;
+            *cached = Some(creds.clone());
+
+            Ok(creds)
+        }
+    }
+
+    /// A credentials fetcher that calls back into JS to get fresh GCS credentials.
+    pub(crate) struct JsGcsCredentialsFetcher {
+        pub(crate) tsfn: ThreadsafeFunction<(), JsGcsBearerCredential>,
+        pub(crate) last_credential: RwLock<Option<icechunk::config::GcsBearerCredential>>,
+    }
+
+    impl std::fmt::Debug for JsGcsCredentialsFetcher {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("JsGcsCredentialsFetcher").finish()
+        }
+    }
+
+    impl Serialize for JsGcsCredentialsFetcher {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            #[derive(Serialize)]
+            struct Helper {
+                last_credential: Option<icechunk::config::GcsBearerCredential>,
+            }
+            let cached = self.last_credential.blocking_read().clone();
+            Helper { last_credential: cached }.serialize(serializer)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for JsGcsCredentialsFetcher {
+        fn deserialize<D: Deserializer<'de>>(_deserializer: D) -> Result<Self, D::Error> {
+            Err(serde::de::Error::custom(
+                "JsGcsCredentialsFetcher cannot be deserialized: JS callback is not serializable",
+            ))
+        }
+    }
+
+    #[async_trait]
+    #[typetag::serde(name = "js_gcs_credentials_fetcher")]
+    impl icechunk::config::GcsCredentialsFetcher for JsGcsCredentialsFetcher {
+        async fn get(&self) -> Result<icechunk::config::GcsBearerCredential, String> {
+            // Check if cached credentials are still valid
+            {
+                let cached = self.last_credential.read().await;
+                if let Some(creds) = cached.as_ref() {
+                    match creds.expires_after {
+                        None => return Ok(creds.clone()),
+                        Some(expiration)
+                            if expiration
+                                > Utc::now()
+                                    + TimeDelta::seconds(rand::random_range(
+                                        120..=180,
+                                    )) =>
+                        {
+                            return Ok(creds.clone());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Call the JS function to get fresh credentials
+            let js_creds: JsGcsBearerCredential =
+                self.tsfn.call_async(Ok(())).await.map_err(|e| {
+                    format!("Failed to call JS GCS credentials fetcher: {e}")
+                })?;
+
+            let creds: icechunk::config::GcsBearerCredential = js_creds.into();
+
+            // Cache the fresh credentials
+            let mut cached = self.last_credential.write().await;
+            *cached = Some(creds.clone());
+
+            Ok(creds)
+        }
+    }
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -269,6 +440,19 @@ impl JsStorage {
     pub async fn new_in_memory() -> napi::Result<JsStorage> {
         let storage = icechunk::storage::new_in_memory_storage().await.map_napi_err()?;
         Ok(JsStorage(storage))
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn default_s3_options() -> icechunk::config::S3Options {
+    icechunk::config::S3Options {
+        region: None,
+        endpoint_url: None,
+        allow_http: false,
+        anonymous: false,
+        force_path_style: false,
+        network_stream_timeout_seconds: None,
+        requester_pays: false,
     }
 }
 
@@ -421,6 +605,160 @@ impl JsStorage {
     ) -> napi::Result<JsStorage> {
         let storage =
             icechunk::storage::new_http_storage(&base_url, config).map_napi_err()?;
+        Ok(JsStorage(storage))
+    }
+
+    // --- Refreshable credential factory methods ---
+
+    #[napi(factory)]
+    pub fn new_s3_with_refreshable_credentials(
+        bucket: String,
+        prefix: Option<String>,
+        #[napi(ts_arg_type = "() => Promise<S3StaticCredentials>")]
+        credentials_callback: napi::threadsafe_function::ThreadsafeFunction<
+            (),
+            JsS3StaticCredentials,
+        >,
+        initial_credentials: Option<JsS3StaticCredentials>,
+        options: Option<JsS3Options>,
+    ) -> napi::Result<JsStorage> {
+        let fetcher = JsS3CredentialsFetcher {
+            tsfn: credentials_callback,
+            last_credential: tokio::sync::RwLock::new(
+                initial_credentials.map(|c| c.into()),
+            ),
+        };
+        let creds =
+            icechunk::config::S3Credentials::Refreshable(std::sync::Arc::new(fetcher));
+        let opts = options.map(|o| o.into()).unwrap_or(default_s3_options());
+        let storage =
+            icechunk::storage::new_s3_storage(opts, bucket, prefix, Some(creds))
+                .map_napi_err()?;
+        Ok(JsStorage(storage))
+    }
+
+    #[napi(factory)]
+    pub fn new_r2_with_refreshable_credentials(
+        bucket: Option<String>,
+        prefix: Option<String>,
+        account_id: Option<String>,
+        #[napi(ts_arg_type = "() => Promise<S3StaticCredentials>")]
+        credentials_callback: napi::threadsafe_function::ThreadsafeFunction<
+            (),
+            JsS3StaticCredentials,
+        >,
+        initial_credentials: Option<JsS3StaticCredentials>,
+        options: Option<JsS3Options>,
+    ) -> napi::Result<JsStorage> {
+        let fetcher = JsS3CredentialsFetcher {
+            tsfn: credentials_callback,
+            last_credential: tokio::sync::RwLock::new(
+                initial_credentials.map(|c| c.into()),
+            ),
+        };
+        let creds =
+            icechunk::config::S3Credentials::Refreshable(std::sync::Arc::new(fetcher));
+        let opts = options.map(|o| o.into()).unwrap_or(default_s3_options());
+        let storage = icechunk::storage::new_r2_storage(
+            opts,
+            bucket,
+            prefix,
+            account_id,
+            Some(creds),
+        )
+        .map_napi_err()?;
+        Ok(JsStorage(storage))
+    }
+
+    #[napi(factory)]
+    pub fn new_tigris_with_refreshable_credentials(
+        bucket: String,
+        prefix: Option<String>,
+        #[napi(ts_arg_type = "() => Promise<S3StaticCredentials>")]
+        credentials_callback: napi::threadsafe_function::ThreadsafeFunction<
+            (),
+            JsS3StaticCredentials,
+        >,
+        initial_credentials: Option<JsS3StaticCredentials>,
+        options: Option<JsS3Options>,
+        use_weak_consistency: Option<bool>,
+    ) -> napi::Result<JsStorage> {
+        let fetcher = JsS3CredentialsFetcher {
+            tsfn: credentials_callback,
+            last_credential: tokio::sync::RwLock::new(
+                initial_credentials.map(|c| c.into()),
+            ),
+        };
+        let creds =
+            icechunk::config::S3Credentials::Refreshable(std::sync::Arc::new(fetcher));
+        let opts = options.map(|o| o.into()).unwrap_or(default_s3_options());
+        let weak_consistency = use_weak_consistency.unwrap_or(false);
+        let storage = icechunk::storage::new_tigris_storage(
+            opts,
+            bucket,
+            prefix,
+            Some(creds),
+            weak_consistency,
+        )
+        .map_napi_err()?;
+        Ok(JsStorage(storage))
+    }
+
+    #[napi(factory)]
+    pub async fn new_s3_object_store_with_refreshable_credentials(
+        bucket: String,
+        prefix: Option<String>,
+        #[napi(ts_arg_type = "() => Promise<S3StaticCredentials>")]
+        credentials_callback: napi::threadsafe_function::ThreadsafeFunction<
+            (),
+            JsS3StaticCredentials,
+        >,
+        initial_credentials: Option<JsS3StaticCredentials>,
+        options: Option<JsS3Options>,
+    ) -> napi::Result<JsStorage> {
+        let fetcher = JsS3CredentialsFetcher {
+            tsfn: credentials_callback,
+            last_credential: tokio::sync::RwLock::new(
+                initial_credentials.map(|c| c.into()),
+            ),
+        };
+        let creds =
+            icechunk::config::S3Credentials::Refreshable(std::sync::Arc::new(fetcher));
+        let opts = options.map(|o| o.into()).unwrap_or(default_s3_options());
+        let storage = icechunk::storage::new_s3_object_store_storage(
+            opts,
+            bucket,
+            prefix,
+            Some(creds),
+        )
+        .await
+        .map_napi_err()?;
+        Ok(JsStorage(storage))
+    }
+
+    #[napi(factory)]
+    pub fn new_gcs_with_refreshable_credentials(
+        bucket: String,
+        prefix: Option<String>,
+        #[napi(ts_arg_type = "() => Promise<GcsBearerCredential>")]
+        credentials_callback: napi::threadsafe_function::ThreadsafeFunction<
+            (),
+            JsGcsBearerCredential,
+        >,
+        initial_credentials: Option<JsGcsBearerCredential>,
+        config: Option<HashMap<String, String>>,
+    ) -> napi::Result<JsStorage> {
+        let fetcher = JsGcsCredentialsFetcher {
+            tsfn: credentials_callback,
+            last_credential: tokio::sync::RwLock::new(
+                initial_credentials.map(|c| c.into()),
+            ),
+        };
+        let creds =
+            icechunk::config::GcsCredentials::Refreshable(std::sync::Arc::new(fetcher));
+        let storage =
+            icechunk::storage::new_gcs_storage(bucket, prefix, Some(creds), config)
+                .map_napi_err()?;
         Ok(JsStorage(storage))
     }
 }

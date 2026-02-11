@@ -1976,6 +1976,7 @@ dependencies = [
 name = "icechunk-js"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "chrono",
  "futures",
@@ -1983,8 +1984,11 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "rand 0.10.0",
+ "serde",
  "serde_json",
  "tokio",
+ "typetag",
 ]
 
 [[package]]
