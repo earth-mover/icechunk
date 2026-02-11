@@ -2219,6 +2219,7 @@ mod tests {
         }
         session.commit("first split", None).await?;
         total_manifests += 4;
+        dbg!("commit 1");
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // make sure data is correct
@@ -2269,6 +2270,7 @@ mod tests {
         )
         .await?;
         total_manifests += 1;
+        dbg!("commit 2");
         assert_manifest_count(new_repo.asset_manager(), total_manifests).await;
         validate_data().await;
         assert!(
@@ -2300,6 +2302,7 @@ mod tests {
         )
         .await?;
         total_manifests += 3;
+        dbg!("commit 3");
         assert_manifest_count(new_repo.asset_manager(), total_manifests).await;
         validate_data().await;
         assert!(
@@ -2855,6 +2858,7 @@ mod tests {
         let indices =
             [vec![0, 0, 1, 0], vec![0, 0, 0, 0], vec![0, 2, 0, 0], vec![0, 2, 0, 1]];
 
+        dbg!("before session1");
         let mut session1 = repository.writable_session("main").await?;
         session1
             .set_chunk_ref(
@@ -2960,6 +2964,8 @@ mod tests {
                 Some(ChunkPayload::Inline(format!("{0}", 4).into())),
             )
             .await?;
+
+        dbg!("before session2");
         let mut session2 = repository.writable_session("main").await?;
         session2
             .set_chunk_ref(temp_path.clone(), ChunkIndices(indices[2].clone()), None)

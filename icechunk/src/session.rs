@@ -2058,7 +2058,6 @@ impl<'a> FlushProcess<'a> {
         fn modified_manifests(modified_extents):
            modified_extents.iter(|ext| finds_the_manifest_for_these_extents(ext))
         */
-
         let mut modified_extents: HashSet<ManifestExtents> = Default::default();
         let mut classified_chunks: HashMap<
             ManifestExtents,
@@ -2066,12 +2065,10 @@ impl<'a> FlushProcess<'a> {
         > = Default::default();
         let mut new_chunk_indices: HashSet<ChunkIndices> = Default::default();
 
-        for coord in self
-            .change_set
-            .changed_node_chunks(&node.id)
-            .chain(self.change_set.deleted_chunks_iterator(&node.id))
+        for coord in self.change_set.changed_node_chunks(&node.id)
+        //.chain(self.change_set.deleted_chunks_iterator(&node.id))
         {
-            let extents = splits.find(&coord);
+            let extents = splits.find(dbg!(coord));
             if let Some(e) = extents {
                 modified_extents.insert(e.clone());
                 classified_chunks
@@ -2080,11 +2077,39 @@ impl<'a> FlushProcess<'a> {
                     .entry(coord.clone())
                     .or_insert_with(|| {
                         let payload = self.change_set.get_chunk_ref(&node.id, coord);
-                        payload.clone().unwrap().clone() // TODO: don´t unwrap here
+                        payload.unwrap().clone() // TODO: don´t unwrap here
                     });
                 new_chunk_indices.insert(coord.clone());
             }
         }
+        dbg!(&splits);
+
+        let init: HashMap<ManifestExtents, Vec<ChunkInfo>> = Default::default();
+        // FIXME: this duplicates chunk storage for the array
+        let classified_chunks_original = updated_node_chunks_iterator(
+            &self.asset_manager,
+            self.change_set,
+            self.parent_id,
+            node.clone(),
+        )
+        .await
+        .try_fold(init, |mut res, (_, chunk)| {
+            if let Some(extents) = splits.find(dbg!(&chunk.coord)) {
+                res.entry(extents.clone()).or_default().push(chunk);
+            }
+
+            ready(Ok(res))
+        })
+        .await?;
+
+        /*
+                for each modified_manifest(modified_extents)  |manifest| do
+                    manifest = load_manifest(manifest)
+                    extents = get_manifest_ext(manifest)
+                    for each chunk in the manifest:
+                        if the chunk is already in the classified_chunks -> do nothing
+                        if the chunk is not in the classified_chunks -> add to it
+        */
 
         let modified_manifests: HashMap<&ManifestExtents, &ManifestRef> =
             modified_extents
@@ -2105,15 +2130,16 @@ impl<'a> FlushProcess<'a> {
             let manifest = fetch_manifest(
                 &manifest_ref.object_id,
                 &old_snapshot.id(),
+                //self.parent_id,
                 &self.asset_manager,
             )
-            .await;
+            .await?;
 
-            match manifest {
-                Ok(manifest) => manifest
-                    .iter(node.id.clone())
-                    .filter_ok(|(coord, _)| new_chunk_indices.contains(coord))
-                    .for_each(|res| match res {
+            manifest
+                .iter(node.id.clone())
+                .filter_ok(|(coord, _)| !new_chunk_indices.contains(coord))
+                .try_for_each(|res| {
+                    match res {
                         Ok((coord, payload)) => {
                             // add to classified chunks
                             classified_chunks
@@ -2121,11 +2147,32 @@ impl<'a> FlushProcess<'a> {
                                 .or_default()
                                 .insert(coord, Some(payload));
                         }
-                        Err(_) => todo!("throw error"),
-                    }),
-                Err(_) => todo!("error"),
-            }
+                        Err(err) => return Err(err),
+                    };
+                    Ok(())
+                })?;
         }
+
+        /*
+        debug_assert_eq!(
+            classified_chunks
+                .iter()
+                .map(|(k, v)| (
+                    k.clone(),
+                    v.iter()
+                        .map(|(k, payload)| ChunkInfo {
+                            node: node.id.clone(),
+                            coord: k.clone(),
+                            payload: payload.clone().unwrap(),
+                        })
+                        .collect::<Vec::<ChunkInfo>>()
+                ))
+                .collect::<HashMap::<ManifestExtents, Vec<ChunkInfo>>>()
+                .keys()
+                .collect::<HashSet::<_>>(),
+            classified_chunks_original.keys().collect::<HashSet::<_>>()
+        );
+        */
 
         let mut refs =
             HashMap::<ManifestExtents, Vec<ManifestRef>>::with_capacity(splits.len());
@@ -2133,15 +2180,7 @@ impl<'a> FlushProcess<'a> {
         let on_disk_extents =
             existing_manifests.iter().map(|m| m.extents.clone()).collect::<Vec<_>>();
 
-        let modified_splits = classified_chunks.keys().collect::<HashSet<_>>();
-        // FIXME: this is another pass through all chunks
-        /*
-        let modified_splits: HashSet<_> = self
-            .change_set
-            .changed_node_chunks(&node.id)
-            .filter_map(|idx| splits.find(idx))
-            .collect();
-        */
+        let modified_splits: HashSet<_> = classified_chunks.keys().collect();
 
         // ``modified_splits`` (i.e. splits used in this session)
         // must be a subset of ``splits`` (the splits set in the config)
@@ -2154,16 +2193,25 @@ impl<'a> FlushProcess<'a> {
                 let chunks: Vec<ChunkInfo> = classified_chunks
                     .get(extent)
                     .unwrap_or(&no_chunks)
-                    .into_iter()
-                    .map(|(k, payload)| {
-                        //v.map(|payload| ChunkInfo {
-                        ChunkInfo {
+                    .iter()
+                    .filter_map(|(k, payload)| {
+                        payload.as_ref().map(|payload| ChunkInfo {
                             node: node.id.clone(),
                             coord: k.clone(),
-                            payload: (*payload).clone().unwrap(),
-                        }
+                            payload: payload.clone(),
+                        })
                     })
                     .collect();
+                /*
+                debug_assert_eq!(
+                    chunks.iter().collect::<HashSet::<_>>(),
+                    classified_chunks_original
+                        .get(extent)
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .collect::<HashSet::<_>>()
+                );
+                */
                 self.write_manifest_for_updated_chunks(&chunks)
                     .await?
                     .map(|new_ref| refs.insert(extent.clone(), vec![new_ref]));
@@ -2197,14 +2245,13 @@ impl<'a> FlushProcess<'a> {
                             let chunks: Vec<ChunkInfo> = classified_chunks
                                 .get(extent)
                                 .unwrap_or(&no_chunks)
-                                .into_iter()
-                                .map(|(k, payload)| {
-                                    //v.map(|payload| ChunkInfo {
-                                    ChunkInfo {
+                                .iter()
+                                .filter_map(|(k, payload)| {
+                                    payload.as_ref().map(|payload| ChunkInfo {
                                         node: node.id.clone(),
                                         coord: k.clone(),
-                                        payload: (*payload).clone().unwrap(),
-                                    }
+                                        payload: payload.clone(),
+                                    })
                                 })
                                 .collect();
                             if let Some(new_ref) =
@@ -2227,6 +2274,7 @@ impl<'a> FlushProcess<'a> {
             .entry(node.id.clone())
             .or_default()
             .extend(refs.into_values().flatten());
+        dbg!(&self.manifest_refs);
         Ok(())
     }
 
