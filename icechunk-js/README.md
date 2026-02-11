@@ -4,6 +4,15 @@ JavaScript/TypeScript library for Icechunk Zarr Stores. Works as a native Node.j
 
 ## Getting Started
 
+Install with `npm`
+
+```
+npm install @earthmover/icechunk@alpha
+```
+
+> [!NOTE]
+> When using in the browser, you must specify to install the wasm package with `--cpu=wasm32`
+
 ```typescript
 import { Repository, Storage } from '@earthmover/icechunk'
 import * as zarr from 'zarrita'
@@ -23,7 +32,9 @@ const arr = await zarr.create(root.resolve('/foo'), {
 const snapshotId = await session.commit('Create foo array')
 ```
 
-## Storage Backends
+## Features
+
+### Storage Backends
 
 In-memory storage works on all platforms. The following backends are available on native (non-WASM) builds:
 
@@ -34,6 +45,10 @@ In-memory storage works on all platforms. The following backends are available o
 - **Tigris** — `Storage.newTigris(bucket, prefix?, credentials?, options?)`
 - **HTTP** — `Storage.newHttp(baseUrl, config?)`
 - **Local Filesystem** — `Storage.newLocalFilesystem(path)`
+
+### Virtual Chunks
+
+Virtual chunks are supported in node but not in WASM builds.
 
 ## Using in the Browser (WASM)
 
