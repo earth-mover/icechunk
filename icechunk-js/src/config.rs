@@ -173,6 +173,7 @@ pub struct JsVirtualChunkContainer {
 ///   }
 /// }
 /// ```
+#[cfg(not(target_family = "wasm"))]
 #[napi(object, js_name = "RepositoryConfig")]
 #[derive(Clone, Debug)]
 pub struct JsRepositoryConfig {
@@ -185,9 +186,24 @@ pub struct JsRepositoryConfig {
     /// Manifest configuration, passed as a JSON-compatible object.
     /// The object is deserialized using serde, matching the Rust ManifestConfig structure.
     pub manifest: Option<serde_json::Value>,
-    /// Virtual chunk containers configuration (non-WASM only)
-    #[cfg(not(target_family = "wasm"))]
+    /// Virtual chunk containers configuration
     pub virtual_chunk_containers: Option<HashMap<String, JsVirtualChunkContainer>>,
+}
+
+/// Repository configuration (WASM build — no virtual chunk support)
+#[cfg(target_family = "wasm")]
+#[napi(object, js_name = "RepositoryConfig")]
+#[derive(Clone, Debug)]
+pub struct JsRepositoryConfig {
+    pub inline_chunk_threshold_bytes: Option<u32>,
+    pub get_partial_values_concurrency: Option<u32>,
+    pub compression: Option<JsCompressionConfig>,
+    pub max_concurrent_requests: Option<u32>,
+    pub caching: Option<JsCachingConfig>,
+    pub storage: Option<JsStorageSettings>,
+    /// Manifest configuration, passed as a JSON-compatible object.
+    /// The object is deserialized using serde, matching the Rust ManifestConfig structure.
+    pub manifest: Option<serde_json::Value>,
 }
 
 impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
@@ -214,9 +230,7 @@ impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
             })
             .transpose()?;
         #[cfg(target_family = "wasm")]
-        let virtual_chunk_containers: Option<
-            HashMap<String, VirtualChunkContainer>,
-        > = None;
+        let virtual_chunk_containers = None;
 
         Ok(RepositoryConfig {
             inline_chunk_threshold_bytes: value
