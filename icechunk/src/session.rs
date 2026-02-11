@@ -2039,47 +2039,13 @@ impl<'a> FlushProcess<'a> {
         rewrite_manifests: bool,
         splits: &ManifestSplits,
     ) -> SessionResult<()> {
-        let init: HashMap<ManifestExtents, Vec<ChunkIndices>> = Default::default();
-        // TODO: deleted chunks
-        // TODO:
-        /*
-                - modified_extents: vec =  changed_node_chunks.map(|coord| get_extents_for_coord).collect
-                - modified_extents.flat_map(|e| load chunks for e, for all manifests containing e (check existing_manifests))
-        })
-        */
-        /*
-        modified_extents: HashSet<ManifestExtents> = change_set.get_modified_extents();
-
-        fn modified_manifests(modified_extents):
-           modified_extents.iter(|ext| finds_the_manifest_for_these_extents(ext))
-
-
-        classfied_chunks: HashMap<MannifestExtents, HashMap<ChunkIndices, ChunkInfo>>> = {}
-
-        for each modified_manifest(modified_extents)  |manifest| do
-            manifest = load_manifest(manifest)
-            extents = get_manifest_ext(manifest)
-            classfied_chunks[extenst] = manifest.iter().collect()]
-
-
-        for each (chunk_index, Option<chunk_info>) in change_set do
-            extents = extents_for (chunk_index)
-
-            if chunk_info is none:
-              del classfied_chunks[extents][chunk_index]
-            else:
-              classfied_chunks[extents][chunk_index]  = chunk_info.unwrap()
-        */
-
         /*
         modified_extents: HashSet<ManifestExtents> = HashSet::new()
         classfied_chunks: HashMap<MannifestExtents, HashMap<ChunkIndices, Option<ChunkPayload>>>> = {}
 
         * In a sigle pass through every chunk in the change set:
           * we compute a Set of manifests extents that were modified
-          * we add the chunk, either deleted, or midified, to the classfied_chunks
-
-
+          * we add the chunk, either deleted, or modified, to the classfied_chunks
 
 
         for each modified_manifest(modified_extents)  |manifest| do
@@ -2089,132 +2055,77 @@ impl<'a> FlushProcess<'a> {
                 if the chunk is already in the classified_chunks -> do nothing
                 if the chunk is not in the classified_chunks -> add to it
 
-
-
-
         fn modified_manifests(modified_extents):
            modified_extents.iter(|ext| finds_the_manifest_for_these_extents(ext))
         */
-        let new_chunk_indices: HashSet<&ChunkIndices> = self
+
+        let mut modified_extents: HashSet<ManifestExtents> = Default::default();
+        let mut classified_chunks: HashMap<
+            ManifestExtents,
+            HashMap<ChunkIndices, Option<ChunkPayload>>,
+        > = Default::default();
+        let mut new_chunk_indices: HashSet<ChunkIndices> = Default::default();
+
+        for coord in self
             .change_set
             .changed_node_chunks(&node.id)
             .chain(self.change_set.deleted_chunks_iterator(&node.id))
-            .collect();
-
-        let modified_extents: Vec<_> =
-            new_chunk_indices.iter().filter_map(|coord| splits.find(coord)).collect();
-
-        let modified_manifests: HashMap<ManifestExtents, ManifestRef> = modified_extents
-            .iter()
-            .flat_map(|e| {
-                existing_manifests.iter().filter_map(|manifest| {
-                    if e.overlap_with(&manifest.extents) != Overlap::None {
-                        //if manifest.extents.overlap_with(*e) != Overlap::None {
-                        Some(manifest)
-                    } else {
-                        None
-                    }
-                })
-            })
-            .collect();
-
-        /*
-        dbg!(
-            &overlapping_manifests,
-            overlapping_manifests.len(),
-            existing_manifests.len()
-        );
-        */
-
-        let init: HashMap<ManifestExtents, Vec<ChunkInfo>> = Default::default();
-        let asset_manager = &self.asset_manager;
-        let classified_chunks: HashMap<ManifestExtents, Vec<ChunkInfo>> =
-            futures::stream::iter(modified_extents)
-                .flat_map(|extent| {
-                    futures::stream::iter(&existing_manifests).filter_map(
-                        async |manifest_ref| {
-                            if extent.overlap_with(&manifest_ref.extents) != Overlap::None
-                            {
-                                //if manifest.extents.overlap_with(*extent) != Overlap::None {
-                                // load overlapping chunks from manifest, plus chunks from extent
-                                //TODO: put this in a box
-                                let new_chunk_indices = new_chunk_indices.clone();
-                                let node_id_1 = node.id.clone();
-                                let node_id_2 = node.id.clone();
-                                let node_id_3 = node.id.clone();
-
-                                let manifest = fetch_manifest(
-                                    &manifest_ref.object_id,
-                                    &old_snapshot.id(),
-                                    &asset_manager,
-                                )
-                                .await;
-
-                                match manifest {
-                                    Ok(manifest) => {
-                                        let old_chunks = manifest
-                                            .iter(node_id_1)
-                                            .filter_ok(move |(coord, _)| {
-                                                !new_chunk_indices.contains(coord)
-                                            })
-                                            .map_ok(move |(coord, payload)| ChunkInfo {
-                                                node: node_id_2.clone(),
-                                                coord,
-                                                payload,
-                                            });
-
-                                        /*
-                                           let old_chunks = futures::stream::iter(
-                                           self.change_set.update_existing_chunks(
-                                           node_id_3, old_chunks,
-                                           ),
-                                                                                );
-                                        */
-
-                                        Some(old_chunks)
-                                    }
-                                    Err(_) => todo!("error"),
-                                }
-                            } else {
-                                // TODO: return just chunks from extent
-                                None
-                            }
-                        },
-                    )
-                })
-                .fold(init, async |mut res, chunks| {
-                    chunks
-                        .for_each(|chunk| {
-                            let chunk = chunk.unwrap();
-                            if let Some(extents) = splits.find(&chunk.coord) {
-                                res.entry(extents.clone()).or_default().push(chunk);
-                            };
-                            ready(())
-                        })
-                        .await;
-
-                    res
-                })
-                .await;
-
-        /*
-        let init: HashMap<ManifestExtents, Vec<ChunkInfo>> = Default::default();
-        // FIXME: this duplicates chunk storage for the array
-        let classified_chunks_3 = updated_node_chunks_iterator(
-            &self.asset_manager,
-            self.change_set,
-            self.parent_id,
-            node.clone(),
-        )
-        .await
-        .try_fold(init, |mut res, (_, chunk)| {
-            if let Some(extents) = splits.find(&chunk.coord) {
-                res.entry(extents.clone()).or_default().push(chunk);
+        {
+            let extents = splits.find(&coord);
+            if let Some(e) = extents {
+                modified_extents.insert(e.clone());
+                classified_chunks
+                    .entry(e.clone())
+                    .or_default()
+                    .entry(coord.clone())
+                    .or_insert_with(|| {
+                        let payload = self.change_set.get_chunk_ref(&node.id, coord);
+                        payload.clone().unwrap().clone() // TODO: don´t unwrap here
+                    });
+                new_chunk_indices.insert(coord.clone());
             }
-            ready(Ok(res))
-        })
-        .await?;
-        */
+        }
+
+        let modified_manifests: HashMap<&ManifestExtents, &ManifestRef> =
+            modified_extents
+                .iter()
+                .flat_map(|e| {
+                    existing_manifests.iter().filter_map(move |manifest| {
+                        if e.overlap_with(&manifest.extents) != Overlap::None {
+                            Some((e, manifest))
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .collect();
+
+        // iterate over manifests, update classified_chunks
+        for (extent, manifest_ref) in modified_manifests {
+            let manifest = fetch_manifest(
+                &manifest_ref.object_id,
+                &old_snapshot.id(),
+                &self.asset_manager,
+            )
+            .await;
+
+            match manifest {
+                Ok(manifest) => manifest
+                    .iter(node.id.clone())
+                    .filter_ok(|(coord, _)| new_chunk_indices.contains(coord))
+                    .for_each(|res| match res {
+                        Ok((coord, payload)) => {
+                            // add to classified chunks
+                            classified_chunks
+                                .entry(extent.clone())
+                                .or_default()
+                                .insert(coord, Some(payload));
+                        }
+                        Err(_) => todo!("throw error"),
+                    }),
+                Err(_) => todo!("error"),
+            }
+        }
 
         let mut refs =
             HashMap::<ManifestExtents, Vec<ManifestRef>>::with_capacity(splits.len());
@@ -2222,24 +2133,38 @@ impl<'a> FlushProcess<'a> {
         let on_disk_extents =
             existing_manifests.iter().map(|m| m.extents.clone()).collect::<Vec<_>>();
 
-        //let modified_splits = classified_chunks.keys().collect::<HashSet<_>>();
+        let modified_splits = classified_chunks.keys().collect::<HashSet<_>>();
         // FIXME: this is another pass through all chunks
+        /*
         let modified_splits: HashSet<_> = self
             .change_set
             .changed_node_chunks(&node.id)
             .filter_map(|idx| splits.find(idx))
             .collect();
+        */
 
         // ``modified_splits`` (i.e. splits used in this session)
         // must be a subset of ``splits`` (the splits set in the config)
         debug_assert!(modified_splits.is_subset(&splits.iter().collect::<HashSet<_>>()));
 
-        let no_chunks = Vec::new();
+        let no_chunks: HashMap<ChunkIndices, Option<ChunkPayload>> = Default::default();
         for extent in splits.iter() {
             if rewrite_manifests || modified_splits.contains(extent) {
                 // this split was modified in this session, rewrite it completely
-                let chunks = classified_chunks.get(extent).unwrap_or(&no_chunks);
-                self.write_manifest_for_updated_chunks(chunks)
+                let chunks: Vec<ChunkInfo> = classified_chunks
+                    .get(extent)
+                    .unwrap_or(&no_chunks)
+                    .into_iter()
+                    .map(|(k, payload)| {
+                        //v.map(|payload| ChunkInfo {
+                        ChunkInfo {
+                            node: node.id.clone(),
+                            coord: k.clone(),
+                            payload: (*payload).clone().unwrap(),
+                        }
+                    })
+                    .collect();
+                self.write_manifest_for_updated_chunks(&chunks)
                     .await?
                     .map(|new_ref| refs.insert(extent.clone(), vec![new_ref]));
             } else {
@@ -2269,10 +2194,21 @@ impl<'a> FlushProcess<'a> {
                             // the splits have changed, but no refs in this split have been written in this session
                             // same as `if` block above
                             debug_assert!(on_disk_bbox.is_some());
-                            let chunks =
-                                classified_chunks.get(extent).unwrap_or(&no_chunks);
+                            let chunks: Vec<ChunkInfo> = classified_chunks
+                                .get(extent)
+                                .unwrap_or(&no_chunks)
+                                .into_iter()
+                                .map(|(k, payload)| {
+                                    //v.map(|payload| ChunkInfo {
+                                    ChunkInfo {
+                                        node: node.id.clone(),
+                                        coord: k.clone(),
+                                        payload: (*payload).clone().unwrap(),
+                                    }
+                                })
+                                .collect();
                             if let Some(new_ref) =
-                                self.write_manifest_for_updated_chunks(chunks).await?
+                                self.write_manifest_for_updated_chunks(&chunks).await?
                             {
                                 refs.entry(extent.clone()).or_default().push(new_ref);
                             }
