@@ -3,11 +3,26 @@ use std::sync::Arc;
 use bytes::Bytes;
 use futures::TryStreamExt;
 use icechunk::format::ByteRange;
-use icechunk::store::{Store, StoreErrorKind};
+use icechunk::format::manifest::{Checksum, VirtualChunkLocation, VirtualChunkRef};
+use icechunk::format::{ChunkIndices, Path};
+use icechunk::storage::ETag;
+use icechunk::store::{SetVirtualRefsResult, Store, StoreErrorKind};
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 
 use crate::errors::IntoNapiResult;
+
+/// Specification for a virtual chunk reference
+#[cfg(not(target_family = "wasm"))]
+#[napi(object, js_name = "VirtualChunkSpec")]
+#[derive(Clone, Debug)]
+pub struct JsVirtualChunkSpec {
+    pub index: Vec<u32>,
+    pub location: String,
+    pub offset: i64,
+    pub length: i64,
+    pub etag_checksum: Option<String>,
+}
 
 #[napi(js_name = "Store")]
 pub struct JsStore(pub(crate) Arc<Store>);
@@ -91,5 +106,82 @@ impl JsStore {
     #[napi(getter)]
     pub fn supports_listing(&self) -> bool {
         true
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[napi]
+impl JsStore {
+    /// Set a single virtual reference to a chunk
+    #[napi]
+    pub async fn set_virtual_ref(
+        &self,
+        key: String,
+        location: String,
+        offset: i64,
+        length: i64,
+        etag_checksum: Option<String>,
+        validate_container: bool,
+    ) -> napi::Result<()> {
+        let location = VirtualChunkLocation::from_absolute_path(location.as_str())
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let checksum = etag_checksum.map(|etag| Checksum::ETag(ETag(etag)));
+        let virtual_ref = VirtualChunkRef {
+            location,
+            offset: offset as u64,
+            length: length as u64,
+            checksum,
+        };
+        self.0.set_virtual_ref(&key, virtual_ref, validate_container).await.map_napi_err()
+    }
+
+    /// Set multiple virtual references for the same array
+    /// Returns the indices of failed chunk references if any
+    #[napi]
+    pub async fn set_virtual_refs(
+        &self,
+        array_path: String,
+        chunks: Vec<JsVirtualChunkSpec>,
+        validate_containers: bool,
+    ) -> napi::Result<Option<Vec<Vec<u32>>>> {
+        let vrefs: Vec<(ChunkIndices, VirtualChunkRef)> = chunks
+            .into_iter()
+            .map(|spec| {
+                let checksum = spec.etag_checksum.map(|etag| Checksum::ETag(ETag(etag)));
+                let index = ChunkIndices(spec.index);
+                let location =
+                    VirtualChunkLocation::from_absolute_path(spec.location.as_str())
+                        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+                let vref = VirtualChunkRef {
+                    offset: spec.offset as u64,
+                    length: spec.length as u64,
+                    location,
+                    checksum,
+                };
+                Ok::<_, napi::Error>((index, vref))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let array_path = if !array_path.starts_with('/') {
+            format!("/{array_path}")
+        } else {
+            array_path
+        };
+
+        let path = Path::try_from(array_path)
+            .map_err(|e| napi::Error::from_reason(format!("Invalid array path: {e}")))?;
+
+        let res = self
+            .0
+            .set_virtual_refs(&path, validate_containers, vrefs)
+            .await
+            .map_napi_err()?;
+
+        match res {
+            SetVirtualRefsResult::Done => Ok(None),
+            SetVirtualRefsResult::FailedRefs(vec) => {
+                Ok(Some(vec.into_iter().map(|ci| ci.0).collect()))
+            }
+        }
     }
 }

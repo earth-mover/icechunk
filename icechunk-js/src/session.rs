@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use futures::TryStreamExt;
 use icechunk::session::Session;
 use napi_derive::napi;
 use tokio::sync::RwLock;
@@ -60,5 +61,23 @@ impl JsSession {
     pub async fn discard_changes(&self) -> napi::Result<()> {
         let mut session = self.0.write().await;
         session.discard_changes().map_napi_err()
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[napi]
+impl JsSession {
+    /// Get all virtual chunk locations referenced by this session
+    #[napi]
+    pub async fn all_virtual_chunk_locations(&self) -> napi::Result<Vec<String>> {
+        let session = self.0.read().await;
+        let locations = session
+            .all_virtual_chunk_locations()
+            .await
+            .map_napi_err()?
+            .try_collect()
+            .await
+            .map_napi_err()?;
+        Ok(locations)
     }
 }

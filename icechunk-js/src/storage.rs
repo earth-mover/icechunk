@@ -199,6 +199,65 @@ mod native {
             }
         }
     }
+
+    /// Credentials for virtual chunk access
+    #[napi(js_name = "Credentials")]
+    pub enum JsCredentials {
+        S3(JsS3Credentials),
+        Gcs(JsGcsCredentials),
+        Azure(JsAzureCredentials),
+    }
+
+    impl From<JsCredentials> for icechunk::config::Credentials {
+        fn from(creds: JsCredentials) -> Self {
+            match creds {
+                JsCredentials::S3(c) => icechunk::config::Credentials::S3(c.into()),
+                JsCredentials::Gcs(c) => icechunk::config::Credentials::Gcs(c.into()),
+                JsCredentials::Azure(c) => icechunk::config::Credentials::Azure(c.into()),
+            }
+        }
+    }
+
+    /// Object store configuration for virtual chunk containers
+    #[napi(js_name = "ObjectStoreConfig")]
+    #[derive(Clone, Debug)]
+    pub enum JsObjectStoreConfig {
+        InMemory,
+        LocalFileSystem(String),
+        Http(HashMap<String, String>),
+        S3Compatible(JsS3Options),
+        S3(JsS3Options),
+        Gcs(HashMap<String, String>),
+        Azure(HashMap<String, String>),
+        Tigris(JsS3Options),
+    }
+
+    impl From<JsObjectStoreConfig> for icechunk::ObjectStoreConfig {
+        fn from(config: JsObjectStoreConfig) -> Self {
+            match config {
+                JsObjectStoreConfig::InMemory => icechunk::ObjectStoreConfig::InMemory,
+                JsObjectStoreConfig::LocalFileSystem(path) => {
+                    icechunk::ObjectStoreConfig::LocalFileSystem(path.into())
+                }
+                JsObjectStoreConfig::Http(opts) => {
+                    icechunk::ObjectStoreConfig::Http(opts)
+                }
+                JsObjectStoreConfig::S3Compatible(opts) => {
+                    icechunk::ObjectStoreConfig::S3Compatible(opts.into())
+                }
+                JsObjectStoreConfig::S3(opts) => {
+                    icechunk::ObjectStoreConfig::S3(opts.into())
+                }
+                JsObjectStoreConfig::Gcs(opts) => icechunk::ObjectStoreConfig::Gcs(opts),
+                JsObjectStoreConfig::Azure(opts) => {
+                    icechunk::ObjectStoreConfig::Azure(opts)
+                }
+                JsObjectStoreConfig::Tigris(opts) => {
+                    icechunk::ObjectStoreConfig::Tigris(opts.into())
+                }
+            }
+        }
+    }
 }
 
 #[cfg(not(target_family = "wasm"))]

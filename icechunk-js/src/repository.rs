@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use icechunk::config::RepositoryConfig;
+use icechunk::config::{Credentials, RepositoryConfig};
 use icechunk::format::SnapshotId;
 use icechunk::format::format_constants::SpecVersionBin;
 use icechunk::repository::{Repository, VersionInfo};
@@ -11,6 +11,7 @@ use tokio::sync::RwLock;
 use crate::config::JsRepositoryConfig;
 use crate::errors::IntoNapiResult;
 use crate::session::JsSession;
+use crate::storage::JsCredentials;
 use crate::storage::JsStorage;
 
 fn convert_config(
@@ -19,6 +20,14 @@ fn convert_config(
     config
         .map(|c| RepositoryConfig::try_from(c).map_err(napi::Error::from_reason))
         .transpose()
+}
+
+fn convert_credentials(
+    creds: Option<HashMap<String, Option<JsCredentials>>>,
+) -> HashMap<String, Option<Credentials>> {
+    creds
+        .map(|c| c.into_iter().map(|(k, v)| (k, v.map(|c| c.into()))).collect())
+        .unwrap_or_default()
 }
 
 #[napi(object)]
@@ -38,16 +47,17 @@ impl JsRepository {
         storage: &JsStorage,
         config: Option<JsRepositoryConfig>,
         spec_version: Option<u32>,
+        authorize_virtual_chunk_access: Option<HashMap<String, Option<JsCredentials>>>,
     ) -> napi::Result<JsRepository> {
         let config = convert_config(config)?;
         let version = spec_version
             .map(|v| SpecVersionBin::try_from(v as u8))
             .transpose()
             .map_napi_err()?;
-        let repo =
-            Repository::create(config, Arc::clone(&storage.0), HashMap::new(), version)
-                .await
-                .map_napi_err()?;
+        let creds = convert_credentials(authorize_virtual_chunk_access);
+        let repo = Repository::create(config, Arc::clone(&storage.0), creds, version)
+            .await
+            .map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 
@@ -55,9 +65,11 @@ impl JsRepository {
     pub async fn open(
         storage: &JsStorage,
         config: Option<JsRepositoryConfig>,
+        authorize_virtual_chunk_access: Option<HashMap<String, Option<JsCredentials>>>,
     ) -> napi::Result<JsRepository> {
         let config = convert_config(config)?;
-        let repo = Repository::open(config, Arc::clone(&storage.0), HashMap::new())
+        let creds = convert_credentials(authorize_virtual_chunk_access);
+        let repo = Repository::open(config, Arc::clone(&storage.0), creds)
             .await
             .map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
@@ -68,20 +80,18 @@ impl JsRepository {
         storage: &JsStorage,
         config: Option<JsRepositoryConfig>,
         spec_version: Option<u32>,
+        authorize_virtual_chunk_access: Option<HashMap<String, Option<JsCredentials>>>,
     ) -> napi::Result<JsRepository> {
         let config = convert_config(config)?;
         let version = spec_version
             .map(|v| SpecVersionBin::try_from(v as u8))
             .transpose()
             .map_napi_err()?;
-        let repo = Repository::open_or_create(
-            config,
-            Arc::clone(&storage.0),
-            HashMap::new(),
-            version,
-        )
-        .await
-        .map_napi_err()?;
+        let creds = convert_credentials(authorize_virtual_chunk_access);
+        let repo =
+            Repository::open_or_create(config, Arc::clone(&storage.0), creds, version)
+                .await
+                .map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 

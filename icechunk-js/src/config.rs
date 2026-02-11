@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::num::{NonZeroU16, NonZeroU64};
 
 use napi_derive::napi;
@@ -7,6 +8,10 @@ use icechunk::config::{
     RepositoryConfig,
 };
 use icechunk::storage::{ConcurrencySettings, RetriesSettings, Settings};
+use icechunk::virtual_chunks::VirtualChunkContainer;
+
+#[cfg(not(target_family = "wasm"))]
+use crate::storage::JsObjectStoreConfig;
 
 /// Compression algorithm
 #[napi(js_name = "CompressionAlgorithm")]
@@ -136,6 +141,16 @@ impl From<JsStorageSettings> for Settings {
     }
 }
 
+/// Virtual chunk container configuration
+#[cfg(not(target_family = "wasm"))]
+#[napi(object, js_name = "VirtualChunkContainer")]
+#[derive(Clone, Debug)]
+pub struct JsVirtualChunkContainer {
+    pub name: Option<String>,
+    pub url_prefix: String,
+    pub store: JsObjectStoreConfig,
+}
+
 /// Repository configuration
 ///
 /// The `manifest` field accepts a JSON object matching the serde serialization
@@ -168,6 +183,8 @@ pub struct JsRepositoryConfig {
     /// Manifest configuration, passed as a JSON-compatible object.
     /// The object is deserialized using serde, matching the Rust ManifestConfig structure.
     pub manifest: Option<serde_json::Value>,
+    /// Virtual chunk containers configuration (non-WASM only)
+    pub virtual_chunk_containers: Option<HashMap<String, JsVirtualChunkContainer>>,
 }
 
 impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
@@ -190,7 +207,19 @@ impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
             max_concurrent_requests: value.max_concurrent_requests.map(|v| v as u16),
             caching: value.caching.map(|c| c.into()),
             storage: value.storage.map(|s| s.into()),
-            virtual_chunk_containers: None,
+            virtual_chunk_containers: value
+                .virtual_chunk_containers
+                .map(|containers| {
+                    containers
+                        .into_iter()
+                        .map(|(k, v)| {
+                            let container =
+                                VirtualChunkContainer::new(v.url_prefix, v.store.into())?;
+                            Ok((k, container))
+                        })
+                        .collect::<Result<HashMap<_, _>, String>>()
+                })
+                .transpose()?,
             manifest,
             previous_file: None,
         })
