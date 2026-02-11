@@ -1977,6 +1977,7 @@ name = "icechunk-js"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "chrono",
  "futures",
  "icechunk",
  "napi",
@@ -2441,6 +2442,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "909805cbad4d569e69b80e101290fe72e92b9742ba9e333b0c1e83b22fb7447b"
 dependencies = [
  "bitflags 2.10.0",
+ "chrono",
  "ctor",
  "futures",
  "napi-build",

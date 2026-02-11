@@ -8,6 +8,8 @@ use icechunk::config::{
     RepositoryConfig,
 };
 use icechunk::storage::{ConcurrencySettings, RetriesSettings, Settings};
+
+#[cfg(not(target_family = "wasm"))]
 use icechunk::virtual_chunks::VirtualChunkContainer;
 
 #[cfg(not(target_family = "wasm"))]
@@ -184,6 +186,7 @@ pub struct JsRepositoryConfig {
     /// The object is deserialized using serde, matching the Rust ManifestConfig structure.
     pub manifest: Option<serde_json::Value>,
     /// Virtual chunk containers configuration (non-WASM only)
+    #[cfg(not(target_family = "wasm"))]
     pub virtual_chunk_containers: Option<HashMap<String, JsVirtualChunkContainer>>,
 }
 
@@ -196,6 +199,25 @@ impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
             .map(|v| serde_json::from_value(v).map_err(|e| e.to_string()))
             .transpose()?;
 
+        #[cfg(not(target_family = "wasm"))]
+        let virtual_chunk_containers = value
+            .virtual_chunk_containers
+            .map(|containers| {
+                containers
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let container =
+                            VirtualChunkContainer::new(v.url_prefix, v.store.into())?;
+                        Ok((k, container))
+                    })
+                    .collect::<Result<HashMap<_, _>, String>>()
+            })
+            .transpose()?;
+        #[cfg(target_family = "wasm")]
+        let virtual_chunk_containers: Option<
+            HashMap<String, VirtualChunkContainer>,
+        > = None;
+
         Ok(RepositoryConfig {
             inline_chunk_threshold_bytes: value
                 .inline_chunk_threshold_bytes
@@ -207,19 +229,7 @@ impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
             max_concurrent_requests: value.max_concurrent_requests.map(|v| v as u16),
             caching: value.caching.map(|c| c.into()),
             storage: value.storage.map(|s| s.into()),
-            virtual_chunk_containers: value
-                .virtual_chunk_containers
-                .map(|containers| {
-                    containers
-                        .into_iter()
-                        .map(|(k, v)| {
-                            let container =
-                                VirtualChunkContainer::new(v.url_prefix, v.store.into())?;
-                            Ok((k, container))
-                        })
-                        .collect::<Result<HashMap<_, _>, String>>()
-                })
-                .transpose()?,
+            virtual_chunk_containers,
             manifest,
             previous_file: None,
         })

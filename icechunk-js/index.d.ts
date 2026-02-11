@@ -53,8 +53,13 @@ export declare class Store {
   get supportsWrites(): boolean
   get supportsDeletes(): boolean
   get supportsListing(): boolean
-  /** Set a single virtual reference to a chunk */
-  setVirtualRef(key: string, location: string, offset: number, length: number, etagChecksum: string | undefined | null, validateContainer: boolean): Promise<void>
+  /**
+   * Set a single virtual reference to a chunk
+   *
+   * For checksum validation, provide either etag_checksum (string) or last_modified (JS Date object).
+   * If both are provided, etag_checksum takes precedence.
+   */
+  setVirtualRef(key: string, location: string, offset: number, length: number, etagChecksum: string | undefined | null, lastModified: Date | undefined | null, validateContainer: boolean): Promise<void>
   /**
    * Set multiple virtual references for the same array
    * Returns the indices of failed chunk references if any
@@ -238,4 +243,6 @@ export interface VirtualChunkSpec {
   offset: number
   length: number
   etagChecksum?: string
+  /** Last modified datetime (accepts JS Date object) */
+  lastModified?: Date
 }

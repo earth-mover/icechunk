@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
-use futures::TryStreamExt;
 use icechunk::session::Session;
 use napi_derive::napi;
 use tokio::sync::RwLock;
 
 use crate::errors::IntoNapiResult;
 use crate::store::JsStore;
+
+#[cfg(not(target_family = "wasm"))]
+use futures::TryStreamExt;
 
 #[napi(js_name = "Session")]
 pub struct JsSession(pub(crate) Arc<RwLock<Session>>);

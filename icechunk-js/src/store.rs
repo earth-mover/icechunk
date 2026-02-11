@@ -3,14 +3,33 @@ use std::sync::Arc;
 use bytes::Bytes;
 use futures::TryStreamExt;
 use icechunk::format::ByteRange;
-use icechunk::format::manifest::{Checksum, VirtualChunkLocation, VirtualChunkRef};
-use icechunk::format::{ChunkIndices, Path};
-use icechunk::storage::ETag;
-use icechunk::store::{SetVirtualRefsResult, Store, StoreErrorKind};
+use icechunk::store::{Store, StoreErrorKind};
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 
 use crate::errors::IntoNapiResult;
+
+#[cfg(not(target_family = "wasm"))]
+use chrono::{DateTime, Utc};
+#[cfg(not(target_family = "wasm"))]
+use icechunk::format::manifest::{Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef};
+#[cfg(not(target_family = "wasm"))]
+use icechunk::format::{ChunkIndices, Path};
+#[cfg(not(target_family = "wasm"))]
+use icechunk::storage::ETag;
+#[cfg(not(target_family = "wasm"))]
+use icechunk::store::SetVirtualRefsResult;
+
+#[cfg(not(target_family = "wasm"))]
+/// Create a checksum from either an etag string or a last-modified datetime
+/// etag_checksum takes precedence if both are provided
+fn create_checksum(etag: Option<String>, last_modified: Option<DateTime<Utc>>) -> Option<Checksum> {
+    etag.map(|e| Checksum::ETag(ETag(e))).or_else(|| {
+        last_modified.map(|dt| {
+            Checksum::LastModified(SecondsSinceEpoch(dt.timestamp() as u32))
+        })
+    })
+}
 
 /// Specification for a virtual chunk reference
 #[cfg(not(target_family = "wasm"))]
@@ -22,6 +41,8 @@ pub struct JsVirtualChunkSpec {
     pub offset: i64,
     pub length: i64,
     pub etag_checksum: Option<String>,
+    /// Last modified datetime (accepts JS Date object)
+    pub last_modified: Option<DateTime<Utc>>,
 }
 
 #[napi(js_name = "Store")]
@@ -113,6 +134,9 @@ impl JsStore {
 #[napi]
 impl JsStore {
     /// Set a single virtual reference to a chunk
+    /// 
+    /// For checksum validation, provide either etag_checksum (string) or last_modified (JS Date object).
+    /// If both are provided, etag_checksum takes precedence.
     #[napi]
     pub async fn set_virtual_ref(
         &self,
@@ -121,11 +145,12 @@ impl JsStore {
         offset: i64,
         length: i64,
         etag_checksum: Option<String>,
+        last_modified: Option<DateTime<Utc>>,
         validate_container: bool,
     ) -> napi::Result<()> {
         let location = VirtualChunkLocation::from_absolute_path(location.as_str())
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        let checksum = etag_checksum.map(|etag| Checksum::ETag(ETag(etag)));
+        let checksum = create_checksum(etag_checksum, last_modified);
         let virtual_ref = VirtualChunkRef {
             location,
             offset: offset as u64,
@@ -147,7 +172,7 @@ impl JsStore {
         let vrefs: Vec<(ChunkIndices, VirtualChunkRef)> = chunks
             .into_iter()
             .map(|spec| {
-                let checksum = spec.etag_checksum.map(|etag| Checksum::ETag(ETag(etag)));
+                let checksum = create_checksum(spec.etag_checksum, spec.last_modified);
                 let index = ChunkIndices(spec.index);
                 let location =
                     VirtualChunkLocation::from_absolute_path(spec.location.as_str())
