@@ -351,7 +351,7 @@ uv sync --group docs
 
 # Start the MkDocs development server
 cd docs
-uv run mkdocs serve --no-strict
+uv run mkdocs serve
 ```
 
 !!! note "Use `--livereload` for file watching"
@@ -372,6 +372,7 @@ This builds the site to `docs/.site` directory.
 
 - Use `mkdocs serve --dirty` to only rebuild changed files (faster for iterative development)
 - You may need to restart if you make changes to `mkdocs.yml`
+- For debugging the doc build logs, check out [docs-output-filter](https://github.com/ianhi/docs-output-filter) (you can run `uv run docs-output-filter -- mkdocs serve --livereload` once installed). *This also works to debug remote builds like RTD with the `--url` flag* 😍
 
 ## Roadmap
 
