@@ -13,6 +13,6 @@ build:
       # - cd icechunk-python && maturin develop && cd ../docs
 
 conda:
-  environment: ./doc-env.yml
+  environment: icechunk-python/docs/doc-env.yml
 mkdocs:
-  configuration: ./mkdocs.yml
+  configuration: icechunk-python/docs/mkdocs.yml
