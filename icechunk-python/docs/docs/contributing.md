@@ -37,7 +37,7 @@ cd icechunk-python
     uv run -m maturin_import_hook site install
 
     # Build the Rust extension
-    maturin develop --uv
+    uv run maturin develop --uv
     ```
 
     **Why these steps?** Icechunk is a mixed Python/Rust project. The `maturin-import-hook` enables incremental Rust compilation (7-20 seconds) instead of full rebuilds (5+ minutes) every time you run tests or import the module. This makes development significantly faster.
@@ -344,6 +344,8 @@ pre-commit run --all-files
 # Run full CI checks manually
 pre-commit run rust-pre-commit-ci --hook-stage manual
 ```
+
+### Local Docker 
 
 ## Roadmap
 
