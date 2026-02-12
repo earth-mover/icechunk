@@ -17,8 +17,8 @@ Icechunk is an open source (Apache 2.0) project and welcomes contributions in th
 
 ### Docker setup for local storage testing
 
-In order to run local versions of S3 and Azure compatible object stores with Docker, you have to [install Docker](https://docs.docker.com/desktop/) first. 
-We provide a docker compose `compose.yaml` file, which you can run with `docker compose up -d` from the root of the repo to start the containers in detached mode. 
+In order to run local versions of S3 and Azure compatible object stores with Docker, you have to [install Docker](https://docs.docker.com/desktop/) first.
+We provide a docker compose `compose.yaml` file, which you can run with `docker compose up -d` from the root of the repo to start the containers in detached mode.
 `docker ps` should show the `azurite` and `icechunk_minio` containers as running (you can also navigate to the GUI e.g. for the minIO container at `localhost:9001` and log in with the username and password from the `compose.yaml` file to navigate the buckets).
 
 After testing you can clean up with `docker compose down`. To verify that all containers are down use `docker ps` again.
@@ -191,7 +191,7 @@ uv run scripts/check_xarray_docs_sync.py --update-known-diffs
 
 #### Troubleshooting
 
-**Too many open Files**: If your limit for open file descriptors is set low (usually only a problem on macOS) some tests might fail. Adjusting the level with e.g. `ulimit -n 1024` should fix this issue. 
+**Too many open Files**: If your limit for open file descriptors is set low (usually only a problem on macOS) some tests might fail. Adjusting the level with e.g. `ulimit -n 1024` should fix this issue.
 
 ### Rust Development Workflow
 
