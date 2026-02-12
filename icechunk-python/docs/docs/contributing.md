@@ -347,7 +347,7 @@ uv sync --group docs
 
 # Start the MkDocs development server
 cd docs
-uv run mkdocs serve
+uv run mkdocs serve --no-strict
 ```
 
 !!! note "Use `--livereload` for file watching"
