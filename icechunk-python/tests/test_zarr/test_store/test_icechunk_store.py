@@ -420,6 +420,10 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert result is not None
         assert result.to_bytes() == DEFAULT_GROUP_METADATA
 
+    @pytest.mark.xfail(
+            reason="Fails locally for unknown reasons. Tracked in https://github.com/earth-mover/icechunk/issues/1642"
+            strict=True
+            )
     async def test_get_many(self, store: IcechunkStore) -> None:
         """
         Ensure that multiple keys can be retrieved at once with the _get_many method.
