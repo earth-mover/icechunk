@@ -313,6 +313,22 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                     f"list_dir mismatch for {path=}: {model_ls=} != {store_ls=}"
                 )
 
+    @precondition(lambda self: self.store.supports_deletes)
+    @precondition(
+        lambda self: any("/" in group for group in self.all_groups)
+    )  # Ensure there are non-root groups with "/"
+    @rule(data=st.data())
+    def delete_group_using_del(self, data: st.DataObject) -> None:
+        """Override parent's delete_group_using_del with better precondition.
+
+        The parent class checks len(self.all_groups) >= 2, but then filters to only
+        groups with "/" in the path. After move operations, we can end up with only
+        top-level groups like '0', '00' which don't contain "/", causing the filtered
+        list to be empty and sampled_from to fail.
+        """
+        # Call parent implementation
+        super().delete_group_using_del(data)
+
     @invariant()
     def check_list_dir(self) -> None:
         self._compare_list_dir(self.model, self.store, self.all_groups | self.all_arrays)
