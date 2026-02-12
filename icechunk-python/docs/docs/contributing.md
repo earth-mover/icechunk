@@ -106,9 +106,13 @@ cd icechunk-python
     pytest
     ```
 
+!!! note pytest-xdist configuration
+
+    By default pytest will run tests in parallel on all available cores of your machine. If you want to specify the number of cores manually set the `-n <number-of-workers>` manually (set 0 to run the test in serial)
+
 !!! important
 
-    The full Python test suite depends on S3 and Azure compatible object stores. See [](#docker-setup-for-local-storage-testing) for detailed instructions.
+    The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions.
 
 
 #### Testing with Upstream Dependencies
@@ -185,65 +189,6 @@ uv run scripts/check_xarray_docs_sync.py --update-known-diffs
 
 **CI Integration**: The script returns exit code 0 if only known differences exist, allowing CI to pass while still displaying diffs for review.
 
-### Building Documentation
-
-The documentation is built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/).
-
-**System dependencies**: Install Cairo graphics library for image processing:
-
-=== "macOS"
-
-    ```bash
-    brew install cairo
-    ```
-
-    If `mkdocs` fails to find Cairo, set the library path:
-
-    ```bash
-    export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
-    ```
-
-    You can add this to your `~/.zshrc` to make it permanent.
-
-=== "Ubuntu/Debian"
-
-    ```bash
-    sudo apt-get install libcairo2-dev
-    ```
-
-=== "Fedora/RHEL"
-
-    ```bash
-    sudo dnf install cairo-devel
-    ```
-
-From the `icechunk-python` directory:
-
-```bash
-# Install icechunk with docs dependencies
-uv sync --group docs
-
-# Start the MkDocs development server
-cd ../docs
-uv run mkdocs serve
-```
-
-The development server will start at `http://127.0.0.1:8000` with live reload enabled.
-
-**Build static site**:
-
-```bash
-cd docs
-uv run mkdocs build
-```
-
-This builds the site to `docs/.site` directory.
-
-**Tips**:
-
-- Use `mkdocs serve --dirty` to only rebuild changed files (faster for iterative development)
-- You may need to restart if you make changes to `mkdocs.yml`
-
 ### Rust Development Workflow
 
 #### Prerequisites
@@ -293,7 +238,7 @@ cargo test test_name
 
 !!! important
 
-    The full Python test suite depends on S3 and Azure compatible object stores. See [](#docker-setup-for-local-storage-testing) for detailed instructions.
+    The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions.
 
 #### Code Quality
 
@@ -360,7 +305,69 @@ pre-commit run --all-files
 pre-commit run rust-pre-commit-ci --hook-stage manual
 ```
 
-### Local Docker 
+### Building Documentation
+
+#### Python Documentation
+
+The documentation is built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/).
+
+**System dependencies**: Install Cairo graphics library for image processing:
+
+=== "macOS"
+
+    ```bash
+    brew install cairo
+    ```
+
+    If `mkdocs` fails to find Cairo, set the library path:
+
+    ```bash
+    export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
+    ```
+
+    You can add this to your `~/.zshrc` to make it permanent.
+
+=== "Ubuntu/Debian"
+
+    ```bash
+    sudo apt-get install libcairo2-dev
+    ```
+
+=== "Fedora/RHEL"
+
+    ```bash
+    sudo dnf install cairo-devel
+    ```
+
+From the `icechunk-python` directory:
+
+```bash
+# Install icechunk with docs dependencies
+uv sync --group docs
+
+# Start the MkDocs development server
+cd docs
+uv run mkdocs serve
+```
+
+!!! note "Use `--livereload` for file watching"
+    Due to a [Click 8.3.x bug](https://github.com/mkdocs/mkdocs/issues/4032), file watching may not work without the `--livereload` flag. Always use `mkdocs serve --livereload` to ensure automatic rebuilds when you edit files.
+
+The development server will start at `http://127.0.0.1:8000` with live reload enabled.
+
+**Build static site**:
+
+```bash
+cd docs
+uv run mkdocs build
+```
+
+This builds the site to `docs/.site` directory.
+
+**Tips**:
+
+- Use `mkdocs serve --dirty` to only rebuild changed files (faster for iterative development)
+- You may need to restart if you make changes to `mkdocs.yml`
 
 ## Roadmap
 
