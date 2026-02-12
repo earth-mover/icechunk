@@ -15,6 +15,14 @@ Icechunk is an open source (Apache 2.0) project and welcomes contributions in th
 
 ## Development
 
+### Docker setup for local storage testing
+
+In order to run local versions of S3 and Azure compatible object stores with Docker, you have to [install Docker](https://docs.docker.com/desktop/) first. 
+Then you can run `docker compose up -d` from the root of the repo to start the containers in detached mode. 
+`docker ps` should show the `azurite` and `icechunk_minio` containers as running.
+
+After testing you can clean up with `docker compose down`. To verify that all containers are down use `docker ps` again.
+
 ### Python Development Workflow
 
 The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
@@ -22,6 +30,8 @@ The Python code is developed in the `icechunk-python` subdirectory. To make chan
 ```bash
 cd icechunk-python
 ```
+
+#### Prerequisites
 
 #### Setting up your development environment
 
@@ -85,10 +95,6 @@ cd icechunk-python
 
 #### Testing
 
-The full Python test suite depends on S3 and Azure compatible object stores.
-
-They can be run from the root of the repo with `docker compose up` (`ctrl-c` then `docker compose down` once done to clean up.).
-
 === "uv"
 
     ```bash
@@ -99,6 +105,11 @@ They can be run from the root of the repo with `docker compose up` (`ctrl-c` the
     ```bash
     pytest
     ```
+
+!!! important
+
+    The full Python test suite depends on S3 and Azure compatible object stores. See [](#docker-setup-for-local-storage-testing) for detailed instructions.
+
 
 #### Testing with Upstream Dependencies
 
@@ -279,6 +290,10 @@ just test-logs debug
 # Run only specific tests
 cargo test test_name
 ```
+
+!!! important
+
+    The full Python test suite depends on S3 and Azure compatible object stores. See [](#docker-setup-for-local-storage-testing) for detailed instructions.
 
 #### Code Quality
 
