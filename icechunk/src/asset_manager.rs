@@ -21,7 +21,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncBufRead, AsyncReadExt},
-    sync::Semaphore,
+    sync::{RwLock, Semaphore},
 };
 use tokio_util::io::SyncIoBridge;
 use tracing::{Span, debug, instrument, trace, warn};
@@ -84,6 +84,11 @@ pub struct AssetManager {
 
     #[serde(skip)]
     request_semaphore: Semaphore,
+
+    #[serde(skip)]
+    repo_version: Arc<RwLock<Option<VersionInfo>>>,
+    #[serde(skip)]
+    current_repo: Arc<RwLock<Option<Arc<RepoInfo>>>>,
 }
 
 impl private::Sealed for AssetManager {}
@@ -155,6 +160,8 @@ impl AssetManager {
             snapshot_cache_size_warned: AtomicBool::new(false),
             manifest_cache_size_warned: AtomicBool::new(false),
             request_semaphore: Semaphore::new(max_concurrent_requests as usize),
+            repo_version: Arc::new(RwLock::new(None)),
+            current_repo: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -465,7 +472,29 @@ impl AssetManager {
         &self,
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
         self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
-        fetch_repo_info(self.storage.as_ref(), &self.storage_settings).await
+
+        // check etag from version_info here
+        let remote_info =
+            fetch_repo_etag(self.storage.as_ref(), &self.storage_settings).await?;
+        let current_repo_info = self.repo_version.read().await;
+        if Some(remote_info.etag()) == current_repo_info.as_ref().map(|e| e.etag()) {
+            // just return current_repo, if it is cached
+            return Ok((
+                self.current_repo.read().await.clone().unwrap(),
+                // Safe to unwrap here, we already used this in the if statement above
+                current_repo_info.clone().unwrap(),
+            ));
+        }
+
+        let res = fetch_repo_info(self.storage.as_ref(), &self.storage_settings).await?;
+
+        let mut r = self.current_repo.write().await;
+        *r = Some(res.0.clone());
+
+        let mut r = self.repo_version.write().await;
+        *r = Some(res.1.clone());
+
+        Ok(res)
     }
 
     pub fn fail_unless_spec_at_least(
@@ -549,6 +578,11 @@ impl AssetManager {
             {
                 res @ Ok(_) => {
                     debug!(attempts, "Repo info object updated successfully");
+                    let mut r = self.current_repo.write().await;
+                    *r = Some(Arc::clone(&new_repo));
+
+                    let mut r = self.repo_version.write().await;
+                    *r = Some(res.as_ref().unwrap().clone());
                     return res;
                 }
                 Err(RepositoryError {
@@ -1285,6 +1319,17 @@ pub async fn fetch_repo_info(
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
     fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH).await
+}
+
+pub async fn fetch_repo_etag(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+) -> RepositoryResult<VersionInfo> {
+    let res = storage.get_object_etag(REPO_INFO_FILE_PATH, storage_settings).await?;
+    let mut version_info = VersionInfo::for_creation();
+    version_info.etag = res;
+
+    Ok(version_info)
 }
 
 async fn fetch_repo_info_backup(

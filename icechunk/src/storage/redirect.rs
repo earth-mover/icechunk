@@ -26,7 +26,7 @@ use crate::{
 use crate::{private, storage::StorageErrorKind};
 
 use super::{
-    DeleteObjectsResult, ListInfo, Settings, Storage, StorageError, StorageResult,
+    DeleteObjectsResult, ETag, ListInfo, Settings, Storage, StorageError, StorageResult,
     VersionInfo, VersionedUpdateResult,
 };
 
@@ -376,5 +376,13 @@ impl Storage for RedirectStorage {
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
         self.backend().await?.get_object_last_modified(path, settings).await
+    }
+
+    async fn get_object_etag(
+        &self,
+        path: &str,
+        settings: &Settings,
+    ) -> StorageResult<Option<ETag>> {
+        self.backend().await?.get_object_etag(path, settings).await
     }
 }

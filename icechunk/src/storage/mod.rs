@@ -499,6 +499,12 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>>;
 
+    async fn get_object_etag(
+        &self,
+        path: &str,
+        settings: &Settings,
+    ) -> StorageResult<Option<ETag>>;
+
     /// Delete a stream of objects, by their id string representations
     /// Input stream includes sizes to get as result the total number of bytes deleted
     #[instrument(skip(self, settings, ids))]

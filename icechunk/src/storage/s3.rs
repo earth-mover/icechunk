@@ -43,8 +43,8 @@ use tracing::{error, instrument};
 use typed_path::Utf8UnixPath;
 
 use super::{
-    DeleteObjectsResult, ListInfo, Settings, StorageErrorKind, StorageResult,
-    VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests, strip_quotes,
+    DeleteObjectsResult, ETag, ListInfo, Settings, StorageErrorKind, StorageResult,
+    VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests, strip_quotes
 };
 
 fn s3_get_err(err: impl std::error::Error + Send + Sync + 'static) -> StorageError {
@@ -810,6 +810,29 @@ impl Storage for S3Storage {
         })?;
 
         Ok(res)
+    }
+
+    #[instrument(skip(self, settings))]
+    async fn get_object_etag(
+        &self,
+        path: &str,
+        settings: &Settings,
+    ) -> StorageResult<Option<ETag>> {
+        let key = self.prefixed_path(path);
+        let mut req = self
+            .get_client(settings)
+            .await
+            .head_object()
+            .bucket(self.bucket.clone())
+            .key(key);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        let res = req.send().await.map_err(Box::new)?;
+
+        Ok(res.e_tag.map(|e| ETag(e)))
     }
 
     async fn get_object_range(

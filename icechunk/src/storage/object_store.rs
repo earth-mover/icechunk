@@ -471,6 +471,17 @@ impl Storage for ObjectStorage {
         Ok(res.last_modified)
     }
 
+    #[instrument(skip(self, settings))]
+    async fn get_object_etag(
+        &self,
+        path: &str,
+        settings: &Settings,
+    ) -> StorageResult<Option<ETag>> {
+        let path = self.prefixed_path(path);
+        let res = self.get_client(settings).await.head(&path).await.map_err(Box::new)?;
+        Ok(res.e_tag.map(|e| ETag(e)))
+    }
+
     #[instrument(skip(self))]
     async fn get_object_range(
         &self,
