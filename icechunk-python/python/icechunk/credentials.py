@@ -1,7 +1,7 @@
 import asyncio
 import inspect
 import pickle
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from datetime import datetime
 from typing import TypeVar, cast
 
@@ -48,12 +48,8 @@ AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
 
 AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
 
-S3CredentialProvider = Callable[
-    [], S3StaticCredentials | Awaitable[S3StaticCredentials]
-]
-GcsCredentialProvider = Callable[
-    [], GcsBearerCredential | Awaitable[GcsBearerCredential]
-]
+S3CredentialProvider = Callable[[], S3StaticCredentials | Awaitable[S3StaticCredentials]]
+GcsCredentialProvider = Callable[[], GcsBearerCredential | Awaitable[GcsBearerCredential]]
 CredentialType = TypeVar("CredentialType")
 
 
@@ -62,10 +58,13 @@ def _resolve_callback_once(
 ) -> CredentialType:
     value = get_credentials()
     if inspect.isawaitable(value):
+        awaitable = cast(Awaitable[CredentialType], value)
         try:
-            return asyncio.run(cast(Awaitable[CredentialType], value))
+            return asyncio.run(awaitable)
         except RuntimeError as err:
             if "asyncio.run() cannot be called from a running event loop" in str(err):
+                if inspect.iscoroutine(awaitable):
+                    cast(Coroutine[object, object, CredentialType], awaitable).close()
                 raise ValueError(
                     "scatter_initial_credentials=True cannot eagerly evaluate async "
                     "credential callbacks while an event loop is running. "
@@ -93,7 +92,9 @@ def s3_refreshable_credentials(
         set of credentials has expired, the cached value is no longer used. Notice that credentials
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
     """
-    current = _resolve_callback_once(get_credentials) if scatter_initial_credentials else None
+    current = (
+        _resolve_callback_once(get_credentials) if scatter_initial_credentials else None
+    )
     return S3Credentials.Refreshable(pickle.dumps(get_credentials), current)
 
 
@@ -264,7 +265,9 @@ def gcs_refreshable_credentials(
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
     """
 
-    current = _resolve_callback_once(get_credentials) if scatter_initial_credentials else None
+    current = (
+        _resolve_callback_once(get_credentials) if scatter_initial_credentials else None
+    )
     return GcsCredentials.Refreshable(pickle.dumps(get_credentials), current)
 
 

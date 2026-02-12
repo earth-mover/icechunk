@@ -66,8 +66,8 @@ def returns_something_else() -> int:
     return 42
 
 
-ASYNC_CREDENTIALS_CONTEXT: contextvars.ContextVar[str | None] = (
-    contextvars.ContextVar("ASYNC_CREDENTIALS_CONTEXT", default=None)
+ASYNC_CREDENTIALS_CONTEXT: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "ASYNC_CREDENTIALS_CONTEXT", default=None
 )
 
 
@@ -282,6 +282,111 @@ def test_async_refreshable_credentials_with_sync_repository_api(
     repo = Repository.open(callback_storage)
     assert "main" in repo.list_branches()
     assert calls_path.read_text() != ""
+
+
+def test_async_refreshable_credentials_constructed_sync_used_async(
+    tmp_path: Path, any_spec_version: int | None
+) -> None:
+    prefix = "test_async_refreshable_sync_construct_async_use-" + str(
+        int(time.time() * 1000)
+    )
+
+    create_storage = s3_storage(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id="minio123",
+        secret_access_key="minio123",
+    )
+    Repository.create(storage=create_storage, spec_version=any_spec_version)
+
+    calls_path = tmp_path / "async_sync_construct_calls.txt"
+    callback_storage = s3_storage(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        bucket="testbucket",
+        prefix=prefix,
+        get_credentials=AsyncGoodCredentials(calls_path),
+    )
+
+    async def use_async_repository_api() -> None:
+        repo = await Repository.open_async(callback_storage)
+        assert "main" in await repo.list_branches_async()
+
+    asyncio.run(use_async_repository_api())
+    assert calls_path.read_text() != ""
+
+
+def test_async_refreshable_credentials_repo_reused_across_event_loops(
+    tmp_path: Path, any_spec_version: int | None
+) -> None:
+    prefix = "test_async_refreshable_new_loop-" + str(int(time.time() * 1000))
+
+    create_storage = s3_storage(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id="minio123",
+        secret_access_key="minio123",
+    )
+    Repository.create(storage=create_storage, spec_version=any_spec_version)
+
+    calls_path = tmp_path / "async_new_loop_calls.txt"
+
+    async def create_and_use_repo_once() -> Repository:
+        callback_storage = s3_storage(
+            region="us-east-1",
+            endpoint_url="http://localhost:9000",
+            allow_http=True,
+            force_path_style=True,
+            bucket="testbucket",
+            prefix=prefix,
+            get_credentials=AsyncGoodCredentials(calls_path),
+        )
+        repo = await Repository.open_async(callback_storage)
+        assert "main" in await repo.list_branches_async()
+        return repo
+
+    repo = asyncio.run(create_and_use_repo_once())
+
+    async def use_repo_on_different_loop() -> None:
+        assert "main" in await repo.list_branches_async()
+
+    asyncio.run(use_repo_on_different_loop())
+    assert calls_path.read_text() != ""
+
+
+@pytest.mark.asyncio
+async def test_sync_list_branches_in_async_context_errors(
+    any_spec_version: int | None,
+) -> None:
+    prefix = "test_sync_list_branches_in_async_context_errors-" + str(
+        int(time.time() * 1000)
+    )
+
+    create_storage = s3_storage(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id="minio123",
+        secret_access_key="minio123",
+    )
+    Repository.create(storage=create_storage, spec_version=any_spec_version)
+
+    repo = await Repository.open_async(create_storage)
+    with pytest.raises(RuntimeError, match="list_branches_async"):
+        repo.list_branches()
 
 
 @pytest.mark.asyncio

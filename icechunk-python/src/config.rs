@@ -213,7 +213,7 @@ where
     PyCred: for<'a, 'py> FromPyObject<'a, 'py>,
     for<'a, 'py> <PyCred as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
 {
-    if let Some(task_locals) = task_locals {
+    if let Some(task_locals) = current_task_locals().or(task_locals) {
         let fut = Python::attach(|py| {
             pyo3_async_runtimes::into_future_with_locals(
                 &task_locals,

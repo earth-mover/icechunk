@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import warnings
 from collections.abc import AsyncIterator, Iterator
@@ -19,6 +20,17 @@ from icechunk._icechunk_python import (
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
 from icechunk.store import IcechunkStore
+
+
+def _raise_if_running_loop(sync_method: str, async_method: str) -> None:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    raise RuntimeError(
+        f"`Repository.{sync_method}` cannot be called while an asyncio event loop is "
+        f"running. Use `await Repository.{async_method}` instead."
+    )
 
 
 class Repository:
@@ -793,6 +805,7 @@ class Repository:
         set[str]
             A set of branch names.
         """
+        _raise_if_running_loop("list_branches", "list_branches_async")
         return self._repository.list_branches()
 
     async def list_branches_async(self) -> set[str]:
