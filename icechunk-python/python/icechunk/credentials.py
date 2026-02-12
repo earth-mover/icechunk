@@ -3,7 +3,7 @@ import inspect
 import pickle
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from datetime import datetime
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from icechunk._icechunk_python import (
     AzureCredentials,
@@ -58,13 +58,21 @@ def _resolve_callback_once(
 ) -> CredentialType:
     value = get_credentials()
     if inspect.isawaitable(value):
-        awaitable = cast(Awaitable[CredentialType], value)
+        if inspect.iscoroutine(value):
+            coroutine = cast(Coroutine[Any, Any, CredentialType], value)
+        else:
+            awaitable = cast(Awaitable[CredentialType], value)
+
+            async def _as_coroutine() -> CredentialType:
+                return await awaitable
+
+            coroutine = _as_coroutine()
+
         try:
-            return asyncio.run(awaitable)
+            return asyncio.run(coroutine)
         except RuntimeError as err:
             if "asyncio.run() cannot be called from a running event loop" in str(err):
-                if inspect.iscoroutine(awaitable):
-                    cast(Coroutine[object, object, CredentialType], awaitable).close()
+                coroutine.close()
                 raise ValueError(
                     "scatter_initial_credentials=True cannot eagerly evaluate async "
                     "credential callbacks while an event loop is running. "
@@ -72,7 +80,7 @@ def _resolve_callback_once(
                 ) from err
             raise
 
-    return cast(CredentialType, value)
+    return value
 
 
 def s3_refreshable_credentials(
