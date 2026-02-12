@@ -1,4 +1,3 @@
-import asyncio
 import datetime
 import warnings
 from collections.abc import AsyncIterator, Iterator
@@ -20,24 +19,6 @@ from icechunk._icechunk_python import (
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
 from icechunk.store import IcechunkStore
-
-
-def _raise_if_running_loop(
-    sync_method: str, async_method: str, *, await_async: bool = True
-) -> None:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    guidance = (
-        f"Use `await Repository.{async_method}` instead."
-        if await_async
-        else f"Use `Repository.{async_method}` instead."
-    )
-    raise RuntimeError(
-        f"`Repository.{sync_method}` cannot be called while an asyncio event loop is "
-        f"running. {guidance}"
-    )
 
 
 class Repository:
@@ -86,7 +67,6 @@ class Repository:
         Self
             An instance of the Repository class.
         """
-        _raise_if_running_loop("create", "create_async")
         return cls(
             PyRepository.create(
                 storage,
@@ -179,7 +159,6 @@ class Repository:
         Self
             An instance of the Repository class.
         """
-        _raise_if_running_loop("open", "open_async")
         return cls(
             PyRepository.open(
                 storage,
@@ -275,7 +254,6 @@ class Repository:
         Self
             An instance of the Repository class.
         """
-        _raise_if_running_loop("open_or_create", "open_or_create_async")
         return cls(
             PyRepository.open_or_create(
                 storage,
@@ -351,7 +329,6 @@ class Repository:
         bool
             True if the repository exists, False otherwise.
         """
-        _raise_if_running_loop("exists", "exists_async")
         return PyRepository.exists(storage)
 
     @staticmethod
@@ -390,7 +367,6 @@ class Repository:
             The spec version of the repository if it exists, None if no repository
             exists at the given location.
         """
-        _raise_if_running_loop("fetch_spec_version", "fetch_spec_version_async")
         return PyRepository.fetch_spec_version(storage)
 
     @staticmethod
@@ -439,7 +415,6 @@ class Repository:
         RepositoryConfig | None
             The repository configuration if it exists, None otherwise.
         """
-        _raise_if_running_loop("fetch_config", "fetch_config_async")
         return PyRepository.fetch_config(storage)
 
     @staticmethod
@@ -467,7 +442,6 @@ class Repository:
         -------
         None
         """
-        _raise_if_running_loop("save_config", "save_config_async")
         return self._repository.save_config()
 
     async def save_config_async(self) -> None:
@@ -536,7 +510,6 @@ class Repository:
         Self
             A new Repository instance with the updated configuration.
         """
-        _raise_if_running_loop("reopen", "reopen_async")
         return self.__class__(
             self._repository.reopen(
                 config=config,
@@ -610,7 +583,6 @@ class Repository:
         dict[str, Any]
             The repository level metadata.
         """
-        _raise_if_running_loop("get_metadata", "get_metadata_async")
         return self._repository.get_metadata()
 
     @property
@@ -647,7 +619,6 @@ class Repository:
         metadata : dict[str, Any]
             The value to use as repository metadata.
         """
-        _raise_if_running_loop("set_metadata", "set_metadata_async")
         self._repository.set_metadata(metadata)
 
     async def set_metadata_async(self, metadata: dict[str, Any]) -> None:
@@ -674,7 +645,6 @@ class Repository:
         metadata : dict[str, Any]
             The dict to merge into the repository metadata.
         """
-        _raise_if_running_loop("update_metadata", "update_metadata_async")
         return self._repository.update_metadata(metadata)
 
     async def update_metadata_async(self, metadata: dict[str, Any]) -> dict[str, Any]:
@@ -718,7 +688,6 @@ class Repository:
         -----
         Only one of the arguments can be specified.
         """
-        _raise_if_running_loop("ancestry", "async_ancestry", await_async=False)
 
         # the returned object is both an Async and Sync iterator
         res = cast(
@@ -765,7 +734,6 @@ class Repository:
         """
         Get a summary of changes to the repository
         """
-        _raise_if_running_loop("ops_log", "ops_log_async", await_async=False)
 
         # the returned object is both an Async and Sync iterator
         res = cast(
@@ -797,7 +765,6 @@ class Repository:
         -------
         None
         """
-        _raise_if_running_loop("create_branch", "create_branch_async")
         self._repository.create_branch(branch, snapshot_id)
 
     async def create_branch_async(self, branch: str, snapshot_id: str) -> None:
@@ -826,7 +793,6 @@ class Repository:
         set[str]
             A set of branch names.
         """
-        _raise_if_running_loop("list_branches", "list_branches_async")
         return self._repository.list_branches()
 
     async def list_branches_async(self) -> set[str]:
@@ -854,7 +820,6 @@ class Repository:
         str
             The snapshot ID of the tip of the branch.
         """
-        _raise_if_running_loop("lookup_branch", "lookup_branch_async")
         return self._repository.lookup_branch(branch)
 
     async def lookup_branch_async(self, branch: str) -> str:
@@ -886,7 +851,6 @@ class Repository:
         -------
         SnapshotInfo
         """
-        _raise_if_running_loop("lookup_snapshot", "lookup_snapshot_async")
         return self._repository.lookup_snapshot(snapshot_id)
 
     async def lookup_snapshot_async(self, snapshot_id: str) -> SnapshotInfo:
@@ -917,7 +881,6 @@ class Repository:
         -------
         list[ManifestFileInfo]
         """
-        _raise_if_running_loop("list_manifest_files", "list_manifest_files_async")
         return self._repository.list_manifest_files(snapshot_id)
 
     async def list_manifest_files_async(self, snapshot_id: str) -> list[ManifestFileInfo]:
@@ -958,7 +921,6 @@ class Repository:
         -------
         None
         """
-        _raise_if_running_loop("reset_branch", "reset_branch_async")
         self._repository.reset_branch(branch, snapshot_id, from_snapshot_id)
 
     async def reset_branch_async(
@@ -999,7 +961,6 @@ class Repository:
         -------
         None
         """
-        _raise_if_running_loop("delete_branch", "delete_branch_async")
         self._repository.delete_branch(branch)
 
     async def delete_branch_async(self, branch: str) -> None:
@@ -1030,7 +991,6 @@ class Repository:
         -------
         None
         """
-        _raise_if_running_loop("delete_tag", "delete_tag_async")
         self._repository.delete_tag(tag)
 
     async def delete_tag_async(self, tag: str) -> None:
@@ -1063,7 +1023,6 @@ class Repository:
         -------
         None
         """
-        _raise_if_running_loop("create_tag", "create_tag_async")
         self._repository.create_tag(tag, snapshot_id)
 
     async def create_tag_async(self, tag: str, snapshot_id: str) -> None:
@@ -1092,7 +1051,6 @@ class Repository:
         set[str]
             A set of tag names.
         """
-        _raise_if_running_loop("list_tags", "list_tags_async")
         return self._repository.list_tags()
 
     async def list_tags_async(self) -> set[str]:
@@ -1120,7 +1078,6 @@ class Repository:
         str
             The snapshot ID of the tag.
         """
-        _raise_if_running_loop("lookup_tag", "lookup_tag_async")
         return self._repository.lookup_tag(tag)
 
     async def lookup_tag_async(self, tag: str) -> str:
@@ -1162,7 +1119,6 @@ class Repository:
         Diff
             The operations executed between the two versions
         """
-        _raise_if_running_loop("diff", "diff_async")
         return self._repository.diff(
             from_branch=from_branch,
             from_tag=from_tag,
@@ -1240,7 +1196,6 @@ class Repository:
         -----
         Only one of the arguments can be specified.
         """
-        _raise_if_running_loop("readonly_session", "readonly_session_async")
         return Session(
             self._repository.readonly_session(
                 branch=branch, tag=tag, snapshot_id=snapshot_id, as_of=as_of
@@ -1308,7 +1263,6 @@ class Repository:
         Session
             The writable session on the branch.
         """
-        _raise_if_running_loop("writable_session", "writable_session_async")
         return Session(self._repository.writable_session(branch))
 
     async def writable_session_async(self, branch: str) -> Session:
@@ -1354,7 +1308,6 @@ class Repository:
         Session
             The writable session on the branch.
         """
-        _raise_if_running_loop("rearrange_session", "rearrange_session_async")
         return Session(self._repository.rearrange_session(branch))
 
     async def rearrange_session_async(self, branch: str) -> Session:
@@ -1466,7 +1419,6 @@ class Repository:
         -------
         set of expires snapshot IDs
         """
-        _raise_if_running_loop("expire_snapshots", "expire_snapshots_async")
         return self._repository.expire_snapshots(
             older_than,
             delete_expired_branches=delete_expired_branches,
@@ -1548,7 +1500,6 @@ class Repository:
             The snapshot ID of the new commit.
 
         """
-        _raise_if_running_loop("rewrite_manifests", "rewrite_manifests_async")
         return self._repository.rewrite_manifests(
             message, branch=branch, metadata=metadata
         )
@@ -1621,7 +1572,6 @@ class Repository:
         GCSummary
             Summary of objects deleted.
         """
-        _raise_if_running_loop("garbage_collect", "garbage_collect_async")
 
         return self._repository.garbage_collect(
             delete_object_older_than,
@@ -1703,7 +1653,6 @@ class Repository:
         max_concurrent_manifest_fetches : int
             Don't run more than this many concurrent manifest fetches.
         """
-        _raise_if_running_loop("chunk_storage_stats", "chunk_storage_stats_async")
         return self._repository.chunk_storage_stats(
             max_snapshots_in_memory=max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes=max_compressed_manifest_mem_bytes,
@@ -1769,7 +1718,6 @@ class Repository:
         max_concurrent_manifest_fetches : int
             Don't run more than this many concurrent manifest fetches.
         """
-        _raise_if_running_loop("total_chunks_storage", "total_chunks_storage_async")
 
         warnings.warn(
             "The ``total_chunks_storage`` method has been deprecated in favour of the ``chunk_storage_stats`` method. "
@@ -1831,7 +1779,6 @@ class Repository:
         return stats.native_bytes
 
     def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str:
-        _raise_if_running_loop("inspect_snapshot", "inspect_snapshot_async")
         return self._repository.inspect_snapshot(snapshot_id, pretty=pretty)
 
     async def inspect_snapshot_async(

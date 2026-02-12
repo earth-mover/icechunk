@@ -141,6 +141,9 @@ pub(crate) fn datetime_repr(d: &DateTime<Utc>) -> String {
 struct PythonCredentialsFetcher<CredType> {
     pub pickled_function: Vec<u8>,
     pub initial: Option<CredType>,
+    // Intentionally skipped during serialization — on deserialization,
+    // `await_python_callback` calls `current_task_locals()` to get
+    // fresh locals from whatever event loop is active at that point.
     #[serde(skip, default)]
     pub task_locals: Option<pyo3_async_runtimes::TaskLocals>,
 }
@@ -224,6 +227,10 @@ where
         return Python::attach(|py| value.bind(py).extract().map_err(Into::into));
     }
 
+    // No task locals available — no Python event loop is currently running.
+    // Fall back to asyncio.run() which creates a temporary event loop to
+    // drive the awaitable. This is the correct path when an async credential
+    // callback is used from a sync context (e.g. Repository.open).
     Python::attach(|py| {
         let asyncio = PyModule::import(py, "asyncio")?;
         let value = asyncio.getattr("run")?.call1((awaitable.bind(py),))?;

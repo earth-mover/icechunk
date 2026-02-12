@@ -71,8 +71,8 @@ def _resolve_callback_once(
         try:
             return asyncio.run(coroutine)
         except RuntimeError as err:
+            coroutine.close()
             if "asyncio.run() cannot be called from a running event loop" in str(err):
-                coroutine.close()
                 raise ValueError(
                     "scatter_initial_credentials=True cannot eagerly evaluate async "
                     "credential callbacks while an event loop is running. "

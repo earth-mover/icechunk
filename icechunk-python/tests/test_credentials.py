@@ -281,7 +281,7 @@ def test_async_refreshable_credentials_with_sync_repository_api(
 
     repo = Repository.open(callback_storage)
     assert "main" in repo.list_branches()
-    assert calls_path.read_text() != ""
+    assert "." in calls_path.read_text()
 
 
 def test_async_refreshable_credentials_constructed_sync_used_async(
@@ -319,7 +319,7 @@ def test_async_refreshable_credentials_constructed_sync_used_async(
         assert "main" in await repo.list_branches_async()
 
     asyncio.run(use_async_repository_api())
-    assert calls_path.read_text() != ""
+    assert "." in calls_path.read_text()
 
 
 def test_async_refreshable_credentials_repo_reused_across_event_loops(
@@ -361,67 +361,7 @@ def test_async_refreshable_credentials_repo_reused_across_event_loops(
         assert "main" in await repo.list_branches_async()
 
     asyncio.run(use_repo_on_different_loop())
-    assert calls_path.read_text() != ""
-
-
-@pytest.mark.asyncio
-async def test_sync_list_branches_in_async_context_errors(
-    any_spec_version: int | None,
-) -> None:
-    prefix = "test_sync_list_branches_in_async_context_errors-" + str(
-        int(time.time() * 1000)
-    )
-
-    create_storage = s3_storage(
-        region="us-east-1",
-        endpoint_url="http://localhost:9000",
-        allow_http=True,
-        force_path_style=True,
-        bucket="testbucket",
-        prefix=prefix,
-        access_key_id="minio123",
-        secret_access_key="minio123",
-    )
-    await Repository.create_async(
-        storage=create_storage, spec_version=any_spec_version
-    )
-
-    repo = await Repository.open_async(create_storage)
-    with pytest.raises(RuntimeError, match="list_branches_async"):
-        repo.list_branches()
-
-
-@pytest.mark.asyncio
-async def test_sync_repository_apis_in_async_context_error_consistently(
-    any_spec_version: int | None,
-) -> None:
-    prefix = "test_sync_repository_apis_in_async_context_error_consistently-" + str(
-        int(time.time() * 1000)
-    )
-
-    create_storage = s3_storage(
-        region="us-east-1",
-        endpoint_url="http://localhost:9000",
-        allow_http=True,
-        force_path_style=True,
-        bucket="testbucket",
-        prefix=prefix,
-        access_key_id="minio123",
-        secret_access_key="minio123",
-    )
-    await Repository.create_async(
-        storage=create_storage, spec_version=any_spec_version
-    )
-    repo = await Repository.open_async(create_storage)
-
-    with pytest.raises(RuntimeError, match="exists_async"):
-        Repository.exists(create_storage)
-    with pytest.raises(RuntimeError, match="lookup_branch_async"):
-        repo.lookup_branch("main")
-    with pytest.raises(RuntimeError, match=r"Repository\.async_ancestry"):
-        repo.ancestry(branch="main")
-    with pytest.raises(RuntimeError, match=r"Repository\.ops_log_async"):
-        repo.ops_log()
+    assert "." in calls_path.read_text()
 
 
 @pytest.mark.asyncio
@@ -440,9 +380,7 @@ async def test_async_refreshable_credentials_with_async_repository_api(
         access_key_id="minio123",
         secret_access_key="minio123",
     )
-    await Repository.create_async(
-        storage=create_storage, spec_version=any_spec_version
-    )
+    await Repository.create_async(storage=create_storage, spec_version=any_spec_version)
 
     calls_path = tmp_path / "async_async_calls.txt"
     context_value = "expected-refresh-context"
@@ -465,4 +403,4 @@ async def test_async_refreshable_credentials_with_async_repository_api(
     finally:
         ASYNC_CREDENTIALS_CONTEXT.reset(reset_token)
 
-    assert calls_path.read_text() != ""
+    assert "." in calls_path.read_text()
