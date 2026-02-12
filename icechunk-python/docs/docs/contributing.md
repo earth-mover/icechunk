@@ -189,6 +189,10 @@ uv run scripts/check_xarray_docs_sync.py --update-known-diffs
 
 **CI Integration**: The script returns exit code 0 if only known differences exist, allowing CI to pass while still displaying diffs for review.
 
+#### Troubleshooting
+
+**Too many open Files**: If your limit for open file descriptors is set low (usually only a problem on macOS) some tests might fail. Adjusting the level with e.g. `ulimit -n 1024` should fix this issue. 
+
 ### Rust Development Workflow
 
 #### Prerequisites
