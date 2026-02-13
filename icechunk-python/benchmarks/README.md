@@ -137,7 +137,13 @@ Downsides:
 ### `runner.py`
 
 `runner.py` abstracts the painful task of setting up envs with different versions (with potential format changes), and recreating datasets where needed.
-Datasets are written to `s3://icechunk-test/benchmarks/REFNAME_SHORTCOMMIT`.
+Datasets are written to `{bucket}/benchmarks/{REF}_{SHORTCOMMIT}/` where the bucket depends on `--where`:
+| Store   | Bucket                |
+|---------|-----------------------|
+| s3      | `icechunk-ci`         |
+| gcs     | `icechunk-test-gcp`   |
+| tigris  | `icechunk-test`       |
+| r2      | `icechunk-test-r2`    |
 
 Usage:
 ``` sh

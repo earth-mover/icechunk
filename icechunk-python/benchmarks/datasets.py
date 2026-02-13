@@ -39,7 +39,7 @@ CONSTRUCTORS = {
     "r2": ic.s3_storage,
 }
 TEST_BUCKETS = {
-    "s3": dict(store="s3", bucket="icechunk-test", region="us-east-1"),
+    "s3": dict(store="s3", bucket="icechunk-ci", region="us-east-1"),
     "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
     # "gcs": dict(store="gcs", bucket="arraylake-scratch", region="us-east1"),
     # not using region="auto", because for now we pass this directly to coiled.
