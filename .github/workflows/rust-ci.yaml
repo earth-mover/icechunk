@@ -203,4 +203,4 @@ jobs:
           CFLAGS_wasm32_wasi: --sysroot=/usr -isystem /usr/include/wasm32-wasi
           CXXFLAGS_wasm32_wasi: --sysroot=/usr -isystem /usr/include/wasm32-wasi
         run: |
-          cargo check -p icechunk --no-default-features --target wasm32-wasip1-threads
+          cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
