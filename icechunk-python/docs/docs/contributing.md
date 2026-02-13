@@ -15,7 +15,8 @@ Icechunk is an open source (Apache 2.0) project and welcomes contributions in th
 
 ## Development
 
-This guide describes the local development workflow for
+This guide describes the local development workflow for:
+
 - [Python](#python-development-workflow)
 - [Rust](#rust-development-workflow)
 - Building the [Documentation](#building-documentation)
