@@ -49,11 +49,16 @@ def get_benchmark_deps(filepath: str) -> str:
     """
     with open(filepath, mode="rb") as f:
         data = tomllib.load(f)
-    return (
-        " ".join(data["project"]["optional-dependencies"].get("benchmark", ""))
-        + " "
-        + " ".join(data["project"]["optional-dependencies"].get("test", ""))
+
+    # Support both [dependency-groups] (uv) and [project.optional-dependencies] (legacy)
+    groups = data.get("dependency-groups") or data.get("project", {}).get(
+        "optional-dependencies", {}
     )
+
+    deps = []
+    for group_name in ("benchmark", "test"):
+        deps.extend(dep for dep in groups.get(group_name, []) if isinstance(dep, str))
+    return " ".join(deps)
 
 
 class Runner:
