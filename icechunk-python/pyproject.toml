@@ -27,7 +27,7 @@ dependencies = ["zarr>=3.1.0"]
 dev = [
     { include-group = "test" },
     "mypy",
-    "ruff",
+    "ruff==0.15.1",
     "maturin>=1.7,<2.0",
     "maturin-import-hook>=0.3.0",
 ]
@@ -139,6 +139,8 @@ warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [tool.ruff]
+fix = true
+show-fixes = true
 line-length = 90
 extend-exclude = ["*.ipynb", "doc", "_typed_ops.pyi"]
 
