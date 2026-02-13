@@ -229,15 +229,17 @@ class CoiledRunner(Runner):
 
         ckwargs = self.get_coiled_kwargs()
         # repeated calls are a no-op!
-        coiled.create_software_environment(
-            name=ckwargs["software"],
-            workspace=ckwargs["workspace"],
-            conda={
-                "channels": ["conda-forge"],
-                "dependencies": ["rust", "python=3.12", "pip"],
-            },
-            pip=[self.pip_github_url, "coiled", *deps],
-        )
+        envs = coiled.list_software_environments(workspace=ckwargs["workspace"])
+        if ckwargs["software"] not in envs:
+            coiled.create_software_environment(
+                name=ckwargs["software"],
+                workspace=ckwargs["workspace"],
+                conda={
+                    "channels": ["conda-forge"],
+                    "dependencies": ["rust", "python=3.12", "pip"],
+                },
+                pip=[self.pip_github_url, "coiled", *deps],
+            )
         super().initialize()
 
     def execute(self, cmd, **kwargs):
