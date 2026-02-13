@@ -222,6 +222,14 @@ nav:
     - Spec: spec.md
     - Version Policy: version-policy.md
     - Python API Reference: reference.md
-    - Icechunk Rust: icechunk-rust.md
+    - Rust Library:
+      - Overview: rust/index.md
+      - Architecture: rust/architecture.md
+      - Repository: rust/repository.md
+      - Session & ChangeSet: rust/session.md
+      - Store: rust/store.md
+      - Core Types: rust/core-types.md
+      - Conflict Resolution: rust/conflicts.md
+      - Storage Backends: rust/storage.md
     - Contributing: contributing.md
     - Migrate to 1.0: migration.md
