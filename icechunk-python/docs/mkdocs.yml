@@ -144,7 +144,7 @@ plugins:
             summary: true
             # Fix for cyclic alias issues on macOS
             allow_inspection: false
-          paths: [../icechunk-python/python]
+          paths: [../python]
   - mkdocs-jupyter:
       include_source: True
       # include: ["*.ipynb"] # Default: ["*.py", "*.ipynb"]
