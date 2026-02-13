@@ -25,7 +25,6 @@ from helpers import (
 
 logger = setup_logger()
 
-PIP_OPTIONS = "--disable-pip-version-check -q"
 PYTEST_OPTIONS = "-q --durations 10 --rootdir=benchmarks --tb=line"
 TMP = tempfile.gettempdir()
 CURRENTDIR = os.getcwd()
@@ -132,31 +131,52 @@ class Runner:
 
 
 class LocalRunner(Runner):
-    activate: str = "source .venv/bin/activate"
     bench_store_dir = CURRENTDIR
 
     def __init__(self, *, ref: str, where: str, save_prefix: str):
         super().__init__(ref=ref, where=where, save_prefix="")
         suffix = self.commit
         self.base = f"{TMP}/icechunk-bench-{suffix}"
-        self.cwd = f"{TMP}/icechunk-bench-{suffix}/icechunk"
-        self.pycwd = f"{TMP}/icechunk-bench-{suffix}/icechunk/icechunk-python"
+        self.pycwd = f"{self.base}/icechunk-python"
+        self.repo_root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
 
     def sync_benchmarks_folder(self):
-        subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}"], check=True)
+        subprocess.run(["rm", "-rf", f"{self.pycwd}/benchmarks"], check=False)
+        subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}/"], check=True)
 
     def execute(self, cmd: str, **kwargs) -> None:
-        # don't stop if benchmarks fail
-        subprocess.run(f"{self.activate} && {cmd}", cwd=self.pycwd, shell=True, **kwargs)
+        subprocess.run(f"uv run {cmd}", cwd=self.pycwd, shell=True, **kwargs)
 
     def initialize(self) -> None:
         logger.info(f"Running initialize for {self.ref} in {self.base}")
 
-        deps = get_benchmark_deps(f"{CURRENTDIR}/pyproject.toml")
-        subprocess.run(["mkdir", "-p", self.pycwd], check=False)
-        subprocess.run(["python3", "-m", "venv", ".venv"], cwd=self.pycwd, check=True)
-        cmd = f"pip install {PIP_OPTIONS} {self.pip_github_url} {deps}"
-        self.execute(cmd, check=True)
+        if not os.path.exists(self.base):
+            subprocess.run(
+                ["git", "clone", "--local", "--no-checkout", self.repo_root, self.base],
+                check=True,
+            )
+        subprocess.run(
+            ["git", "checkout", self.full_commit],
+            cwd=self.base,
+            check=True,
+        )
+        subprocess.run(
+            ["uv", "sync", "--group", "benchmark"],
+            cwd=self.pycwd,
+            check=True,
+        )
+        build_env = {k: v for k, v in os.environ.items() if k != "CONDA_PREFIX"}
+        subprocess.run(
+            ["uv", "run", "maturin", "develop", "--uv", "--release"],
+            cwd=self.pycwd,
+            check=True,
+            env=build_env,
+        )
         super().initialize()
 
     def run(self, *, pytest_extra: str = "") -> None:
