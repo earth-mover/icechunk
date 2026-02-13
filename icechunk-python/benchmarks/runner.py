@@ -150,7 +150,9 @@ class LocalRunner(Runner):
         subprocess.run(["cp", "-r", "benchmarks", f"{self.pycwd}/"], check=True)
 
     def execute(self, cmd: str, **kwargs) -> None:
-        subprocess.run(f"uv run {cmd}", cwd=self.pycwd, shell=True, **kwargs)
+        subprocess.run(
+            f"uv run --group benchmark {cmd}", cwd=self.pycwd, shell=True, **kwargs
+        )
 
     def initialize(self) -> None:
         logger.info(f"Running initialize for {self.ref} in {self.base}")

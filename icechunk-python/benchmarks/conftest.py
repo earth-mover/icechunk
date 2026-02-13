@@ -15,7 +15,13 @@ from benchmarks.datasets import (
     BenchmarkWriteDataset,
     Dataset,
 )
-from icechunk import Repository, local_filesystem_storage
+from icechunk import (
+    Repository,
+    RepositoryConfig,
+    VirtualChunkContainer,
+    local_filesystem_storage,
+    s3_store,
+)
 
 try:
     from icechunk import ManifestSplittingConfig  # noqa: F401
@@ -41,7 +47,11 @@ def request_to_dataset(request, moar_prefix: str = "") -> Dataset:
 
 @pytest.fixture(scope="function")
 def repo(tmpdir: str) -> Repository:
-    return Repository.create(storage=local_filesystem_storage(tmpdir))
+    config = RepositoryConfig.default()
+    config.set_virtual_chunk_container(
+        VirtualChunkContainer("s3://foo/", s3_store(region="us-east-1"))
+    )
+    return Repository.create(storage=local_filesystem_storage(tmpdir), config=config)
 
 
 @pytest.fixture(params=[pytest.param(PANCAKE_WRITES, id="pancake-writes")])
