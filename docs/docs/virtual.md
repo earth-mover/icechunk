@@ -164,6 +164,10 @@ ds.sst.isel(time=26, zlev=0).plot(x='lon', y='lat', vmin=0)
 
 While `VirtualiZarr` is the easiest way to create virtual datasets with Icechunk, the Store API that it uses to create the datasets in Icechunk is public. `IcechunkStore` contains a [`set_virtual_ref`](./reference.md#icechunk.IcechunkStore.set_virtual_ref) method that specifies a virtual ref for a specified chunk.
 
+!!! important "URL prefix must end with a trailing slash"
+
+    When creating a `VirtualChunkContainer`, the URL prefix **must end with a trailing slash** (`/`). For example, use `"s3://mybucket/my/data/"` not `"s3://mybucket/my/data"`.
+
 ### Virtual Reference Storage Support
 
 Currently, Icechunk supports four types of storage for virtual references:
@@ -178,7 +182,7 @@ Here is how we can set the chunk at key `c/0` to point to a file on an s3 bucket
 
 ```python
 config = icechunk.RepositoryConfig.default()
-config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("s3://mybucket/my/data", icechunk.s3_store(region="us-east-1")))
+config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("s3://mybucket/my/data/", icechunk.s3_store(region="us-east-1")))
 repo = icechunk.Repository.create(storage, config)
 session = repo.writable_session("main")
 session.store.set_virtual_ref('c/0', 's3://mybucket/my/data/file.nc', offset=1000, length=200)
@@ -198,7 +202,7 @@ Here is how we can set the chunk at key `c/0` to point to a file on an s3 bucket
 
 ```python
 config = icechunk.RepositoryConfig.default()
-config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("gcs://mybucket/my/data", icechunk.gcs_store(options={})))
+config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("gcs://mybucket/my/data/", icechunk.gcs_store(opts={})))
 repo = icechunk.Repository.create(storage, config)
 session = repo.writable_session("main")
 session.store.set_virtual_ref('c/0', 'gcs://mybucket/my/data/file.nc', offset=1000, length=200)
@@ -230,7 +234,7 @@ Here is how we can set the chunk at key `c/0` to point to a file on my local fil
 
 ```python
 config = icechunk.RepositoryConfig.default()
-config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("s3://mybucket/my/data", icechunk.local_filesystem_store("/path/to/my")))
+config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("s3://mybucket/my/data/", icechunk.local_filesystem_store("/path/to/my")))
 repo = icechunk.Repository.create(storage, config)
 session = repo.writable_session("main")
 session.store.set_virtual_ref('c/0', 'file:///path/to/my/file.nc', offset=20, length=100)
