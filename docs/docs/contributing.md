@@ -252,6 +252,14 @@ Or using other package managers:
 
 Ensure you have navigated to the root directory of the cloned repo (i.e. not the `icechunk-python` subdirectory).
 
+For running the tests we also leverage [cargo-nextest](https://nexte.st/),
+for building it from source run
+```bash
+cargo install cargo-nextest
+```
+or check the [installation instructions](https://nexte.st/docs/installation/)
+for pre-built binaries or using package managers.
+
 #### Building
 
 Build the Rust workspace:
@@ -343,6 +351,21 @@ pre-commit run --all-files
 
 # Run full CI checks manually
 pre-commit run rust-pre-commit-ci --hook-stage manual
+```
+
+#### Faster linking for incremental builds with mold
+
+On Linux you can use the mold linker for
+significantly faster linking (~5-10x improvement on incremental builds).
+It can be installed with `apt install mold` or `dnf install mold`
+
+Then edit your `~/.cargo/config.toml` to include these configs:
+```toml
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 ```
 
 ## Roadmap
