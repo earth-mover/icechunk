@@ -214,7 +214,7 @@ Here is how we can set the chunk at key `c/0` to point to a file on `myserver`, 
 
 ```python
 config = icechunk.RepositoryConfig.default()
-config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("https://myserver/my/data", icechunk.http_store(options={})))
+config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("https://myserver/my/data/", icechunk.http_store(opts={})))
 repo = icechunk.Repository.create(storage, config)
 session = repo.writable_session("main")
 session.store.set_virtual_ref('c/0', 'https://myserver/my/data/file.nc', offset=1000, length=200)
