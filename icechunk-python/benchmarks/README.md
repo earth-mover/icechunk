@@ -40,7 +40,7 @@ pytest -nauto -m setup_benchmarks benchmarks/
 ```
 As of Jan 20, 2025 this command takes about 3 minutes to run.
 
-Use the `--force-setup` flag to avoid re-creating datasets if possible.
+Use `--force-setup=False` to avoid re-creating datasets if possible.
 
 ``` sh
 pytest -nauto -m setup_benchmarks --force-setup=False benchmarks/
@@ -146,7 +146,7 @@ python benchmarks/runner.py icechunk-v0.1.0-alpha.12 main
 This will
 1. setup a virtual env with the icechunk version
 2. compile it,
-3. run `setup_benchmarks` with `force-setup=False`. This will recreate datasets if the version in the bucket cannot be opened by this icechunk version.
+3. run `setup_benchmarks`. This will recreate datasets if the version in the bucket cannot be opened by this icechunk version. Pass `--setup=force` to always recreate, or `--setup=skip` to skip setup entirely.
 4. Runs the benchmarks.
 5. Compares the benchmarks.
 
@@ -225,7 +225,7 @@ To easily run benchmarks for some named refs use `benchmarks/run_refs.py`
 ### Comparing across multiple stores
 
 ```sh
-python benchmarks/runner.py --skip-setup --pytest '-k test_write_simple' --where 's3|s3_ob|gcs' main
+python benchmarks/runner.py --setup=skip --pytest '-k test_write_simple' --where 's3|s3_ob|gcs' main
 ```
 
 ``` sh
