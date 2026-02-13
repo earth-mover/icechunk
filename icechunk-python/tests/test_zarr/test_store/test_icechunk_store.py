@@ -422,7 +422,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     @pytest.mark.xfail(
         reason="Fails locally for unknown reasons. Tracked in https://github.com/earth-mover/icechunk/issues/1642",
-        strict=True,
+        strict=False,  # only fails locally not in CI
     )
     async def test_get_many(self, store: IcechunkStore) -> None:
         """
