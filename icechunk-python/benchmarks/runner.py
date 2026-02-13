@@ -265,9 +265,9 @@ def run_there(where: str, *, args, save_prefix) -> None:
     # we can only initialize in parallel since the two refs may have the same spec version.
     process_map(serial=args.serial, func=partial(init_for_ref), iterable=runners)
 
-    if not args.skip_setup:
+    if args.setup != "skip":
         for runner in runners:
-            runner.setup(force=args.force_setup)
+            runner.setup(force=args.setup == "force")
 
     # TODO: this could be parallelized for coiled runners
     for runner in tqdm.tqdm(runners):
@@ -285,13 +285,10 @@ if __name__ == "__main__":
         default="local",
     )
     parser.add_argument(
-        "--skip-setup",
-        help="skip setup step, useful for benchmarks that don't need data",
-        action="store_true",
-        default=False,
-    )
-    parser.add_argument(
-        "--force-setup", help="forced recreation of datasets?", type=bool, default=False
+        "--setup",
+        help="control setup step: 'force' to force recreation, 'skip' to skip entirely. Default: run setup without forcing.",
+        choices=["force", "skip"],
+        default=None,
     )
     args = parser.parse_args()
 
