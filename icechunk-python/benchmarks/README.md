@@ -3,6 +3,28 @@
 This is a benchmark suite based on `pytest-benchmark`.
 It is best to think of these benchmarks as benchmarking "integration" workflows that exercise the ecosystem from the Xarray/Zarr level down to Icechunk.
 
+## Quick Start (uv)
+
+From the repo root:
+
+``` sh
+# Install benchmark deps and build icechunk (release mode)
+just bench-build
+
+# Create benchmark datasets (once, ~3 min)
+just bench-setup
+
+# Run all benchmarks
+just bench
+
+# Run specific benchmarks
+just bench "-k getsize"
+just bench "-k write"
+
+# Compare saved runs
+just bench-compare 0020 0021
+```
+
 ## Setup
 
 Install the necessary dependencies with the `[benchmarks]` extra.
@@ -128,14 +150,17 @@ This will
 4. Runs the benchmarks.
 5. Compares the benchmarks.
 
-### Just aliases
+### Just recipes
 
-> [!WARNING]
-> This doesn't work yet
+Some useful `just` recipes:
 
-Some useful `just` aliases:
-
-| Compare these benchmark runs | `just bench-compare 0020 0021 0022` |
+| Task                      | Command                             |
+|---------------------------|-------------------------------------|
+| Install deps + build      | `just bench-build`                  |
+| Create benchmark datasets | `just bench-setup`                  |
+| Run benchmarks            | `just bench`                        |
+| Run specific benchmarks   | `just bench "-k getsize"`           |
+| Compare benchmark runs    | `just bench-compare 0020 0021 0022` |
 
 ### Run the read benchmarks:
 ``` sh
