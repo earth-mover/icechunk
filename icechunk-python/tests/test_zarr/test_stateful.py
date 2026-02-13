@@ -19,9 +19,10 @@ import icechunk as ic
 import zarr
 from icechunk import Repository, Storage, in_memory_storage
 from icechunk.testing import strategies as icst
+from zarr import Array
 from zarr.core.buffer import default_buffer_prototype
 from zarr.storage import MemoryStore
-from zarr.testing.stateful import ZarrHierarchyStateMachine
+from zarr.testing.stateful import ZarrHierarchyStateMachine, split_prefix_name
 from zarr.testing.strategies import (
     node_names,
     np_array_and_chunks,
@@ -316,6 +317,38 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @invariant()
     def check_list_dir(self) -> None:
         self._compare_list_dir(self.model, self.store, self.all_groups | self.all_arrays)
+
+    # Override upstream delete_group_using_del to fix precondition bug:
+    # upstream checks `len(self.all_groups) >= 2` but filters to only groups
+    # with "/" in their path, crashing when only root-level groups remain.
+    # Fix: allow deleting any group (root "" is never in all_groups).
+    # TODO: remove once https://github.com/zarr-developers/zarr-python/pull/3707 is released
+    # and is our minimum required version
+    @precondition(lambda self: self.store.supports_deletes)
+    @precondition(lambda self: bool(self.all_groups - {"", "/"}))
+    @rule(data=st.data())
+    def delete_group_using_del(self, data: st.DataObject) -> None:
+        group_path = data.draw(
+            st.sampled_from(sorted(self.all_groups - {"", "/"})),
+            label="Group deletion target",
+        )
+        prefix, group_name = split_prefix_name(group_path)
+        note(
+            f"Deleting group '{group_path=!r}', {prefix=!r}, {group_name=!r} using delete"
+        )
+        members = zarr.open_group(store=self.model, path=group_path).members(
+            max_depth=None
+        )
+        for _, obj in members:
+            if isinstance(obj, Array):
+                self.all_arrays.remove(obj.path)
+            else:
+                self.all_groups.remove(obj.path)
+        for store in [self.store, self.model]:
+            group = zarr.open_group(store=store, path=prefix)
+            group[group_name]  # check that it exists
+            del group[group_name]
+        self.all_groups.remove(group_path)
 
     @rule()
     def pickle_objects(self) -> None:
