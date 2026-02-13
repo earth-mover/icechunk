@@ -100,6 +100,17 @@ samply *args:
 chrome-trace *args:
   ICECHUNK_TRACE=chrome cargo bench --features logs --bench main -- {{args}} --test
 
+# install benchmark deps and build icechunk in release mode
+bench-build:
+  cd icechunk-python && uv sync --group benchmark && env -u CONDA_PREFIX uv run maturin develop --uv --release
+
+# create/refresh benchmark datasets (run once, or after format changes)
+bench-setup *args='':
+  cd icechunk-python && uv run pytest -nauto -m --benchmark-disable setup_benchmarks benchmarks/ {{args}}
+
+# run benchmarks (pass extra pytest args, e.g.: just bench "-k getsize")
+bench *args='':
+  cd icechunk-python && uv run pytest --benchmark-autosave benchmarks/ {{args}}
 [doc("Compare pytest-benchmark results")]
 bench-compare *args:
   pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short "$@"
