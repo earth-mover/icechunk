@@ -32,6 +32,7 @@ use tracing::{Instrument, debug, error, instrument, trace};
 use crate::{
     Storage, StorageError,
     asset_manager::AssetManager,
+    change_set::ChangeSet,
     config::{
         Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestPreloadCondition,
         RepositoryConfig,
@@ -46,7 +47,7 @@ use crate::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
         },
-        transaction_log::{Diff, DiffBuilder},
+        transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
     refs::{self, Ref, RefError, RefErrorKind},
     session::{Session, SessionErrorKind, SessionResult},
@@ -248,21 +249,38 @@ impl Repository {
         let create_repo_info = async move {
             // On create we need to create the default branch
             let new_snapshot = Arc::new(Snapshot::initial(spec_version)?);
-            asset_manager_c.write_snapshot(Arc::clone(&new_snapshot)).await?;
+            let write_snap = asset_manager_c.write_snapshot(Arc::clone(&new_snapshot));
 
             if spec_version >= SpecVersionBin::V2dot0 {
+                let empty_tx_log = TransactionLog::new(
+                    &Snapshot::INITIAL_SNAPSHOT_ID,
+                    &ChangeSet::for_edits(),
+                );
                 let snap_info = new_snapshot.as_ref().try_into()?;
                 let repo_info = Arc::new(RepoInfo::initial(spec_version, snap_info));
-                let _ = asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
+
+                // Write snapshot, transaction log, and repo info concurrently
+                // since they target independent storage keys
+                let write_tx = asset_manager_c.write_transaction_log(
+                    Snapshot::INITIAL_SNAPSHOT_ID,
+                    Arc::new(empty_tx_log),
+                );
+                let write_repo = asset_manager_c.create_repo_info(Arc::clone(&repo_info));
+                try_join!(write_snap, write_tx, write_repo)?;
             } else {
-                refs::update_branch(
-                    storage_c.as_ref(),
-                    settings_ref,
-                    Ref::DEFAULT_BRANCH,
-                    new_snapshot.id().clone(),
-                    None,
-                )
-                .await?;
+                // Write snapshot and branch ref concurrently
+                let write_branch = async {
+                    refs::update_branch(
+                        storage_c.as_ref(),
+                        settings_ref,
+                        Ref::DEFAULT_BRANCH,
+                        new_snapshot.id().clone(),
+                        None,
+                    )
+                    .await
+                    .map_err(RepositoryError::from)
+                };
+                try_join!(write_snap, write_branch)?;
             }
 
             Ok::<_, RepositoryError>(())
@@ -1446,7 +1464,8 @@ impl Repository {
         let fut: FuturesOrdered<_> = all_snaps
             .iter()
             .filter_map(|snap_info| {
-                if snap_info.is_initial() {
+                // v1 repos don't have transaction logs for initial snapshots
+                if self.spec_version == SpecVersionBin::V1dot0 && snap_info.is_initial() {
                     None
                 } else {
                     Some(
