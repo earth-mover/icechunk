@@ -814,70 +814,29 @@ impl Storage for S3Storage {
     }
 
     #[instrument(skip(self, settings))]
-    async fn get_object_if_modified(
+    async fn get_object_conditional(
         &self,
         path: &str,
         settings: &Settings,
         previous_version: Option<VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
-        let key = self.prefixed_path(path);
-        let mut req = self
-            .get_client(settings)
+        match self
+            .get_object_range_conditional(settings, path, None, previous_version)
             .await
-            .get_object()
-            .bucket(self.bucket.clone())
-            .key(key);
-
-        if let Some(previous_version) = previous_version.as_ref()
-            && let Some(etag) = previous_version.etag()
         {
-            req = req.if_none_match(strip_quotes(etag));
-        };
-
-        if self.config.requester_pays {
-            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
-        }
-
-        match req.send().await {
-            Ok(output) => match output.e_tag {
-                Some(etag) => {
-                    let stream = stream2stream(output.body)
-                        .map_err(|e| StorageErrorKind::S3StreamError(Box::new(e.into())));
-                    let reader = StreamReader::new(stream.map_err(std::io::Error::other));
-                    Ok(GetModifiedResult::Modified {
-                        data: Box::pin(reader),
-                        new_version: VersionInfo::from_etag_only(etag),
-                    })
-                }
-                None => {
-                    Err(StorageErrorKind::Other("Object should have an etag".to_string())
-                        .into())
-                }
-            },
-            Err(sdk_err) => match sdk_err.as_service_error() {
-                Some(e) if e.is_no_such_key() => {
-                    Err(StorageErrorKind::ObjectNotFound.into())
-                }
-                Some(_)
-                    if sdk_err
-                        .raw_response()
-                        .is_some_and(|x| x.status().as_u16() == 304) =>
+            Ok(Some((stream, new_version))) => {
+                let reader = StreamReader::new(stream.map_err(std::io::Error::other));
+                Ok(GetModifiedResult::Modified { data: Box::pin(reader), new_version })
+            }
+            Ok(None) => Ok(GetModifiedResult::OnLatestVersion),
+            Err(sdk_err) => match sdk_err.kind {
+                StorageErrorKind::S3GetObjectError(e)
+                    if e.raw_response().is_some_and(|x| x.status().as_u16() == 304) =>
                 {
                     // Object not modified
                     Ok(GetModifiedResult::OnLatestVersion)
                 }
-                Some(_)
-                    if sdk_err
-                        .raw_response()
-                        .is_some_and(|x| x.status().as_u16() == 404) =>
-                {
-                    // needed for Cloudflare R2 public bucket URLs
-                    // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
-                    // into anything useful. So we need to parse the raw response, and match
-                    // the status code.
-                    Err(StorageErrorKind::ObjectNotFound.into())
-                }
-                _ => Err(Box::new(sdk_err).into()),
+                _ => Err(sdk_err),
             },
         }
     }
@@ -891,21 +850,50 @@ impl Storage for S3Storage {
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
+        self.get_object_range_conditional(settings, path, range, None)
+            .await
+            .map(|v| v.unwrap())
+    }
+}
+
+impl S3Storage {
+    async fn get_object_range_conditional(
+        &self,
+        settings: &Settings,
+        path: &str,
+        range: Option<&Range<u64>>,
+        previous_version: Option<VersionInfo>,
+    ) -> StorageResult<
+        Option<(
+            Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+            VersionInfo,
+        )>,
+    > {
         let client = self.get_client(settings).await;
         let bucket = self.bucket.clone();
         let key = self.prefixed_path(path);
+
         let mut req = client.get_object().bucket(bucket).key(key);
+
         if let Some(range) = range {
             req = req.range(range_to_header(range));
         }
+
         if self.config.requester_pays {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
+
+        if let Some(previous_version) = previous_version.as_ref()
+            && let Some(etag) = previous_version.etag()
+        {
+            req = req.if_none_match(strip_quotes(etag));
+        };
+
         match req.send().await {
             Ok(output) => match output.e_tag {
                 Some(etag) => {
                     let stream = stream2stream(output.body).err_into();
-                    Ok((Box::pin(stream), VersionInfo::from_etag_only(etag)))
+                    Ok(Some((Box::pin(stream), VersionInfo::from_etag_only(etag))))
                 }
                 None => {
                     Err(StorageErrorKind::Other("Object should have an etag".to_string())

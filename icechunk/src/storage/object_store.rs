@@ -473,7 +473,7 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self, settings))]
-    async fn get_object_if_modified(
+    async fn get_object_conditional(
         &self,
         path: &str,
         settings: &Settings,

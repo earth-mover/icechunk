@@ -1355,7 +1355,7 @@ pub async fn fetch_repo_info_from_path(
     previous_version: Option<VersionInfo>,
 ) -> RepositoryResult<Option<(Arc<RepoInfo>, VersionInfo)>> {
     debug!("Downloading repo info");
-    match storage.get_object_if_modified(path, storage_settings, previous_version).await {
+    match storage.get_object_conditional(path, storage_settings, previous_version).await {
         Ok(GetModifiedResult::Modified { data, new_version }) => {
             let span = Span::current();
             tokio::task::spawn_blocking(move || {

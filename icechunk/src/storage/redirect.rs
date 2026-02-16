@@ -378,7 +378,7 @@ impl Storage for RedirectStorage {
         self.backend().await?.get_object_last_modified(path, settings).await
     }
 
-    async fn get_object_if_modified(
+    async fn get_object_conditional(
         &self,
         path: &str,
         settings: &Settings,
@@ -386,7 +386,7 @@ impl Storage for RedirectStorage {
     ) -> StorageResult<GetModifiedResult> {
         self.backend()
             .await?
-            .get_object_if_modified(path, settings, previous_version)
+            .get_object_conditional(path, settings, previous_version)
             .await
     }
 }

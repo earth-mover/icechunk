@@ -504,7 +504,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>>;
 
-    async fn get_object_if_modified(
+    async fn get_object_conditional(
         &self,
         path: &str,
         settings: &Settings,

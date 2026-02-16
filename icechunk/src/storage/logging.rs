@@ -132,13 +132,13 @@ impl Storage for LoggingStorage {
         self.backend.get_object_last_modified(path, settings).await
     }
 
-    async fn get_object_if_modified(
+    async fn get_object_conditional(
         &self,
         path: &str,
         settings: &Settings,
         previous_version: Option<VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
-        self.backend.get_object_if_modified(path, settings, previous_version).await
+        self.backend.get_object_conditional(path, settings, previous_version).await
     }
 
     async fn get_object_range(
