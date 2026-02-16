@@ -47,7 +47,7 @@ use crate::{
     session::PySession,
     stats::PyChunkStorageStats,
     streams::PyAsyncGenerator,
-    sync_api::ensure_not_running_event_loop,
+    sync::ensure_not_running_event_loop,
 };
 
 /// Wrapper needed to implement pyo3 conversion classes
@@ -1148,7 +1148,6 @@ impl PyRepository {
         bytes: Vec<u8>,
     ) -> PyResult<Self> {
         // This is a compute intensive task, we need to release the Gil
-        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let repository = Repository::from_bytes(bytes)
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
@@ -1158,7 +1157,6 @@ impl PyRepository {
 
     fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<'_, [u8]>> {
         // This is a compute intensive task, we need to release the Gil
-        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let bytes = self
                 .0
@@ -1600,8 +1598,10 @@ impl PyRepository {
 
     pub(crate) fn list_manifest_files(
         &self,
+        py: Python<'_>,
         snapshot_id: &str,
     ) -> PyResult<Vec<PyManifestFileInfo>> {
+        ensure_not_running_event_loop(py)?;
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
             PyIcechunkStoreError::RepositoryError(
                 RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
@@ -2361,7 +2361,13 @@ impl PyRepository {
     }
 
     #[pyo3(signature = (snapshot_id, *, pretty = true))]
-    fn inspect_snapshot(&self, snapshot_id: String, pretty: bool) -> PyResult<String> {
+    fn inspect_snapshot(
+        &self,
+        py: Python<'_>,
+        snapshot_id: String,
+        pretty: bool,
+    ) -> PyResult<String> {
+        ensure_not_running_event_loop(py)?;
         let result = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let lock = self.0.read().await;
@@ -2397,11 +2403,14 @@ impl PyRepository {
     }
 
     #[getter]
-    fn spec_version(&self) -> u8 {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let repo = self.0.read().await;
-            repo.spec_version()
-        }) as u8
+    fn spec_version(&self, py: Python<'_>) -> PyResult<u8> {
+        ensure_not_running_event_loop(py)?;
+        let spec_version =
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let repo = self.0.read().await;
+                repo.spec_version()
+            }) as u8;
+        Ok(spec_version)
     }
 }
 

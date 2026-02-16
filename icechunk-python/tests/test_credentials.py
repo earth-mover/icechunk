@@ -567,7 +567,7 @@ def test_async_cred_refresh_graceful_deadlock():
     t.start()
     t.join(timeout=1)
     assert not t.is_alive(), "Deadlocked: sync call blocked the event loop thread"
-    assert isinstance(caught_error, IcechunkError | ValueError)
+    assert isinstance(caught_error, ValueError)
     assert "deadlock" in str(caught_error)
 
 

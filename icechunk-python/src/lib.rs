@@ -7,7 +7,7 @@ mod session;
 mod stats;
 mod store;
 mod streams;
-mod sync_api;
+mod sync;
 
 use std::env;
 

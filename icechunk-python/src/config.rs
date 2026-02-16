@@ -32,7 +32,7 @@ use pyo3::{
     types::{PyAny, PyAnyMethods, PyModule, PyType},
 };
 
-use crate::errors::PyIcechunkStoreError;
+use crate::{errors::PyIcechunkStoreError, sync::would_deadlock_current_loop};
 
 #[pyclass(name = "S3StaticCredentials")]
 #[derive(Clone, Debug)]
@@ -175,26 +175,6 @@ fn current_task_locals() -> Option<pyo3_async_runtimes::TaskLocals> {
 
 static FALLBACK_TASK_LOCALS: OnceLock<Result<pyo3_async_runtimes::TaskLocals, String>> =
     OnceLock::new();
-
-fn object_id(py: Python<'_>, obj: &Bound<'_, PyAny>) -> Result<usize, PyErr> {
-    let builtins = PyModule::import(py, "builtins")?;
-    builtins.getattr("id")?.call1((obj,))?.extract()
-}
-
-fn would_deadlock_current_loop(
-    task_locals: &pyo3_async_runtimes::TaskLocals,
-) -> Result<bool, PyErr> {
-    Python::attach(|py| {
-        let running_loop = match pyo3_async_runtimes::get_running_loop(py) {
-            Ok(loop_ref) => loop_ref,
-            Err(err) if err.is_instance_of::<PyRuntimeError>(py) => return Ok(false),
-            Err(err) => return Err(err),
-        };
-
-        let target_loop = task_locals.event_loop(py);
-        Ok(object_id(py, &running_loop)? == object_id(py, &target_loop)?)
-    })
-}
 
 fn create_fallback_task_locals() -> Result<pyo3_async_runtimes::TaskLocals, String> {
     let (tx, rx) = std::sync::mpsc::sync_channel::<

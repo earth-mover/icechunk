@@ -21,7 +21,7 @@ use crate::{
     repository::{PyDiff, PySnapshotProperties},
     store::PyStore,
     streams::PyAsyncGenerator,
-    sync_api::ensure_not_running_event_loop,
+    sync::ensure_not_running_event_loop,
 };
 
 #[pyclass]
@@ -67,7 +67,6 @@ impl PySession {
         bytes: Vec<u8>,
     ) -> PyResult<Self> {
         // This is a compute intensive task, we need to release the Gil
-        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let session =
                 Session::from_bytes(bytes).map_err(PyIcechunkStoreError::SessionError)?;
@@ -81,7 +80,6 @@ impl PySession {
 
     fn as_bytes(&self, py: Python<'_>) -> PyIcechunkStoreResult<Cow<'_, [u8]>> {
         // This is a compute intensive task, we need to release the Gil
-        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let bytes =
                 self.0.blocking_read().as_bytes().map_err(PyIcechunkStoreError::from)?;
@@ -135,7 +133,6 @@ impl PySession {
 
     pub fn discard_changes(&self, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
-        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             self.0
                 .blocking_write()
@@ -199,6 +196,7 @@ impl PySession {
         array_path: String,
         shift_chunk: Bound<'py, PyFunction>,
     ) -> PyResult<()> {
+        ensure_not_running_event_loop(py)?;
         let array_path = Path::new(array_path.as_str())
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
@@ -232,7 +230,13 @@ impl PySession {
         })
     }
 
-    pub fn shift_array(&mut self, array_path: String, offset: Vec<i64>) -> PyResult<()> {
+    pub fn shift_array(
+        &mut self,
+        py: Python<'_>,
+        array_path: String,
+        offset: Vec<i64>,
+    ) -> PyResult<()> {
+        ensure_not_running_event_loop(py)?;
         let array_path = Path::new(array_path.as_str())
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
@@ -251,7 +255,6 @@ impl PySession {
     #[getter]
     pub fn store(&self, py: Python<'_>) -> PyResult<PyStore> {
         // This is blocking function, we need to release the Gil
-        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let session = self.0.blocking_read();
             let conc = session.config().get_partial_values_concurrency();
@@ -265,7 +268,6 @@ impl PySession {
     #[getter]
     pub fn config(&self, py: Python<'_>) -> PyResult<PyRepositoryConfig> {
         // This is blocking function, we need to release the Gil
-        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let session = self.0.blocking_read();
             let config = session.config().clone().into();
@@ -363,9 +365,11 @@ impl PySession {
 
     pub fn chunk_type(
         &self,
+        py: Python<'_>,
         array_path: String,
         coords: Vec<u32>,
     ) -> PyResult<ChunkType> {
+        ensure_not_running_event_loop(py)?;
         let session = self.0.clone();
         pyo3_async_runtimes::tokio::get_runtime()
             .block_on(Self::chunk_type_inner(session, array_path, coords))
