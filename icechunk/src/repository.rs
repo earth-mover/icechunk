@@ -261,14 +261,18 @@ impl Repository {
                 let repo_info =
                     Arc::new(RepoInfo::initial(spec_version, snap_info, num_updates));
 
-                // Write snapshot, transaction log, and repo info concurrently
-                // since they target independent storage keys
+                // Write snapshot and transaction log concurrently first
                 let write_tx = asset_manager_c.write_transaction_log(
                     Snapshot::INITIAL_SNAPSHOT_ID,
                     Arc::new(empty_tx_log),
                 );
-                let write_repo = asset_manager_c.create_repo_info(Arc::clone(&repo_info));
-                try_join!(write_snap, write_tx, write_repo)?;
+                try_join!(write_snap, write_tx)?;
+
+                // Only write the repo info after both succeed, since the repo
+                // object is the entry point that makes the repository valid.
+                // Writing it last ensures we never create a repo pointing to
+                // missing snapshot/tx data.
+                asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
             } else {
                 // Write snapshot and branch ref concurrently
                 let write_branch = async {
