@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
-use std::sync::RwLock;
+use std::sync::Mutex;
 use std::{
     io::{BufReader, Read},
     ops::Range,
@@ -88,7 +88,7 @@ pub struct AssetManager {
     request_semaphore: Semaphore,
 
     #[serde(skip)]
-    repo_cache: Arc<RwLock<Option<(Arc<RepoInfo>, VersionInfo)>>>,
+    repo_cache: Mutex<Option<(Arc<RepoInfo>, VersionInfo)>>,
 }
 
 impl private::Sealed for AssetManager {}
@@ -160,7 +160,7 @@ impl AssetManager {
             snapshot_cache_size_warned: AtomicBool::new(false),
             manifest_cache_size_warned: AtomicBool::new(false),
             request_semaphore: Semaphore::new(max_concurrent_requests as usize),
-            repo_cache: Arc::new(RwLock::new(None)),
+            repo_cache: Mutex::new(None),
         }
     }
 
@@ -472,7 +472,7 @@ impl AssetManager {
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
         self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        let repo_cache = self.repo_cache.read().unwrap().clone();
+        let repo_cache = self.repo_cache.lock().unwrap().clone();
         match fetch_repo_if_modified(
             self.storage.as_ref(),
             &self.storage_settings,
@@ -481,7 +481,7 @@ impl AssetManager {
         .await
         {
             Ok(Some((repo_info, version_info))) => {
-                let mut repo_cache = self.repo_cache.write().unwrap();
+                let mut repo_cache = self.repo_cache.lock().unwrap();
                 *repo_cache = Some((repo_info.clone(), version_info.clone()));
 
                 return Ok((repo_info, version_info));
@@ -516,8 +516,8 @@ impl AssetManager {
         &self,
         info: Arc<RepoInfo>,
     ) -> RepositoryResult<VersionInfo> {
-        write_repo_info(
-            info,
+        let new_version = write_repo_info(
+            info.clone(),
             self.spec_version(),
             &storage::VersionInfo::for_creation(),
             self.compression_level,
@@ -526,7 +526,11 @@ impl AssetManager {
             &self.storage_settings,
             None,
         )
-        .await
+        .await?;
+
+        *self.repo_cache.lock().unwrap() = Some((info, new_version.clone()));
+
+        Ok(new_version)
     }
 
     #[instrument(skip(self, retry_settings, update))]
@@ -573,7 +577,7 @@ impl AssetManager {
                 res @ Ok(_) => {
                     debug!(attempts, "Repo info object updated successfully");
 
-                    let mut repo_cache = self.repo_cache.write().unwrap();
+                    let mut repo_cache = self.repo_cache.lock().unwrap();
                     // TODO: check again if they changed!
                     *repo_cache = Some((new_repo.clone(), res.as_ref().unwrap().clone()));
 

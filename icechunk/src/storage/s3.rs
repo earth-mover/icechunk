@@ -830,9 +830,9 @@ impl Storage for S3Storage {
 
         if let Some(previous_version) = previous_version.as_ref() {
             if let Some(etag) = previous_version.etag() {
-                req = req.if_match(strip_quotes(etag));
-            } else {
-                req = req.if_none_match("*");
+                req = req.if_none_match(strip_quotes(etag));
+                //} else {
+                //   req = req.if_none_match("*");
             }
         };
 
