@@ -828,9 +828,10 @@ impl Storage for S3Storage {
             .bucket(self.bucket.clone())
             .key(key);
 
-        if let Some(previous_version) = previous_version.as_ref() &&
-            let Some(etag) = previous_version.etag() {
-                req = req.if_none_match(strip_quotes(etag));
+        if let Some(previous_version) = previous_version.as_ref()
+            && let Some(etag) = previous_version.etag()
+        {
+            req = req.if_none_match(strip_quotes(etag));
         };
 
         if self.config.requester_pays {
