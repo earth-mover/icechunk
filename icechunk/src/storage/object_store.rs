@@ -479,38 +479,24 @@ impl Storage for ObjectStorage {
         settings: &Settings,
         previous_version: Option<VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
-        let path = self.prefixed_path(path);
-        let opts = GetOptions {
-            if_none_match: previous_version
-                .as_ref()
-                .and_then(|v| v.etag().map(|e| strip_quotes(e).into())),
-            ..Default::default()
-        };
-
-        let res = self.get_client(settings).await.get_opts(&path, opts).await;
-
-        match res {
-            Ok(result) => {
-                let version = VersionInfo {
-                    etag: result.meta.e_tag.as_ref().cloned().map(ETag),
-                    generation: result.meta.version.as_ref().cloned().map(Generation),
-                };
-                let stream = result
-                    .into_stream()
-                    .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)));
+        match self
+            .get_object_range_conditional(settings, path, None, previous_version)
+            .await
+        {
+            Ok(Some((stream, new_version))) => {
                 let reader = StreamReader::new(stream.map_err(std::io::Error::other));
-                Ok(GetModifiedResult::Modified {
-                    data: Box::pin(reader),
-                    new_version: version,
-                })
+                Ok(GetModifiedResult::Modified { data: Box::pin(reader), new_version })
             }
-            Err(object_store::Error::NotModified { .. }) => {
-                Ok(GetModifiedResult::OnLatestVersion)
-            }
-            Err(object_store::Error::NotFound { .. }) => {
-                Err(StorageErrorKind::ObjectNotFound.into())
-            }
-            Err(err) => Err(Box::new(err).into()),
+            Ok(None) => Ok(GetModifiedResult::OnLatestVersion),
+            Err(sdk_err) => match sdk_err.kind {
+                StorageErrorKind::ObjectStore(ref e) => match &**e {
+                    object_store::Error::NotModified { .. } => {
+                        Ok(GetModifiedResult::OnLatestVersion)
+                    }
+                    _ => Err(sdk_err),
+                },
+                _ => Err(sdk_err),
+            },
         }
     }
 
@@ -524,12 +510,37 @@ impl Storage for ObjectStorage {
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
+        self.get_object_range_conditional(settings, path, range, None)
+            .await
+            .map(|v| v.unwrap())
+    }
+}
+
+impl ObjectStorage {
+    async fn get_object_range_conditional(
+        &self,
+        settings: &Settings,
+        path: &str,
+        range: Option<&Range<u64>>,
+        previous_version: Option<VersionInfo>,
+    ) -> StorageResult<
+        Option<(
+            Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+            VersionInfo,
+        )>,
+    > {
         let full_key = self.prefixed_path(path);
         let range = range.map(|range| {
             let usize_range = range.start..range.end;
             usize_range.into()
         });
-        let opts = GetOptions { range, ..Default::default() };
+        let opts = GetOptions {
+            range,
+            if_none_match: previous_version
+                .as_ref()
+                .and_then(|v| v.etag().map(|e| strip_quotes(e).into())),
+            ..Default::default()
+        };
         let res = self.get_client(settings).await.get_opts(&full_key, opts).await;
 
         match res {
@@ -540,7 +551,7 @@ impl Storage for ObjectStorage {
                 };
                 let stream =
                     Box::pin(result.into_stream().map_err(|e| Box::new(e).into()));
-                Ok((stream, version))
+                Ok(Some((stream, version)))
             }
             Err(object_store::Error::NotFound { .. }) => {
                 Err(StorageErrorKind::ObjectNotFound.into())
