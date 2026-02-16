@@ -553,8 +553,8 @@ def test_async_cred_refresh_graceful_deadlock():
         )
         # A user can very easily make this mistake!
         # we should be gracefully falling over not deadlocking
-        with pytest.raises(IcechunkError, match="deadlock"):
-            Repository.open(storage=storage)
+        # with pytest.raises(IcechunkError, match="deadlock"):
+        Repository.open(storage=storage)
 
     def run_deadlock_check() -> None:
         nonlocal caught_error
@@ -567,8 +567,8 @@ def test_async_cred_refresh_graceful_deadlock():
     t.start()
     t.join(timeout=1)
     assert not t.is_alive(), "Deadlocked: sync call blocked the event loop thread"
-    assert isinstance(caught_error, IcechunkError)
-    assert caught_error == "YOLO", (str(caught_error), type(caught_error))
+    assert isinstance(caught_error, IcechunkError | ValueError)
+    assert "deadlock" in str(caught_error)
 
 
 def test_async_callback_no_loop_has_consistent_loop(

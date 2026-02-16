@@ -21,6 +21,7 @@ use crate::{
     repository::{PyDiff, PySnapshotProperties},
     store::PyStore,
     streams::PyAsyncGenerator,
+    sync_api::ensure_not_running_event_loop,
 };
 
 #[pyclass]
@@ -66,6 +67,7 @@ impl PySession {
         bytes: Vec<u8>,
     ) -> PyResult<Self> {
         // This is a compute intensive task, we need to release the Gil
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let session =
                 Session::from_bytes(bytes).map_err(PyIcechunkStoreError::SessionError)?;
@@ -79,6 +81,7 @@ impl PySession {
 
     fn as_bytes(&self, py: Python<'_>) -> PyIcechunkStoreResult<Cow<'_, [u8]>> {
         // This is a compute intensive task, we need to release the Gil
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let bytes =
                 self.0.blocking_read().as_bytes().map_err(PyIcechunkStoreError::from)?;
@@ -118,6 +121,7 @@ impl PySession {
 
     pub fn status(&self, py: Python<'_>) -> PyResult<PyDiff> {
         // This is blocking function, we need to release the Gil
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let session = self.0.blocking_read();
 
@@ -131,6 +135,7 @@ impl PySession {
 
     pub fn discard_changes(&self, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             self.0
                 .blocking_write()
@@ -152,6 +157,7 @@ impl PySession {
         let to = Path::new(to_path.as_str())
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let mut session = self.0.write().await;
@@ -245,6 +251,7 @@ impl PySession {
     #[getter]
     pub fn store(&self, py: Python<'_>) -> PyResult<PyStore> {
         // This is blocking function, we need to release the Gil
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let session = self.0.blocking_read();
             let conc = session.config().get_partial_values_concurrency();
@@ -258,6 +265,7 @@ impl PySession {
     #[getter]
     pub fn config(&self, py: Python<'_>) -> PyResult<PyRepositoryConfig> {
         // This is blocking function, we need to release the Gil
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let session = self.0.blocking_read();
             let config = session.config().clone().into();
@@ -267,6 +275,7 @@ impl PySession {
 
     pub fn all_virtual_chunk_locations(&self, py: Python<'_>) -> PyResult<Vec<String>> {
         // This is blocking function, we need to release the Gil
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let session = self.0.blocking_read();
 
@@ -377,6 +386,7 @@ impl PySession {
 
     pub fn merge(&self, other: &PySession, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             // TODO: bad clone
             let other = other.0.blocking_read().deref().clone();
@@ -421,6 +431,7 @@ impl PySession {
     ) -> PyResult<String> {
         let metadata = metadata.map(|m| m.into());
         // This is blocking function, we need to release the Gil
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
@@ -489,6 +500,7 @@ impl PySession {
     ) -> PyResult<String> {
         let metadata = metadata.map(|m| m.into());
         // This is blocking function, we need to release the Gil
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
@@ -532,6 +544,7 @@ impl PySession {
     ) -> PyResult<String> {
         let metadata = metadata.map(|m| m.into());
         // This is blocking function, we need to release the Gil
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
@@ -566,6 +579,7 @@ impl PySession {
 
     pub fn rebase(&self, solver: PyConflictSolver, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
+        ensure_not_running_event_loop(py)?;
         py.detach(move || {
             let solver = solver.as_ref();
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
