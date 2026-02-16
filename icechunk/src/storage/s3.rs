@@ -841,7 +841,6 @@ impl Storage for S3Storage {
         match req.send().await {
             Ok(output) => match output.e_tag {
                 Some(etag) => {
-                    // TODO(li-em): check etag properly, might not be modified
                     let stream = stream2stream(output.body)
                         .map_err(|e| StorageErrorKind::S3StreamError(Box::new(e.into())));
                     let reader = StreamReader::new(stream.map_err(std::io::Error::other));

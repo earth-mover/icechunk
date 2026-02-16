@@ -473,9 +473,10 @@ impl AssetManager {
         self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
         let repo_cache = self.repo_cache.lock().expect("Lock poisoned").clone();
-        match fetch_repo_if_modified(
+        match fetch_repo_info_from_path(
             self.storage.as_ref(),
             &self.storage_settings,
+            REPO_INFO_FILE_PATH,
             repo_cache.as_ref().map(|(_, info)| info.clone()),
         )
         .await
@@ -581,7 +582,6 @@ impl AssetManager {
                     debug!(attempts, "Repo info object updated successfully");
 
                     let mut repo_cache = self.repo_cache.lock().expect("Lock poisoned");
-                    // TODO: check again if they changed!
                     *repo_cache = Some((
                         new_repo.clone(),
                         res.as_ref().expect("res is available here").clone(),
@@ -1322,18 +1322,40 @@ pub async fn fetch_repo_info(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
-    fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH).await
+    fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH, None)
+        .await
+        .map(|repo| {
+            // since we didn't give a previous version, there will be a value here
+            repo.unwrap()
+        })
 }
 
-pub async fn fetch_repo_if_modified(
+async fn fetch_repo_info_backup(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
+    file_name: &str,
+) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
+    fetch_repo_info_from_path(
+        storage,
+        storage_settings,
+        format!("{OVERWRITTEN_FILES_PATH}/{file_name}").as_str(),
+        None,
+    )
+    .await
+    .map(|repo| {
+        // since we didn't give a previous version, there will be a value here
+        repo.unwrap()
+    })
+}
+
+pub async fn fetch_repo_info_from_path(
+    storage: &(dyn Storage + Send + Sync),
+    storage_settings: &storage::Settings,
+    path: &str,
     previous_version: Option<VersionInfo>,
 ) -> RepositoryResult<Option<(Arc<RepoInfo>, VersionInfo)>> {
-    match storage
-        .get_object_if_modified(REPO_INFO_FILE_PATH, storage_settings, previous_version)
-        .await
-    {
+    debug!("Downloading repo info");
+    match storage.get_object_if_modified(path, storage_settings, previous_version).await {
         Ok(GetModifiedResult::Modified { data, new_version }) => {
             let span = Span::current();
             tokio::task::spawn_blocking(move || {
@@ -1347,45 +1369,6 @@ pub async fn fetch_repo_if_modified(
             .await?
         }
         Ok(GetModifiedResult::OnLatestVersion) => Ok(None),
-        Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
-            Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
-        }
-        Err(e) => Err(e.into()),
-    }
-}
-
-async fn fetch_repo_info_backup(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
-    file_name: &str,
-) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
-    fetch_repo_info_from_path(
-        storage,
-        storage_settings,
-        format!("{OVERWRITTEN_FILES_PATH}/{file_name}").as_str(),
-    )
-    .await
-}
-
-pub async fn fetch_repo_info_from_path(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
-    path: &str,
-) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
-    debug!("Downloading repo info");
-    match storage.get_object(storage_settings, path, None).await {
-        Ok((result, version)) => {
-            let span = Span::current();
-            tokio::task::spawn_blocking(move || {
-                let _entered = span.entered();
-                let (spec_version, decompressor) =
-                    check_and_get_decompressor(result, FileTypeBin::RepoInfo)?;
-                deserialize_repo_info(spec_version, decompressor)
-                    .map(|ri| (Arc::new(ri), version))
-                    .map_err(RepositoryError::from)
-            })
-            .await?
-        }
         Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
             Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
         }
