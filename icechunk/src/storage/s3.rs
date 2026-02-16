@@ -850,9 +850,13 @@ impl Storage for S3Storage {
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
-        self.get_object_range_conditional(settings, path, range, None)
-            .await
-            .map(|v| v.unwrap())
+        self.get_object_range_conditional(settings, path, range, None).await.map(|v| {
+            // If we got a result, then we can unwrap safely here:
+            // Errors would be in the other branch, and None is only expected
+            // if previous_version was passed in function call, but we set it to None
+            #[allow(clippy::expect_used)]
+            v.expect("Logic bug in get_object_range_conditional, should not get None")
+        })
     }
 }
 

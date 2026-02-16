@@ -472,7 +472,8 @@ impl AssetManager {
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
         self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        let repo_cache = self.repo_cache.lock().expect("Lock poisoned").clone();
+        #[allow(clippy::expect_used)]
+        let repo_cache = self.repo_cache.lock().expect("Poison lock").clone();
         match fetch_repo_info_from_path(
             self.storage.as_ref(),
             &self.storage_settings,
@@ -482,13 +483,17 @@ impl AssetManager {
         .await
         {
             Ok(Some((repo_info, version_info))) => {
-                let mut repo_cache = self.repo_cache.lock().expect("Lock poisoned");
+                #[allow(clippy::expect_used)]
+                let mut repo_cache = self.repo_cache.lock().expect("Poison lock");
                 *repo_cache = Some((repo_info.clone(), version_info.clone()));
 
                 return Ok((repo_info, version_info));
             }
             Ok(None) => {
-                return Ok(repo_cache.expect("Repo not modified, so we can unwrap here"));
+                #[allow(clippy::expect_used)]
+                return Ok(repo_cache.expect(
+                    "Logic bug in fetch_repo_info, repo_cache should exist here",
+                ));
             }
             Err(e) => return Err(e),
         }
@@ -531,8 +536,11 @@ impl AssetManager {
         )
         .await?;
 
-        *self.repo_cache.lock().expect("Lock poisoned") =
-            Some((info, new_version.clone()));
+        #[allow(clippy::expect_used)]
+        {
+            *self.repo_cache.lock().expect("Poison lock") =
+                Some((info, new_version.clone()));
+        }
 
         Ok(new_version)
     }
@@ -581,11 +589,17 @@ impl AssetManager {
                 res @ Ok(_) => {
                     debug!(attempts, "Repo info object updated successfully");
 
-                    let mut repo_cache = self.repo_cache.lock().expect("Lock poisoned");
-                    *repo_cache = Some((
-                        new_repo.clone(),
-                        res.as_ref().expect("res is available here").clone(),
-                    ));
+                    #[allow(clippy::expect_used)]
+                    {
+                        let mut repo_cache = self.repo_cache.lock().expect("Poison lock");
+
+                        *repo_cache = Some((
+                            new_repo.clone(),
+                            res.as_ref()
+                                .expect("Logic bus, res should be available")
+                                .clone(),
+                        ));
+                    }
 
                     return res;
                 }
@@ -1325,8 +1339,9 @@ pub async fn fetch_repo_info(
     fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH, None)
         .await
         .map(|repo| {
-            // since we didn't give a previous version, there will be a value here
-            repo.unwrap()
+            // Since we didn't give a previous version, there must be a result here
+            #[allow(clippy::expect_used)]
+            repo.expect("Logic bug, must have a repo_info here")
         })
 }
 
@@ -1343,8 +1358,9 @@ async fn fetch_repo_info_backup(
     )
     .await
     .map(|repo| {
-        // since we didn't give a previous version, there will be a value here
-        repo.unwrap()
+        // Since we didn't give a previous version, there must be a result here
+        #[allow(clippy::expect_used)]
+        repo.expect("Logic bug, must have a repo_info here")
     })
 }
 
