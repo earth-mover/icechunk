@@ -191,7 +191,13 @@ fn create_fallback_task_locals() -> Result<pyo3_async_runtimes::TaskLocals, Stri
                 asyncio.getattr("set_event_loop")?.call1((event_loop.clone(),))?;
 
                 let locals = pyo3_async_runtimes::TaskLocals::new(event_loop.clone());
-                let _ = tx.take().expect("sender must exist").send(Ok(locals));
+                if let Some(sender) = tx.take() {
+                    let _ = sender.send(Ok(locals));
+                } else {
+                    return Err(PyRuntimeError::new_err(
+                        "fallback asyncio loop sender was unexpectedly missing",
+                    ));
+                }
 
                 event_loop.call_method0("run_forever")?;
                 Ok(())
