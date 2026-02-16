@@ -483,8 +483,7 @@ impl Storage for ObjectStorage {
         let opts = GetOptions {
             if_none_match: previous_version
                 .as_ref()
-                .map(|v| v.etag().map(|e| strip_quotes(e).into()))
-                .flatten(),
+                .and_then(|v| v.etag().map(|e| strip_quotes(e).into())),
             ..Default::default()
         };
 

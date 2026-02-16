@@ -472,7 +472,7 @@ impl AssetManager {
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
         self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        let repo_cache = self.repo_cache.lock().unwrap().clone();
+        let repo_cache = self.repo_cache.lock().expect("Lock poisoned").clone();
         match fetch_repo_if_modified(
             self.storage.as_ref(),
             &self.storage_settings,
@@ -481,12 +481,14 @@ impl AssetManager {
         .await
         {
             Ok(Some((repo_info, version_info))) => {
-                let mut repo_cache = self.repo_cache.lock().unwrap();
+                let mut repo_cache = self.repo_cache.lock().expect("Lock poisoned");
                 *repo_cache = Some((repo_info.clone(), version_info.clone()));
 
                 return Ok((repo_info, version_info));
             }
-            Ok(None) => return Ok(repo_cache.unwrap()),
+            Ok(None) => {
+                return Ok(repo_cache.expect("Repo not modified, so we can unwrap here"));
+            }
             Err(e) => return Err(e),
         }
     }
@@ -528,7 +530,8 @@ impl AssetManager {
         )
         .await?;
 
-        *self.repo_cache.lock().unwrap() = Some((info, new_version.clone()));
+        *self.repo_cache.lock().expect("Lock poisoned") =
+            Some((info, new_version.clone()));
 
         Ok(new_version)
     }
@@ -577,9 +580,12 @@ impl AssetManager {
                 res @ Ok(_) => {
                     debug!(attempts, "Repo info object updated successfully");
 
-                    let mut repo_cache = self.repo_cache.lock().unwrap();
+                    let mut repo_cache = self.repo_cache.lock().expect("Lock poisoned");
                     // TODO: check again if they changed!
-                    *repo_cache = Some((new_repo.clone(), res.as_ref().unwrap().clone()));
+                    *repo_cache = Some((
+                        new_repo.clone(),
+                        res.as_ref().expect("res is available here").clone(),
+                    ));
 
                     return res;
                 }
@@ -1340,7 +1346,7 @@ pub async fn fetch_repo_if_modified(
             })
             .await?
         }
-        Ok(GetModifiedResult::OnLatestVersion) => return Ok(None),
+        Ok(GetModifiedResult::OnLatestVersion) => Ok(None),
         Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
             Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
         }
