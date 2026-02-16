@@ -414,6 +414,11 @@ impl DeleteObjectsResult {
     }
 }
 
+pub enum GetModifiedResult {
+    Modified { data: Pin<Box<dyn AsyncBufRead + Send>>, new_version: VersionInfo },
+    OnLatestVersion,
+}
+
 /// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
@@ -499,11 +504,12 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>>;
 
-    async fn get_object_etag(
+    async fn get_object_if_modified(
         &self,
         path: &str,
         settings: &Settings,
-    ) -> StorageResult<Option<ETag>>;
+        previous_version: Option<VersionInfo>,
+    ) -> StorageResult<GetModifiedResult>;
 
     /// Delete a stream of objects, by their id string representations
     /// Input stream includes sizes to get as result the total number of bytes deleted
@@ -893,7 +899,7 @@ pub fn new_gcs_storage(
     Ok(Arc::new(storage))
 }
 
-pub fn strip_quotes(s: &str) -> &str {
+fn strip_quotes(s: &str) -> &str {
     s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
 }
 

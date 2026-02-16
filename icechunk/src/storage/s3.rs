@@ -39,11 +39,12 @@ use futures::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
+use tokio_util::io::StreamReader;
 use tracing::{error, instrument};
 use typed_path::Utf8UnixPath;
 
 use super::{
-    DeleteObjectsResult, ETag, ListInfo, Settings, StorageErrorKind, StorageResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, StorageErrorKind, StorageResult,
     VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests, strip_quotes
 };
 
@@ -813,26 +814,75 @@ impl Storage for S3Storage {
     }
 
     #[instrument(skip(self, settings))]
-    async fn get_object_etag(
+    async fn get_object_if_modified(
         &self,
         path: &str,
         settings: &Settings,
-    ) -> StorageResult<Option<ETag>> {
+        previous_version: Option<VersionInfo>,
+    ) -> StorageResult<GetModifiedResult> {
         let key = self.prefixed_path(path);
         let mut req = self
             .get_client(settings)
             .await
-            .head_object()
+            .get_object()
             .bucket(self.bucket.clone())
             .key(key);
+
+        if let Some(previous_version) = previous_version.as_ref() {
+            if let Some(etag) = previous_version.etag() {
+                req = req.if_match(strip_quotes(etag));
+            } else {
+                req = req.if_none_match("*");
+            }
+        };
 
         if self.config.requester_pays {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
-        let res = req.send().await.map_err(Box::new)?;
-
-        Ok(res.e_tag.map(|e| ETag(e)))
+        match req.send().await {
+            Ok(output) => match output.e_tag {
+                Some(etag) => {
+                    // TODO(li-em): check etag properly, might not be modified
+                    let stream = stream2stream(output.body)
+                        .map_err(|e| StorageErrorKind::S3StreamError(Box::new(e.into())));
+                    let reader = StreamReader::new(stream.map_err(std::io::Error::other));
+                    Ok(GetModifiedResult::Modified {
+                        data: Box::pin(reader),
+                        new_version: VersionInfo::from_etag_only(etag),
+                    })
+                }
+                None => {
+                    Err(StorageErrorKind::Other("Object should have an etag".to_string())
+                        .into())
+                }
+            },
+            Err(sdk_err) => match sdk_err.as_service_error() {
+                Some(e) if e.is_no_such_key() => {
+                    Err(StorageErrorKind::ObjectNotFound.into())
+                }
+                Some(_)
+                    if sdk_err
+                        .raw_response()
+                        .is_some_and(|x| x.status().as_u16() == 304) =>
+                {
+                    // Object not modified
+                    Ok(GetModifiedResult::OnLatestVersion)
+                }
+                Some(_)
+                    if sdk_err
+                        .raw_response()
+                        .is_some_and(|x| x.status().as_u16() == 404) =>
+                {
+                    // needed for Cloudflare R2 public bucket URLs
+                    // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
+                    // into anything useful. So we need to parse the raw response, and match
+                    // the status code.
+                    Err(StorageErrorKind::ObjectNotFound.into())
+                }
+                _ => Err(Box::new(sdk_err).into()),
+            },
+        }
     }
 
     async fn get_object_range(

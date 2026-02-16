@@ -27,6 +27,7 @@ use tokio::{
 use tokio_util::io::SyncIoBridge;
 use tracing::{Span, debug, instrument, trace, warn};
 
+use crate::storage::GetModifiedResult;
 use crate::{
     RepositoryConfig, Storage, StorageError,
     config::CachingConfig,
@@ -471,27 +472,23 @@ impl AssetManager {
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
         self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        // check etag from version_info here
-        let remote_info =
-            fetch_repo_etag(self.storage.as_ref(), &self.storage_settings).await?;
+        let repo_cache = self.repo_cache.read().unwrap().clone();
+        match fetch_repo_if_modified(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            repo_cache.as_ref().map(|(_, info)| info.clone()),
+        )
+        .await
         {
-            let repo_cache = self.repo_cache.read().unwrap();
-            let etag = repo_cache.as_ref().map(|(_, info)| info.etag().clone());
+            Ok(Some((repo_info, version_info))) => {
+                let mut repo_cache = self.repo_cache.write().unwrap();
+                *repo_cache = Some((repo_info.clone(), version_info.clone()));
 
-            if Some(remote_info.etag()) == etag {
-                // just return current_repo, if it is cached
-                // Safe to unwrap here, we already used this in the if statement above
-                return Ok(repo_cache.as_ref().unwrap().clone());
+                return Ok((repo_info, version_info));
             }
+            Ok(None) => return Ok(repo_cache.unwrap()),
+            Err(e) => return Err(e),
         }
-
-        let res = fetch_repo_info(self.storage.as_ref(), &self.storage_settings).await?;
-
-        let mut repo_cache = self.repo_cache.write().unwrap();
-        // TODO: check again if they changed!
-        *repo_cache = Some(res.clone());
-
-        Ok(res)
     }
 
     pub fn fail_unless_spec_at_least(
@@ -1318,15 +1315,33 @@ pub async fn fetch_repo_info(
     fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH).await
 }
 
-pub async fn fetch_repo_etag(
+pub async fn fetch_repo_if_modified(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
-) -> RepositoryResult<VersionInfo> {
-    let res = storage.get_object_etag(REPO_INFO_FILE_PATH, storage_settings).await?;
-    let mut version_info = VersionInfo::for_creation();
-    version_info.etag = res;
-
-    Ok(version_info)
+    previous_version: Option<VersionInfo>,
+) -> RepositoryResult<Option<(Arc<RepoInfo>, VersionInfo)>> {
+    match storage
+        .get_object_if_modified(REPO_INFO_FILE_PATH, storage_settings, previous_version)
+        .await
+    {
+        Ok(GetModifiedResult::Modified { data, new_version }) => {
+            let span = Span::current();
+            tokio::task::spawn_blocking(move || {
+                let _entered = span.entered();
+                let (spec_version, decompressor) =
+                    check_and_get_decompressor(data, FileTypeBin::RepoInfo)?;
+                deserialize_repo_info(spec_version, decompressor)
+                    .map(|ri| Some((Arc::new(ri), new_version)))
+                    .map_err(RepositoryError::from)
+            })
+            .await?
+        }
+        Ok(GetModifiedResult::OnLatestVersion) => return Ok(None),
+        Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
+            Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 async fn fetch_repo_info_backup(

@@ -14,8 +14,8 @@ use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, ETag, ListInfo, Settings, Storage, StorageError, StorageResult,
-    VersionInfo, VersionedUpdateResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
+    StorageResult, VersionInfo, VersionedUpdateResult,
 };
 use crate::private;
 
@@ -132,16 +132,13 @@ impl Storage for LoggingStorage {
         self.backend.get_object_last_modified(path, settings).await
     }
 
-    async fn get_object_etag(
+    async fn get_object_if_modified(
         &self,
         path: &str,
         settings: &Settings,
-    ) -> StorageResult<Option<ETag>> {
-        self.fetch_log
-            .lock()
-            .expect("poison lock")
-            .push(("get_object_etag".to_string(), path.to_string()));
-        self.backend.get_object_etag(path, settings).await
+        previous_version: Option<VersionInfo>,
+    ) -> StorageResult<GetModifiedResult> {
+        self.backend.get_object_if_modified(path, settings, previous_version).await
     }
 
     async fn get_object_range(

@@ -3,8 +3,8 @@
 //! Supports local filesystem, in-memory, Azure Blob, and Google Cloud Storage.
 
 use crate::private;
-#[cfg(feature = "object-store-s3")]
 use crate::storage::s3_config::{S3Credentials, S3Options};
+use crate::storage::strip_quotes,
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -56,13 +56,14 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::{OnceCell, RwLock};
+use tokio_util::io::StreamReader;
 use tracing::instrument;
 use url::Url;
 
 use super::{
-    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, ListInfo,
-    RetriesSettings, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
-    VersionInfo, VersionedUpdateResult,
+    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
+    ListInfo, RetriesSettings, Settings, Storage, StorageError, StorageErrorKind,
+    StorageResult, VersionInfo, VersionedUpdateResult,
 };
 
 // --- GCS credential types ---
@@ -472,14 +473,46 @@ impl Storage for ObjectStorage {
     }
 
     #[instrument(skip(self, settings))]
-    async fn get_object_etag(
+    async fn get_object_if_modified(
         &self,
         path: &str,
         settings: &Settings,
-    ) -> StorageResult<Option<ETag>> {
+        previous_version: Option<VersionInfo>,
+    ) -> StorageResult<GetModifiedResult> {
         let path = self.prefixed_path(path);
-        let res = self.get_client(settings).await.head(&path).await.map_err(Box::new)?;
-        Ok(res.e_tag.map(|e| ETag(e)))
+        let opts = GetOptions {
+            if_none_match: previous_version
+                .as_ref()
+                .map(|v| v.etag().map(|e| strip_quotes(e).into()))
+                .flatten(),
+            ..Default::default()
+        };
+
+        let res = self.get_client(settings).await.get_opts(&path, opts).await;
+
+        match res {
+            Ok(result) => {
+                let version = VersionInfo {
+                    etag: result.meta.e_tag.as_ref().cloned().map(ETag),
+                    generation: result.meta.version.as_ref().cloned().map(Generation),
+                };
+                let stream = result
+                    .into_stream()
+                    .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)));
+                let reader = StreamReader::new(stream.map_err(std::io::Error::other));
+                Ok(GetModifiedResult::Modified {
+                    data: Box::pin(reader),
+                    new_version: version,
+                })
+            }
+            Err(object_store::Error::NotModified { .. }) => {
+                Ok(GetModifiedResult::OnLatestVersion)
+            }
+            Err(object_store::Error::NotFound { .. }) => {
+                Err(StorageErrorKind::ObjectNotFound.into())
+            }
+            Err(err) => Err(Box::new(err).into()),
+        }
     }
 
     #[instrument(skip(self))]
