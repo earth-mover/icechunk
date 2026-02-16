@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import icechunk as ic
@@ -23,7 +24,7 @@ async def test_inspect_snapshot_async() -> None:
     repo = await ic.Repository.open_async(
         storage=ic.local_filesystem_storage("./tests/data/split-repo-v2")
     )
-    snap = next(repo.ancestry(branch="main")).id
+    snap = (await asyncio.to_thread(lambda: next(repo.ancestry(branch="main")))).id
     pretty_str = await repo.inspect_snapshot_async(snap, pretty=True)
     non_pretty_str = await repo.inspect_snapshot_async(snap, pretty=False)
 

@@ -53,13 +53,13 @@ async def test_issue_418(any_spec_version: int | None) -> None:
         }
     )
 
-    repo = Repository.create(
+    repo = await Repository.create_async(
         storage=in_memory_storage(),
         config=config,
         authorize_virtual_chunk_access=credentials,
         spec_version=any_spec_version,
     )
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     root = zarr.Group.from_store(store=store, zarr_format=3)
@@ -82,9 +82,9 @@ async def test_issue_418(any_spec_version: int | None) -> None:
     assert (await store._store.get("time/c/0")) == b"firs"  # codespell:ignore firs
     assert (await store._store.get("time/c/1")) == b"econ"
 
-    session.commit("Initial commit")
+    await session.commit_async("Initial commit")
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     root = zarr.Group.open(store=store)
@@ -104,7 +104,7 @@ async def test_issue_418(any_spec_version: int | None) -> None:
     assert (await store._store.get("time/c/2")) == b"thir"
 
     # commit
-    session.commit("Append virtual ref")
+    await session.commit_async("Append virtual ref")
 
     assert (await store._store.get("lon/c/0")) == b"fift"
     assert (await store._store.get("time/c/0")) == b"firs"  # codespell:ignore firs
@@ -114,11 +114,11 @@ async def test_issue_418(any_spec_version: int | None) -> None:
 
 async def test_read_chunks_from_old_array(any_spec_version: int | None) -> None:
     # This regression appeared during the change to manifest per array
-    repo = Repository.create(
+    repo = await Repository.create_async(
         storage=in_memory_storage(),
         spec_version=any_spec_version,
     )
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     root = zarr.Group.from_store(store=store, zarr_format=3)
@@ -127,9 +127,9 @@ async def test_read_chunks_from_old_array(any_spec_version: int | None) -> None:
     array1[:] = 42
     assert array1[0] == 42
     print("about to commit 1")
-    session.commit("create array 1")
+    await session.commit_async("create array 1")
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
     root = zarr.group(store=store, zarr_format=3)
     # array1 = root.require_array(name="array1", shape=((2,)), chunks=((1,)), dtype="i4")
@@ -137,9 +137,9 @@ async def test_read_chunks_from_old_array(any_spec_version: int | None) -> None:
     # assert array1[0] == 42
     array2[:] = 84
     print("about to commit 2")
-    session.commit("create array 2")
+    await session.commit_async("create array 2")
 
-    session = repo.readonly_session(branch="main")
+    session = await repo.readonly_session_async(branch="main")
     store = session.store
     root = zarr.Group.open(store=store, zarr_format=3)
     array1 = root.require_array(name="array1", shape=((2,)), chunks=((1,)), dtype="i4")
@@ -149,11 +149,11 @@ async def test_read_chunks_from_old_array(any_spec_version: int | None) -> None:
 async def test_tag_with_open_session(any_spec_version: int | None) -> None:
     """This is an issue found by hypothesis"""
 
-    repo = Repository.create(
+    repo = await Repository.create_async(
         storage=in_memory_storage(),
         spec_version=any_spec_version,
     )
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     await store.set(
@@ -168,8 +168,8 @@ async def test_tag_with_open_session(any_spec_version: int | None) -> None:
             b'{\n  "shape": [\n    1\n  ],\n  "data_type": "bool",\n  "chunk_grid": {\n    "name": "regular",\n    "configuration": {\n      "chunk_shape": [\n        1\n      ]\n    }\n  },\n  "chunk_key_encoding": {\n    "name": "default",\n    "configuration": {\n      "separator": "/"\n    }\n  },\n  "fill_value": false,\n  "codecs": [\n    {\n      "name": "bytes"\n    }\n  ],\n  "attributes": {},\n  "zarr_format": 3,\n  "node_type": "array",\n  "storage_transformers": []\n}'
         ),
     )
-    session.commit("")
-    session = repo.writable_session("main")
+    await session.commit_async("")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     await store.set(
@@ -193,8 +193,8 @@ async def test_tag_with_open_session(any_spec_version: int | None) -> None:
         ),
     )
 
-    session.commit("")
-    session = repo.writable_session("main")
+    await session.commit_async("")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     async for k in store.list_prefix(""):

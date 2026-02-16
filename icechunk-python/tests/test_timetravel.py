@@ -14,7 +14,11 @@ import zarr.core.buffer
 async def async_ancestry(
     repo: ic.Repository, **kwargs: str | None
 ) -> list[ic.SnapshotInfo]:
-    return [parent async for parent in repo.async_ancestry(**kwargs)]
+    return await asyncio.to_thread(lambda: list(repo.ancestry(**kwargs)))
+
+
+async def first_ancestry(repo: ic.Repository, **kwargs: str | None) -> ic.SnapshotInfo:
+    return await asyncio.to_thread(lambda: next(repo.ancestry(**kwargs)))
 
 
 @pytest.mark.parametrize(
@@ -235,41 +239,41 @@ Arrays deleted:
 async def test_branch_reset(any_spec_version: int | None) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
-    repo = ic.Repository.create(
+    repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
         config=config,
         spec_version=any_spec_version,
     )
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     group = zarr.group(store=store, overwrite=True)
     group.create_group("a")
-    prev_snapshot_id = session.commit("group a")
+    prev_snapshot_id = await session.commit_async("group a")
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     group = zarr.open_group(store=store)
     group.create_group("b")
-    last_commit = session.commit("group b")
+    last_commit = await session.commit_async("group b")
 
     keys = {k async for k in store.list()}
     assert "a/zarr.json" in keys
     assert "b/zarr.json" in keys
 
     with pytest.raises(ic.IcechunkError, match="branch update conflict"):
-        repo.reset_branch(
+        await repo.reset_branch_async(
             "main", prev_snapshot_id, from_snapshot_id="1CECHNKREP0F1RSTCMT0"
         )
 
-    assert last_commit == repo.lookup_branch("main")
+    assert last_commit == await repo.lookup_branch_async("main")
 
-    repo.reset_branch("main", prev_snapshot_id, from_snapshot_id=last_commit)
-    assert prev_snapshot_id == repo.lookup_branch("main")
+    await repo.reset_branch_async("main", prev_snapshot_id, from_snapshot_id=last_commit)
+    assert prev_snapshot_id == await repo.lookup_branch_async("main")
 
-    session = repo.readonly_session("main")
+    session = await repo.readonly_session_async("main")
     store = session.store
 
     keys = {k async for k in store.list()}
@@ -282,52 +286,52 @@ async def test_branch_reset(any_spec_version: int | None) -> None:
 
 
 async def test_tag_delete(any_spec_version: int | None) -> None:
-    repo = ic.Repository.create(
+    repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
     )
 
-    snap = repo.lookup_branch("main")
-    repo.create_tag("tag", snap)
-    repo.delete_tag("tag")
+    snap = await repo.lookup_branch_async("main")
+    await repo.create_tag_async("tag", snap)
+    await repo.delete_tag_async("tag")
 
     with pytest.raises(ic.IcechunkError):
-        repo.delete_tag("tag")
+        await repo.delete_tag_async("tag")
 
     with pytest.raises(ic.IcechunkError):
-        repo.create_tag("tag", snap)
+        await repo.create_tag_async("tag", snap)
 
 
 async def test_session_with_as_of(any_spec_version: int | None) -> None:
-    repo = ic.Repository.create(
+    repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
     )
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     times = []
     group = zarr.group(store=store, overwrite=True)
-    sid = session.commit("root")
-    times.append(next(repo.ancestry(snapshot_id=sid)).written_at)
+    sid = await session.commit_async("root")
+    times.append((await first_ancestry(repo, snapshot_id=sid)).written_at)
 
     for i in range(5):
-        session = repo.writable_session("main")
+        session = await repo.writable_session_async("main")
         store = session.store
         group = zarr.open_group(store=store)
         group.create_group(f"child {i}")
-        sid = session.commit(f"child {i}")
-        times.append(next(repo.ancestry(snapshot_id=sid)).written_at)
+        sid = await session.commit_async(f"child {i}")
+        times.append((await first_ancestry(repo, snapshot_id=sid)).written_at)
 
-    ancestry = list(p for p in repo.ancestry(branch="main"))
+    ancestry = await async_ancestry(repo, branch="main")
     assert len(ancestry) == 7  # initial + root + 5 children
 
-    store = repo.readonly_session("main", as_of=times[-1]).store
+    store = (await repo.readonly_session_async("main", as_of=times[-1])).store
     group = zarr.open_group(store=store, mode="r")
 
     for i, time in enumerate(times):
-        store = repo.readonly_session("main", as_of=time).store
+        store = (await repo.readonly_session_async("main", as_of=time)).store
         group = zarr.open_group(store=store, mode="r")
         expected_children = {f"child {j}" for j in range(i)}
         actual_children = {g[0] for g in group.members()}
@@ -335,17 +339,17 @@ async def test_session_with_as_of(any_spec_version: int | None) -> None:
 
 
 async def test_default_commit_metadata(any_spec_version: int | None) -> None:
-    repo = ic.Repository.create(
+    repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
     )
 
-    repo.set_default_commit_metadata({"user": "test"})
-    session = repo.writable_session("main")
+    await asyncio.to_thread(lambda: repo.set_default_commit_metadata({"user": "test"}))
+    session = await repo.writable_session_async("main")
     root = zarr.group(store=session.store, overwrite=True)
     root.create_group("child")
-    sid = session.commit("root")
-    snap = next(repo.ancestry(snapshot_id=sid))
+    sid = await session.commit_async("root")
+    snap = await first_ancestry(repo, snapshot_id=sid)
     assert snap.metadata == {"user": "test"}
 
 
@@ -391,34 +395,34 @@ def test_set_metadata() -> None:
 
 
 async def test_set_metadata_async() -> None:
-    repo = ic.Repository.create(
+    repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
     )
-    assert repo.metadata == {}
+    assert await repo.get_metadata_async() == {}
 
     await repo.set_metadata_async({"user": "test"})
     assert await repo.get_metadata_async() == {"user": "test"}
 
 
 async def test_update_metadata() -> None:
-    repo = ic.Repository.create(
+    repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
     )
-    assert repo.metadata == {}
+    assert await repo.get_metadata_async() == {}
 
-    repo.update_metadata({"user": "test"})
-    assert repo.get_metadata() == {"user": "test"}
-    repo.update_metadata({"foo": 42})
-    assert repo.get_metadata() == {"user": "test", "foo": 42}
-    repo.update_metadata({"foo": 43})
-    assert repo.get_metadata() == {"user": "test", "foo": 43}
+    await repo.update_metadata_async({"user": "test"})
+    assert await repo.get_metadata_async() == {"user": "test"}
+    await repo.update_metadata_async({"foo": 42})
+    assert await repo.get_metadata_async() == {"user": "test", "foo": 42}
+    await repo.update_metadata_async({"foo": 43})
+    assert await repo.get_metadata_async() == {"user": "test", "foo": 43}
 
 
 async def test_update_metadata_async() -> None:
-    repo = ic.Repository.create(
+    repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
     )
-    assert repo.metadata == {}
+    assert await repo.get_metadata_async() == {}
 
     await repo.update_metadata_async({"user": "test"})
     assert await repo.get_metadata_async() == {"user": "test"}
@@ -450,7 +454,7 @@ async def test_timetravel_async(using_flush: bool, any_spec_version: int | None)
     air_temp[:, :] = 42
     assert air_temp[200, 6] == 42
 
-    status = session.status()
+    status = await asyncio.to_thread(lambda: session.status())
     assert status.new_groups == {"/"}
     assert status.new_arrays == {"/air_temp"}
     assert list(status.updated_chunks.keys()) == ["/air_temp"]
@@ -542,9 +546,7 @@ async def test_timetravel_async(using_flush: bool, any_spec_version: int | None)
     air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     assert air_temp[200, 6] == 90
 
-    parents = [
-        parent async for parent in repo.async_ancestry(snapshot_id=feature_snapshot_id)
-    ]
+    parents = await async_ancestry(repo, snapshot_id=feature_snapshot_id)
     assert [snap.message for snap in parents] == [
         "commit 3",
         "commit 2",
@@ -552,13 +554,16 @@ async def test_timetravel_async(using_flush: bool, any_spec_version: int | None)
         "Repository initialized",
     ]
     assert parents[-1].id == "1CECHNKREP0F1RSTCMT0"
-    assert [len(repo.list_manifest_files(snap.id)) for snap in parents] == [1, 1, 1, 0]
+    assert [len(await repo.list_manifest_files_async(snap.id)) for snap in parents] == [
+        1,
+        1,
+        1,
+        0,
+    ]
     assert sorted(parents, key=lambda p: p.written_at) == list(reversed(parents))
     assert len(set([snap.id for snap in parents])) == 4
-    assert [parent async for parent in repo.async_ancestry(tag="v1.0")] == parents
-    assert [
-        parent async for parent in repo.async_ancestry(branch="feature-not-dead")
-    ] == parents
+    assert await async_ancestry(repo, tag="v1.0") == parents
+    assert await async_ancestry(repo, branch="feature-not-dead") == parents
 
     diff = await repo.diff_async(to_tag="v1.0", from_snapshot_id=parents[-1].id)
     assert diff.new_groups == {"/"}
@@ -602,7 +607,7 @@ Chunks updated:
         "air_temp", shape=(1000, 1000), chunks=(100, 100), dtype="i4", overwrite=True
     )
     assert (
-        repr(session.status())
+        repr(await asyncio.to_thread(lambda: session.status()))
         == """\
 Arrays created:
     /air_temp
@@ -622,11 +627,11 @@ Arrays deleted:
     tag_snapshot_id = await repo.lookup_tag_async("v1.0")
     assert tag_snapshot_id == feature_snapshot_id
 
-    actual = next(iter([parent async for parent in repo.async_ancestry(tag="v1.0")]))
+    actual = (await async_ancestry(repo, tag="v1.0"))[0]
     assert actual == await repo.lookup_snapshot_async(actual.id)
 
     if any_spec_version is None or any_spec_version > 1:
-        ops = [type(op) for op in repo.ops_log()]
+        ops = await asyncio.to_thread(lambda: [type(op) for op in repo.ops_log()])
         flush_or_commit = (
             [ic.NewCommitUpdate]
             if not using_flush
@@ -711,7 +716,7 @@ async def test_session_with_as_of_async(any_spec_version: int | None) -> None:
     times = []
     group = zarr.group(store=session.store, overwrite=True)
     sid = await session.commit_async("root")
-    to_append = await anext(repo.async_ancestry(snapshot_id=sid))
+    to_append = await first_ancestry(repo, snapshot_id=sid)
     times.append(to_append.written_at)
 
     for i in range(5):
@@ -719,10 +724,10 @@ async def test_session_with_as_of_async(any_spec_version: int | None) -> None:
         group = zarr.open_group(store=session.store)
         group.create_group(f"child {i}")
         sid = await session.commit_async(f"child {i}")
-        to_append = await anext(repo.async_ancestry(snapshot_id=sid))
+        to_append = await first_ancestry(repo, snapshot_id=sid)
         times.append(to_append.written_at)
 
-    ancestry = [p async for p in repo.async_ancestry(branch="main")]
+    ancestry = await async_ancestry(repo, branch="main")
     assert len(ancestry) == 7  # initial + root + 5 children
 
     store = (await repo.readonly_session_async("main", as_of=times[-1])).store
@@ -926,7 +931,7 @@ async def test_repository_lifecycle_async(any_spec_version: int | None) -> None:
     new_config_sync = ic.RepositoryConfig.default()
     new_config_sync.inline_chunk_threshold_bytes = 2048
 
-    reopened_repo_sync = repo.reopen(config=new_config_sync)
+    reopened_repo_sync = await repo.reopen_async(config=new_config_sync)
     assert reopened_repo_sync.config.inline_chunk_threshold_bytes == 2048
 
     # Test open_or_create_async with new storage (should create)
@@ -965,7 +970,7 @@ async def test_rewrite_manifests_async(any_spec_version: int | None) -> None:
     second_commit = await session.commit_async("more data")
 
     # Get initial ancestry to verify commits exist
-    initial_ancestry = [snap async for snap in repo.async_ancestry(branch="main")]
+    initial_ancestry = await async_ancestry(repo, branch="main")
     assert len(initial_ancestry) >= 3  # initial + first_commit + second_commit
 
     # Test rewrite_manifests_async
@@ -978,7 +983,7 @@ async def test_rewrite_manifests_async(any_spec_version: int | None) -> None:
     assert rewrite_commit != second_commit
 
     # Verify ancestry after rewrite
-    new_ancestry = [snap async for snap in repo.async_ancestry(branch="main")]
+    new_ancestry = await async_ancestry(repo, branch="main")
     extra_commits = 1 if any_spec_version == 1 else 0  # we do amend in IC2+
     assert len(new_ancestry) == len(initial_ancestry) + extra_commits
     assert new_ancestry[0].message == "rewritten manifests"
@@ -1089,7 +1094,7 @@ async def test_long_ops_log(spec_version: int | None) -> None:
     snap = await repo.lookup_branch_async("main")
     for i in range(1, NUM_BRANCHES + 1):
         await repo.create_branch_async(str(i), snap)
-    updates = [update async for update in repo.ops_log_async()]
+    updates = await asyncio.to_thread(lambda: list(repo.ops_log()))
     assert len(updates) == NUM_BRANCHES + 1
 
     t = type(updates[0])

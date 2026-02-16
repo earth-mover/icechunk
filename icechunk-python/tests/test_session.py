@@ -24,11 +24,11 @@ from icechunk.distributed import merge_sessions
 @pytest.mark.parametrize("use_async", [True, False])
 async def test_session_fork(use_async: bool, any_spec_version: int | None) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
-        repo = Repository.create(
+        repo = await Repository.create_async(
             local_filesystem_storage(tmpdir),
             spec_version=any_spec_version,
         )
-        session = repo.writable_session("main")
+        session = await repo.writable_session_async("main")
         zarr.group(session.store)
         assert session.has_uncommitted_changes
 
@@ -38,7 +38,7 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         if use_async:
             await session.commit_async("init")
         else:
-            session.commit("init")
+            await session.commit_async("init")
 
         # forking a read-only session
         with pytest.raises(ValueError):
@@ -48,29 +48,29 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
             pickle.loads(pickle.dumps(session.fork()))
         pickle.loads(pickle.dumps(session))
 
-        session = repo.writable_session("main")
+        session = await repo.writable_session_async("main")
         fork = pickle.loads(pickle.dumps(session.fork()))
         zarr.create_group(fork.store, path="/foo")
         assert not session.has_uncommitted_changes
         assert fork.has_uncommitted_changes
         with pytest.warns(UserWarning):
             with pytest.raises(IcechunkError, match="cannot commit"):
-                session.commit("foo")
+                await session.commit_async("foo")
         if use_async:
             await session.merge_async(fork)
             await session.commit_async("foo")
         else:
-            session.merge(fork)
-            session.commit("foo")
+            await session.merge_async(fork)
+            await session.commit_async("foo")
 
-        session = repo.writable_session("main")
+        session = await repo.writable_session_async("main")
         fork1 = pickle.loads(pickle.dumps(session.fork()))
         fork2 = pickle.loads(pickle.dumps(session.fork()))
         zarr.create_group(fork1.store, path="/foo1")
         zarr.create_group(fork2.store, path="/foo2")
 
         with pytest.raises(TypeError, match="Cannot commit a fork"):
-            fork1.commit("foo")
+            await fork1.commit_async("foo")
 
         fork1 = pickle.loads(pickle.dumps(fork1))
         fork2 = pickle.loads(pickle.dumps(fork2))
@@ -83,8 +83,8 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
             await session.merge_async(fork1, fork2)
             await session.commit_async("all done")
         else:
-            session.merge(fork1, fork2)
-            session.commit("all done")
+            await session.merge_async(fork1, fork2)
+            await session.commit_async("all done")
 
         groups = set(
             name for name, _ in zarr.open_group(session.store, mode="r").groups()
@@ -92,7 +92,7 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         assert groups == {"foo", "foo1", "foo2"}
 
         # forking a forked session may be useful
-        session = repo.writable_session("main")
+        session = await repo.writable_session_async("main")
         fork1 = pickle.loads(pickle.dumps(session.fork()))
         fork2 = pickle.loads(pickle.dumps(fork1.fork()))
         zarr.create_group(fork1.store, path="/foo3")
@@ -102,7 +102,7 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
 
         fork1 = pickle.loads(pickle.dumps(fork1))
         fork2 = pickle.loads(pickle.dumps(fork2))
-        session.merge(fork1, fork2)
+        await session.merge_async(fork1, fork2)
 
         groups = set(
             name for name, _ in zarr.open_group(session.store, mode="r").groups()
@@ -124,13 +124,13 @@ async def test_chunk_type(
     container = VirtualChunkContainer("file:///foo/", store_config)
     config.set_virtual_chunk_container(container)
 
-    repo = Repository.create(
+    repo = await Repository.create_async(
         storage=in_memory_storage(),
         config=config,
         spec_version=any_spec_version,
     )
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
     group = zarr.group(store=store, overwrite=True)
     air_temp = group.create_array("air_temp", shape=(1, 4), chunks=(1, 1), dtype="i4")
@@ -154,9 +154,9 @@ async def test_chunk_type(
     air_temp[0, 2] = 42
     assert air_temp[0, 2] == 42
 
-    assert session.chunk_type("/air_temp", [0, 0]) == ChunkType.VIRTUAL
-    assert session.chunk_type("/air_temp", [0, 2]) == chunk_type
-    assert session.chunk_type("/air_temp", [0, 3]) == ChunkType.UNINITIALIZED
+    assert await session.chunk_type_async("/air_temp", [0, 0]) == ChunkType.VIRTUAL
+    assert await session.chunk_type_async("/air_temp", [0, 2]) == chunk_type
+    assert await session.chunk_type_async("/air_temp", [0, 3]) == ChunkType.UNINITIALIZED
 
     assert await session.chunk_type_async("/air_temp", [0, 0]) == ChunkType.VIRTUAL
     assert await session.chunk_type_async("/air_temp", [0, 2]) == chunk_type

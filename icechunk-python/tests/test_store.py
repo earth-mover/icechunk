@@ -1,24 +1,25 @@
+import asyncio
 import json
 
 import numpy as np
 
 import icechunk as ic
 import zarr
-from tests.conftest import parse_repo
+from tests.conftest import parse_repo, parse_repo_async
 from zarr.core.buffer import cpu, default_buffer_prototype
 
 rng = np.random.default_rng(seed=12345)
 
 
 async def test_store_clear_metadata_list(any_spec_version: int | None) -> None:
-    repo = parse_repo("memory", "test", any_spec_version)
-    session = repo.writable_session("main")
+    repo = await parse_repo_async("memory", "test", any_spec_version)
+    session = await repo.writable_session_async("main")
     store = session.store
 
     zarr.group(store=store)
-    session.commit("created node /")
+    await session.commit_async("created node /")
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
     await store.clear()
     zarr.group(store=store)
@@ -26,8 +27,8 @@ async def test_store_clear_metadata_list(any_spec_version: int | None) -> None:
 
 
 async def test_store_clear_chunk_list(any_spec_version: int | None) -> None:
-    repo = parse_repo("memory", "test", any_spec_version)
-    session = repo.writable_session("main")
+    repo = await parse_repo_async("memory", "test", any_spec_version)
+    session = await repo.writable_session_async("main")
     store = session.store
 
     array_kwargs = dict(
@@ -35,9 +36,9 @@ async def test_store_clear_chunk_list(any_spec_version: int | None) -> None:
     )
     group = zarr.group(store=store)
     group.create_array(**array_kwargs)  # type: ignore[arg-type]
-    session.commit("created node /")
+    await session.commit_async("created node /")
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
     await store.clear()
 
@@ -55,8 +56,8 @@ async def test_store_clear_chunk_list(any_spec_version: int | None) -> None:
 
 
 async def test_support_dimension_names_null(any_spec_version: int | None) -> None:
-    repo = parse_repo("memory", "test", any_spec_version)
-    session = repo.writable_session("main")
+    repo = await parse_repo_async("memory", "test", any_spec_version)
+    session = await repo.writable_session_async("main")
     store = session.store
 
     root = zarr.group(store=store)
@@ -78,12 +79,12 @@ def test_doesnt_support_consolidated_metadata(any_spec_version: int | None) -> N
 
 
 async def test_with_readonly(any_spec_version: int | None) -> None:
-    repo = parse_repo("memory", "test", any_spec_version)
-    session = repo.readonly_session("main")
+    repo = await parse_repo_async("memory", "test", any_spec_version)
+    session = await repo.readonly_session_async("main")
     store = session.store
     assert store.read_only
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
     writer = store.with_read_only(read_only=False)
     assert not writer._is_open
@@ -99,29 +100,37 @@ async def test_with_readonly(any_spec_version: int | None) -> None:
 
 
 async def test_transaction(any_spec_version: int | None) -> None:
-    repo = parse_repo("memory", "test", any_spec_version)
-    cid1 = repo.lookup_branch("main")
+    repo = await parse_repo_async("memory", "test", any_spec_version)
+    cid1 = await repo.lookup_branch_async("main")
+
     # TODO: test metadata, rebase_with, and rebase_tries kwargs
-    with repo.transaction("main", message="initialize group") as store:
-        assert not store.read_only
-        root = zarr.group(store=store)
-        root.attrs["foo"] = "bar"
-    cid2 = repo.lookup_branch("main")
+    def _run_transaction() -> None:
+        with repo.transaction("main", message="initialize group") as store:
+            assert not store.read_only
+            root = zarr.group(store=store)
+            root.attrs["foo"] = "bar"
+
+    await asyncio.to_thread(_run_transaction)
+    cid2 = await repo.lookup_branch_async("main")
     assert cid1 != cid2, "Transaction did not commit changes"
 
 
 async def test_transaction_failed_no_commit(any_spec_version: int | None) -> None:
-    repo = parse_repo("memory", "test", any_spec_version)
-    cid1 = repo.lookup_branch("main")
-    try:
+    repo = await parse_repo_async("memory", "test", any_spec_version)
+    cid1 = await repo.lookup_branch_async("main")
+
+    def _run_failing_transaction() -> None:
         with repo.transaction("main", message="initialize group") as store:
             assert not store.read_only
             root = zarr.group(store=store)
             root.attrs["foo"] = "bar"
             raise RuntimeError("Simulating an error to prevent commit")
+
+    try:
+        await asyncio.to_thread(_run_failing_transaction)
     except RuntimeError:
         pass
-    cid2 = repo.lookup_branch("main")
+    cid2 = await repo.lookup_branch_async("main")
     assert cid1 == cid2, "Transaction committed changes despite error"
 
 

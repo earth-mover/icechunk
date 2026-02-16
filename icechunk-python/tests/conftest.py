@@ -1,3 +1,4 @@
+import asyncio
 from typing import Literal, cast
 
 import boto3
@@ -20,6 +21,12 @@ def parse_repo(
             storage=in_memory_storage(),
             spec_version=spec_version,
         )
+
+
+async def parse_repo_async(
+    store: Literal["local", "memory"], path: str, spec_version: int | None
+) -> Repository:
+    return await asyncio.to_thread(parse_repo, store, path, spec_version)
 
 
 @pytest.fixture(scope="function")
