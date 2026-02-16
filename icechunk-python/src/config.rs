@@ -217,10 +217,10 @@ fn create_fallback_task_locals() -> Result<pyo3_async_runtimes::TaskLocals, Stri
                 Ok(())
             });
 
-            if let Err(err) = run_result {
-                if let Some(sender) = tx {
-                    let _ = sender.send(Err(err.to_string()));
-                }
+            if let Err(err) = run_result
+                && let Some(sender) = tx
+            {
+                let _ = sender.send(Err(err.to_string()));
             }
         })
         .map_err(|err| format!("failed to start fallback asyncio loop thread: {err}"))?;
