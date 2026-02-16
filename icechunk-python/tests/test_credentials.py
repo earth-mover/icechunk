@@ -3,6 +3,7 @@ import contextvars
 import pickle
 import threading
 import time
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -420,7 +421,7 @@ _cred_refresh_loop_ids: list[int] = []
 
 
 @pytest.fixture(autouse=False)
-def reset_cred_tracker():
+def reset_cred_tracker() -> Iterator[list[int]]:
     _cred_refresh_loop_ids.clear()
     yield _cred_refresh_loop_ids
     _cred_refresh_loop_ids.clear()
@@ -536,7 +537,7 @@ def test_async_cred_refresh_uses_originator_loop_from_thread(
     asyncio.run(run())
 
 
-def test_async_cred_refresh_graceful_deadlock():
+def test_async_cred_refresh_graceful_deadlock() -> None:
     # Deadlock scenario: sync list_branches called directly on the event loop
     # thread where the credential callback would also need to run. Use a thread
     # with a timeout so the test doesn't hang forever if it actually deadlocks.
@@ -599,6 +600,6 @@ def test_async_callback_no_loop_has_consistent_loop(
     t.join()
     assert len(_cred_refresh_loop_ids) > 4
     assert len(set(_cred_refresh_loop_ids)) == 1
-    assert len(set(_cred_refresh_loop_ids)) == 1, (
-        "All credential refresh calls should be on the same loop even if there isn't an event loop at the start"
-    )
+    assert (
+        len(set(_cred_refresh_loop_ids)) == 1
+    ), "All credential refresh calls should be on the same loop even if there isn't an event loop at the start"
