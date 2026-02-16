@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Datelike, TimeDelta, Timelike, Utc};
 use icechunk::storage::RetriesSettings;
 use itertools::Itertools;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use std::{
@@ -11,7 +11,7 @@ use std::{
     hash::DefaultHasher,
     num::{NonZeroU16, NonZeroU64},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use icechunk::{
@@ -173,6 +173,74 @@ fn current_task_locals() -> Option<pyo3_async_runtimes::TaskLocals> {
     Python::attach(|py| pyo3_async_runtimes::tokio::get_current_locals(py).ok())
 }
 
+static FALLBACK_TASK_LOCALS: OnceLock<Result<pyo3_async_runtimes::TaskLocals, String>> =
+    OnceLock::new();
+
+fn object_id(py: Python<'_>, obj: &Bound<'_, PyAny>) -> Result<usize, PyErr> {
+    let builtins = PyModule::import(py, "builtins")?;
+    builtins.getattr("id")?.call1((obj,))?.extract()
+}
+
+fn would_deadlock_current_loop(
+    task_locals: &pyo3_async_runtimes::TaskLocals,
+) -> Result<bool, PyErr> {
+    Python::attach(|py| {
+        let running_loop = match pyo3_async_runtimes::get_running_loop(py) {
+            Ok(loop_ref) => loop_ref,
+            Err(err) if err.is_instance_of::<PyRuntimeError>(py) => return Ok(false),
+            Err(err) => return Err(err),
+        };
+
+        let target_loop = task_locals.event_loop(py);
+        Ok(object_id(py, &running_loop)? == object_id(py, &target_loop)?)
+    })
+}
+
+fn create_fallback_task_locals() -> Result<pyo3_async_runtimes::TaskLocals, String> {
+    let (tx, rx) = std::sync::mpsc::sync_channel::<
+        Result<pyo3_async_runtimes::TaskLocals, String>,
+    >(1);
+
+    std::thread::Builder::new()
+        .name("icechunk-python-asyncio-fallback".to_string())
+        .spawn(move || {
+            let mut tx = Some(tx);
+            let run_result = Python::attach(|py| -> PyResult<()> {
+                let asyncio = PyModule::import(py, "asyncio")?;
+                let event_loop = asyncio.getattr("new_event_loop")?.call0()?;
+                asyncio.getattr("set_event_loop")?.call1((event_loop.clone(),))?;
+
+                let locals = pyo3_async_runtimes::TaskLocals::new(event_loop.clone());
+                let _ = tx.take().expect("sender must exist").send(Ok(locals));
+
+                event_loop.call_method0("run_forever")?;
+                Ok(())
+            });
+
+            if let Err(err) = run_result {
+                if let Some(sender) = tx {
+                    let _ = sender.send(Err(err.to_string()));
+                }
+            }
+        })
+        .map_err(|err| format!("failed to start fallback asyncio loop thread: {err}"))?;
+
+    match rx.recv() {
+        Ok(Ok(locals)) => Ok(locals),
+        Ok(Err(err)) => Err(format!("failed to initialize fallback asyncio loop: {err}")),
+        Err(err) => Err(format!(
+            "fallback asyncio loop thread terminated before initialization: {err}"
+        )),
+    }
+}
+
+fn fallback_task_locals() -> Result<pyo3_async_runtimes::TaskLocals, PyErr> {
+    match FALLBACK_TASK_LOCALS.get_or_init(create_fallback_task_locals) {
+        Ok(locals) => Ok(locals.clone()),
+        Err(err) => Err(PyRuntimeError::new_err(err.clone())),
+    }
+}
+
 enum PythonCallbackResult<PyCred> {
     Value(PyCred),
     Awaitable(Py<PyAny>),
@@ -216,26 +284,26 @@ where
     PyCred: for<'a, 'py> FromPyObject<'a, 'py>,
     for<'a, 'py> <PyCred as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
 {
-    if let Some(task_locals) = current_task_locals().or(task_locals) {
-        let fut = Python::attach(|py| {
-            pyo3_async_runtimes::into_future_with_locals(
-                &task_locals,
-                awaitable.bind(py).clone(),
-            )
-        })?;
-        let value = fut.await?;
-        return Python::attach(|py| value.bind(py).extract().map_err(Into::into));
-    }
+    let task_locals = match current_task_locals().or(task_locals) {
+        Some(task_locals) => {
+            if would_deadlock_current_loop(&task_locals)? {
+                return Err(PyValueError::new_err(
+                    "deadlock: async credential callback targets the currently blocked event loop thread",
+                ));
+            }
+            task_locals
+        }
+        None => fallback_task_locals()?,
+    };
 
-    // No task locals available — no Python event loop is currently running.
-    // Fall back to asyncio.run() which creates a temporary event loop to
-    // drive the awaitable. This is the correct path when an async credential
-    // callback is used from a sync context (e.g. Repository.open).
-    Python::attach(|py| {
-        let asyncio = PyModule::import(py, "asyncio")?;
-        let value = asyncio.getattr("run")?.call1((awaitable.bind(py),))?;
-        value.extract().map_err(Into::into)
-    })
+    let fut = Python::attach(|py| {
+        pyo3_async_runtimes::into_future_with_locals(
+            &task_locals,
+            awaitable.bind(py).clone(),
+        )
+    })?;
+    let value = fut.await?;
+    Python::attach(|py| value.bind(py).extract().map_err(Into::into))
 }
 
 #[async_trait]
