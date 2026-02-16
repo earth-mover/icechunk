@@ -1,3 +1,4 @@
+mod asyncio_bridge;
 mod config;
 mod conflicts;
 mod errors;
