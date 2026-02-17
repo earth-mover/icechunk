@@ -29,7 +29,7 @@ env:
 jobs:
   rust:
     name: Rust CI
-    timeout-minutes: 30
+    timeout-minutes: 35
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -64,10 +64,38 @@ jobs:
         if: matrix.os != 'macos-latest'
         run: docker version
 
+      - name: Install Just (non-macos)
+        if: "!contains(matrix.os, 'macos')"
+        run: sudo snap install --edge --classic just
+
+      - name: Install Just (macos)
+        if: "contains(matrix.os, 'macos')"
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_UPGRADE: 1
+        run: brew install just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          # workspaces: "rust -> target"
+          key: ${{ env.RUST_CHANNEL }}
+
       - name: Stand up docker services
         if: matrix.os != 'macos-latest'
         run: |
           docker compose up -d
+
+      - name: Compile tests (while containers start)
+        if: matrix.os != 'macos-latest'
+        run: |
+          just compile-tests "--locked"
 
       - name: Wait for containers to be ready
         if: matrix.os != 'macos-latest'
@@ -85,25 +113,6 @@ jobs:
               fi
               sleep 1
           done
-
-      - name: Install Just (non-macos)
-        if: "!contains(matrix.os, 'macos')"
-        run: sudo snap install --edge --classic just
-
-      - name: Install Just (macos)
-        run: cargo install just
-
-      - name: Install Rust toolchain
-        run: |
-          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
-          rustup default ${{ env.RUST_CHANNEL }}
-
-      - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          # workspaces: "rust -> target"
-          key: ${{ env.RUST_CHANNEL }}
 
       - name: Run tests with Docker services
         if: matrix.os != 'macos-latest'
@@ -125,7 +134,6 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          just compile-tests "--locked"
           just test
 
       - name: Run doc tests
