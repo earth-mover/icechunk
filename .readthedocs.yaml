@@ -10,7 +10,7 @@ build:
       - which mamba
       - cd icechunk-python && maturin build && pip install "$(ls ../target/wheels/*.whl | head -n 1)" && pip install --group docs && maturin develop
       - mamba list
-      - cd icechunk-python && maturin develop && cd docs
+      - cd icechunk-python && cd docs
 
 conda:
   environment: docs/doc-env.yml
