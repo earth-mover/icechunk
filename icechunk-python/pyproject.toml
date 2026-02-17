@@ -23,26 +23,33 @@ authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
 dependencies = ["zarr>=3,!=3.0.3"]
 
-[project.optional-dependencies]
+[dependency-groups]
+dev = [
+    { include-group = "test" },
+    "mypy",
+    "ruff",
+    "maturin>=1.7,<2.0",
+    "maturin-import-hook>=0.3.0",
+]
 test = [
   "boto3",
   "coverage",
-  "mypy",
   "object-store-python",
   "pytest",
   "pytest-cov",
   "pytest-asyncio",
   "pytest-xdist",
-  "ruff",
-  "dask>=2024.11.0",
-  "distributed>=2024.11.0",
-  "xarray>=2025.01.2",
+  "pytest-reportlog",
+  "dask>=2025.2.0",
+  "distributed>=2025.2.0",
+  "xarray>=2025.07.1",
   "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
   "termcolor",
   "pooch",
   "netcdf4",
+  "matplotlib",
 ]
 benchmark = [
   "pytest-benchmark[histogram]",
@@ -54,16 +61,16 @@ benchmark = [
   "tqdm",
   "humanize",
   "platformdirs",
-  "ipdb",
   "coiled",
+  "toolz",
 ]
 docs = [
   "scipy",
   "cftime",
   "pooch",
-  "dask>=2024.11.0",
-  "distributed>=2024.11.0",
-  "xarray>=2025.01.2",
+  "dask>=2025.2.0",
+  "distributed>=2025.2.0",
+  "xarray>=2025.07.1",
   "myst_nb",
   "pydata_sphinx_theme",
   "mkdocs-awesome-pages-plugin",
@@ -89,32 +96,6 @@ docs = [
   "sphinx-autodoc-typehints",
 ]
 
-[dependency-groups]
-upstream = [
-  "boto3",
-  "coverage",
-  "mypy",
-  "pytest",
-  "pytest-cov",
-  "pytest-asyncio",
-  "pytest-xdist",
-  "pytest-reportlog",
-  "ruff",
-  "hypothesis",
-  "pandas-stubs",
-  "boto3-stubs[s3]",
-  "termcolor",
-  # "object-store-python @ git+https://github.com/roeap/object-store-python.git", # doesn't work with uv
-  "object-store-python",
-  "distributed==2025.11.0",
-  "dask==2025.11.0",
-  "xarray @ git+https://github.com/pydata/xarray.git",
-  "zarr @ git+https://github.com/zarr-developers/zarr.git",
-]
-dev = [
-  { include-group = "upstream" }
-]
-
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "icechunk._icechunk_python"
@@ -122,14 +103,8 @@ python-source = "python"
 exclude = ["README.md"]
 
 [tool.uv]
-# Rebuild package when any Rust files change
-cache-keys = [
-  {file = "pyproject.toml"},
-  {file = "Cargo.toml"},
-  {file = "src/**/*.rs"},
-  {file = "../icechunk/Cargo.toml"},
-  {file = "../icechunk/src/**/*.rs"},
-]
+# Disable automatic package building - we use maturin-import-hook for faster dev cycles
+package = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -138,7 +113,7 @@ minversion = "7"
 testpaths = ["tests", "integration_tests"]
 log_cli_level = "INFO"
 xfail_strict = true
-addopts = ["-ra", "--strict-config", "--strict-markers"]
+addopts = ["-ra", "--strict-config", "--strict-markers", "-n", "auto"]
 markers = [
   "gpu", # need this to run the zarr tests
 ]
@@ -162,10 +137,6 @@ python_version = "3.11"
 strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
-
-[[tool.mypy.overrides]]
-ignore_missing_imports = true
-module = ["toolz.*"]
 
 [tool.ruff]
 line-length = 90
