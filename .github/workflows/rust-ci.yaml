@@ -50,6 +50,16 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
+      - name: Set up Docker on macOS
+        if: contains(matrix.os, 'macos')
+        uses: douglascamata/setup-docker-macos-action@v1 # Use the latest version tag
+        with:
+          colima-version: 'latest'
+          docker-version: 'latest'
+
+      - name: Verify Docker installation
+        run: docker version
+
       - name: Stand up docker services
         run: |
           docker compose up -d
