@@ -153,7 +153,7 @@ async fn test_stalled_stream_with_toxiproxy() -> Result<(), Box<dyn std::error::
     //      DEBUG fetch_chunk{id=5RJVAV34MK97ND5G4WAG range=0..51200}: icechunk::storage::s3: retrying on stalled stream error after 200.000003ms.
     //    Removing toxics
     //      DEBUG fetch_chunk{id=5RJVAV34MK97ND5G4WAG range=0..51200}: icechunk::storage::s3: retrying on stalled stream error after 400.000006ms.
-    //    Succesfully read data!
+    //    Successfully read data!
     let range = 0..test_data.len() as u64;
     let grab_data = {
         println!("Fetching chunk again");
@@ -173,7 +173,7 @@ async fn test_stalled_stream_with_toxiproxy() -> Result<(), Box<dyn std::error::
     let (fetch_result, _) = tokio::join!(grab_data, remove_toxics);
 
     assert!(fetch_result.is_ok());
-    println!("Succesfully read data!");
+    println!("Successfully read data!");
 
     // Cleanup
     proxy.delete().await?;
