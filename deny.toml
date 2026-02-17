@@ -5,6 +5,12 @@ all-features = true
 version = 2
 # only fail for direct unmaintained dependencies, this can only be used with rustc 1.85
 unmaintained = "workspace"
+ignore = [
+  # generator 0.6.x data race advisory (RUSTSEC-2020-0151)
+  # Transitive dev-dependency: noxious-client -> noxious -> bmrng -> loom 0.4 -> generator 0.6
+  # bmrng 0.4 pins loom ^0.4 which pins generator ^0.6; upstream hasn't updated
+  "RUSTSEC-2020-0151",
+]
 
 [licenses]
 # List of explicitly allowed licenses
