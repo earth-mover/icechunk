@@ -8,11 +8,11 @@ build:
   jobs:
     install:
       - which mamba
-      - cd icechunk-python && maturin build && pip install "$(ls ../target/wheels/*.whl | head -n 1)" && pip install --group docs && cd docs
+      - cd icechunk-python && maturin build && pip install "$(ls ../target/wheels/*.whl | head -n 1)" && pip install --group docs 
       - mamba list
-      # - cd icechunk-python && maturin develop && cd ../docs
+      - cd icechunk-python && maturin develop && cd ../docs
 
 conda:
-  environment: icechunk-python/docs/doc-env.yml
+  environment: docs/doc-env.yml
 mkdocs:
-  configuration: icechunk-python/docs/mkdocs.yml
+  configuration: docs/mkdocs.yml

@@ -8,3 +8,4 @@ dependencies:
   - maturin
   - cairo
   - rust
+  - patchelf
