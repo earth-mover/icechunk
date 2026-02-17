@@ -172,7 +172,7 @@ async fn test_stalled_stream_with_toxiproxy() -> Result<(), Box<dyn std::error::
     // Remove toxics while chunk is fetched
     let (fetch_result, _) = tokio::join!(grab_data, remove_toxics);
 
-    assert!(fetch_result.is_ok());
+    assert_eq!(fetch_result.unwrap().len(), test_data.len());
     println!("Successfully read data!");
 
     // Cleanup
