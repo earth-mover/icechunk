@@ -664,8 +664,9 @@ mod tests {
     }
 
     #[icechunk_macros::test]
-    fn test_yaml_config_all_features() {
-        let yaml = r#"
+    fn test_yaml_config_deserialization() {
+        let mut yaml_parts = vec![
+            r#"
 inline_chunk_threshold_bytes: null
 get_partial_values_concurrency: null
 compression: null
@@ -673,10 +674,6 @@ max_concurrent_requests: null
 caching: null
 storage: null
 virtual_chunk_containers:
-  https://example.com/data/:
-    name: null
-    url_prefix: https://example.com/data/
-    store: !http {}
   s3://my-s3-bucket/:
     name: null
     url_prefix: s3://my-s3-bucket/
@@ -687,23 +684,38 @@ virtual_chunk_containers:
       allow_http: false
       force_path_style: false
       network_stream_timeout_seconds: 60
-      requester_pays: false
+      requester_pays: false"#
+                .to_string(),
+        ];
+
+        #[cfg(feature = "object-store-http")]
+        yaml_parts.push(
+            r#"
+  https://example.com/data/:
+    name: null
+    url_prefix: https://example.com/data/
+    store: !http {}"#
+                .to_string(),
+        );
+
+        #[cfg(feature = "object-store-gcs")]
+        yaml_parts.push(
+            r#"
   gcs://my-gcs-bucket/:
     name: null
     url_prefix: gcs://my-gcs-bucket/
-    store: !gcs {}
-manifest: null
-"#;
+    store: !gcs {}"#
+                .to_string(),
+        );
 
-        let config: RepositoryConfig = serde_yaml_ng::from_str(yaml).unwrap();
+        yaml_parts.push("\nmanifest: null\n".to_string());
+        let yaml = yaml_parts.join("");
+
+        let config: RepositoryConfig = serde_yaml_ng::from_str(&yaml).unwrap();
 
         let vccs = config.virtual_chunk_containers.as_ref().unwrap();
-        assert_eq!(vccs.len(), 3);
 
-        // HTTP container
-        let http = &vccs["https://example.com/data/"];
-        assert_eq!(http.url_prefix(), "https://example.com/data/");
-        assert!(matches!(http.store, ObjectStoreConfig::Http(_)));
+        let mut expected_len = 1; // S3 is always present
 
         // S3 container
         let s3 = &vccs["s3://my-s3-bucket/"];
@@ -720,10 +732,25 @@ manifest: null
             other => panic!("Expected S3, got {:?}", other),
         }
 
+        // HTTP container
+        #[cfg(feature = "object-store-http")]
+        {
+            expected_len += 1;
+            let http = &vccs["https://example.com/data/"];
+            assert_eq!(http.url_prefix(), "https://example.com/data/");
+            assert!(matches!(http.store, ObjectStoreConfig::Http(_)));
+        }
+
         // GCS container
-        let gcs = &vccs["gcs://my-gcs-bucket/"];
-        assert_eq!(gcs.url_prefix(), "gcs://my-gcs-bucket/");
-        assert!(matches!(gcs.store, ObjectStoreConfig::Gcs(_)));
+        #[cfg(feature = "object-store-gcs")]
+        {
+            expected_len += 1;
+            let gcs = &vccs["gcs://my-gcs-bucket/"];
+            assert_eq!(gcs.url_prefix(), "gcs://my-gcs-bucket/");
+            assert!(matches!(gcs.store, ObjectStoreConfig::Gcs(_)));
+        }
+
+        assert_eq!(vccs.len(), expected_len);
 
         // All other top-level fields should be None
         assert!(config.inline_chunk_threshold_bytes.is_none());
