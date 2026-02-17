@@ -9,7 +9,7 @@ test *args='':
   cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --all-targets {{args}}
 
 doctest *args='':
-  cargo test --profile {{profile}} --doc {{args}}
+  cargo test --workspace --profile {{profile}} --doc {{args}}
 
 # run all tests with logs enabled
 test-logs level *args='':
