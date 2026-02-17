@@ -86,9 +86,12 @@ jobs:
               sleep 1
           done
 
-      - name: Install Just
-        if: matrix.os != 'macos-latest'
+      - name: Install Just (non-macos)
+        if: "!contains(matrix.os, 'macos')"
         run: sudo snap install --edge --classic just
+
+      - name: Install Just (macos)
+        run: cargo install just
 
       - name: Install Rust toolchain
         run: |
