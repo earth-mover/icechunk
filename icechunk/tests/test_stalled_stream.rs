@@ -33,7 +33,7 @@ use bytes::Bytes;
 /// This test requires MinIO and Toxiproxy running via docker compose:
 /// ```bash
 /// docker compose up -d
-/// cargo test test_stalled_stream --test test_stalled_stream -- --ignored --nocapture
+/// cargo test test_stalled_stream --test test_stalled_stream -- --nocapture
 /// ```
 use std::time::Duration;
 
