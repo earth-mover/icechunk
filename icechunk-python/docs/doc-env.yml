@@ -1,0 +1,11 @@
+name: icechunk-docs
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.13
+  - pip
+  - maturin
+  - cairo
+  - rust
+  - patchelf
