@@ -30,18 +30,11 @@ use bytes::Bytes;
 /// - SDK sees: data stopped flowing, but connection not closed
 /// - After grace period, SDK measures 0 B/s < 1 B/s → ThroughputBelowMinimum error
 ///
-/// This test requires:
-/// 1. MinIO running on localhost:9000 (credentials: minio123/minio123)
-/// 2. Toxiproxy running on localhost:8474
-///
-/// To run:
+/// This test requires MinIO and Toxiproxy running via docker compose:
 /// ```bash
-/// # Use the setup script to start services
-/// ./icechunk/tests/setup_stalled_stream_test.sh
-///
-/// # Run the test
+/// docker compose up -d
 /// cargo test test_stalled_stream --test test_stalled_stream -- --ignored --nocapture
-///     ```
+/// ```
 use std::time::Duration;
 
 use icechunk::{
@@ -100,9 +93,8 @@ async fn test_stalled_stream_with_toxiproxy() -> Result<(), Box<dyn std::error::
 
     // Create a proxy: toxiproxy listens on 9002, forwards to MinIO on 9000
     let name = format!("minio_test_{}", uuid::Uuid::new_v4());
-    let proxy =
-        client.create_proxy(&name, "0.0.0.0:9002", "host.docker.internal:9000").await?;
-    println!("Created proxy: {} -> host.docker.internal:9000", name);
+    let proxy = client.create_proxy(&name, "0.0.0.0:9002", "minio:9000").await?;
+    println!("Created proxy: {} -> minio:9000", name);
 
     // Create storage with 2-second grace period for stalled stream detection
     let storage = create_proxied_storage(9002, 2).await?;
