@@ -6,6 +6,7 @@
 //! transaction logs, and chunks.
 
 use async_stream::try_stream;
+use backon::{ExponentialBuilder, Retryable};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
@@ -16,6 +17,7 @@ use std::{
     ops::Range,
     pin::Pin,
     sync::{Arc, atomic::AtomicBool},
+    time::Duration,
 };
 use tokio::{
     io::{AsyncBufRead, AsyncReadExt},
@@ -595,15 +597,36 @@ impl AssetManager {
             Err(guard) => {
                 trace!(%chunk_id, ?range, "Downloading chunk");
                 let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
-                let permit = self.request_semaphore.acquire().await?;
-                let (read, _) = self
-                    .storage
-                    .get_object(&self.storage_settings, &path, Some(range))
-                    .await?;
-                let chunk =
-                    async_reader_to_bytes(read, (range.end - range.start) as usize)
+                let chunk = (|| async {
+                    let permit = self.request_semaphore.acquire().await?;
+                    let (read, _) = self
+                        .storage
+                        .get_object(&self.storage_settings, &path, Some(range))
                         .await?;
-                drop(permit);
+                    let bytes_result =
+                        async_reader_to_bytes(read, (range.end - range.start) as usize)
+                            .await
+                            .map_err(RepositoryError::from);
+                    drop(permit);
+                    bytes_result
+                })
+                .retry(
+                    ExponentialBuilder::new()
+                        .with_max_times(
+                            self.storage_settings.retries().max_tries().get().into(),
+                        )
+                        .with_min_delay(Duration::from_millis(
+                            self.storage_settings.retries().initial_backoff_ms().into(),
+                        ))
+                        .with_max_delay(Duration::from_millis(
+                            self.storage_settings.retries().max_backoff_ms().into(),
+                        )),
+                )
+                .when(|e| format!("{e:?}").contains("StreamingError"))
+                .notify(|_err, duration| {
+                    debug!("retrying on stalled stream error after {:?}.", duration)
+                })
+                .await?;
                 let _fail_is_ok = guard.insert(chunk.clone());
                 Ok(chunk)
             }
