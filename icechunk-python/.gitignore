@@ -78,3 +78,6 @@ docs/_build/
 .mypy_cache/
 
 .benchmarks/
+# pixi environments
+.pixi/*
+!.pixi/config.toml

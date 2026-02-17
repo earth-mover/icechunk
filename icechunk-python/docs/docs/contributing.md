@@ -314,55 +314,19 @@ pre-commit run rust-pre-commit-ci --hook-stage manual
 
 The documentation is built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/).
 
-**System dependencies**: Install Cairo graphics library for image processing:
-
-=== "macOS"
-
-    ```bash
-    brew install cairo
-    ```
-
-    If `mkdocs` fails to find Cairo, set the library path:
-
-    ```bash
-    export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
-    ```
-
-    You can add this to your `~/.zshrc` to make it permanent.
-
-=== "Ubuntu/Debian"
-
-    ```bash
-    sudo apt-get install libcairo2-dev
-    ```
-
-=== "Fedora/RHEL"
-
-    ```bash
-    sudo dnf install cairo-devel
-    ```
-
 From the `icechunk-python` directory:
 
 ```bash
-# Install icechunk with docs dependencies
-uv sync --group docs
-
 # Start the MkDocs development server
-cd docs
-uv run mkdocs serve
+pixi run docs-serve
 ```
-
-!!! note "Use `--livereload` for file watching"
-    Due to a [Click 8.3.x bug](https://github.com/mkdocs/mkdocs/issues/4032), file watching may not work without the `--livereload` flag. Always use `mkdocs serve --livereload` to ensure automatic rebuilds when you edit files.
 
 The development server will start at `http://127.0.0.1:8000` with live reload enabled.
 
 **Build static site**:
 
 ```bash
-cd docs
-uv run mkdocs build
+pixi run docs-build
 ```
 
 This builds the site to `docs/.site` directory.
