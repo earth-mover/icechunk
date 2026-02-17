@@ -78,7 +78,6 @@ async fn create_proxied_storage(
 }
 
 #[icechunk_macros::tokio_test]
-#[ignore]
 async fn test_stalled_stream_with_toxiproxy() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to toxiproxy
     let client = Client::new("http://localhost:8474");
