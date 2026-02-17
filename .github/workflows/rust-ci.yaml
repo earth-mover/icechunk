@@ -51,20 +51,26 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up Docker on macOS
-        if: contains(matrix.os, 'macos')
-        uses: douglascamata/setup-docker-macos-action@v1 # Use the latest version tag
+        # docker installation not supported with most Mx Apple Chips
+        #(Might change once runners use M3: uses: douglascamata/setup-docker-macos-action@v1.0.1
+        if: matrix.os == 'macos-15-intel'
+        uses: douglascamata/setup-docker-macos-action@v1.0.1
         with:
-          colima-version: 'latest'
-          docker-version: 'latest'
+          lima: v1.2.1
+          colima: v0.9.1
+          colima-network-address: false
 
       - name: Verify Docker installation
+        if: matrix.os != 'macos-latest'
         run: docker version
 
       - name: Stand up docker services
+        if: matrix.os != 'macos-latest'
         run: |
           docker compose up -d
 
       - name: Wait for containers to be ready
+        if: matrix.os != 'macos-latest'
         run: |
           for _ in {1..30}; do
               if curl --silent --fail http://localhost:9000/minio/health/live; then
@@ -81,6 +87,7 @@ jobs:
           done
 
       - name: Install Just
+        if: matrix.os != 'macos-latest'
         run: sudo snap install --edge --classic just
 
       - name: Install Rust toolchain
@@ -96,6 +103,7 @@ jobs:
           key: ${{ env.RUST_CHANNEL }}
 
       - name: Run tests with Docker services
+        if: matrix.os != 'macos-latest'
         env:
           RUST_LOG: icechunk=trace
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
@@ -145,3 +153,8 @@ jobs:
 
         run: |
           cargo test --all --all-targets -- --ignored
+
+      - name: Run unit tests only
+        if: matrix.os == 'macos-latest'
+        run: |
+          cargo test --lib
