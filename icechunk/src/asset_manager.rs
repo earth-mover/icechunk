@@ -22,6 +22,7 @@ use tokio::{
     sync::Semaphore,
 };
 use tokio_util::io::SyncIoBridge;
+use backon::{BackoffBuilder, ExponentialBuilder};
 use tracing::{Span, debug, instrument, trace, warn};
 
 use crate::{
@@ -510,11 +511,18 @@ impl AssetManager {
         retry_settings: &storage::RetriesSettings,
         mut update: impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>>,
     ) -> RepositoryResult<VersionInfo> {
-        let max_attempts = retry_settings.max_tries().get() as u64;
-        let initial_backoff = retry_settings.initial_backoff_ms() as u64;
-        let max_backoff = retry_settings.max_backoff_ms() as u64;
-        // First few retries have no delay for brief contention
-        let free_retries: u64 = 5;
+        let max_attempts = retry_settings.max_tries().get() as usize;
+
+        let mut backoff = ExponentialBuilder::new()
+            .with_min_delay(std::time::Duration::from_millis(
+                retry_settings.initial_backoff_ms() as u64,
+            ))
+            .with_max_delay(std::time::Duration::from_millis(
+                retry_settings.max_backoff_ms() as u64,
+            ))
+            .with_max_times(max_attempts)
+            .with_jitter()
+            .build();
 
         let mut attempts: u64 = 1;
         loop {
@@ -542,27 +550,24 @@ impl AssetManager {
                     kind: RepositoryErrorKind::RepoInfoUpdated,
                     ..
                 }) => {
-                    if attempts >= max_attempts {
-                        return Err(RepositoryErrorKind::RepoUpdateAttemptsLimit(
-                            max_attempts,
-                        )
-                        .into());
+                    match backoff.next() {
+                        Some(delay) => {
+                            debug!(
+                                attempts,
+                                ?delay,
+                                "Repo info object was updated concurrently, retrying..."
+                            );
+                            tokio::time::sleep(delay).await;
+                        }
+                        None => {
+                            return Err(
+                                RepositoryErrorKind::RepoUpdateAttemptsLimit(
+                                    max_attempts as u64,
+                                )
+                                .into(),
+                            );
+                        }
                     }
-                    debug!(
-                        attempts,
-                        "Repo info object was updated concurrently, retrying..."
-                    );
-
-                    // Apply exponential backoff with jitter after the free retries
-                    if attempts > free_retries {
-                        let exp = (attempts - free_retries - 1).min(32);
-                        let backoff_ms =
-                            initial_backoff.saturating_mul(1u64 << exp).min(max_backoff);
-                        let jittered = rand::random_range(0..=backoff_ms);
-                        tokio::time::sleep(std::time::Duration::from_millis(jittered))
-                            .await;
-                    }
-
                     attempts += 1;
                 }
                 err @ Err(_) => {
