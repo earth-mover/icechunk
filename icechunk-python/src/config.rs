@@ -22,7 +22,8 @@ use icechunk::{
         GcsCredentialsFetcher, GcsStaticCredentials, ManifestConfig,
         ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
         ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
-        S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
+        RepoUpdateRetryConfig, S3Credentials, S3CredentialsFetcher, S3Options,
+        S3StaticCredentials,
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
@@ -796,6 +797,104 @@ fn storage_retries_settings_repr(s: &PyStorageRetriesSettings) -> String {
     )
 }
 
+#[pyclass(name = "RepoUpdateRetryConfig", eq)]
+#[derive(Debug)]
+pub struct PyRepoUpdateRetryConfig {
+    #[pyo3(get, set)]
+    pub default: Option<Py<PyStorageRetriesSettings>>,
+    #[pyo3(get, set)]
+    pub commit: Option<Py<PyStorageRetriesSettings>>,
+    #[pyo3(get, set)]
+    pub refs: Option<Py<PyStorageRetriesSettings>>,
+    #[pyo3(get, set)]
+    pub gc: Option<Py<PyStorageRetriesSettings>>,
+}
+
+impl PartialEq for PyRepoUpdateRetryConfig {
+    fn eq(&self, other: &Self) -> bool {
+        let x: RepoUpdateRetryConfig = self.into();
+        let y: RepoUpdateRetryConfig = other.into();
+        x == y
+    }
+}
+
+impl From<RepoUpdateRetryConfig> for PyRepoUpdateRetryConfig {
+    fn from(value: RepoUpdateRetryConfig) -> Self {
+        #[allow(clippy::expect_used)]
+        Python::attach(|py| Self {
+            default: value.default.map(|r| {
+                Py::new(py, Into::<PyStorageRetriesSettings>::into(r))
+                    .expect("Cannot create instance of StorageRetriesSettings")
+            }),
+            commit: value.commit.map(|r| {
+                Py::new(py, Into::<PyStorageRetriesSettings>::into(r))
+                    .expect("Cannot create instance of StorageRetriesSettings")
+            }),
+            refs: value.refs.map(|r| {
+                Py::new(py, Into::<PyStorageRetriesSettings>::into(r))
+                    .expect("Cannot create instance of StorageRetriesSettings")
+            }),
+            gc: value.gc.map(|r| {
+                Py::new(py, Into::<PyStorageRetriesSettings>::into(r))
+                    .expect("Cannot create instance of StorageRetriesSettings")
+            }),
+        })
+    }
+}
+
+impl From<&PyRepoUpdateRetryConfig> for RepoUpdateRetryConfig {
+    fn from(value: &PyRepoUpdateRetryConfig) -> Self {
+        Python::attach(|py| Self {
+            default: value.default.as_ref().map(|r| (&*r.borrow(py)).into()),
+            commit: value.commit.as_ref().map(|r| (&*r.borrow(py)).into()),
+            refs: value.refs.as_ref().map(|r| (&*r.borrow(py)).into()),
+            gc: value.gc.as_ref().map(|r| (&*r.borrow(py)).into()),
+        })
+    }
+}
+
+#[pymethods]
+impl PyRepoUpdateRetryConfig {
+    #[pyo3(signature = (default=None, commit=None, refs=None, gc=None))]
+    #[new]
+    pub fn new(
+        default: Option<Py<PyStorageRetriesSettings>>,
+        commit: Option<Py<PyStorageRetriesSettings>>,
+        refs: Option<Py<PyStorageRetriesSettings>>,
+        gc: Option<Py<PyStorageRetriesSettings>>,
+    ) -> Self {
+        Self { default, commit, refs, gc }
+    }
+
+    pub fn __repr__(&self) -> String {
+        Python::attach(|py| {
+            format!(
+                r#"RepoUpdateRetryConfig(default={default}, commit={commit}, refs={refs}, gc={gc})"#,
+                default = self
+                    .default
+                    .as_ref()
+                    .map(|r| storage_retries_settings_repr(&r.borrow(py)))
+                    .unwrap_or_else(|| "None".to_string()),
+                commit = self
+                    .commit
+                    .as_ref()
+                    .map(|r| storage_retries_settings_repr(&r.borrow(py)))
+                    .unwrap_or_else(|| "None".to_string()),
+                refs = self
+                    .refs
+                    .as_ref()
+                    .map(|r| storage_retries_settings_repr(&r.borrow(py)))
+                    .unwrap_or_else(|| "None".to_string()),
+                gc = self
+                    .gc
+                    .as_ref()
+                    .map(|r| storage_retries_settings_repr(&r.borrow(py)))
+                    .unwrap_or_else(|| "None".to_string()),
+            )
+        })
+    }
+}
+
 #[pyclass(name = "StorageConcurrencySettings", eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyStorageConcurrencySettings {
@@ -1469,6 +1568,8 @@ pub struct PyRepositoryConfig {
     pub manifest: Option<Py<PyManifestConfig>>,
     #[pyo3(get)]
     pub previous_file: Option<String>,
+    #[pyo3(get, set)]
+    pub repo_update_retries: Option<Py<PyRepoUpdateRetryConfig>>,
 }
 
 impl PartialEq for PyRepositoryConfig {
@@ -1503,6 +1604,10 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
                 virtual_chunk_containers: cont,
                 manifest: value.manifest.as_ref().map(|c| (&*c.borrow(py)).into()),
                 previous_file: value.previous_file.clone(),
+                repo_update_retries: value
+                    .repo_update_retries
+                    .as_ref()
+                    .map(|r| (&*r.borrow(py)).into()),
             })
         })
     }
@@ -1536,6 +1641,10 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
                     .expect("Cannot create instance of ManifestConfig")
             }),
             previous_file: value.previous_file,
+            repo_update_retries: value.repo_update_retries.map(|r| {
+                Py::new(py, Into::<PyRepoUpdateRetryConfig>::into(r))
+                    .expect("Cannot create instance of RepoUpdateRetryConfig")
+            }),
         })
     }
 }
@@ -1549,7 +1658,7 @@ impl PyRepositoryConfig {
     }
 
     #[new]
-    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, max_concurrent_requests = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None))]
+    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, max_concurrent_requests = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None, repo_update_retries = None))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         inline_chunk_threshold_bytes: Option<u16>,
@@ -1560,6 +1669,7 @@ impl PyRepositoryConfig {
         storage: Option<Py<PyStorageSettings>>,
         virtual_chunk_containers: Option<HashMap<String, PyVirtualChunkContainer>>,
         manifest: Option<Py<PyManifestConfig>>,
+        repo_update_retries: Option<Py<PyRepoUpdateRetryConfig>>,
     ) -> Self {
         Self {
             inline_chunk_threshold_bytes,
@@ -1571,6 +1681,7 @@ impl PyRepositoryConfig {
             virtual_chunk_containers,
             manifest,
             previous_file: None,
+            repo_update_retries,
         }
     }
 

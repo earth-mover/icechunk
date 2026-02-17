@@ -218,21 +218,6 @@ impl AssetManager {
         self.spec_version
     }
 
-    pub fn limit_retries_repo_update(
-        attempts: u64,
-        mut update: impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>>,
-    ) -> impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>> {
-        let mut _attempts = attempts;
-        move |a, b| {
-            if _attempts > 0 {
-                _attempts -= 1;
-                update(a, b)
-            } else {
-                Err(RepositoryErrorKind::RepoUpdateAttemptsLimit(attempts).into())
-            }
-        }
-    }
-
     pub fn remove_cached_snapshot(&self, snapshot_id: &SnapshotId) {
         self.snapshot_cache.remove(snapshot_id);
     }
@@ -519,11 +504,18 @@ impl AssetManager {
         .await
     }
 
-    #[instrument(skip(self, update))]
+    #[instrument(skip(self, retry_settings, update))]
     pub async fn update_repo_info(
         &self,
+        retry_settings: &storage::RetriesSettings,
         mut update: impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>>,
     ) -> RepositoryResult<VersionInfo> {
+        let max_attempts = retry_settings.max_tries().get() as u64;
+        let initial_backoff = retry_settings.initial_backoff_ms() as u64;
+        let max_backoff = retry_settings.max_backoff_ms() as u64;
+        // First few retries have no delay for brief contention
+        let free_retries: u64 = 5;
+
         let mut attempts: u64 = 1;
         loop {
             let (repo_info, repo_version) = self.fetch_repo_info().await?;
@@ -550,8 +542,27 @@ impl AssetManager {
                     kind: RepositoryErrorKind::RepoInfoUpdated,
                     ..
                 }) => {
-                    // try again
-                    debug!("Repo info object was updated concurrently, retrying...");
+                    if attempts >= max_attempts {
+                        return Err(RepositoryErrorKind::RepoUpdateAttemptsLimit(
+                            max_attempts,
+                        )
+                        .into());
+                    }
+                    debug!(
+                        attempts,
+                        "Repo info object was updated concurrently, retrying..."
+                    );
+
+                    // Apply exponential backoff with jitter after the free retries
+                    if attempts > free_retries {
+                        let exp = (attempts - free_retries - 1).min(32);
+                        let backoff_ms =
+                            initial_backoff.saturating_mul(1u64 << exp).min(max_backoff);
+                        let jittered = rand::random_range(0..=backoff_ms);
+                        tokio::time::sleep(std::time::Duration::from_millis(jittered))
+                            .await;
+                    }
+
                     attempts += 1;
                 }
                 err @ Err(_) => {

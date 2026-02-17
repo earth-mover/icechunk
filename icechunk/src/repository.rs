@@ -593,8 +593,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().refs(), do_update)
             .await?;
         Ok(final_metadata)
     }
@@ -621,8 +620,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().refs(), do_update)
             .await?;
         Ok(())
     }
@@ -857,8 +855,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().refs(), do_update)
             .await?;
         Ok(())
     }
@@ -1063,8 +1060,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().refs(), do_update)
             .await?;
         Ok(())
     }
@@ -1116,8 +1112,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().refs(), do_update)
             .await?;
         Ok(())
     }
@@ -1163,8 +1158,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().refs(), do_update)
             .await?;
         Ok(())
     }
@@ -1230,8 +1224,7 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().refs(), do_update)
             .await?;
         Ok(())
     }

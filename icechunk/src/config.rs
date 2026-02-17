@@ -10,6 +10,7 @@
 use core::fmt;
 use std::{
     collections::HashMap,
+    num::NonZeroU16,
     ops::Bound,
     path::PathBuf,
     sync::{Arc, OnceLock},
@@ -22,7 +23,11 @@ pub use object_store::gcp::GcpCredential;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::{format::Path, storage, virtual_chunks::VirtualChunkContainer};
+use crate::{
+    format::Path,
+    storage::{self, RetriesSettings},
+    virtual_chunks::VirtualChunkContainer,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct S3Options {
@@ -385,6 +390,92 @@ impl ManifestConfig {
     }
 }
 
+/// Retry configuration for repo info update operations.
+///
+/// Different operation types can have different retry settings.
+/// If a specific category is `None`, the `default` settings are used.
+/// If `default` is also `None`, hardcoded defaults are used.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RepoUpdateRetryConfig {
+    /// Default retry settings applied when a specific category is not set.
+    #[serde(default)]
+    pub default: Option<RetriesSettings>,
+
+    /// Retry settings for commit operations (flush, commit).
+    #[serde(default)]
+    pub commit: Option<RetriesSettings>,
+
+    /// Retry settings for ref operations (branch/tag create/delete/reset, metadata).
+    #[serde(default)]
+    pub refs: Option<RetriesSettings>,
+
+    /// Retry settings for GC operations (delete_snapshots, expire).
+    #[serde(default)]
+    pub gc: Option<RetriesSettings>,
+}
+
+static DEFAULT_REPO_UPDATE_RETRIES: OnceLock<RetriesSettings> = OnceLock::new();
+static DEFAULT_REPO_UPDATE_GC_RETRIES: OnceLock<RetriesSettings> = OnceLock::new();
+
+impl RepoUpdateRetryConfig {
+    fn default_retries() -> &'static RetriesSettings {
+        DEFAULT_REPO_UPDATE_RETRIES.get_or_init(|| RetriesSettings {
+            max_tries: Some(NonZeroU16::new(100).unwrap()),
+            initial_backoff_ms: Some(50),
+            max_backoff_ms: Some(30_000),
+        })
+    }
+
+    fn default_gc_retries() -> &'static RetriesSettings {
+        DEFAULT_REPO_UPDATE_GC_RETRIES.get_or_init(|| RetriesSettings {
+            max_tries: Some(NonZeroU16::new(500).unwrap()),
+            initial_backoff_ms: Some(100),
+            max_backoff_ms: Some(60_000),
+        })
+    }
+
+    pub fn commit(&self) -> &RetriesSettings {
+        self.commit.as_ref().or(self.default.as_ref()).unwrap_or(Self::default_retries())
+    }
+
+    pub fn refs(&self) -> &RetriesSettings {
+        self.refs.as_ref().or(self.default.as_ref()).unwrap_or(Self::default_retries())
+    }
+
+    pub fn gc(&self) -> &RetriesSettings {
+        self.gc.as_ref().or(self.default.as_ref()).unwrap_or(Self::default_gc_retries())
+    }
+
+    pub fn merge(&self, other: Self) -> Self {
+        Self {
+            default: match (&self.default, other.default) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            commit: match (&self.commit, other.commit) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            refs: match (&self.refs, other.refs) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            gc: match (&self.gc, other.gc) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+        }
+    }
+}
+
 /// Configuration options for a repository.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepositoryConfig {
@@ -421,11 +512,16 @@ pub struct RepositoryConfig {
 
     #[serde(default)]
     pub previous_file: Option<String>,
+
+    #[serde(default)]
+    pub repo_update_retries: Option<RepoUpdateRetryConfig>,
 }
 
 static DEFAULT_COMPRESSION: OnceLock<CompressionConfig> = OnceLock::new();
 static DEFAULT_CACHING: OnceLock<CachingConfig> = OnceLock::new();
 static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
+static DEFAULT_REPO_UPDATE_RETRY_CONFIG: OnceLock<RepoUpdateRetryConfig> =
+    OnceLock::new();
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: u16 = 256;
 
 impl RepositoryConfig {
@@ -458,6 +554,12 @@ impl RepositoryConfig {
 
     pub fn max_concurrent_requests(&self) -> u16 {
         self.max_concurrent_requests.unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS)
+    }
+
+    pub fn repo_update_retries(&self) -> &RepoUpdateRetryConfig {
+        self.repo_update_retries.as_ref().unwrap_or_else(|| {
+            DEFAULT_REPO_UPDATE_RETRY_CONFIG.get_or_init(RepoUpdateRetryConfig::default)
+        })
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -517,6 +619,15 @@ impl RepositoryConfig {
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
                 (Some(_), Some(theirs)) => Some(theirs),
+            },
+            repo_update_retries: match (
+                &self.repo_update_retries,
+                other.repo_update_retries,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
         }
     }
