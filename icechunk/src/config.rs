@@ -420,7 +420,7 @@ static DEFAULT_REPO_UPDATE_GC_RETRIES: OnceLock<RetriesSettings> = OnceLock::new
 impl RepoUpdateRetryConfig {
     fn default_retries() -> &'static RetriesSettings {
         DEFAULT_REPO_UPDATE_RETRIES.get_or_init(|| RetriesSettings {
-            max_tries: Some(NonZeroU16::new(100).unwrap()),
+            max_tries: Some(NonZeroU16::new(100).unwrap_or(NonZeroU16::MIN)),
             initial_backoff_ms: Some(50),
             max_backoff_ms: Some(30_000),
         })
@@ -428,7 +428,7 @@ impl RepoUpdateRetryConfig {
 
     fn default_gc_retries() -> &'static RetriesSettings {
         DEFAULT_REPO_UPDATE_GC_RETRIES.get_or_init(|| RetriesSettings {
-            max_tries: Some(NonZeroU16::new(500).unwrap()),
+            max_tries: Some(NonZeroU16::new(500).unwrap_or(NonZeroU16::MIN)),
             initial_backoff_ms: Some(100),
             max_backoff_ms: Some(60_000),
         })
