@@ -1,3 +1,4 @@
+use backon::{ExponentialBuilder, Retryable};
 use std::{
     collections::HashMap,
     fmt,
@@ -5,11 +6,13 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 use crate::{
     Storage, StorageError,
     config::{S3Credentials, S3CredentialsFetcher, S3Options},
+    error::ICError,
     format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private,
 };
@@ -42,7 +45,7 @@ use futures::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncRead, sync::OnceCell};
-use tracing::{error, instrument};
+use tracing::{debug, error, instrument};
 
 use super::{
     CHUNK_PREFIX, CONFIG_PATH, DeleteObjectsResult, FetchConfigResult, GetRefResult,
@@ -150,7 +153,7 @@ pub async fn mk_client(
     } else {
         StalledStreamProtectionConfig::enabled()
             .grace_period(std::time::Duration::from_secs(
-                config.network_stream_timeout_seconds.unwrap_or(60) as u64,
+                config.network_stream_timeout_seconds.unwrap_or(10) as u64,
             ))
             .build()
     };
@@ -177,11 +180,11 @@ pub async fn mk_client(
 
     let retry_config = RetryConfig::standard()
         .with_max_attempts(settings.retries().max_tries().get() as u32)
-        .with_initial_backoff(core::time::Duration::from_millis(
+        .with_initial_backoff(Duration::from_millis(
             settings.retries().initial_backoff_ms() as u64,
         ))
-        .with_max_backoff(core::time::Duration::from_millis(
-            settings.retries().max_backoff_ms() as u64,
+        .with_max_backoff(Duration::from_millis(
+            settings.retries().max_backoff_ms() as u64
         ));
 
     let mut s3_builder = Builder::from(&aws_config.load().await)
@@ -190,8 +193,8 @@ pub async fn mk_client(
 
     // credentials may take a while to refresh, defaults are too strict
     let id_cache = IdentityCache::lazy()
-        .load_timeout(core::time::Duration::from_secs(120))
-        .buffer_time(core::time::Duration::from_secs(120))
+        .load_timeout(Duration::from_secs(120))
+        .buffer_time(Duration::from_secs(120))
         .build();
 
     s3_builder = s3_builder.identity_cache(id_cache);
@@ -686,10 +689,33 @@ impl Storage for S3Storage {
         range: &Range<ChunkOffset>,
     ) -> StorageResult<Bytes> {
         let key = self.get_chunk_path(id)?;
-        self.get_object_concurrently(settings, key.as_str(), range)
-            .await?
-            .to_bytes((range.end - range.start) as usize)
-            .await
+
+        (|| async {
+            self.get_object_concurrently(settings, key.as_str(), range)
+                .await?
+                .to_bytes((range.end - range.start) as usize)
+                .await
+        })
+        .retry(
+            ExponentialBuilder::new()
+                .with_max_times(settings.retries().max_tries().get().into())
+                .with_min_delay(Duration::from_millis(
+                    settings.retries().initial_backoff_ms().into(),
+                ))
+                .with_max_delay(Duration::from_millis(
+                    settings.retries().max_backoff_ms().into(),
+                )),
+        )
+        .when(|e: &ICError<StorageErrorKind>|
+              // Sadly ThroughputBelowMinimum is buried inside a boxed error,
+              // so check the debug output (yuck!)
+              // We actually check for StreamingError to catch more generic errors too
+              // For example, the integration test raises UnexpectedEof when toxics are removed.
+              format!("{e:?}").contains("StreamingError"))
+        .notify(|_err, duration| {
+            debug!("retrying on stalled stream error after {:?}.", duration)
+        })
+        .await
     }
 
     #[instrument(skip(self, settings, metadata, bytes))]
