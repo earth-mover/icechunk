@@ -3,16 +3,18 @@ version: 2
 build:
   os: ubuntu-24.04
   tools:
-    python: "mambaforge-latest"
+      python: "latest"
 
   jobs:
+    create_environment:
+         - asdf plugin add pixi
+         - asdf install pixi latest
+         - asdf global pixi latest
     install:
-      - which mamba
-      - cd icechunk-python && maturin build && pip install "$(ls ../target/wheels/*.whl | head -n 1)" && pip install --group docs && cd docs
-      - mamba list
-      # - cd icechunk-python && maturin develop && cd ../docs
+      - pixi install -e docs
+    build:
+         html:
+           - pixi run docs-build --site-dir $READTHEDOCS_OUTPUT/html
 
-conda:
-  environment: icechunk-python/docs/doc-env.yml
 mkdocs:
   configuration: icechunk-python/docs/mkdocs.yml
