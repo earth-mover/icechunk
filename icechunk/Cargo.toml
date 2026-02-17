@@ -18,13 +18,7 @@ bytes = { version = "1.11.1", features = ["serde"] }
 base64 = "0.22.1"
 futures = "0.3.31"
 itertools = "0.14.0"
-object_store = { version = "0.13.1", default-features = false, features = [
-  "aws",
-  "gcp",
-  "azure",
-  "http",
-  "fs"
-] }
+object_store = { version = "0.13.1", default-features = false, features = [] }
 rand = "0.10.0"
 thiserror = "2.0.18"
 serde_json = "1.0.149"
@@ -106,19 +100,19 @@ warp = { version = "0.4.2", features = ["server"] }
 workspace = true
 
 [features]
-default = ["s3", "gcs", "azure", "http-store", "redirect", "local-store"]
+default = ["s3", "object-store-s3", "object-store-gcs", "object-store-azure", "object-store-http", "object-store-fs", "redirect"]
 s3 = [
   "dep:aws-sdk-s3",
   "dep:aws-config",
   "dep:aws-credential-types",
   "dep:aws-smithy-runtime",
   "dep:aws-smithy-types-convert",
-  "object_store/aws",
 ]
-gcs = ["object_store/gcp"]
-azure = ["object_store/azure"]
-http-store = ["object_store/http"]
-local-store = ["object_store/fs"]
+object-store-s3 = ["object_store/aws"]
+object-store-gcs = ["object_store/gcp"]
+object-store-azure = ["object_store/azure"]
+object-store-http = ["object_store/http"]
+object-store-fs = ["object_store/fs"]
 redirect = ["dep:reqwest"]
 logs = ["dep:tracing-subscriber"]
 cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs"]

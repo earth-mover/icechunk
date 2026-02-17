@@ -232,21 +232,18 @@ prop_compose! {
         use ObjectStoreConfig::*;
         match &store {
             InMemory => panic!("assumed not to be in memory"),
-            #[cfg(feature = "local-store")]
+            #[cfg(feature = "object-store-fs")]
             LocalFileSystem(path_buf) => {
                 VirtualChunkContainer::new(format!("file:///{}/", path_buf.to_string_lossy()),store).unwrap()
             }
-            #[cfg(feature = "http-store")]
+            #[cfg(feature = "object-store-http")]
             Http(_) => VirtualChunkContainer::new("http://example.com/".to_string(),store).unwrap(),
-            #[cfg(feature = "s3")]
             S3Compatible(_) => VirtualChunkContainer::new("s3://somebucket/".to_string(),store).unwrap(),
-            #[cfg(feature = "s3")]
             S3(_) => VirtualChunkContainer::new("s3://somebucket/".to_string(),store).unwrap(),
-            #[cfg(feature = "gcs")]
+            #[cfg(feature = "object-store-gcs")]
             Gcs(_) => VirtualChunkContainer::new("gcs://somebucket/".to_string(),store).unwrap(),
-            #[cfg(feature = "azure")]
+            #[cfg(feature = "object-store-azure")]
             Azure(_) => VirtualChunkContainer::new("az://somebucket/".to_string(),store).unwrap(),
-            #[cfg(feature = "s3")]
             Tigris(_) => VirtualChunkContainer::new("tigris://somebucket/".to_string(),store).unwrap(),
             #[allow(unreachable_patterns)]
             _ => panic!("unsupported store config for this feature set"),
@@ -258,23 +255,20 @@ pub fn object_store_config() -> BoxedStrategy<ObjectStoreConfig> {
     use ObjectStoreConfig::*;
     let mut strategies: Vec<BoxedStrategy<ObjectStoreConfig>> =
         vec![Just(InMemory).boxed()];
-    #[cfg(feature = "local-store")]
+    #[cfg(feature = "object-store-fs")]
     strategies.push(
         vec(string_regex("[a-zA-Z0-9\\-_]+").unwrap(), 1..4)
             .prop_map(|s| LocalFileSystem(PathBuf::from(s.join("/"))))
             .boxed(),
     );
-    #[cfg(feature = "s3")]
-    {
-        strategies.push(s3_options().prop_map(S3).boxed());
-        strategies.push(s3_options().prop_map(S3Compatible).boxed());
-        strategies.push(s3_options().prop_map(Tigris).boxed());
-    }
-    #[cfg(feature = "gcs")]
+    strategies.push(s3_options().prop_map(S3).boxed());
+    strategies.push(s3_options().prop_map(S3Compatible).boxed());
+    strategies.push(s3_options().prop_map(Tigris).boxed());
+    #[cfg(feature = "object-store-gcs")]
     strategies.push(any::<HashMap<String, String>>().prop_map(Gcs).boxed());
-    #[cfg(feature = "http-store")]
+    #[cfg(feature = "object-store-http")]
     strategies.push(any::<HashMap<String, String>>().prop_map(Http).boxed());
-    #[cfg(feature = "azure")]
+    #[cfg(feature = "object-store-azure")]
     strategies.push(azure_options().prop_map(Azure).boxed());
     proptest::strategy::Union::new(strategies).boxed()
 }

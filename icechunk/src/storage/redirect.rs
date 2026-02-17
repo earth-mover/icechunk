@@ -13,13 +13,13 @@ use tokio::sync::OnceCell;
 use tracing::{debug, trace};
 use url::Url;
 
-#[cfg(feature = "http-store")]
+use crate::config::{S3Credentials, S3Options};
+#[cfg(feature = "object-store-http")]
 use crate::storage::new_http_storage;
-#[cfg(feature = "gcs")]
+#[cfg(feature = "object-store-gcs")]
 use crate::{config::GcsCredentials, storage::new_gcs_storage};
 #[cfg(feature = "s3")]
 use crate::{
-    config::{S3Credentials, S3Options},
     new_s3_storage,
     storage::{new_r2_storage, new_tigris_storage},
 };
@@ -200,7 +200,7 @@ impl RedirectStorage {
             )
             .into()),
 
-            #[cfg(feature = "http-store")]
+            #[cfg(feature = "object-store-http")]
             "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => {
                 let mut base_url = url.clone();
                 // we can expect here because the scheme is already matched as http[s]
@@ -217,14 +217,14 @@ impl RedirectStorage {
                     .expect("Internal error, cannot set url scheme");
                 new_http_storage(base_url.to_string().as_str(), None)
             }
-            #[cfg(not(feature = "http-store"))]
+            #[cfg(not(feature = "object-store-http"))]
             "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => Err(
                 StorageErrorKind::BadRedirect(
                     "Redirect target uses `http+icechunk://` or `https+icechunk://`, but the `http-store` feature is disabled".to_string(),
                 )
                 .into(),
             ),
-            #[cfg(feature = "gcs")]
+            #[cfg(feature = "object-store-gcs")]
             "gs" | "gcs" => {
                 let (bucket, prefix) = repo_location(&url)?;
                 new_gcs_storage(
@@ -234,7 +234,7 @@ impl RedirectStorage {
                     None,
                 )
             }
-            #[cfg(not(feature = "gcs"))]
+            #[cfg(not(feature = "object-store-gcs"))]
             "gs" | "gcs" => Err(StorageErrorKind::BadRedirect(
                 "Redirect target uses `gs://`/`gcs://` but the `gcs` feature is disabled"
                     .to_string(),

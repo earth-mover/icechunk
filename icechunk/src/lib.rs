@@ -54,8 +54,10 @@ pub mod virtual_chunks;
 
 pub use config::{ObjectStoreConfig, RepositoryConfig};
 pub use repository::Repository;
-#[cfg(feature = "local-store")]
+#[cfg(feature = "object-store-fs")]
 pub use storage::new_local_filesystem_storage;
+#[cfg(feature = "object-store-s3")]
+pub use storage::new_s3_object_store_storage;
 #[cfg(feature = "s3")]
 pub use storage::new_s3_storage;
 pub use storage::{ObjectStorage, Storage, StorageError, new_in_memory_storage};

@@ -4,11 +4,11 @@
 //! list) for persisting Icechunk data. Constructor functions like [`new_s3_storage`],
 //! [`new_gcs_storage`], [`new_in_memory_storage`] create configured storage instances.
 
-#[cfg(feature = "http-store")]
+#[cfg(feature = "object-store-http")]
 use ::object_store::ClientConfigKey;
-#[cfg(feature = "azure")]
+#[cfg(feature = "object-store-azure")]
 use ::object_store::azure::AzureConfigKey;
-#[cfg(feature = "gcs")]
+#[cfg(feature = "object-store-gcs")]
 use ::object_store::gcp::GoogleConfigKey;
 use chrono::{DateTime, Utc};
 use core::fmt;
@@ -19,6 +19,9 @@ use futures::{
 use itertools::Itertools;
 #[cfg(feature = "s3")]
 use s3::S3Storage;
+pub use s3_config::{
+    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::{max, min},
@@ -52,18 +55,18 @@ pub mod redirect;
 /// Native S3 client implementation.
 #[cfg(feature = "s3")]
 pub mod s3;
+/// Shared S3 configuration types (always compiled).
+pub mod s3_config;
 
 pub use object_store::ObjectStorage;
 
 #[cfg(feature = "redirect")]
 use crate::storage::redirect::RedirectStorage;
 use crate::{error::ICError, private};
-#[cfg(feature = "azure")]
+#[cfg(feature = "object-store-azure")]
 use object_store::AzureCredentials;
-#[cfg(feature = "gcs")]
+#[cfg(feature = "object-store-gcs")]
 use object_store::GcsCredentials;
-#[cfg(feature = "s3")]
-use s3::{S3Credentials, S3Options};
 
 /// Storage operation error types.
 #[derive(Debug, Error)]
@@ -794,7 +797,7 @@ pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
     Ok(Arc::new(st))
 }
 
-#[cfg(feature = "local-store")]
+#[cfg(feature = "object-store-fs")]
 pub async fn new_local_filesystem_storage(
     path: &Path,
 ) -> StorageResult<Arc<dyn Storage>> {
@@ -802,7 +805,7 @@ pub async fn new_local_filesystem_storage(
     Ok(Arc::new(st))
 }
 
-#[cfg(feature = "http-store")]
+#[cfg(feature = "object-store-http")]
 pub fn new_http_storage(
     base_url: &str,
     config: Option<HashMap<String, String>>,
@@ -829,7 +832,7 @@ pub fn new_redirect_storage(base_url: &str) -> StorageResult<Arc<dyn Storage>> {
     Ok(Arc::new(RedirectStorage::new(base_url)))
 }
 
-#[cfg(feature = "s3")]
+#[cfg(feature = "object-store-s3")]
 pub async fn new_s3_object_store_storage(
     config: S3Options,
     bucket: String,
@@ -847,7 +850,7 @@ pub async fn new_s3_object_store_storage(
     Ok(Arc::new(storage))
 }
 
-#[cfg(feature = "azure")]
+#[cfg(feature = "object-store-azure")]
 pub async fn new_azure_blob_storage(
     account: String,
     container: String,
@@ -866,7 +869,7 @@ pub async fn new_azure_blob_storage(
     Ok(Arc::new(storage))
 }
 
-#[cfg(feature = "gcs")]
+#[cfg(feature = "object-store-gcs")]
 pub fn new_gcs_storage(
     bucket: String,
     prefix: Option<String>,

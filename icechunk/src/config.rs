@@ -17,39 +17,35 @@ use crate::{format::Path, storage, virtual_chunks::VirtualChunkContainer};
 
 // Re-export backend-specific types from their canonical modules so that existing
 // consumers (`crate::config::S3Options`, etc.) continue to work.
-#[cfg(feature = "azure")]
+#[cfg(feature = "object-store-azure")]
 pub use crate::storage::object_store::{AzureCredentials, AzureStaticCredentials};
-#[cfg(feature = "gcs")]
+#[cfg(feature = "object-store-gcs")]
 pub use crate::storage::object_store::{
     GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
 };
-#[cfg(feature = "s3")]
-pub use crate::storage::s3::{
+pub use crate::storage::s3_config::{
     S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
 };
-#[cfg(feature = "gcs")]
-pub use ::object_store::gcp::GcpCredential;
+#[cfg(feature = "object-store-gcs")]
+pub use object_store::gcp::GcpCredential;
 
 /// Storage backend configuration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectStoreConfig {
     InMemory,
-    #[cfg(feature = "local-store")]
+    #[cfg(feature = "object-store-fs")]
     LocalFileSystem(PathBuf),
-    #[cfg(feature = "http-store")]
+    #[cfg(feature = "object-store-http")]
     Http(HashMap<String, String>),
-    #[cfg(feature = "s3")]
     S3Compatible(S3Options),
-    #[cfg(feature = "s3")]
     S3(S3Options),
-    #[cfg(feature = "gcs")]
+    #[cfg(feature = "object-store-gcs")]
     Gcs(HashMap<String, String>),
     /// For compatibility reason we cannot change this structure,
     /// but a key in this map should be "account"
-    #[cfg(feature = "azure")]
+    #[cfg(feature = "object-store-azure")]
     Azure(HashMap<String, String>),
-    #[cfg(feature = "s3")]
     Tigris(S3Options),
 }
 
@@ -531,11 +527,10 @@ impl RepositoryConfig {
 #[serde(tag = "credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum Credentials {
-    #[cfg(feature = "s3")]
     S3(S3Credentials),
-    #[cfg(feature = "gcs")]
+    #[cfg(feature = "object-store-gcs")]
     Gcs(GcsCredentials),
-    #[cfg(feature = "azure")]
+    #[cfg(feature = "object-store-azure")]
     Azure(AzureCredentials),
 }
 
