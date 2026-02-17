@@ -153,7 +153,7 @@ pub async fn mk_client(
     } else {
         StalledStreamProtectionConfig::enabled()
             .grace_period(std::time::Duration::from_secs(
-                config.network_stream_timeout_seconds.unwrap_or(60) as u64,
+                config.network_stream_timeout_seconds.unwrap_or(10) as u64,
             ))
             .build()
     };
