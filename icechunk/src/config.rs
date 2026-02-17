@@ -662,4 +662,76 @@ mod tests {
         );
         assert!(!vccs.contains_key("s3://bucket1/"), "Should not contain bucket1");
     }
+
+    #[icechunk_macros::test]
+    fn test_yaml_config_all_features() {
+        let yaml = r#"
+inline_chunk_threshold_bytes: null
+get_partial_values_concurrency: null
+compression: null
+max_concurrent_requests: null
+caching: null
+storage: null
+virtual_chunk_containers:
+  https://example.com/data/:
+    name: null
+    url_prefix: https://example.com/data/
+    store: !http {}
+  s3://my-s3-bucket/:
+    name: null
+    url_prefix: s3://my-s3-bucket/
+    store: !s3
+      region: us-east-1
+      endpoint_url: null
+      anonymous: false
+      allow_http: false
+      force_path_style: false
+      network_stream_timeout_seconds: 60
+      requester_pays: false
+  gcs://my-gcs-bucket/:
+    name: null
+    url_prefix: gcs://my-gcs-bucket/
+    store: !gcs {}
+manifest: null
+"#;
+
+        let config: RepositoryConfig = serde_yaml_ng::from_str(yaml).unwrap();
+
+        let vccs = config.virtual_chunk_containers.as_ref().unwrap();
+        assert_eq!(vccs.len(), 3);
+
+        // HTTP container
+        let http = &vccs["https://example.com/data/"];
+        assert_eq!(http.url_prefix(), "https://example.com/data/");
+        assert!(matches!(http.store, ObjectStoreConfig::Http(_)));
+
+        // S3 container
+        let s3 = &vccs["s3://my-s3-bucket/"];
+        assert_eq!(s3.url_prefix(), "s3://my-s3-bucket/");
+        match &s3.store {
+            ObjectStoreConfig::S3(opts) => {
+                assert_eq!(opts.region, Some("us-east-1".to_string()));
+                assert!(!opts.anonymous);
+                assert!(!opts.allow_http);
+                assert!(!opts.force_path_style);
+                assert_eq!(opts.network_stream_timeout_seconds, Some(60));
+                assert!(!opts.requester_pays);
+            }
+            other => panic!("Expected S3, got {:?}", other),
+        }
+
+        // GCS container
+        let gcs = &vccs["gcs://my-gcs-bucket/"];
+        assert_eq!(gcs.url_prefix(), "gcs://my-gcs-bucket/");
+        assert!(matches!(gcs.store, ObjectStoreConfig::Gcs(_)));
+
+        // All other top-level fields should be None
+        assert!(config.inline_chunk_threshold_bytes.is_none());
+        assert!(config.get_partial_values_concurrency.is_none());
+        assert!(config.compression.is_none());
+        assert!(config.max_concurrent_requests.is_none());
+        assert!(config.caching.is_none());
+        assert!(config.storage.is_none());
+        assert!(config.manifest.is_none());
+    }
 }
