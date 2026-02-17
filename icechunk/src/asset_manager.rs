@@ -6,6 +6,7 @@
 //! transaction logs, and chunks.
 
 use async_stream::try_stream;
+use backon::{BackoffBuilder, ExponentialBuilder};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
@@ -22,7 +23,6 @@ use tokio::{
     sync::Semaphore,
 };
 use tokio_util::io::SyncIoBridge;
-use backon::{BackoffBuilder, ExponentialBuilder};
 use tracing::{Span, debug, instrument, trace, warn};
 
 use crate::{
@@ -560,12 +560,10 @@ impl AssetManager {
                             tokio::time::sleep(delay).await;
                         }
                         None => {
-                            return Err(
-                                RepositoryErrorKind::RepoUpdateAttemptsLimit(
-                                    max_attempts as u64,
-                                )
-                                .into(),
-                            );
+                            return Err(RepositoryErrorKind::RepoUpdateAttemptsLimit(
+                                max_attempts as u64,
+                            )
+                            .into());
                         }
                     }
                     attempts += 1;
