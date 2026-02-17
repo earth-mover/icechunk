@@ -29,7 +29,7 @@ env:
 jobs:
   rust:
     name: Rust CI
-    timeout-minutes: 20
+    timeout-minutes: 30
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -52,7 +52,7 @@ jobs:
 
       - name: Set up Docker on macOS
         # docker installation not supported with most Mx Apple Chips
-        #(Might change once runners use M3: uses: douglascamata/setup-docker-macos-action@v1.0.1
+        #(Might change once runners use M3: https://github.com/douglascamata/setup-docker-macos-action#arm64-processors-m-series-used-on-macos-15-images-and-beyond-are-unsupported
         if: matrix.os == 'macos-15-intel'
         uses: douglascamata/setup-docker-macos-action@v1.0.1
         with:
