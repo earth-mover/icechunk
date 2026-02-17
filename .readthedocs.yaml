@@ -11,10 +11,7 @@ build:
          - asdf install pixi latest
          - asdf global pixi latest
     install:
-      - pixi install -e docs
+      - pixi install -m icechunk-python -e docs
     build:
          html:
-           - pixi run docs-build --site-dir $READTHEDOCS_OUTPUT/html
-
-mkdocs:
-  configuration: icechunk-python/docs/mkdocs.yml
+           - pixi run -m icechunk-python docs-build --site-dir $READTHEDOCS_OUTPUT/html
