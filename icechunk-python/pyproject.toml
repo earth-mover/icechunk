@@ -23,7 +23,7 @@ authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
 dependencies = ["zarr>=3,!=3.0.3"]
 
-[project.optional-dependencies]
+[dependency-groups]
 test = [
   "boto3",
   "coverage",
@@ -89,7 +89,6 @@ docs = [
   "sphinx-autodoc-typehints",
 ]
 
-[dependency-groups]
 upstream = [
   "boto3",
   "coverage",

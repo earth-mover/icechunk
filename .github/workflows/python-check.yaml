@@ -99,7 +99,7 @@ jobs:
           source .venv/bin/activate
           python --version
           WHEEL=$(ls dist/*-cp311-*.whl)
-          uv pip install "${WHEEL}[test]"
+          uv pip install "${WHEEL}" --group test
           # Install specific versions based on matrix
           if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
             echo "Installing minimum versions:"
@@ -185,7 +185,7 @@ jobs:
           source .venv/bin/activate
           python --version
           WHEEL=$(ls dist/*-cp311-*.whl)
-          uv pip install "${WHEEL}[test]"
+          uv pip install "${WHEEL}" --group test
           uv pip install pytest-mypy-plugins
           # Install specific xarray version based on matrix
           if [ "${{ matrix.xarray-version.version }}" != "latest-release" ]; then
