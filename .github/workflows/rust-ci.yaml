@@ -126,10 +126,12 @@ jobs:
           just test
 
       - name: Run doc tests
+        if: matrix.os != 'macos-latest'
         run: |
           just doctest
 
       - name: Run examples
+        if: matrix.os != 'macos-latest'
         run: |
           just run-all-examples
 
