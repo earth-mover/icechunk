@@ -513,6 +513,10 @@ impl AssetManager {
     ) -> RepositoryResult<VersionInfo> {
         let max_attempts = retry_settings.max_tries().get() as usize;
 
+        // The first few retries are immediate (no delay) since brief contention
+        // typically resolves within one or two attempts. After that, we switch to
+        // exponential backoff with jitter.
+        let immediate_retries: u64 = 5;
         let mut backoff = ExponentialBuilder::new()
             .with_min_delay(std::time::Duration::from_millis(
                 retry_settings.initial_backoff_ms() as u64,
@@ -520,7 +524,7 @@ impl AssetManager {
             .with_max_delay(std::time::Duration::from_millis(
                 retry_settings.max_backoff_ms() as u64,
             ))
-            .with_max_times(max_attempts)
+            .with_max_times(max_attempts.saturating_sub(immediate_retries as usize))
             .with_jitter()
             .build();
 
@@ -550,20 +554,29 @@ impl AssetManager {
                     kind: RepositoryErrorKind::RepoInfoUpdated,
                     ..
                 }) => {
-                    match backoff.next() {
-                        Some(delay) => {
-                            debug!(
-                                attempts,
-                                ?delay,
-                                "Repo info object was updated concurrently, retrying..."
-                            );
-                            tokio::time::sleep(delay).await;
-                        }
-                        None => {
-                            return Err(RepositoryErrorKind::RepoUpdateAttemptsLimit(
-                                max_attempts as u64,
-                            )
-                            .into());
+                    if attempts <= immediate_retries {
+                        debug!(
+                            attempts,
+                            "Repo info object was updated concurrently, retrying immediately..."
+                        );
+                    } else {
+                        match backoff.next() {
+                            Some(delay) => {
+                                debug!(
+                                    attempts,
+                                    ?delay,
+                                    "Repo info object was updated concurrently, retrying with backoff..."
+                                );
+                                tokio::time::sleep(delay).await;
+                            }
+                            None => {
+                                return Err(
+                                    RepositoryErrorKind::RepoUpdateAttemptsLimit(
+                                        max_attempts as u64,
+                                    )
+                                    .into(),
+                                );
+                            }
                         }
                     }
                     attempts += 1;
