@@ -1529,6 +1529,8 @@ pub struct PyRepositoryConfig {
     pub previous_file: Option<String>,
     #[pyo3(get, set)]
     pub repo_update_retries: Option<Py<PyRepoUpdateRetryConfig>>,
+    #[pyo3(get, set)]
+    pub num_updates_per_repo_info_file: Option<usize>,
 }
 
 impl PartialEq for PyRepositoryConfig {
@@ -1567,6 +1569,7 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
                     .repo_update_retries
                     .as_ref()
                     .map(|r| (&*r.borrow(py)).into()),
+                num_updates_per_repo_info_file: value.num_updates_per_repo_info_file,
             })
         })
     }
@@ -1604,6 +1607,7 @@ impl From<RepositoryConfig> for PyRepositoryConfig {
                 Py::new(py, Into::<PyRepoUpdateRetryConfig>::into(r))
                     .expect("Cannot create instance of RepoUpdateRetryConfig")
             }),
+            num_updates_per_repo_info_file: value.num_updates_per_repo_info_file,
         })
     }
 }
@@ -1617,7 +1621,7 @@ impl PyRepositoryConfig {
     }
 
     #[new]
-    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, max_concurrent_requests = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None, repo_update_retries = None))]
+    #[pyo3(signature = (inline_chunk_threshold_bytes = None, get_partial_values_concurrency = None, compression = None, max_concurrent_requests = None, caching = None, storage = None, virtual_chunk_containers = None, manifest = None, repo_update_retries = None, num_updates_per_repo_info_file = None))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         inline_chunk_threshold_bytes: Option<u16>,
@@ -1629,6 +1633,7 @@ impl PyRepositoryConfig {
         virtual_chunk_containers: Option<HashMap<String, PyVirtualChunkContainer>>,
         manifest: Option<Py<PyManifestConfig>>,
         repo_update_retries: Option<Py<PyRepoUpdateRetryConfig>>,
+        num_updates_per_repo_info_file: Option<usize>,
     ) -> Self {
         Self {
             inline_chunk_threshold_bytes,
@@ -1641,6 +1646,7 @@ impl PyRepositoryConfig {
             manifest,
             previous_file: None,
             repo_update_retries,
+            num_updates_per_repo_info_file,
         }
     }
 

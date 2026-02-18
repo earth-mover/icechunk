@@ -146,7 +146,8 @@ pub async fn do_test_gc(
         NonZeroU16::new(500).unwrap(),
         false,
     );
-    let summary = garbage_collect(repo.asset_manager().clone(), &gc_config, None).await?;
+    let summary =
+        garbage_collect(repo.asset_manager().clone(), &gc_config, None, 100).await?;
     assert_eq!(summary, GCSummary::default());
     assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);
     for idx in 0..10 {
@@ -166,7 +167,8 @@ pub async fn do_test_gc(
     assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);
     assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 111);
 
-    let summary = garbage_collect(repo.asset_manager().clone(), &gc_config, None).await?;
+    let summary =
+        garbage_collect(repo.asset_manager().clone(), &gc_config, None, 100).await?;
     assert_eq!(summary.chunks_deleted, 10);
     // only one manifest was re-created, so there is only one garbage manifest
     assert_eq!(summary.manifests_deleted, 1);
@@ -371,6 +373,7 @@ pub async fn do_test_expire_and_garbage_collect(
         ExpiredRefAction::Ignore,
         ExpiredRefAction::Ignore,
         None,
+        100,
     )
     .await?;
 
@@ -425,7 +428,7 @@ pub async fn do_test_expire_and_garbage_collect(
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
 
-    let summary = garbage_collect(asset_manager.clone(), &gc_config, None).await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
     // other expired snapshots are pointed by tags
     assert_eq!(summary.snapshots_deleted, 5);
 
@@ -434,7 +437,7 @@ pub async fn do_test_expire_and_garbage_collect(
 
     repo.delete_tag("tag1").await?;
 
-    let summary = garbage_collect(asset_manager.clone(), &gc_config, None).await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
     // other expired snapshots are pointed by tag2
     assert_eq!(summary.snapshots_deleted, 1);
 
@@ -443,7 +446,7 @@ pub async fn do_test_expire_and_garbage_collect(
 
     repo.delete_tag("tag2").await?;
 
-    let summary = garbage_collect(asset_manager.clone(), &gc_config, None).await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
     // tag2 snapshosts are not released yet because it's in the path to root from main
     // this behavior changed in IC 2.0
     assert_eq!(summary.snapshots_deleted, 0);
@@ -483,6 +486,7 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
         ExpiredRefAction::Delete,
         ExpiredRefAction::Delete,
         None,
+        100,
     )
     .await?;
 
@@ -499,7 +503,7 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
         NonZeroU16::new(500).unwrap(),
         false,
     );
-    let summary = garbage_collect(asset_manager.clone(), &gc_config, None).await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
 
     assert_eq!(summary.snapshots_deleted, 7);
     assert_eq!(summary.transaction_logs_deleted, 7);

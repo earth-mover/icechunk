@@ -324,6 +324,7 @@ pub async fn garbage_collect(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
+    num_updates_per_repo_info_file: usize,
 ) -> GCResult<GCSummary> {
     if !asset_manager.can_write_to_storage().await? {
         return Err(GCError::Repository(
@@ -390,6 +391,7 @@ pub async fn garbage_collect(
                 asset_manager.as_ref(),
                 &keep_snapshots,
                 retry_config.retries(),
+                num_updates_per_repo_info_file,
             )
             .await?;
         }
@@ -422,6 +424,7 @@ async fn delete_snapshots_from_repo_info(
     asset_manager: &AssetManager,
     keep_snapshots: &HashSet<SnapshotId>,
     retry_settings: &crate::storage::RetriesSettings,
+    num_updates_per_repo_info_file: usize,
 ) -> GCResult<()> {
     // FIXME: IMPORTANT
     // Notice this loses any new snapshots that may have been created while GC was running
@@ -446,6 +449,7 @@ async fn delete_snapshots_from_repo_info(
                 previous_updates: repo_info.latest_updates()?,
             },
             Some(backup_path),
+            num_updates_per_repo_info_file,
         )?;
 
         Ok(Arc::new(new_repo_info))
@@ -625,6 +629,7 @@ pub async fn expire(
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
+    num_updates_per_repo_info_file: usize,
 ) -> GCResult<ExpireResult> {
     match asset_manager.spec_version() {
         SpecVersionBin::V1dot0 => {
@@ -643,6 +648,7 @@ pub async fn expire(
                 expired_branches,
                 expired_tags,
                 repo_update_retries,
+                num_updates_per_repo_info_file,
             )
             .await
         }
@@ -656,6 +662,7 @@ pub async fn expire_v2(
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
+    num_updates_per_repo_info_file: usize,
 ) -> GCResult<ExpireResult> {
     if !asset_manager.can_write_to_storage().await? {
         return Err(GCError::Repository(
@@ -839,6 +846,7 @@ pub async fn expire_v2(
                 previous_updates: repo_info.latest_updates()?,
             },
             Some(backup_path),
+            num_updates_per_repo_info_file,
         )?;
 
         Ok(Arc::new(new_repo_info))

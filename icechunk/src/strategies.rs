@@ -444,6 +444,7 @@ prop_compose! {
             storage,
             previous_file,
             repo_update_retries,
+            num_updates_per_repo_info_file: None,
         }
     }
 }
