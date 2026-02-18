@@ -204,6 +204,9 @@ docs-build = "mkdocs build -f docs/mkdocs.yml"
 rust = "~=1.92.0"
 just = ">=1.46.0,<2"
 compilers = ">=1.11.0,<2"
+uv = ">=0.10.4,<0.11"
+openssl = ">=3.6.1,<4"
+pkgconfig = ">=1.5.5,<2"
 
 [tool.pixi.feature.dev.tasks]
 develop = "maturin develop --uv"
