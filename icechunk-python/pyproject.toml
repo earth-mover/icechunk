@@ -223,5 +223,5 @@ pytest = "pytest"
 default = { solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
-docs = { features = ["docs"], solve-group = "default" }
+docs = { features = ["docs", "dev"], solve-group = "default" }
 test = { features = ["test"], solve-group = "default" }
