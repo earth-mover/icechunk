@@ -149,7 +149,7 @@ jobs:
       - name: Stand up docker services
         run: |
           docker compose up -d
-      - name: Wait for MinIO to be ready
+      - name: Wait for RustFS to be ready
         run: |
           for _ in {1..10}; do
               if curl --silent --fail http://rustfs:9000/health; then

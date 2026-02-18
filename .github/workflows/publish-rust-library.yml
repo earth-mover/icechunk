@@ -21,10 +21,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - name: Stand up MinIO
+      - name: Stand up RustFS
         run: |
-          docker compose up -d minio
-      - name: Wait for MinIO to be ready
+          docker compose up -d rustfs
+      - name: Wait for RustFS to be ready
         run: |
           for _ in {1..10}; do
               if curl --silent --fail http://rustfs:9000/health; then
