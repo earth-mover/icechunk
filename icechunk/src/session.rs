@@ -1219,7 +1219,7 @@ impl Session {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().commit(), do_update)
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
         Ok(())
     }
@@ -1361,7 +1361,7 @@ impl Session {
             rewrite_manifests,
             commit_method,
             allow_empty,
-            self.config.repo_update_retries().commit(),
+            self.config.repo_update_retries().retries(),
         )
         .await?;
 

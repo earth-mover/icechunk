@@ -802,12 +802,6 @@ fn storage_retries_settings_repr(s: &PyStorageRetriesSettings) -> String {
 pub struct PyRepoUpdateRetryConfig {
     #[pyo3(get, set)]
     pub default: Option<Py<PyStorageRetriesSettings>>,
-    #[pyo3(get, set)]
-    pub commit: Option<Py<PyStorageRetriesSettings>>,
-    #[pyo3(get, set)]
-    pub refs: Option<Py<PyStorageRetriesSettings>>,
-    #[pyo3(get, set)]
-    pub gc: Option<Py<PyStorageRetriesSettings>>,
 }
 
 impl PartialEq for PyRepoUpdateRetryConfig {
@@ -826,18 +820,6 @@ impl From<RepoUpdateRetryConfig> for PyRepoUpdateRetryConfig {
                 Py::new(py, Into::<PyStorageRetriesSettings>::into(r))
                     .expect("Cannot create instance of StorageRetriesSettings")
             }),
-            commit: value.commit.map(|r| {
-                Py::new(py, Into::<PyStorageRetriesSettings>::into(r))
-                    .expect("Cannot create instance of StorageRetriesSettings")
-            }),
-            refs: value.refs.map(|r| {
-                Py::new(py, Into::<PyStorageRetriesSettings>::into(r))
-                    .expect("Cannot create instance of StorageRetriesSettings")
-            }),
-            gc: value.gc.map(|r| {
-                Py::new(py, Into::<PyStorageRetriesSettings>::into(r))
-                    .expect("Cannot create instance of StorageRetriesSettings")
-            }),
         })
     }
 }
@@ -846,47 +828,24 @@ impl From<&PyRepoUpdateRetryConfig> for RepoUpdateRetryConfig {
     fn from(value: &PyRepoUpdateRetryConfig) -> Self {
         Python::attach(|py| Self {
             default: value.default.as_ref().map(|r| (&*r.borrow(py)).into()),
-            commit: value.commit.as_ref().map(|r| (&*r.borrow(py)).into()),
-            refs: value.refs.as_ref().map(|r| (&*r.borrow(py)).into()),
-            gc: value.gc.as_ref().map(|r| (&*r.borrow(py)).into()),
         })
     }
 }
 
 #[pymethods]
 impl PyRepoUpdateRetryConfig {
-    #[pyo3(signature = (default=None, commit=None, refs=None, gc=None))]
+    #[pyo3(signature = (default=None))]
     #[new]
-    pub fn new(
-        default: Option<Py<PyStorageRetriesSettings>>,
-        commit: Option<Py<PyStorageRetriesSettings>>,
-        refs: Option<Py<PyStorageRetriesSettings>>,
-        gc: Option<Py<PyStorageRetriesSettings>>,
-    ) -> Self {
-        Self { default, commit, refs, gc }
+    pub fn new(default: Option<Py<PyStorageRetriesSettings>>) -> Self {
+        Self { default }
     }
 
     pub fn __repr__(&self) -> String {
         Python::attach(|py| {
             format!(
-                r#"RepoUpdateRetryConfig(default={default}, commit={commit}, refs={refs}, gc={gc})"#,
+                r#"RepoUpdateRetryConfig(default={default})"#,
                 default = self
                     .default
-                    .as_ref()
-                    .map(|r| storage_retries_settings_repr(&r.borrow(py)))
-                    .unwrap_or_else(|| "None".to_string()),
-                commit = self
-                    .commit
-                    .as_ref()
-                    .map(|r| storage_retries_settings_repr(&r.borrow(py)))
-                    .unwrap_or_else(|| "None".to_string()),
-                refs = self
-                    .refs
-                    .as_ref()
-                    .map(|r| storage_retries_settings_repr(&r.borrow(py)))
-                    .unwrap_or_else(|| "None".to_string()),
-                gc = self
-                    .gc
                     .as_ref()
                     .map(|r| storage_retries_settings_repr(&r.borrow(py)))
                     .unwrap_or_else(|| "None".to_string()),

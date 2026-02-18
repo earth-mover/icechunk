@@ -391,31 +391,14 @@ impl ManifestConfig {
 }
 
 /// Retry configuration for repo info update operations.
-///
-/// Different operation types can have different retry settings.
-/// If a specific category is `None`, the `default` settings are used.
-/// If `default` is also `None`, hardcoded defaults are used.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepoUpdateRetryConfig {
-    /// Default retry settings applied when a specific category is not set.
+    /// Default retry settings for all repo update operations.
     #[serde(default)]
     pub default: Option<RetriesSettings>,
-
-    /// Retry settings for commit operations (flush, commit).
-    #[serde(default)]
-    pub commit: Option<RetriesSettings>,
-
-    /// Retry settings for ref operations (branch/tag create/delete/reset, metadata).
-    #[serde(default)]
-    pub refs: Option<RetriesSettings>,
-
-    /// Retry settings for GC operations (delete_snapshots, expire).
-    #[serde(default)]
-    pub gc: Option<RetriesSettings>,
 }
 
 static DEFAULT_REPO_UPDATE_RETRIES: OnceLock<RetriesSettings> = OnceLock::new();
-static DEFAULT_REPO_UPDATE_GC_RETRIES: OnceLock<RetriesSettings> = OnceLock::new();
 
 impl RepoUpdateRetryConfig {
     fn default_retries() -> &'static RetriesSettings {
@@ -426,47 +409,13 @@ impl RepoUpdateRetryConfig {
         })
     }
 
-    fn default_gc_retries() -> &'static RetriesSettings {
-        DEFAULT_REPO_UPDATE_GC_RETRIES.get_or_init(|| RetriesSettings {
-            max_tries: Some(NonZeroU16::new(500).unwrap_or(NonZeroU16::MIN)),
-            initial_backoff_ms: Some(100),
-            max_backoff_ms: Some(60_000),
-        })
-    }
-
-    pub fn commit(&self) -> &RetriesSettings {
-        self.commit.as_ref().or(self.default.as_ref()).unwrap_or(Self::default_retries())
-    }
-
-    pub fn refs(&self) -> &RetriesSettings {
-        self.refs.as_ref().or(self.default.as_ref()).unwrap_or(Self::default_retries())
-    }
-
-    pub fn gc(&self) -> &RetriesSettings {
-        self.gc.as_ref().or(self.default.as_ref()).unwrap_or(Self::default_gc_retries())
+    pub fn retries(&self) -> &RetriesSettings {
+        self.default.as_ref().unwrap_or(Self::default_retries())
     }
 
     pub fn merge(&self, other: Self) -> Self {
         Self {
             default: match (&self.default, other.default) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
-                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
-            },
-            commit: match (&self.commit, other.commit) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
-                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
-            },
-            refs: match (&self.refs, other.refs) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
-                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
-            },
-            gc: match (&self.gc, other.gc) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),

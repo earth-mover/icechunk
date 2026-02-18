@@ -1181,17 +1181,11 @@ class StorageSettings:
     def minimum_size_for_multipart_upload(self, value: int) -> None: ...
 
 class RepoUpdateRetryConfig:
-    """Configuration for retries when updating the repo info object.
-
-    Different operation types can have different retry settings.
-    If a specific category is None, the default settings are used."""
+    """Configuration for retries when updating the repo info object."""
 
     def __init__(
         self,
         default: StorageRetriesSettings | None = None,
-        commit: StorageRetriesSettings | None = None,
-        refs: StorageRetriesSettings | None = None,
-        gc: StorageRetriesSettings | None = None,
     ) -> None:
         """
         Create a new `RepoUpdateRetryConfig` object
@@ -1199,31 +1193,13 @@ class RepoUpdateRetryConfig:
         Parameters
         ----------
         default: StorageRetriesSettings | None
-            Default retry settings applied when a specific category is not set.
-        commit: StorageRetriesSettings | None
-            Retry settings for commit operations (flush, commit).
-        refs: StorageRetriesSettings | None
-            Retry settings for ref operations (branch/tag create/delete/reset, metadata).
-        gc: StorageRetriesSettings | None
-            Retry settings for GC operations (delete_snapshots, expire).
+            Default retry settings for all repo update operations.
         """
         ...
     @property
     def default(self) -> StorageRetriesSettings | None: ...
     @default.setter
     def default(self, value: StorageRetriesSettings | None) -> None: ...
-    @property
-    def commit(self) -> StorageRetriesSettings | None: ...
-    @commit.setter
-    def commit(self, value: StorageRetriesSettings | None) -> None: ...
-    @property
-    def refs(self) -> StorageRetriesSettings | None: ...
-    @refs.setter
-    def refs(self, value: StorageRetriesSettings | None) -> None: ...
-    @property
-    def gc(self) -> StorageRetriesSettings | None: ...
-    @gc.setter
-    def gc(self, value: StorageRetriesSettings | None) -> None: ...
 
 class RepositoryConfig:
     """Configuration for an Icechunk repository"""

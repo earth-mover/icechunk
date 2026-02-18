@@ -389,7 +389,7 @@ pub async fn garbage_collect(
             delete_snapshots_from_repo_info(
                 asset_manager.as_ref(),
                 &keep_snapshots,
-                retry_config.gc(),
+                retry_config.retries(),
             )
             .await?;
         }
@@ -846,7 +846,7 @@ pub async fn expire_v2(
 
     let default_retry_config = RepoUpdateRetryConfig::default();
     let retry_config = repo_update_retries.unwrap_or(&default_retry_config);
-    let _ = asset_manager.update_repo_info(retry_config.gc(), do_update).await?;
+    let _ = asset_manager.update_repo_info(retry_config.retries(), do_update).await?;
 
     deleted_tags.extend(deleted_branches);
 

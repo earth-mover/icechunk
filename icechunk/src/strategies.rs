@@ -387,11 +387,8 @@ prop_compose! {
 prop_compose! {
     pub fn repo_update_retry_config()
         (default in option::of(retries_settings()),
-        commit in option::of(retries_settings()),
-        refs in option::of(retries_settings()),
-        gc in option::of(retries_settings()),
     ) -> RepoUpdateRetryConfig {
-        RepoUpdateRetryConfig { default, commit, refs, gc }
+        RepoUpdateRetryConfig { default }
     }
 }
 
