@@ -29,7 +29,7 @@ env:
 jobs:
   rust:
     name: Rust CI
-    timeout-minutes: 20
+    timeout-minutes: 30
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -50,13 +50,55 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
+      - name: Set up Docker on macOS
+        # docker installation not supported with most Mx Apple Chips
+        #(Might change once runners use M3: https://github.com/douglascamata/setup-docker-macos-action#arm64-processors-m-series-used-on-macos-15-images-and-beyond-are-unsupported
+        if: matrix.os == 'macos-15-intel'
+        uses: douglascamata/setup-docker-macos-action@v1.0.1
+        with:
+          lima: v1.2.1
+          colima: v0.9.1
+          colima-network-address: false
+
+      - name: Verify Docker installation
+        if: matrix.os != 'macos-latest'
+        run: docker version
+
+      - name: Install Just (non-macos)
+        if: "!contains(matrix.os, 'macos')"
+        run: sudo snap install --edge --classic just
+
+      - name: Install Just (macos)
+        if: "contains(matrix.os, 'macos')"
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_UPGRADE: 1
+        run: brew install just
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          # workspaces: "rust -> target"
+          key: ${{ env.RUST_CHANNEL }}
+
       - name: Stand up docker services
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        if: matrix.os != 'macos-latest'
         run: |
           docker compose up -d
 
+      - name: Compile tests (while containers start)
+        if: matrix.os != 'macos-latest'
+        run: |
+          just compile-tests "--locked"
+
       - name: Wait for containers to be ready
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        if: matrix.os != 'macos-latest'
         run: |
           for _ in {1..30}; do
               if curl --silent --fail http://rustfs:9000/health; then
@@ -71,24 +113,8 @@ jobs:
               sleep 1
           done
 
-      - name: Install Just
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: sudo snap install --edge --classic just
-
-      - name: Install Rust toolchain
-        run: |
-          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
-          rustup default ${{ env.RUST_CHANNEL }}
-
-      - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          # workspaces: "rust -> target"
-          key: ${{ env.RUST_CHANNEL }}
-
       - name: Run tests with Docker services
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        if: matrix.os != 'macos-latest'
         env:
           RUST_LOG: icechunk=trace
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
@@ -107,23 +133,17 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
 
         run: |
-          just compile-tests "--locked"
           just test
 
       - name: Run doc tests
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        if: matrix.os != 'macos-latest'
         run: |
           just doctest
 
       - name: Run examples
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
+        if: matrix.os != 'macos-latest'
         run: |
           just run-all-examples
-
-      - name: Run unit tests only
-        if: matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm'
-        run: |
-          cargo test --lib
 
       - name: Run integration tests against object stores
         if: github.event_name == 'cron'
@@ -145,3 +165,8 @@ jobs:
 
         run: |
           cargo test --all --all-targets -- --ignored
+
+      - name: Run unit tests only
+        if: matrix.os == 'macos-latest'
+        run: |
+          cargo test --lib
