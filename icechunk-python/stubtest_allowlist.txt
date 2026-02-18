@@ -1,5 +1,4 @@
 icechunk._icechunk_python.AzureCredentials.FromEnv
-icechunk._icechunk_python.AzureCredentials.FromEnv.__init__
 icechunk._icechunk_python.AzureCredentials.FromEnv.__match_args__
 icechunk._icechunk_python.AzureCredentials.Static
 icechunk._icechunk_python.AzureCredentials.Static.__match_args__
@@ -10,7 +9,6 @@ icechunk._icechunk_python.AzureStaticCredentials.BearerToken.__match_args__
 icechunk._icechunk_python.AzureStaticCredentials.SasToken
 icechunk._icechunk_python.AzureStaticCredentials.SasToken.__match_args__
 icechunk._icechunk_python.BasicConflictSolver
-icechunk._icechunk_python.BasicConflictSolver.__init__
 icechunk._icechunk_python.BranchCreatedUpdate
 icechunk._icechunk_python.BranchDeletedUpdate
 icechunk._icechunk_python.BranchResetUpdate
@@ -20,12 +18,10 @@ icechunk._icechunk_python.ChunkStorageStats
 icechunk._icechunk_python.ChunkType
 icechunk._icechunk_python.CommitAmendedUpdate
 icechunk._icechunk_python.CompressionAlgorithm
-icechunk._icechunk_python.CompressionAlgorithm.__init__
 icechunk._icechunk_python.CompressionConfig
 icechunk._icechunk_python.ConfigChangedUpdate
 icechunk._icechunk_python.Conflict
 icechunk._icechunk_python.ConflictDetector
-icechunk._icechunk_python.ConflictDetector.__init__
 icechunk._icechunk_python.ConflictError
 icechunk._icechunk_python.ConflictType
 icechunk._icechunk_python.ConflictType.ChunkDoubleUpdate
@@ -51,10 +47,8 @@ icechunk._icechunk_python.GCRanUpdate
 icechunk._icechunk_python.GCSummary
 icechunk._icechunk_python.GcsBearerCredential
 icechunk._icechunk_python.GcsCredentials.Anonymous
-icechunk._icechunk_python.GcsCredentials.Anonymous.__init__
 icechunk._icechunk_python.GcsCredentials.Anonymous.__match_args__
 icechunk._icechunk_python.GcsCredentials.FromEnv
-icechunk._icechunk_python.GcsCredentials.FromEnv.__init__
 icechunk._icechunk_python.GcsCredentials.FromEnv.__match_args__
 icechunk._icechunk_python.GcsCredentials.Refreshable
 icechunk._icechunk_python.GcsCredentials.Refreshable.__match_args__
@@ -82,13 +76,11 @@ icechunk._icechunk_python.ManifestPreloadCondition.True
 icechunk._icechunk_python.ManifestPreloadConfig
 icechunk._icechunk_python.ManifestSplitCondition.And
 icechunk._icechunk_python.ManifestSplitCondition.AnyArray
-icechunk._icechunk_python.ManifestSplitCondition.AnyArray.__init__
 icechunk._icechunk_python.ManifestSplitCondition.AnyArray.__match_args__
 icechunk._icechunk_python.ManifestSplitCondition.NameMatches
 icechunk._icechunk_python.ManifestSplitCondition.Or
 icechunk._icechunk_python.ManifestSplitCondition.PathMatches
 icechunk._icechunk_python.ManifestSplitDimCondition.Any
-icechunk._icechunk_python.ManifestSplitDimCondition.Any.__init__
 icechunk._icechunk_python.ManifestSplitDimCondition.Any.__match_args__
 icechunk._icechunk_python.ManifestSplitDimCondition.Axis
 icechunk._icechunk_python.ManifestSplitDimCondition.Axis.__match_args__
@@ -105,7 +97,6 @@ icechunk._icechunk_python.ObjectStoreConfig.Gcs.__match_args__
 icechunk._icechunk_python.ObjectStoreConfig.Http
 icechunk._icechunk_python.ObjectStoreConfig.Http.__match_args__
 icechunk._icechunk_python.ObjectStoreConfig.InMemory
-icechunk._icechunk_python.ObjectStoreConfig.InMemory.__init__
 icechunk._icechunk_python.ObjectStoreConfig.InMemory.__match_args__
 icechunk._icechunk_python.ObjectStoreConfig.LocalFileSystem
 icechunk._icechunk_python.ObjectStoreConfig.LocalFileSystem.__match_args__
@@ -130,10 +121,8 @@ icechunk._icechunk_python.RepositoryConfig
 icechunk._icechunk_python.RepositoryConfig.previous_file
 icechunk._icechunk_python.RepositoryConfig.repo_update_retries
 icechunk._icechunk_python.S3Credentials.Anonymous
-icechunk._icechunk_python.S3Credentials.Anonymous.__init__
 icechunk._icechunk_python.S3Credentials.Anonymous.__match_args__
 icechunk._icechunk_python.S3Credentials.FromEnv
-icechunk._icechunk_python.S3Credentials.FromEnv.__init__
 icechunk._icechunk_python.S3Credentials.FromEnv.__match_args__
 icechunk._icechunk_python.S3Credentials.Refreshable
 icechunk._icechunk_python.S3Credentials.Refreshable.__match_args__
