@@ -2149,6 +2149,7 @@ impl PyRepository {
                         } else {
                             ExpiredRefAction::Ignore
                         },
+                        None,
                     )
                     .await
                     .map_err(PyIcechunkStoreError::GCError)?;
@@ -2193,6 +2194,7 @@ impl PyRepository {
                 } else {
                     ExpiredRefAction::Ignore
                 },
+                None,
             )
             .await
             .map_err(PyIcechunkStoreError::GCError)?;
@@ -2226,7 +2228,7 @@ impl PyRepository {
                         let lock = self.0.read().await;
                         Arc::clone(lock.asset_manager())
                     };
-                    let result = garbage_collect(asset_manager, &gc_config)
+                    let result = garbage_collect(asset_manager, &gc_config, None)
                         .await
                         .map_err(PyIcechunkStoreError::GCError)?;
                     Ok::<_, PyIcechunkStoreError>(result.into())
@@ -2260,7 +2262,7 @@ impl PyRepository {
                 let lock = repository.read().await;
                 Arc::clone(lock.asset_manager())
             };
-            let result = garbage_collect(asset_manager, &gc_config)
+            let result = garbage_collect(asset_manager, &gc_config, None)
                 .await
                 .map_err(PyIcechunkStoreError::GCError)?;
             Ok(result.into())
