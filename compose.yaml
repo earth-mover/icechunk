@@ -25,6 +25,13 @@ services:
       - '9000:9000'
       - '9001:9001'
 
+  toxiproxy:
+    container_name: icechunk_toxiproxy
+    image: ghcr.io/shopify/toxiproxy
+    ports:
+      - '8474:8474'
+      - '9002:9002'
+
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:3.33.0
     container_name: azurite
