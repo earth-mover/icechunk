@@ -21,18 +21,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - name: Stand up MinIO
+      - name: Stand up RustFS
         run: |
-          docker compose up -d minio
-      - name: Wait for MinIO to be ready
+          docker compose up -d rustfs
+      - name: Wait for RustFS to be ready
         run: |
           for _ in {1..10}; do
-              if curl --silent --fail http://minio:9000/minio/health/live; then
+              if curl --silent --fail http://rustfs:9000/health; then
               break
               fi
               sleep 3
           done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
 
       - name: Install Just
         run: sudo snap install --edge --classic just
