@@ -899,7 +899,7 @@ pub fn new_gcs_storage(
     Ok(Arc::new(storage))
 }
 
-fn strip_quotes(s: &str) -> &str {
+pub fn strip_quotes(s: &str) -> &str {
     s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
 }
 
