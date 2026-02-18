@@ -5,8 +5,8 @@ use crate::config::{
     AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
     CompressionConfig, GcsBearerCredential, GcsStaticCredentials, ManifestConfig,
     ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
-    ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3Options,
-    S3StaticCredentials,
+    ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
+    RepoUpdateRetryConfig, S3Options, S3StaticCredentials,
 };
 use crate::format::format_constants::SpecVersionBin;
 use crate::format::manifest::{
@@ -385,6 +385,14 @@ prop_compose! {
 }
 
 prop_compose! {
+    pub fn repo_update_retry_config()
+        (default in option::of(retries_settings()),
+    ) -> RepoUpdateRetryConfig {
+        RepoUpdateRetryConfig { default }
+    }
+}
+
+prop_compose! {
     pub fn storage_settings()
         (
         concurrency in option::of(concurrency_settings()),
@@ -422,6 +430,7 @@ prop_compose! {
         manifest in option::of(manifest_config()),
         storage in option::of(storage_settings()),
         previous_file in option::of(any::<PathBuf>().prop_map(|path| path.to_string_lossy().to_string())),
+        repo_update_retries in option::of(repo_update_retry_config()),
         )
     -> RepositoryConfig {
         RepositoryConfig{
@@ -434,6 +443,7 @@ prop_compose! {
             virtual_chunk_containers,
             storage,
             previous_file,
+            repo_update_retries,
         }
     }
 }
