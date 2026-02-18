@@ -44,7 +44,7 @@ use typed_path::Utf8UnixPath;
 
 use super::{
     DeleteObjectsResult, ListInfo, Settings, StorageErrorKind, StorageResult,
-    VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests,
+    VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests, strip_quotes,
 };
 
 fn s3_get_err(err: impl std::error::Error + Send + Sync + 'static) -> StorageError {
@@ -906,10 +906,6 @@ impl ProvideRefreshableCredentials {
         );
         Ok(creds)
     }
-}
-
-fn strip_quotes(s: &str) -> &str {
-    s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
 }
 
 #[cfg(test)]

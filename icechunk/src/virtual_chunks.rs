@@ -74,7 +74,7 @@ use crate::{
         },
     },
     private,
-    storage::{self, split_in_multiple_requests},
+    storage::{self, split_in_multiple_requests, strip_quotes},
 };
 
 pub type ContainerName = String;
@@ -713,7 +713,7 @@ impl ChunkFetcher for S3Fetcher {
                 ))
             }
             Some(Checksum::ETag(etag)) => {
-                b = b.if_match(&etag.0);
+                b = b.if_match(strip_quotes(&etag.0));
             }
             None => {}
         };
@@ -939,7 +939,9 @@ impl ChunkFetcher for ObjectStoreFetcher {
                     .expect("Bad last modified field in virtual chunk reference");
                 options.if_unmodified_since = Some(d);
             }
-            Some(Checksum::ETag(etag)) => options.if_match = Some(etag.0.clone()),
+            Some(Checksum::ETag(etag)) => {
+                options.if_match = Some(strip_quotes(&etag.0).to_string())
+            }
             None => {}
         }
 

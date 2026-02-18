@@ -288,7 +288,7 @@ async fn write_chunks_to_minio(chunks: impl Iterator<Item = (String, Bytes)>) {
         client
             .put_object()
             .bucket(bucket_name.clone())
-            .key(key)
+            .key(key.strip_prefix('/').unwrap())
             .body(bytes.into())
             .send()
             .await
