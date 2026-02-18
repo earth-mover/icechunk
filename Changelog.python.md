@@ -6,6 +6,14 @@
 
 ### Fixes
 
+## Python Icechunk Library 1.1.19
+
+### Fixes
+
+- Retry when stalled streams error out. This should help avoid the "0B/s" error that sometimes occurs.
+  The default `network_stream_timeout_seconds` has been reduced to 10s to match the AWS default.
+  If you have previously set this parameter to 0, we recommend unsetting it and working with the defaults now.
+
 ## Python Icechunk Library 1.1.18
 
 ### Fixes
