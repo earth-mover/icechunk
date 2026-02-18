@@ -1219,8 +1219,7 @@ impl Session {
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
         Ok(())
     }
@@ -1362,6 +1361,7 @@ impl Session {
             rewrite_manifests,
             commit_method,
             allow_empty,
+            self.config.repo_update_retries().retries(),
         )
         .await?;
 
@@ -2544,6 +2544,7 @@ async fn do_commit(
     rewrite_manifests: bool,
     commit_method: CommitMethod,
     allow_empty: bool,
+    retry_settings: &storage::RetriesSettings,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
 
@@ -2579,6 +2580,7 @@ async fn do_commit(
                 snapshot_id,
                 new_snapshot,
                 commit_method,
+                retry_settings,
             )
             .await
         }
@@ -2644,6 +2646,7 @@ async fn do_commit_v2(
     parent_snapshot_id: &SnapshotId,
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
+    retry_settings: &storage::RetriesSettings,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
@@ -2693,10 +2696,7 @@ async fn do_commit_v2(
         )?))
     };
 
-    let res = asset_manager
-        // FIXME: hardcoded retries
-        .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
-        .await?;
+    let res = asset_manager.update_repo_info(retry_settings, do_update).await?;
     Ok(res)
 }
 

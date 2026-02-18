@@ -1180,6 +1180,27 @@ class StorageSettings:
     @minimum_size_for_multipart_upload.setter
     def minimum_size_for_multipart_upload(self, value: int) -> None: ...
 
+class RepoUpdateRetryConfig:
+    """Configuration for retries when updating the repo info object."""
+
+    def __init__(
+        self,
+        default: StorageRetriesSettings | None = None,
+    ) -> None:
+        """
+        Create a new `RepoUpdateRetryConfig` object
+
+        Parameters
+        ----------
+        default: StorageRetriesSettings | None
+            Default retry settings for all repo update operations.
+        """
+        ...
+    @property
+    def default(self) -> StorageRetriesSettings | None: ...
+    @default.setter
+    def default(self, value: StorageRetriesSettings | None) -> None: ...
+
 class RepositoryConfig:
     """Configuration for an Icechunk repository"""
 
@@ -1193,6 +1214,7 @@ class RepositoryConfig:
         storage: StorageSettings | None = None,
         virtual_chunk_containers: dict[str, VirtualChunkContainer] | None = None,
         manifest: ManifestConfig | None = None,
+        repo_update_retries: RepoUpdateRetryConfig | None = None,
     ) -> None:
         """
         Create a new `RepositoryConfig` object
@@ -1216,6 +1238,8 @@ class RepositoryConfig:
             The virtual chunk containers for the repository.
         manifest: ManifestConfig | None
             The manifest configuration for the repository.
+        repo_update_retries: RepoUpdateRetryConfig | None
+            Retry configuration for repo info update operations.
         """
         ...
     @staticmethod

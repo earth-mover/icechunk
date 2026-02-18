@@ -1,29 +1,33 @@
 volumes:
-  minio_data:
+  rustfs_data:
   azurite-data:
 
 services:
-  minio:
-    container_name: icechunk_minio
-    image: minio/minio
+  rustfs:
+    container_name: icechunk_rustfs
+    image: rustfs/rustfs:1.0.0-alpha.83
     entrypoint: |
         /bin/sh -c '
-        for bucket in testbucket externalbucket arraylake-repo-bucket
+        for bucket in testbucket
         do
           echo creating bucket "$$bucket";
           mkdir -p /data/"$$bucket"
         done;
 
-        /usr/bin/minio server --console-address ":9001" /data
+        rustfs --access-key minio123 --secret-key minio123 --console-enable /data
         '
-    environment:
-      - MINIO_ROOT_USER=minio123
-      - MINIO_ROOT_PASSWORD=minio123
     volumes:
-      - minio_data:/data
+      - rustfs_data:/data
     ports:
       - '9000:9000'
       - '9001:9001'
+
+  toxiproxy:
+    container_name: icechunk_toxiproxy
+    image: ghcr.io/shopify/toxiproxy
+    ports:
+      - '8474:8474'
+      - '9002:9002'
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:3.33.0

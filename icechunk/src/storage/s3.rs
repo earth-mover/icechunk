@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashMap, fmt, future::ready, ops::Range, path::PathBuf, pin::Pin,
-    sync::Arc,
+    sync::Arc, time::Duration,
 };
 
 use crate::{
@@ -10,6 +10,7 @@ use crate::{
     config::{S3Credentials, S3CredentialsFetcher, S3Options},
     format::ChunkOffset,
     private,
+    storage::strip_quotes,
 };
 use async_trait::async_trait;
 use aws_config::{
@@ -148,8 +149,8 @@ pub async fn mk_client(
         StalledStreamProtectionConfig::disabled()
     } else {
         StalledStreamProtectionConfig::enabled()
-            .grace_period(std::time::Duration::from_secs(
-                config.network_stream_timeout_seconds.unwrap_or(60) as u64,
+            .grace_period(Duration::from_secs(
+                config.network_stream_timeout_seconds.unwrap_or(10) as u64,
             ))
             .build()
     };
@@ -176,11 +177,11 @@ pub async fn mk_client(
 
     let retry_config = RetryConfig::standard()
         .with_max_attempts(settings.retries().max_tries().get() as u32)
-        .with_initial_backoff(core::time::Duration::from_millis(
+        .with_initial_backoff(Duration::from_millis(
             settings.retries().initial_backoff_ms() as u64,
         ))
-        .with_max_backoff(core::time::Duration::from_millis(
-            settings.retries().max_backoff_ms() as u64,
+        .with_max_backoff(Duration::from_millis(
+            settings.retries().max_backoff_ms() as u64
         ));
 
     let mut s3_builder = Builder::from(&aws_config.load().await)
@@ -189,8 +190,8 @@ pub async fn mk_client(
 
     // credentials may take a while to refresh, defaults are too strict
     let id_cache = IdentityCache::lazy()
-        .load_timeout(core::time::Duration::from_secs(120))
-        .buffer_time(core::time::Duration::from_secs(120))
+        .load_timeout(Duration::from_secs(120))
+        .buffer_time(Duration::from_secs(120))
         .build();
 
     s3_builder = s3_builder.identity_cache(id_cache);
@@ -871,10 +872,6 @@ impl ProvideRefreshableCredentials {
         );
         Ok(creds)
     }
-}
-
-fn strip_quotes(s: &str) -> &str {
-    s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
 }
 
 #[cfg(test)]
