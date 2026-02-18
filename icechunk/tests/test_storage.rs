@@ -844,6 +844,46 @@ pub async fn test_write_object_larger_than_multipart_threshold()
     Ok(())
 }
 
+#[tokio_test]
+pub async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(|_, storage| async move {
+        let storage_settings = storage.default_settings().await?;
+        let id = SnapshotId::random();
+        let mut bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
+        bytes[42] = 42;
+        bytes[43] = 99;
+
+        let path = format!("{MANIFESTS_FILE_PATH}/{id}");
+
+        storage
+            .put_object(
+                &storage_settings,
+                path.as_str(),
+                Bytes::copy_from_slice(&bytes[..]),
+                Some("application/foo"),
+                vec![("foo".to_string(), "bar".to_string())],
+                None,
+            )
+            .await?
+            .must_write()?;
+
+        // get version for existing object
+        let (read, version) =
+            storage.get_object(&storage_settings, path.as_str(), None).await?;
+        assert_eq!(async_read_to_bytes(read).await?.as_slice(), bytes);
+
+        // conditional get, should return OnLatestVersion
+        let res = storage
+            .get_object_conditional(&storage_settings, path.as_str(), Some(version))
+            .await?;
+        assert!(matches!(res, storage::GetModifiedResult::OnLatestVersion));
+
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
 #[tokio::test]
 #[allow(clippy::unwrap_used)]
 /// Start an HTTP server serving static files from icechunk-python/tests/data/test-repo-v2

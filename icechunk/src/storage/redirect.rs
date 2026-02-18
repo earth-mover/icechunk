@@ -380,13 +380,13 @@ impl Storage for RedirectStorage {
 
     async fn get_object_conditional(
         &self,
-        path: &str,
         settings: &Settings,
+        path: &str,
         previous_version: Option<VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
         self.backend()
             .await?
-            .get_object_conditional(path, settings, previous_version)
+            .get_object_conditional(settings, path, previous_version)
             .await
     }
 }

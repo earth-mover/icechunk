@@ -506,8 +506,8 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
 
     async fn get_object_conditional(
         &self,
-        path: &str,
         settings: &Settings,
+        path: &str,
         previous_version: Option<VersionInfo>,
     ) -> StorageResult<GetModifiedResult>;
 

@@ -475,8 +475,8 @@ impl Storage for ObjectStorage {
     #[instrument(skip(self, settings))]
     async fn get_object_conditional(
         &self,
-        path: &str,
         settings: &Settings,
+        path: &str,
         previous_version: Option<VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
         match self
