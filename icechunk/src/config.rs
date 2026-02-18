@@ -7,13 +7,8 @@
 //! - [`CachingConfig`] - Cache size limits
 //! - [`ManifestSplittingConfig`] - Controls how manifests are partitioned
 
-use core::fmt;
 use std::{
-    collections::HashMap,
-    num::NonZeroU16,
-    ops::Bound,
-    path::PathBuf,
-    sync::{Arc, OnceLock},
+    collections::HashMap, num::NonZeroU16, ops::Bound, path::PathBuf, sync::OnceLock,
 };
 
 use itertools::Either;
