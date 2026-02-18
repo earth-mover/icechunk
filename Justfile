@@ -74,6 +74,18 @@ pre-commit-python:
 bench-compare *args:
   pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short {{args}}
 
+ruff-format *args:
+  ruff format
+
+ruff *args:
+  ruff check --show-fixes icechunk-python/ {{args}}
+
+mypy *args:
+  cd icechunk-python && mypy python tests {{args}}
+
+py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *args:
+  pre-commit run --all-files
+
 create-deepak-env name:
   mamba create -y -n icechunk-{{name}} python=3.12 ipykernel ipdb
   mamba activate icechunk-{{name}}
