@@ -598,7 +598,6 @@ impl ChunkFetcher for S3Fetcher {
                 ))
             }
             Some(Checksum::ETag(etag)) => {
-                dbg!("!!!!!!!", strip_quotes(&etag.0));
                 b = b.if_match(strip_quotes(&etag.0));
             }
             None => {}
