@@ -726,6 +726,17 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # even after expiration, written_at is unmodified
         assert actual.written_at == expected.written_at
 
+    def check_ops_log(self) -> None:
+        if self.model.spec_version == 1:
+            return
+        actual_ops = list(self.repo.ops_log())
+        assert len(actual_ops) == self.model.num_updates, (
+            actual_ops,
+            self.model.num_updates,
+            actual_ops,
+        )
+        assert isinstance(actual_ops[-1], icechunk.RepoInitializedUpdate)
+
     @invariant()
     def checks(self) -> None:
         # this method only exists to reduce verbosity of hypothesis output
@@ -735,11 +746,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.check_tags()
         self.check_branches()
         self.check_ancestry()
-        if self.model.spec_version >= 2:
-            actual_ops = len(list(self.repo.ops_log()))
-            assert (
-                actual_ops == self.model.num_updates
-            ), f"ops_log has more entries ({actual_ops}) than expected ({self.model.num_updates})"
+        self.check_ops_log()
 
     def check_list_prefix_from_root(self) -> None:
         model_list = self.model.list_prefix("")
