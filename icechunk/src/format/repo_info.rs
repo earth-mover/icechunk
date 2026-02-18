@@ -129,6 +129,7 @@ impl RepoInfo {
         update: UpdateInfo<I>,
         backup_path: Option<&'a str>,
         num_updates_per_file: u16,
+        previous_info: Option<&'a str>,
     ) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = snapshots.into_iter().collect();
         snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
@@ -146,6 +147,7 @@ impl RepoInfo {
             update,
             backup_path,
             num_updates_per_file,
+            previous_info,
         )
     }
 
@@ -163,6 +165,7 @@ impl RepoInfo {
         update: UpdateInfo<I>,
         backup_path: Option<&'a str>,
         num_updates_per_file: u16,
+        previous_info: Option<&'a str>,
     ) -> IcechunkResult<Self> {
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
         let tags = sorted_tags
@@ -291,6 +294,7 @@ impl RepoInfo {
             update,
             backup_path,
             num_updates_per_file,
+            previous_info,
         )?;
 
         // TODO: provide accessors for last_updated_at, status, metadata, etc.
@@ -323,6 +327,7 @@ impl RepoInfo {
         update: UpdateInfo<I>,
         backup_path: Option<&'a str>,
         num_updates_per_file: u16,
+        previous_info: Option<&'a str>,
     ) -> IcechunkResult<(
         WIPOffset<
             flatbuffers::Vector<
@@ -394,6 +399,12 @@ impl RepoInfo {
             "Too many latest updates in repo file"
         );
 
+        // If we didn't overflow (all previous updates fit in the new file),
+        // preserve the old file's chain pointer so older history remains reachable.
+        if repo_before_updates.is_none() {
+            repo_before_updates = previous_info;
+        }
+
         let size = (num_updates - 1).min(updates.len() - 1);
         let updates = builder.create_vector(&updates[0..=size]);
         let repo_before_updates = repo_before_updates.map(|s| builder.create_string(s));
@@ -422,6 +433,7 @@ impl RepoInfo {
             },
             None,
             num_updates_per_file,
+            None,
         )
         .expect("Cannot generate initial snapshot")
     }
@@ -508,6 +520,7 @@ impl RepoInfo {
             },
             Some(previous_file),
             num_updates_per_file,
+            self.repo_before_updates()?,
         )?;
         Ok(res)
     }
@@ -550,6 +563,7 @@ impl RepoInfo {
                     },
                     Some(previous_file),
                     num_updates_per_file,
+                    self.repo_before_updates()?,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -589,6 +603,7 @@ impl RepoInfo {
                     },
                     Some(previous_file),
                     num_updates_per_file,
+                    self.repo_before_updates()?,
                 )
             }
             Err(IcechunkFormatError {
@@ -634,6 +649,7 @@ impl RepoInfo {
                     },
                     Some(previous_file),
                     num_updates_per_file,
+                    self.repo_before_updates()?,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -681,6 +697,7 @@ impl RepoInfo {
                     },
                     Some(previous_file),
                     num_updates_per_file,
+                    self.repo_before_updates()?,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -724,6 +741,7 @@ impl RepoInfo {
                     },
                     Some(previous_file),
                     num_updates_per_file,
+                    self.repo_before_updates()?,
                 )
             }
             Err(IcechunkFormatError {
@@ -758,6 +776,7 @@ impl RepoInfo {
             },
             Some(previous_file),
             num_updates_per_file,
+            self.repo_before_updates()?,
         )
     }
 

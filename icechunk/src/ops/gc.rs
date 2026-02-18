@@ -450,6 +450,7 @@ async fn delete_snapshots_from_repo_info(
             },
             Some(backup_path),
             num_updates_per_repo_info_file,
+            repo_info.repo_before_updates()?,
         )?;
 
         Ok(Arc::new(new_repo_info))
@@ -847,6 +848,7 @@ pub async fn expire_v2(
             },
             Some(backup_path),
             num_updates_per_repo_info_file,
+            repo_info.repo_before_updates()?,
         )?;
 
         Ok(Arc::new(new_repo_info))

@@ -242,6 +242,7 @@ pub async fn migrate_1_to_2(
         },
         None,
         repo.config().num_updates_per_repo_info_file(),
+        None,
     )?);
 
     if dry_run {

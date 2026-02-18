@@ -1737,6 +1737,7 @@ fn raise_if_invalid_snapshot_id_v2(
 #[cfg(test)]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use futures::TryStreamExt;
     use std::{collections::HashMap, error::Error, iter::zip, path::PathBuf, sync::Arc};
 
     use bytes::Bytes;
@@ -3437,6 +3438,77 @@ mod tests {
         .into();
         assert_eq!(res, expected);
         assert_eq!(repo.get_metadata().await?, expected,);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ops_log_chain_with_small_num_updates_per_file()
+    -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+
+        let config = RepositoryConfig {
+            num_updates_per_repo_info_file: Some(1),
+            ..Default::default()
+        };
+
+        let repo = Repository::create(
+            Some(config.clone()),
+            Arc::clone(&storage),
+            HashMap::new(),
+            None,
+        )
+        .await?;
+
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        assert_eq!(ops.len(), 1, "Expected 1 op after creation, got {}", ops.len());
+        assert!(
+            matches!(ops[0].1, UpdateType::RepoInitializedUpdate),
+            "First op should be RepoInitializedUpdate"
+        );
+
+        let snap_id = repo.lookup_branch("main").await?;
+        repo.create_branch("test-branch", &snap_id).await?;
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        assert_eq!(ops.len(), 2, "Expected 2 ops after create_branch, got {}", ops.len());
+
+        repo.create_tag("test-tag", &snap_id).await?;
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        assert_eq!(ops.len(), 3, "Expected 3 ops after create_tag, got {}", ops.len());
+
+        assert!(matches!(ops[0].1, UpdateType::TagCreatedUpdate { .. }));
+        assert!(matches!(ops[2].1, UpdateType::RepoInitializedUpdate));
+
+        // Reopen with a larger num_updates_per_file
+        let config2 = RepositoryConfig {
+            num_updates_per_repo_info_file: Some(10),
+            ..Default::default()
+        };
+        let repo =
+            Repository::open(Some(config2), Arc::clone(&storage), HashMap::new()).await?;
+
+        repo.create_tag("test-tag", &snap_id).await?;
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        assert_eq!(ops.len(), 3);
+        assert!(matches!(ops[2].1, UpdateType::RepoInitializedUpdate));
+
+        // Reopen with a smaller num_updates_per_file
+        let config2 = RepositoryConfig {
+            num_updates_per_repo_info_file: Some(1),
+            ..Default::default()
+        };
+        let repo =
+            Repository::open(Some(config2), Arc::clone(&storage), HashMap::new()).await?;
+
+        repo.create_tag("test-tag", &snap_id).await?;
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        assert_eq!(ops.len(), 4);
+        assert!(matches!(ops[2].1, UpdateType::RepoInitializedUpdate));
+
         Ok(())
     }
 }
