@@ -100,8 +100,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         super().init_store()
 
     @precondition(
-        lambda self: not self.store.session.has_uncommitted_changes
-        and bool(self.all_arrays)
+        lambda self: (
+            not self.store.session.has_uncommitted_changes and bool(self.all_arrays)
+        )
     )
     @rule(data=st.data())
     def reopen_with_config(self, data: st.DataObject) -> None:

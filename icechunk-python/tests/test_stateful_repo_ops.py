@@ -290,9 +290,9 @@ class Model:
             while commit_id != self.initial_snapshot_id:
                 reachable_snaps.add(commit_id)
                 parent_id = self.commits[commit_id].parent_id
-                assert (
-                    parent_id is not None
-                ), f"Commit {commit_id} has no parent but is not the initial snapshot"
+                assert parent_id is not None, (
+                    f"Commit {commit_id} has no parent but is not the initial snapshot"
+                )
                 commit_id = parent_id
         deleted = set()
         for k in set(self.ondisk_snaps) - reachable_snaps:
@@ -410,9 +410,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # TODO: update changes made rule depending on result of
     # https://github.com/earth-mover/icechunk/issues/1532
     @precondition(
-        lambda self: (self.model.changes_made)
-        and (self.repo.spec_version >= 2)
-        and len(self.model.commits) > 1
+        lambda self: (
+            (self.model.changes_made)
+            and (self.repo.spec_version >= 2)
+            and len(self.model.commits) > 1
+        )
     )
     def amend(self, message: str) -> str:
         branch = self.session.branch
@@ -634,16 +636,16 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 remaining_snapshot_ids.add(snap.id)
         expired_but_remaining = actual & remaining_snapshot_ids
         note(expired_but_remaining)
-        assert (
-            not expired_but_remaining
-        ), f"Snapshots marked as expired but still in ancestry: {expired_but_remaining}"
+        assert not expired_but_remaining, (
+            f"Snapshots marked as expired but still in ancestry: {expired_but_remaining}"
+        )
 
-        assert (
-            actual_deleted_branches == expected.deleted_branches
-        ), f"deleted branches mismatch: actual={actual_deleted_branches}, expected={expected.deleted_branches}"
-        assert (
-            actual_deleted_tags == expected.deleted_tags
-        ), f"deleted tags mismatch: actual={actual_deleted_tags}, expected={expected.deleted_tags}"
+        assert actual_deleted_branches == expected.deleted_branches, (
+            f"deleted branches mismatch: actual={actual_deleted_branches}, expected={expected.deleted_branches}"
+        )
+        assert actual_deleted_tags == expected.deleted_tags, (
+            f"deleted tags mismatch: actual={actual_deleted_tags}, expected={expected.deleted_tags}"
+        )
 
         for branch in actual_deleted_branches:
             self.maybe_checkout_branch(branch)
