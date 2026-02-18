@@ -1,10 +1,3 @@
-icechunk._icechunk_python.AnyAzureCredential
-icechunk._icechunk_python.AnyAzureStaticCredential
-icechunk._icechunk_python.AnyCredential
-icechunk._icechunk_python.AnyGcsCredential
-icechunk._icechunk_python.AnyGcsStaticCredential
-icechunk._icechunk_python.AnyObjectStoreConfig
-icechunk._icechunk_python.AnyS3Credential
 icechunk._icechunk_python.AzureCredentials.FromEnv
 icechunk._icechunk_python.AzureCredentials.FromEnv.__init__
 icechunk._icechunk_python.AzureCredentials.FromEnv.__match_args__

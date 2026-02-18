@@ -214,7 +214,7 @@ class ObjectStoreConfig:
     class Http:
         def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
 
-AnyObjectStoreConfig = (
+_AnyObjectStoreConfig = (
     ObjectStoreConfig.InMemory
     | ObjectStoreConfig.LocalFileSystem
     | ObjectStoreConfig.S3
@@ -240,7 +240,7 @@ class VirtualChunkContainer:
     url_prefix: str
     store: ObjectStoreConfig
 
-    def __init__(self, url_prefix: str, store: AnyObjectStoreConfig):
+    def __init__(self, url_prefix: str, store: _AnyObjectStoreConfig):
         """
         Create a new `VirtualChunkContainer` object
 
@@ -1640,7 +1640,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         spec_version: int | None = None,
     ) -> PyRepository: ...
     @classmethod
@@ -1649,7 +1649,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         spec_version: int | None = None,
     ) -> PyRepository: ...
     @classmethod
@@ -1658,7 +1658,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
     ) -> PyRepository: ...
     @classmethod
     async def open_async(
@@ -1666,7 +1666,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open_or_create(
@@ -1674,7 +1674,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         create_version: int | None = None,
     ) -> PyRepository: ...
     @classmethod
@@ -1683,7 +1683,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         create_version: int | None = None,
     ) -> PyRepository: ...
     @staticmethod
@@ -1712,13 +1712,13 @@ class PyRepository:
         self,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = ...,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = ...,
     ) -> PyRepository: ...
     async def reopen_async(
         self,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = ...,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = ...,
     ) -> PyRepository: ...
     def set_default_commit_metadata(self, metadata: dict[str, Any]) -> None: ...
     def default_commit_metadata(self) -> dict[str, Any]: ...
@@ -2189,7 +2189,7 @@ class S3Credentials:
             self, pickled_function: bytes, current: S3StaticCredentials | None = None
         ) -> None: ...
 
-AnyS3Credential = (
+_AnyS3Credential = (
     S3Credentials.Static
     | S3Credentials.Anonymous
     | S3Credentials.FromEnv
@@ -2262,7 +2262,7 @@ class GcsStaticCredentials:
         """
         def __init__(self, token: str) -> None: ...
 
-AnyGcsStaticCredential = (
+_AnyGcsStaticCredential = (
     GcsStaticCredentials.ServiceAccount
     | GcsStaticCredentials.ServiceAccountKey
     | GcsStaticCredentials.ApplicationCredentials
@@ -2284,7 +2284,7 @@ class GcsCredentials:
 
     class Static:
         """Uses gcs credentials without expiration"""
-        def __init__(self, credentials: AnyGcsStaticCredential) -> None: ...
+        def __init__(self, credentials: _AnyGcsStaticCredential) -> None: ...
 
     class Refreshable:
         """Allows for an outside authority to pass in a function that can be used to provide credentials.
@@ -2295,7 +2295,7 @@ class GcsCredentials:
             self, pickled_function: bytes, current: GcsBearerCredential | None = None
         ) -> None: ...
 
-AnyGcsCredential = (
+_AnyGcsCredential = (
     GcsCredentials.Anonymous
     | GcsCredentials.FromEnv
     | GcsCredentials.Static
@@ -2334,7 +2334,7 @@ class AzureStaticCredentials:
         """
         def __init__(self, token: str) -> None: ...
 
-AnyAzureStaticCredential = (
+_AnyAzureStaticCredential = (
     AzureStaticCredentials.AccessKey
     | AzureStaticCredentials.SasToken
     | AzureStaticCredentials.BearerToken
@@ -2351,13 +2351,13 @@ class AzureCredentials:
 
     class Static:
         """Uses azure credentials without expiration"""
-        def __init__(self, credentials: AnyAzureStaticCredential) -> None: ...
+        def __init__(self, credentials: _AnyAzureStaticCredential) -> None: ...
 
-AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
+_AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
 
 class Credentials:
     class S3:
-        def __init__(self, credentials: AnyS3Credential) -> None: ...
+        def __init__(self, credentials: _AnyS3Credential) -> None: ...
 
     class Gcs:
         def __init__(self, credentials: GcsCredentials) -> None: ...
@@ -2365,7 +2365,7 @@ class Credentials:
     class Azure:
         def __init__(self, credentials: AzureCredentials) -> None: ...
 
-AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
+_AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
 
 class Storage:
     """Storage configuration for an IcechunkStore
@@ -2389,7 +2389,7 @@ class Storage:
         config: S3Options,
         bucket: str,
         prefix: str | None,
-        credentials: AnyS3Credential | None = None,
+        credentials: _AnyS3Credential | None = None,
     ) -> Storage: ...
     @classmethod
     def new_s3_object_store(
@@ -2397,7 +2397,7 @@ class Storage:
         config: S3Options,
         bucket: str,
         prefix: str | None,
-        credentials: AnyS3Credential | None = None,
+        credentials: _AnyS3Credential | None = None,
     ) -> Storage: ...
     @classmethod
     def new_tigris(
@@ -2406,7 +2406,7 @@ class Storage:
         bucket: str,
         prefix: str | None,
         use_weak_consistency: bool,
-        credentials: AnyS3Credential | None = None,
+        credentials: _AnyS3Credential | None = None,
     ) -> Storage: ...
     @classmethod
     def new_in_memory(cls) -> Storage: ...
@@ -2417,7 +2417,7 @@ class Storage:
         cls,
         bucket: str,
         prefix: str | None,
-        credentials: AnyGcsCredential | None = None,
+        credentials: _AnyGcsCredential | None = None,
         *,
         config: dict[str, str] | None = None,
     ) -> Storage: ...
@@ -2428,7 +2428,7 @@ class Storage:
         bucket: str | None = None,
         prefix: str | None = None,
         account_id: str | None = None,
-        credentials: AnyS3Credential | None = None,
+        credentials: _AnyS3Credential | None = None,
     ) -> Storage: ...
     @classmethod
     def new_azure_blob(
@@ -2436,7 +2436,7 @@ class Storage:
         account: str,
         container: str,
         prefix: str,
-        credentials: AnyAzureCredential | None = None,
+        credentials: _AnyAzureCredential | None = None,
         *,
         config: dict[str, str] | None = None,
     ) -> Storage: ...
