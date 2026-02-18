@@ -6,7 +6,7 @@
 //! transaction logs, and chunks.
 
 use async_stream::try_stream;
-use backon::{ExponentialBuilder, Retryable};
+use backon::{BackoffBuilder, ExponentialBuilder, Retryable};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
@@ -218,21 +218,6 @@ impl AssetManager {
 
     pub fn spec_version(&self) -> SpecVersionBin {
         self.spec_version
-    }
-
-    pub fn limit_retries_repo_update(
-        attempts: u64,
-        mut update: impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>>,
-    ) -> impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>> {
-        let mut _attempts = attempts;
-        move |a, b| {
-            if _attempts > 0 {
-                _attempts -= 1;
-                update(a, b)
-            } else {
-                Err(RepositoryErrorKind::RepoUpdateAttemptsLimit(attempts).into())
-            }
-        }
     }
 
     pub fn remove_cached_snapshot(&self, snapshot_id: &SnapshotId) {
@@ -521,11 +506,29 @@ impl AssetManager {
         .await
     }
 
-    #[instrument(skip(self, update))]
+    #[instrument(skip(self, retry_settings, update))]
     pub async fn update_repo_info(
         &self,
+        retry_settings: &storage::RetriesSettings,
         mut update: impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>>,
     ) -> RepositoryResult<VersionInfo> {
+        let max_attempts = retry_settings.max_tries().get() as usize;
+
+        // The first few retries are immediate (no delay) since brief contention
+        // typically resolves within one or two attempts. After that, we switch to
+        // exponential backoff with jitter.
+        let immediate_retries: u64 = 5;
+        let mut backoff = ExponentialBuilder::new()
+            .with_min_delay(std::time::Duration::from_millis(
+                retry_settings.initial_backoff_ms() as u64,
+            ))
+            .with_max_delay(std::time::Duration::from_millis(
+                retry_settings.max_backoff_ms() as u64,
+            ))
+            .with_max_times(max_attempts.saturating_sub(immediate_retries as usize))
+            .with_jitter()
+            .build();
+
         let mut attempts: u64 = 1;
         loop {
             let (repo_info, repo_version) = self.fetch_repo_info().await?;
@@ -552,8 +555,31 @@ impl AssetManager {
                     kind: RepositoryErrorKind::RepoInfoUpdated,
                     ..
                 }) => {
-                    // try again
-                    debug!("Repo info object was updated concurrently, retrying...");
+                    if attempts <= immediate_retries {
+                        debug!(
+                            attempts,
+                            "Repo info object was updated concurrently, retrying immediately..."
+                        );
+                    } else {
+                        match backoff.next() {
+                            Some(delay) => {
+                                debug!(
+                                    attempts,
+                                    ?delay,
+                                    "Repo info object was updated concurrently, retrying with backoff..."
+                                );
+                                tokio::time::sleep(delay).await;
+                            }
+                            None => {
+                                return Err(
+                                    RepositoryErrorKind::RepoUpdateAttemptsLimit(
+                                        max_attempts as u64,
+                                    )
+                                    .into(),
+                                );
+                            }
+                        }
+                    }
                     attempts += 1;
                 }
                 err @ Err(_) => {
