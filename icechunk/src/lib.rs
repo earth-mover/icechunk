@@ -35,6 +35,7 @@
 pub mod asset_manager;
 pub mod change_set;
 pub mod cli;
+pub mod compat;
 pub mod config;
 pub mod conflicts;
 pub mod error;
