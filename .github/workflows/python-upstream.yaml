@@ -47,12 +47,11 @@ jobs:
       - name: Wait for MinIO to be ready
         run: |
           for _ in {1..10}; do
-              if curl --silent --fail http://localhost:9000/minio/health/live; then
+              if curl --silent --fail http://rustfs:9000/health; then
               break
               fi
               sleep 3
           done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
