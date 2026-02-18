@@ -17,8 +17,6 @@ icechunk._icechunk_python.BranchResetUpdate
 icechunk._icechunk_python.CachingConfig
 icechunk._icechunk_python.CachingConfig.default
 icechunk._icechunk_python.ChunkStorageStats
-icechunk._icechunk_python.ChunkStorageStats.non_virtual_bytes
-icechunk._icechunk_python.ChunkStorageStats.total_bytes
 icechunk._icechunk_python.ChunkType
 icechunk._icechunk_python.CommitAmendedUpdate
 icechunk._icechunk_python.CompressionAlgorithm
@@ -85,6 +83,8 @@ icechunk._icechunk_python.ManifestPreloadCondition.True
 icechunk._icechunk_python.ManifestPreloadConfig
 icechunk._icechunk_python.ManifestSplitCondition.And
 icechunk._icechunk_python.ManifestSplitCondition.AnyArray
+icechunk._icechunk_python.ManifestSplitCondition.AnyArray.__init__
+icechunk._icechunk_python.ManifestSplitCondition.AnyArray.__match_args__
 icechunk._icechunk_python.ManifestSplitCondition.NameMatches
 icechunk._icechunk_python.ManifestSplitCondition.Or
 icechunk._icechunk_python.ManifestSplitCondition.PathMatches
@@ -96,7 +96,6 @@ icechunk._icechunk_python.ManifestSplitDimCondition.Axis.__match_args__
 icechunk._icechunk_python.ManifestSplitDimCondition.DimensionName
 icechunk._icechunk_python.ManifestSplitDimCondition.DimensionName.__match_args__
 icechunk._icechunk_python.ManifestSplittingConfig
-icechunk._icechunk_python.ManifestSplittingConfig.from_dict
 icechunk._icechunk_python.MetadataChangedUpdate
 icechunk._icechunk_python.NewCommitUpdate
 icechunk._icechunk_python.NewDetachedSnapshotUpdate

@@ -705,10 +705,9 @@ class ManifestSplitCondition:
         """
         ...
 
-    @staticmethod
-    def AnyArray() -> ManifestSplitCondition:
+    class AnyArray:
         """Create a splitting condition that matches any array."""
-        ...
+        def __init__(self) -> None: ...
 
     def __or__(self, other: ManifestSplitCondition) -> ManifestSplitCondition:
         """Create a splitting condition that matches if either this condition or `other` matches"""
@@ -764,6 +763,7 @@ class ManifestSplittingConfig:
             ],
         ],
     ) -> ManifestSplittingConfig: ...
+    @staticmethod
     def to_dict(
         config: ManifestSplittingConfig,
     ) -> dict[
@@ -2760,7 +2760,6 @@ class ChunkStorageStats:
         """Total bytes stored in inline chunks (stored directly in manifests)"""
         ...
 
-    @property
     def non_virtual_bytes(self) -> int:
         """
         Total bytes excluding virtual chunks.
@@ -2774,7 +2773,6 @@ class ChunkStorageStats:
         """
         ...
 
-    @property
     def total_bytes(self) -> int:
         """
         Total bytes across all chunk types.
