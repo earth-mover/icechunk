@@ -794,19 +794,15 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
     store.set_virtual_ref("year/c/3", ref_expired, false).await?;
     store.set_virtual_ref("year/c/4", ref_bad_tag, false).await?;
 
-    // FIXME: enable this once object_store can access public buckets without credentials
-    // otherwise we get an error in GHA
-    if false {
-        let chunk = store.get("year/c/0", &ByteRange::ALL).await.unwrap();
-        assert_eq!(chunk.len(), 288);
-        let chunk = store.get("year/c/1", &ByteRange::ALL).await.unwrap();
-        assert_eq!(chunk.len(), 400);
-        let chunk = store.get("year/c/2", &ByteRange::ALL).await.unwrap();
-        assert_eq!(chunk.len(), 100);
+    let chunk = store.get("year/c/0", &ByteRange::ALL).await.unwrap();
+    assert_eq!(chunk.len(), 288);
+    let chunk = store.get("year/c/1", &ByteRange::ALL).await.unwrap();
+    assert_eq!(chunk.len(), 400);
+    let chunk = store.get("year/c/2", &ByteRange::ALL).await.unwrap();
+    assert_eq!(chunk.len(), 100);
 
-        assert!(store.get("year/c/3", &ByteRange::ALL).await.is_err());
-        assert!(store.get("year/c/4", &ByteRange::ALL).await.is_err());
-    }
+    assert!(store.get("year/c/3", &ByteRange::ALL).await.is_err());
+    assert!(store.get("year/c/4", &ByteRange::ALL).await.is_err());
     Ok(())
 }
 
