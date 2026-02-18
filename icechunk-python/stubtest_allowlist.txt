@@ -46,7 +46,6 @@ icechunk._icechunk_python.Credentials.Gcs.__match_args__
 icechunk._icechunk_python.Credentials.S3
 icechunk._icechunk_python.Credentials.S3.__match_args__
 icechunk._icechunk_python.Diff
-icechunk._icechunk_python.DimSplitSize
 icechunk._icechunk_python.ExpirationRanUpdate
 icechunk._icechunk_python.GCRanUpdate
 icechunk._icechunk_python.GCSummary
@@ -116,15 +115,11 @@ icechunk._icechunk_python.ObjectStoreConfig.S3Compatible
 icechunk._icechunk_python.ObjectStoreConfig.S3Compatible.__match_args__
 icechunk._icechunk_python.ObjectStoreConfig.Tigris
 icechunk._icechunk_python.ObjectStoreConfig.Tigris.__match_args__
-icechunk._icechunk_python.PyAsyncSnapshotGenerator
-icechunk._icechunk_python.PyAsyncStringGenerator
 icechunk._icechunk_python.PyRepository
 icechunk._icechunk_python.PyRepository.chunk_storage_stats
 icechunk._icechunk_python.PyRepository.chunk_storage_stats_async
 icechunk._icechunk_python.PyRepository.garbage_collect
 icechunk._icechunk_python.PyRepository.garbage_collect_async
-icechunk._icechunk_python.PyRepository.total_chunks_storage
-icechunk._icechunk_python.PyRepository.total_chunks_storage_async
 icechunk._icechunk_python.PySession
 icechunk._icechunk_python.PyStore
 icechunk._icechunk_python.RebaseFailedError
@@ -154,8 +149,6 @@ icechunk._icechunk_python.SessionMode.READONLY
 icechunk._icechunk_python.SessionMode.REARRANGE
 icechunk._icechunk_python.SessionMode.WRITABLE
 icechunk._icechunk_python.SnapshotInfo
-icechunk._icechunk_python.SnapshotInfo.manifests
-icechunk._icechunk_python.SplitSizes
 icechunk._icechunk_python.Storage
 icechunk._icechunk_python.StorageConcurrencySettings
 icechunk._icechunk_python.StorageRetriesSettings

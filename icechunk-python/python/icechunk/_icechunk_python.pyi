@@ -731,8 +731,8 @@ class ManifestSplitDimCondition:
         """Split along any other unspecified dimension."""
         def __init__(self) -> None: ...
 
-DimSplitSize: TypeAlias = int
-SplitSizes: TypeAlias = tuple[
+_DimSplitSize: TypeAlias = int
+_SplitSizes: TypeAlias = tuple[
     tuple[
         ManifestSplitCondition,
         tuple[
@@ -740,7 +740,7 @@ SplitSizes: TypeAlias = tuple[
                 ManifestSplitDimCondition.Axis
                 | ManifestSplitDimCondition.DimensionName
                 | ManifestSplitDimCondition.Any,
-                DimSplitSize,
+                _DimSplitSize,
             ],
             ...,
         ],
@@ -775,7 +775,7 @@ class ManifestSplittingConfig:
             int,
         ],
     ]: ...
-    def __init__(self, split_sizes: SplitSizes) -> None:
+    def __init__(self, split_sizes: _SplitSizes) -> None:
         """Configuration for how Icechunk manifests will be split.
 
         Parameters
@@ -798,7 +798,7 @@ class ManifestSplittingConfig:
         pass
 
     @property
-    def split_sizes(self) -> SplitSizes:
+    def split_sizes(self) -> _SplitSizes:
         """
         Configuration for how Icechunk manifests will be split.
 
@@ -810,7 +810,7 @@ class ManifestSplittingConfig:
         ...
 
     @split_sizes.setter
-    def split_sizes(self, value: SplitSizes) -> None:
+    def split_sizes(self, value: _SplitSizes) -> None:
         """
         Set the sizes for how Icechunk manifests will be split.
 
@@ -1856,20 +1856,6 @@ class PyRepository:
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> ChunkStorageStats: ...
-    def total_chunks_storage(
-        self,
-        *,
-        max_snapshots_in_memory: int = 50,
-        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
-        max_concurrent_manifest_fetches: int = 500,
-    ) -> int: ...
-    async def total_chunks_storage_async(
-        self,
-        *,
-        max_snapshots_in_memory: int = 50,
-        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
-        max_concurrent_manifest_fetches: int = 500,
-    ) -> int: ...
     def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str: ...
     async def inspect_snapshot_async(
         self, snapshot_id: str, *, pretty: bool = True
@@ -2061,14 +2047,14 @@ class PyStore:
     ) -> None: ...
     @property
     def supports_listing(self) -> bool: ...
-    def list(self) -> PyAsyncStringGenerator: ...
-    def list_prefix(self, prefix: str) -> PyAsyncStringGenerator: ...
-    def list_dir(self, prefix: str) -> PyAsyncStringGenerator: ...
+    def list(self) -> _PyAsyncStringGenerator: ...
+    def list_prefix(self, prefix: str) -> _PyAsyncStringGenerator: ...
+    def list_dir(self, prefix: str) -> _PyAsyncStringGenerator: ...
     async def getsize(self, key: str) -> int: ...
     async def getsize_prefix(self, prefix: str) -> int: ...
 
-class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
-    def __aiter__(self) -> PyAsyncStringGenerator: ...
+class _PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
+    def __aiter__(self) -> _PyAsyncStringGenerator: ...
     async def __anext__(self) -> str: ...
 
 class SnapshotInfo:
@@ -2099,15 +2085,11 @@ class SnapshotInfo:
         The metadata of the snapshot
         """
         ...
-    @property
-    def manifests(self) -> list[ManifestFileInfo]:
-        """
-        The manifests linked to this snapshot
-        """
-        ...
 
-class PyAsyncSnapshotGenerator(AsyncGenerator[SnapshotInfo, None], metaclass=abc.ABCMeta):
-    def __aiter__(self) -> PyAsyncSnapshotGenerator: ...
+class _PyAsyncSnapshotGenerator(
+    AsyncGenerator[SnapshotInfo, None], metaclass=abc.ABCMeta
+):
+    def __aiter__(self) -> _PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotInfo: ...
 
 class S3StaticCredentials:
