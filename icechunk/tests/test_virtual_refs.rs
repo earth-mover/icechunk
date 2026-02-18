@@ -148,7 +148,7 @@ async fn create_local_repository(
         )
         .unwrap(),
         VirtualChunkContainer::new(
-            "gcs://earthmover-sample-data/".to_string(),
+            "gcs://al-public-test-bucket/".to_string(),
             ObjectStoreConfig::Gcs(Default::default()),
         )
         .unwrap(),
@@ -168,7 +168,7 @@ async fn create_local_repository(
             Some(Credentials::S3(S3Credentials::Anonymous)),
         ),
         (
-            "gcs://earthmover-sample-data".to_string(),
+            "gcs://al-public-test-bucket".to_string(),
             Some(Credentials::Gcs(GcsCredentials::Anonymous)),
         ),
     ]
@@ -746,7 +746,7 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
 
     let ref1 = VirtualChunkRef {
         location: VirtualChunkLocation::from_absolute_path(
-            "gcs://earthmover-sample-data/netcdf/test_echam_spectral.nc",
+            "gcs://al-public-test-bucket/netcdf_test_echam_spectral.nc",
         )?,
         offset: 22306,
         length: 288,
@@ -773,7 +773,7 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
 
     let ref_expired = VirtualChunkRef {
         location: VirtualChunkLocation::from_absolute_path(
-            "gcs://earthmover-sample-data/netcdf/test_echam_spectral.nc",
+            "gcs://al-public-test-bucket/netcdf_test_echam_spectral.nc",
         )?,
         offset: 22306,
         length: 288,
