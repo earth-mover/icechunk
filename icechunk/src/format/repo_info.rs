@@ -65,7 +65,7 @@ pub enum UpdateType {
         from_version: SpecVersionBin,
         to_version: SpecVersionBin,
     },
-    ConfigChangedUpdate, // FIXME: implement
+    ConfigChangedUpdate,
     MetadataChangedUpdate,
     TagCreatedUpdate {
         name: String,
@@ -729,6 +729,28 @@ impl RepoInfo {
             metadata,
             UpdateInfo {
                 update_type: UpdateType::MetadataChangedUpdate,
+                update_time: Utc::now(),
+                previous_updates: self.latest_updates()?,
+            },
+            Some(previous_file),
+        )
+    }
+
+    pub fn record_config_changed(
+        &self,
+        spec_version: SpecVersionBin,
+        previous_file: &str,
+    ) -> IcechunkResult<Self> {
+        let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+        Self::from_parts(
+            spec_version,
+            self.all_tags()?,
+            self.all_branches()?,
+            self.deleted_tags()?,
+            snaps,
+            &self.metadata()?,
+            UpdateInfo {
+                update_type: UpdateType::ConfigChangedUpdate,
                 update_time: Utc::now(),
                 previous_updates: self.latest_updates()?,
             },
