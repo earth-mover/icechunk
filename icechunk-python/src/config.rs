@@ -1530,7 +1530,7 @@ pub struct PyRepositoryConfig {
     #[pyo3(get, set)]
     pub repo_update_retries: Option<Py<PyRepoUpdateRetryConfig>>,
     #[pyo3(get, set)]
-    pub num_updates_per_repo_info_file: Option<usize>,
+    pub num_updates_per_repo_info_file: Option<u16>,
 }
 
 impl PartialEq for PyRepositoryConfig {
@@ -1633,7 +1633,7 @@ impl PyRepositoryConfig {
         virtual_chunk_containers: Option<HashMap<String, PyVirtualChunkContainer>>,
         manifest: Option<Py<PyManifestConfig>>,
         repo_update_retries: Option<Py<PyRepoUpdateRetryConfig>>,
-        num_updates_per_repo_info_file: Option<usize>,
+        num_updates_per_repo_info_file: Option<u16>,
     ) -> Self {
         Self {
             inline_chunk_threshold_bytes,

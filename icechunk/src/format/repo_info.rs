@@ -128,7 +128,7 @@ impl RepoInfo {
         metadata: &SnapshotProperties,
         update: UpdateInfo<I>,
         backup_path: Option<&'a str>,
-        num_updates_per_file: usize,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = snapshots.into_iter().collect();
         snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
@@ -162,7 +162,7 @@ impl RepoInfo {
         metadata: &SnapshotProperties,
         update: UpdateInfo<I>,
         backup_path: Option<&'a str>,
-        num_updates_per_file: usize,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
         let tags = sorted_tags
@@ -322,7 +322,7 @@ impl RepoInfo {
         builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
         update: UpdateInfo<I>,
         backup_path: Option<&'a str>,
-        num_updates_per_file: usize,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<(
         WIPOffset<
             flatbuffers::Vector<
@@ -363,13 +363,14 @@ impl RepoInfo {
         let all_updates = new_updates.into_iter().chain(previous_updates);
         let mut repo_before_updates = None;
 
+        let num_updates = num_updates_per_file as usize;
         let updates: Vec<_> = all_updates
-            .take(num_updates_per_file + 1)
+            .take(num_updates + 1)
             .enumerate()
             .map(|(idx, maybe_data)| maybe_data.map(|(d1, d2, d3)| (idx, d1, d2, d3)))
             .map(|maybe_data| {
                 let (idx, u_type, u_time, file) = maybe_data?;
-                if idx == num_updates_per_file {
+                if idx == num_updates {
                     repo_before_updates = file;
                 }
                 let (update_type_type, update_type) =
@@ -389,11 +390,11 @@ impl RepoInfo {
             .try_collect()?;
 
         debug_assert!(
-            updates.len() <= num_updates_per_file + 1,
+            updates.len() <= num_updates + 1,
             "Too many latest updates in repo file"
         );
 
-        let size = (num_updates_per_file - 1).min(updates.len() - 1);
+        let size = (num_updates - 1).min(updates.len() - 1);
         let updates = builder.create_vector(&updates[0..=size]);
         let repo_before_updates = repo_before_updates.map(|s| builder.create_string(s));
         Ok((updates, repo_before_updates))
@@ -402,7 +403,7 @@ impl RepoInfo {
     pub fn initial(
         spec_version: SpecVersionBin,
         snapshot: SnapshotInfo,
-        num_updates_per_file: usize,
+        num_updates_per_file: u16,
     ) -> Self {
         let last_updated_at = snapshot.flushed_at;
         #[allow(clippy::expect_used)]
@@ -465,7 +466,7 @@ impl RepoInfo {
         branch: Option<&str>,
         update_type: UpdateType,
         previous_file: &str,
-        num_updates_per_file: usize,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         let flushed_at = snap.flushed_at;
         let mut snapshots: Vec<_> = self.all_snapshots()?.try_collect()?;
@@ -517,7 +518,7 @@ impl RepoInfo {
         name: &str,
         snap: &SnapshotId,
         previous_file: &str,
-        num_updates_per_file: usize,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         if let Ok(snapshot_id) = self.resolve_branch(name) {
             return Err(IcechunkFormatErrorKind::BranchAlreadyExists {
@@ -563,7 +564,7 @@ impl RepoInfo {
         spec_version: SpecVersionBin,
         name: &str,
         previous_file: &str,
-        num_updates_per_file: usize,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         match self.resolve_branch(name) {
             Ok(previous_snap_id) => {
@@ -607,7 +608,7 @@ impl RepoInfo {
         name: &str,
         new_snap: &SnapshotId,
         previous_file: &str,
-        num_updates_per_file: usize,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         let previous_snap_id = self.resolve_branch(name)?;
         match self.resolve_snapshot_index(new_snap)? {
@@ -648,7 +649,7 @@ impl RepoInfo {
         name: &str,
         snap: &SnapshotId,
         previous_file: &str,
-        num_updates_per_file: usize,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         if self.resolve_tag(name).is_ok() || self.tag_was_deleted(name)? {
             // TODO: better error on tag already deleted
@@ -694,7 +695,7 @@ impl RepoInfo {
         spec_version: SpecVersionBin,
         name: &str,
         previous_file: &str,
-        num_updates_per_file: usize,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         match self.resolve_tag(name) {
             Ok(previous_snap_id) => {
@@ -740,7 +741,7 @@ impl RepoInfo {
         spec_version: SpecVersionBin,
         metadata: &SnapshotProperties,
         previous_file: &str,
-        num_updates_per_file: usize,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
         Self::from_parts(
@@ -1471,7 +1472,8 @@ mod tests {
             metadata: Default::default(),
         };
 
-        let num_updates_per_file: usize = 10;
+        let num_updates_per_file: u16 = 10;
+        let n = num_updates_per_file as usize;
 
         // check updates for a new repo
         let mut repo =
@@ -1483,7 +1485,7 @@ mod tests {
         assert!(repo.repo_before_updates()?.is_none());
         // check updates after num_updates_per_file changes
         // fill the first page of updates by adding branches
-        for i in 1..=(num_updates_per_file - 1) {
+        for i in 1..=(n - 1) {
             repo = repo.add_branch(
                 SpecVersionBin::current(),
                 i.to_string().as_str(),
@@ -1493,29 +1495,24 @@ mod tests {
             )?
         }
 
-        assert_eq!(repo.latest_updates()?.count(), num_updates_per_file);
+        assert_eq!(repo.latest_updates()?.count(), n);
         let updates = repo.latest_updates()?;
 
         // check all other updates
         for (idx, update) in updates.enumerate() {
             let (update, _, file) = update?;
-            if idx == num_updates_per_file - 1 {
+            if idx == n - 1 {
                 assert_eq!(update, UpdateType::RepoInitializedUpdate);
                 assert_eq!(file, Some("0"));
             } else {
                 assert_eq!(
                     update,
-                    UpdateType::BranchCreatedUpdate {
-                        name: (num_updates_per_file - 1 - idx).to_string()
-                    }
+                    UpdateType::BranchCreatedUpdate { name: (n - 1 - idx).to_string() }
                 );
                 if idx == 0 {
                     assert!(file.is_none())
                 } else {
-                    assert_eq!(
-                        file,
-                        Some((num_updates_per_file - 1 - idx).to_string().as_str())
-                    );
+                    assert_eq!(file, Some((n - 1 - idx).to_string().as_str()));
                 }
             }
         }
@@ -1530,7 +1527,7 @@ mod tests {
             num_updates_per_file,
         )?;
         // the file only contains the first "page" worth of updates
-        assert_eq!(repo.latest_updates()?.count(), num_updates_per_file);
+        assert_eq!(repo.latest_updates()?.count(), n);
         // next file is the oldest change
         assert_eq!(repo.repo_before_updates()?, Some("0"));
         let mut updates = repo.latest_updates()?;
@@ -1543,21 +1540,17 @@ mod tests {
         let (last_update, _, file) = updates.next().unwrap()?;
         assert_eq!(
             last_update,
-            UpdateType::BranchCreatedUpdate {
-                name: (num_updates_per_file - 1).to_string()
-            }
+            UpdateType::BranchCreatedUpdate { name: (n - 1).to_string() }
         );
         assert_eq!(file, Some("first-branches"));
 
         // all other changes are branch creation (repo creation is in the next page)
         for (idx, update) in updates.enumerate() {
             let (update, _, file) = update?;
-            assert_eq!(file, Some((num_updates_per_file - 2 - idx).to_string().as_str()));
+            assert_eq!(file, Some((n - 2 - idx).to_string().as_str()));
             assert_eq!(
                 update,
-                UpdateType::BranchCreatedUpdate {
-                    name: (num_updates_per_file - 2 - idx).to_string()
-                }
+                UpdateType::BranchCreatedUpdate { name: (n - 2 - idx).to_string() }
             );
         }
 

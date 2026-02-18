@@ -324,7 +324,7 @@ pub async fn garbage_collect(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
-    num_updates_per_repo_info_file: usize,
+    num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
     if !asset_manager.can_write_to_storage().await? {
         return Err(GCError::Repository(
@@ -424,7 +424,7 @@ async fn delete_snapshots_from_repo_info(
     asset_manager: &AssetManager,
     keep_snapshots: &HashSet<SnapshotId>,
     retry_settings: &crate::storage::RetriesSettings,
-    num_updates_per_repo_info_file: usize,
+    num_updates_per_repo_info_file: u16,
 ) -> GCResult<()> {
     // FIXME: IMPORTANT
     // Notice this loses any new snapshots that may have been created while GC was running
@@ -629,7 +629,7 @@ pub async fn expire(
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
-    num_updates_per_repo_info_file: usize,
+    num_updates_per_repo_info_file: u16,
 ) -> GCResult<ExpireResult> {
     match asset_manager.spec_version() {
         SpecVersionBin::V1dot0 => {
@@ -662,7 +662,7 @@ pub async fn expire_v2(
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
-    num_updates_per_repo_info_file: usize,
+    num_updates_per_repo_info_file: u16,
 ) -> GCResult<ExpireResult> {
     if !asset_manager.can_write_to_storage().await? {
         return Err(GCError::Repository(

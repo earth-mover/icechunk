@@ -2548,7 +2548,7 @@ async fn do_commit(
     commit_method: CommitMethod,
     allow_empty: bool,
     retry_settings: &storage::RetriesSettings,
-    num_updates_per_repo_info_file: usize,
+    num_updates_per_repo_info_file: u16,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
 
@@ -2652,7 +2652,7 @@ async fn do_commit_v2(
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
     retry_settings: &storage::RetriesSettings,
-    num_updates_per_repo_info_file: usize,
+    num_updates_per_repo_info_file: u16,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
