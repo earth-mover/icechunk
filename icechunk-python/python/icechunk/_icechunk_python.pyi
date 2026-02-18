@@ -2153,31 +2153,36 @@ class S3Credentials:
         def __new__(cls) -> S3Credentials.Anonymous: ...
 
     class Static:
-        """Uses s3 credentials without expiration
+        """Uses s3 credentials without expiration"""
+        def __new__(cls, credentials: S3StaticCredentials) -> S3Credentials.Static:
+            """Create static S3 credentials.
 
-        Parameters
-        ----------
-        credentials: S3StaticCredentials
-            The credentials to use for authentication.
-        """
-        def __new__(cls, credentials: S3StaticCredentials) -> S3Credentials.Static: ...
+            Parameters
+            ----------
+            credentials: S3StaticCredentials
+                The credentials to use for authentication.
+            """
+            ...
 
     class Refreshable:
         """Allows for an outside authority to pass in a function that can be used to provide credentials.
 
         This is useful for credentials that have an expiration time, or are otherwise not known ahead of time.
-
-        Parameters
-        ----------
-        pickled_function: bytes
-            The pickled function to use to provide credentials.
-        current: S3StaticCredentials
-            The initial credentials. They will be returned the first time credentials
-            are requested and then deleted.
         """
         def __new__(
             cls, pickled_function: bytes, current: S3StaticCredentials | None = None
-        ) -> S3Credentials.Refreshable: ...
+        ) -> S3Credentials.Refreshable:
+            """Create refreshable S3 credentials.
+
+            Parameters
+            ----------
+            pickled_function: bytes
+                The pickled function to use to provide credentials.
+            current: S3StaticCredentials
+                The initial credentials. They will be returned the first time credentials
+                are requested and then deleted.
+            """
+            ...
 
 _AnyS3Credential = (
     S3Credentials.Static
@@ -2213,44 +2218,52 @@ class GcsBearerCredential:
 class GcsStaticCredentials:
     """Credentials for a google cloud storage backend"""
     class ServiceAccount:
-        """Credentials for a google cloud storage backend using a service account json file
+        """Credentials for a google cloud storage backend using a service account json file"""
+        def __new__(cls, path: str) -> GcsStaticCredentials.ServiceAccount:
+            """Create service account credentials.
 
-        Parameters
-        ----------
-        path: str
-            The path to the service account json file.
-        """
-        def __new__(cls, path: str) -> GcsStaticCredentials.ServiceAccount: ...
+            Parameters
+            ----------
+            path: str
+                The path to the service account json file.
+            """
+            ...
 
     class ServiceAccountKey:
-        """Credentials for a google cloud storage backend using a a serialized service account key
+        """Credentials for a google cloud storage backend using a serialized service account key"""
+        def __new__(cls, key: str) -> GcsStaticCredentials.ServiceAccountKey:
+            """Create service account key credentials.
 
-        Parameters
-        ----------
-        key: str
-            The serialized service account key.
-        """
-        def __new__(cls, key: str) -> GcsStaticCredentials.ServiceAccountKey: ...
+            Parameters
+            ----------
+            key: str
+                The serialized service account key.
+            """
+            ...
 
     class ApplicationCredentials:
-        """Credentials for a google cloud storage backend using application default credentials
+        """Credentials for a google cloud storage backend using application default credentials"""
+        def __new__(cls, path: str) -> GcsStaticCredentials.ApplicationCredentials:
+            """Create application default credentials.
 
-        Parameters
-        ----------
-        path: str
-            The path to the application default credentials (ADC) file.
-        """
-        def __new__(cls, path: str) -> GcsStaticCredentials.ApplicationCredentials: ...
+            Parameters
+            ----------
+            path: str
+                The path to the application default credentials (ADC) file.
+            """
+            ...
 
     class BearerToken:
-        """Credentials for a google cloud storage backend using a bearer token
+        """Credentials for a google cloud storage backend using a bearer token"""
+        def __new__(cls, token: str) -> GcsStaticCredentials.BearerToken:
+            """Create bearer token credentials.
 
-        Parameters
-        ----------
-        token: str
-            The bearer token to use for authentication.
-        """
-        def __new__(cls, token: str) -> GcsStaticCredentials.BearerToken: ...
+            Parameters
+            ----------
+            token: str
+                The bearer token to use for authentication.
+            """
+            ...
 
 _AnyGcsStaticCredential = (
     GcsStaticCredentials.ServiceAccount
@@ -2297,34 +2310,40 @@ _AnyGcsCredential = (
 class AzureStaticCredentials:
     """Credentials for an azure storage backend"""
     class AccessKey:
-        """Credentials for an azure storage backend using an access key
+        """Credentials for an azure storage backend using an access key"""
+        def __new__(cls, key: str) -> AzureStaticCredentials.AccessKey:
+            """Create access key credentials.
 
-        Parameters
-        ----------
-        key: str
-            The access key to use for authentication.
-        """
-        def __new__(cls, key: str) -> AzureStaticCredentials.AccessKey: ...
+            Parameters
+            ----------
+            key: str
+                The access key to use for authentication.
+            """
+            ...
 
     class SasToken:
-        """Credentials for an azure storage backend using a shared access signature token
+        """Credentials for an azure storage backend using a shared access signature token"""
+        def __new__(cls, token: str) -> AzureStaticCredentials.SasToken:
+            """Create SAS token credentials.
 
-        Parameters
-        ----------
-        token: str
-            The shared access signature token to use for authentication.
-        """
-        def __new__(cls, token: str) -> AzureStaticCredentials.SasToken: ...
+            Parameters
+            ----------
+            token: str
+                The shared access signature token to use for authentication.
+            """
+            ...
 
     class BearerToken:
-        """Credentials for an azure storage backend using a bearer token
+        """Credentials for an azure storage backend using a bearer token"""
+        def __new__(cls, token: str) -> AzureStaticCredentials.BearerToken:
+            """Create bearer token credentials.
 
-        Parameters
-        ----------
-        token: str
-            The bearer token to use for authentication.
-        """
-        def __new__(cls, token: str) -> AzureStaticCredentials.BearerToken: ...
+            Parameters
+            ----------
+            token: str
+                The bearer token to use for authentication.
+            """
+            ...
 
 _AnyAzureStaticCredential = (
     AzureStaticCredentials.AccessKey
