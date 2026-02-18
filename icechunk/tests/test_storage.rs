@@ -860,7 +860,7 @@ pub async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
 
     let join = tokio::task::spawn(server.run());
 
-    let url = format!("http://localhost:{port}");
+    let url = format!("http://127.0.0.1:{port}");
     let storage1 = new_http_storage(url.as_str(), None)?;
     let storage2 = new_http_storage(url.as_str(), None)?;
     for storage in [storage1, storage2] {
@@ -932,7 +932,7 @@ pub async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let join = tokio::task::spawn(server.run());
-    let url = format!("http://localhost:{port}");
+    let url = format!("http://127.0.0.1:{port}");
     let storage = new_redirect_storage(url.as_str())?;
     let mut data = Vec::with_capacity(1_024);
     let settings = storage.default_settings().await?;
