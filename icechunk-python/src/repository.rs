@@ -2057,7 +2057,7 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, branch, metadata=None))]
+    #[pyo3(signature = (message, *, branch, metadata=None))]
     pub(crate) fn rewrite_manifests(
         &self,
         py: Python<'_>,
@@ -2085,7 +2085,7 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, branch, metadata=None))]
+    #[pyo3(signature = (message, *, branch, metadata=None))]
     fn rewrite_manifests_async<'py>(
         &'py self,
         py: Python<'py>,
