@@ -10,6 +10,7 @@ use crate::{
     config::{S3Credentials, S3CredentialsFetcher, S3Options},
     format::ChunkOffset,
     private,
+    storage::strip_quotes,
 };
 use async_trait::async_trait;
 use aws_config::{
@@ -871,10 +872,6 @@ impl ProvideRefreshableCredentials {
         );
         Ok(creds)
     }
-}
-
-fn strip_quotes(s: &str) -> &str {
-    s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
 }
 
 #[cfg(test)]
