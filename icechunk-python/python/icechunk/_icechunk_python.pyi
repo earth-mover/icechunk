@@ -1215,6 +1215,7 @@ class RepositoryConfig:
         virtual_chunk_containers: dict[str, VirtualChunkContainer] | None = None,
         manifest: ManifestConfig | None = None,
         repo_update_retries: RepoUpdateRetryConfig | None = None,
+        num_updates_per_repo_info_file: int | None = None,
     ) -> None:
         """
         Create a new `RepositoryConfig` object

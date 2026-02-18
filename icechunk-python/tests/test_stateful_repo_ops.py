@@ -39,10 +39,12 @@ import zarr.testing.strategies as zrst
 from icechunk import (
     IcechunkError,
     Repository,
+    RepositoryConfig,
     SnapshotInfo,
     Storage,
     in_memory_storage,
 )
+from icechunk.testing.strategies import repository_configs
 from zarr.testing.stateful import SyncStoreWrapper
 
 # JSON file contents, keep it simple
@@ -110,7 +112,10 @@ class TagModel:
 
 class Model:
     def __init__(self, **kwargs: Any) -> None:
-        self.store: dict[str, Any] = {}  #
+        self.store: dict[str, Any] = {}
+
+        self.spec_version = 1  # will be overwritten on `@initialize`
+        self.num_updates: int = 0
 
         self.initial_snapshot_id: str | None = None
         self.changes_made: bool = False
@@ -151,6 +156,9 @@ class Model:
     def __getitem__(self, key: str) -> Buffer:
         return cast(Buffer, self.store[key])
 
+    def upgrade(self) -> None:
+        self.num_updates += 1
+
     @property
     def has_commits(self) -> bool:
         return bool(self.commits)
@@ -171,10 +179,11 @@ class Model:
 
         assert self.branch is not None
         self.branch_heads[self.branch] = ref
+        self.num_updates += 1
 
     def amend(self, snap: SnapshotInfo) -> None:
         """Amend the HEAD commit."""
-        # this is simpe because we aren't modeling the branch as a list of commits
+        # this is simple because we aren't modeling the branch as a list of commits
         self.commit(snap)
 
     def checkout_commit(self, ref: str) -> None:
@@ -189,6 +198,7 @@ class Model:
     def create_branch(self, name: str, commit: str) -> None:
         assert commit in self.commits
         self.branch_heads[name] = commit
+        self.num_updates += 1
 
     def checkout_branch(self, ref: str) -> None:
         self.checkout_commit(self.branch_heads[ref])
@@ -198,17 +208,27 @@ class Model:
     def reset_branch(self, branch: str, commit: str) -> None:
         assert commit in self.commits
         self.branch_heads[branch] = commit
+        self.num_updates += 1
 
     def delete_branch(self, branch_name: str) -> None:
+        self._delete_branch(branch_name)
+        self.num_updates += 1
+
+    def _delete_branch(self, branch_name: str) -> None:
         del self.branch_heads[branch_name]
 
     def delete_tag(self, tag: str) -> None:
+        self._delete_tag(tag)
+        self.num_updates += 1
+
+    def _delete_tag(self, tag: str) -> None:
         del self.tags[tag]
 
     def create_tag(self, tag_name: str, commit_id: str) -> None:
         assert commit_id in self.commits
         self.tags[tag_name] = TagModel(commit_id=str(commit_id))
         self.created_tags.add(tag_name)
+        self.num_updates += 1
 
     def checkout_tag(self, ref: str) -> None:
         self.checkout_commit(self.tags[str(ref)].commit_id)
@@ -261,7 +281,7 @@ class Model:
             }
             note(f"deleting tags {tags_to_delete=!r}")
             for tag in tags_to_delete:
-                self.delete_tag(tag)
+                self._delete_tag(tag)
         else:
             tags_to_delete = set()
 
@@ -274,9 +294,11 @@ class Model:
             note(f"deleting branches {branches_to_delete=!r}")
             for branch in branches_to_delete:
                 note(f"deleting {branch=!r}, {self.branch_heads[branch]=!r}")
-                self.delete_branch(branch)
+                self._delete_branch(branch)
         else:
             branches_to_delete = set()
+
+        self.num_updates += 1
 
         return ExpireInfo(
             expired_snapshots=expired_snaps,
@@ -301,6 +323,7 @@ class Model:
                 self.ondisk_snaps.pop(k, None)
                 deleted.add(k)
         note(f"Deleted snapshots in model: {deleted!r}")
+        self.num_updates += 1
         return deleted
 
 
@@ -325,7 +348,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
     def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
         self.storage = in_memory_storage()
-        self.repo = Repository.create(self.storage, spec_version=spec_version)
+        config = data.draw(repository_configs())
+        self.model.spec_version = spec_version
+
+        self.repo = Repository.create(
+            self.storage,
+            spec_version=spec_version,
+            config=config,
+        )
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         snap = next(iter(self.repo.ancestry(branch=DEFAULT_BRANCH)))
@@ -338,6 +368,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model.HEAD = HEAD
         self.model.create_branch(DEFAULT_BRANCH, HEAD)
         self.model.checkout_branch(DEFAULT_BRANCH)
+        # RepoInitializedUpdate includes the initial branch creation,
+        # so reset to 1 after create_branch incremented it.
+        self.model.num_updates = 1
 
         # initialize with some data always
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
@@ -371,17 +404,22 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # don't test simple cases of catching error upgradging a v2 spec
         # that should be covered in unit tests
         icechunk.upgrade_icechunk_repository(self.repo)
+        self.model.upgrade()
         # TODO: remove the reopen after https://github.com/earth-mover/icechunk/issues/1521
-        self.reopen_repository()
+        self._reopen_repository()
 
-    @rule()
-    def reopen_repository(self) -> None:
+    @rule(data=st.data())
+    def reopen_repository(self, data: st.DataObject) -> None:
+        config = data.draw(repository_configs())
+        self._reopen_repository(config)
+
+    def _reopen_repository(self, config: RepositoryConfig | None = None) -> None:
         """Reopen the repository from storage to get fresh state.
 
         This discards any uncommitted changes.
         """
         assert self.storage is not None, "storage must be initialized"
-        self.repo = Repository.open(self.storage)
+        self.repo = Repository.open(self.storage, config=config)
         note(f"Reopened repository (spec_version={self.repo.spec_version})")
 
         # Reopening discards uncommitted changes - reset model to last committed state
@@ -697,6 +735,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.check_tags()
         self.check_branches()
         self.check_ancestry()
+        if self.model.spec_version >= 2:
+            actual_ops = len(list(self.repo.ops_log()))
+            assert (
+                actual_ops == self.model.num_updates
+            ), f"ops_log has more entries ({actual_ops}) than expected ({self.model.num_updates})"
 
     def check_list_prefix_from_root(self) -> None:
         model_list = self.model.list_prefix("")
