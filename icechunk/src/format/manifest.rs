@@ -424,7 +424,6 @@ impl Manifest {
         stream: impl Stream<Item = Result<ChunkInfo, E>>,
     ) -> Result<Option<Self>, E> {
         let mut all = stream.try_collect::<Vec<_>>().await?;
-        // FIXME: should we sort here or can we sort outside?
         all.sort_by(|a, b| (&a.node, &a.coord).cmp(&(&b.node, &b.coord)));
         Ok(Self::from_sorted_vec(manifest_id, all))
     }
