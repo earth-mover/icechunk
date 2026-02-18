@@ -713,9 +713,10 @@ class ManifestSplitCondition:
         """
         ...
 
-    class AnyArray:
+    @staticmethod
+    def AnyArray() -> ManifestSplitCondition:
         """Create a splitting condition that matches any array."""
-        def __new__(cls) -> ManifestSplitCondition.AnyArray: ...
+        ...
 
     def __or__(self, other: ManifestSplitCondition) -> ManifestSplitCondition:
         """Create a splitting condition that matches if either this condition or `other` matches"""
@@ -771,9 +772,8 @@ class ManifestSplittingConfig:
             ],
         ],
     ) -> ManifestSplittingConfig: ...
-    @staticmethod
     def to_dict(
-        config: ManifestSplittingConfig,
+        self,
     ) -> dict[
         ManifestSplitCondition,
         dict[
