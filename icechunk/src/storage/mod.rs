@@ -881,6 +881,10 @@ pub fn new_gcs_storage(
     Ok(Arc::new(storage))
 }
 
+pub fn strip_quotes(s: &str) -> &str {
+    s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
