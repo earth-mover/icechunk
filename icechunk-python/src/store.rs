@@ -139,7 +139,6 @@ impl PyStore {
     fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<'_, [u8]>> {
         // This is blocking function, we need to release the Gil
         py.detach(move || {
-            // FIXME: Use rmp_serde instead of serde_json to optimize performance
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let serialized =
                     self.0.as_bytes().await.map_err(PyIcechunkStoreError::from)?;
