@@ -12,4 +12,5 @@ build:
          - asdf global pixi latest
     build:
          html:
+           - pixi run -m icechunk-python/pyproject.toml -e all init
            - pixi run -m icechunk-python/pyproject.toml -e all just docs-build --site-dir $READTHEDOCS_OUTPUT/html
