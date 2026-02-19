@@ -22,19 +22,22 @@ This guide describes the local development workflow for:
 - Building the [Documentation](#building-documentation)
 - Setup instructions for additional resources (e.g. [Local Storage Docker Containers](#docker-setup-for-local-storage-testing))
 
-### Python Development Workflow
+### Setting up your development environment
 
-The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
+We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rust dependencies in the development workflow. This will ensure that your development workflow reflects the CI as closely as possible. If you do not want to use pixi we provide more manual alternatives in tabs.
 
-```bash
-cd icechunk-python
-```
+=== "pixi (Recommended)"
+    Activate the developer shell (all following commands should be run within)
 
-#### Prerequisites
+    ```bash
+    pixi shell -m icechunk-python/pyproject.toml -e all
+    ```
+    and then in the shell
+    ```bash
+    pixi run -e all init
+    ```
 
-#### Setting up your development environment
-
-=== "uv (Recommended)"
+=== "uv"
 
     The easiest way to get started is with [uv](https://docs.astral.sh/uv/), which handles virtual environments and dependencies:
 
@@ -50,19 +53,6 @@ cd icechunk-python
     ```
 
     **Why these steps?** Icechunk is a mixed Python/Rust project. The `maturin-import-hook` enables incremental Rust compilation (7-20 seconds) instead of full rebuilds (5+ minutes) every time you run tests or import the module. This makes development significantly faster.
-
-    Now you can run tests and other commands:
-
-    ```bash
-    # Run tests (Rust changes will automatically trigger incremental rebuild)
-    uv run pytest
-
-    # Run type checking
-    uv run mypy python tests
-
-    # Run linting
-    uv run ruff check python
-    ```
 
 === "Venv"
 
@@ -92,16 +82,41 @@ cd icechunk-python
     maturin develop
     ```
 
+
+### Python Development Workflow
+
+
 #### Testing
 
-=== "uv"
+=== "pixi (Recommended)"
+    The Python code is developed in the `icechunk-python` subdirectory. When you use pixi all commands can be run from the repo root.
 
     ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
+    just pytest
+    ```
+
+=== "uv"
+    The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
+
+    ```bash
+    cd icechunk-python
+    ```
+
+    ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
     uv run pytest
     ```
 === "Venv/Conda"
 
+    The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
+
     ```bash
+    cd icechunk-python
+    ```
+
+    ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
     pytest
     ```
 
@@ -111,7 +126,26 @@ cd icechunk-python
 
 !!! important
 
-    The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions.
+    The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions. If this is not set up some tests will fail
+
+
+#### Code Quality Checks
+
+=== "pixi (Recommended)"
+    The Python code is developed in the `icechunk-python` subdirectory. When you use pixi all commands can be run from the repo root.
+
+    ```bash
+    just ruff-format
+    just ruff
+    just mypy
+    just py-pre-commit
+    ```
+
+=== "uv"
+    TBW
+
+=== "Venv/Conda"
+    TBW
 
 
 #### Testing with Upstream Dependencies
@@ -314,11 +348,11 @@ pre-commit run rust-pre-commit-ci --hook-stage manual
 
 The documentation is built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/).
 
-From the `icechunk-python` directory:
+Make sure to [activate](#setting-up-your-development-environment) the pixi shell before running these commands.
 
 ```bash
 # Start the MkDocs development server
-pixi run docs-serve
+just docs-serve
 ```
 
 The development server will start at `http://127.0.0.1:8000` with live reload enabled.
@@ -326,16 +360,16 @@ The development server will start at `http://127.0.0.1:8000` with live reload en
 **Build static site**:
 
 ```bash
-pixi run docs-build
+just docs-build
 ```
 
 This builds the site to `docs/.site` directory.
 
 **Tips**:
 
-- Use `mkdocs serve --dirty` to only rebuild changed files (faster for iterative development)
+- Use `just docs-serve --dirty` to only rebuild changed files (faster for iterative development)
 - You may need to restart if you make changes to `mkdocs.yml`
-- For debugging the doc build logs, check out [docs-output-filter](https://github.com/ianhi/docs-output-filter) (you can run `uv run docs-output-filter -- mkdocs serve --livereload` once installed). *This also works to debug remote builds like RTD with the `--url` flag* 😍
+- For debugging the doc build logs, check out [docs-output-filter](https://github.com/ianhi/docs-output-filter) (you can run `docs-output-filter -- just docs-serve` once installed). *`docs-output-filter` also works to debug remote builds like RTD with the `--url` flag* 😍
 
 ### Docker setup for local storage testing
 
