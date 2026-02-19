@@ -18,13 +18,14 @@ use aws_sdk_s3::{
     Client,
     config::{
         Builder, ConfigBag, IdentityCache, Intercept, ProvideCredentials, Region,
-        RuntimeComponents, StalledStreamProtectionConfig,
+        RuntimeComponents, StalledStreamProtectionConfig, http::HttpResponse,
         interceptors::BeforeTransmitInterceptorContextMut,
     },
     error::{BoxError, SdkError},
     operation::{
         complete_multipart_upload::CompleteMultipartUploadError,
-        copy_object::CopyObjectError, put_object::PutObjectError,
+        copy_object::CopyObjectError, get_object::GetObjectError,
+        put_object::PutObjectError,
     },
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
@@ -44,8 +45,9 @@ use tracing::{error, instrument};
 use typed_path::Utf8UnixPath;
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, StorageErrorKind, StorageResult,
-    VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests, strip_quotes
+    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, StorageErrorKind,
+    StorageResult, VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests,
+    strip_quotes,
 };
 
 fn s3_get_err(err: impl std::error::Error + Send + Sync + 'static) -> StorageError {
@@ -832,10 +834,19 @@ impl Storage for S3Storage {
             Err(sdk_err) => match sdk_err.kind {
                 // aws_sdk_s3 doesn't return an error when status 304 (Not Modified)
                 // happens, so we need to dig into the response and check for the status code
-                StorageErrorKind::S3GetObjectError(e)
-                    if e.raw_response().is_some_and(|x| x.status().as_u16() == 304) =>
-                {
-                    Ok(GetModifiedResult::OnLatestVersion)
+                StorageErrorKind::S3GetObjectError(ref e) => {
+                    // We need to cast back to sdk_err to be able
+                    // to check for status 304
+                    if let Some(error) =
+                        e.downcast_ref::<SdkError<GetObjectError, HttpResponse>>()
+                        && error
+                            .raw_response()
+                            .is_some_and(|x| x.status().as_u16() == 304)
+                    {
+                        Ok(GetModifiedResult::OnLatestVersion)
+                    } else {
+                        Err(sdk_err)
+                    }
                 }
                 _ => Err(sdk_err),
             },
