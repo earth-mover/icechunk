@@ -895,17 +895,17 @@ pub fn strip_quotes(s: &str) -> &str {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
 
-    use std::{collections::HashSet, fs::File, io::Write, path::PathBuf};
-
-    use crate::config::{GcsBearerCredential, GcsStaticCredentials};
+    use std::collections::HashSet;
 
     use super::*;
-    use icechunk_macros::tokio_test;
     use proptest::prelude::*;
-    use tempfile::TempDir;
 
-    #[tokio_test]
+    #[cfg(feature = "object-store-fs")]
+    #[icechunk_macros::tokio_test]
     async fn test_is_clean() {
+        use std::{fs::File, io::Write, path::PathBuf};
+        use tempfile::TempDir;
+
         let repo_dir = TempDir::new().unwrap();
         let s = new_local_filesystem_storage(repo_dir.path()).await.unwrap();
         assert!(s.root_is_clean().await.unwrap());
@@ -920,9 +920,12 @@ mod tests {
         assert!(s.root_is_clean().await.unwrap());
     }
 
-    #[tokio_test]
+    #[cfg(feature = "object-store-gcs")]
+    #[icechunk_macros::tokio_test]
     /// Regression test: we can deserialize a GCS credential with token
     async fn test_gcs_session_serialization() {
+        use crate::config::{GcsBearerCredential, GcsStaticCredentials};
+
         let storage = new_gcs_storage(
             "bucket".to_string(),
             Some("prefix".to_string()),

@@ -1,13 +1,16 @@
 //! Proptest strategies for property-based testing.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[cfg(feature = "object-store-azure")]
+use crate::config::{AzureCredentials, AzureStaticCredentials};
 use crate::config::{
-    AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
-    CompressionConfig, GcsBearerCredential, GcsStaticCredentials, ManifestConfig,
+    CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig,
     ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
     ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
     RepoUpdateRetryConfig, S3Options, S3StaticCredentials,
 };
+#[cfg(feature = "object-store-gcs")]
+use crate::config::{GcsBearerCredential, GcsStaticCredentials};
 use crate::format::format_constants::SpecVersionBin;
 use crate::format::manifest::{
     ChunkPayload, ChunkRef, ManifestExtents, SecondsSinceEpoch, VirtualChunkLocation,
@@ -186,6 +189,7 @@ prop_compose! {
     }
 }
 
+#[cfg(feature = "object-store-azure")]
 prop_compose! {
     pub fn azure_options()
     (account in string_regex("[a-zA-Z0-9\\-_]+").unwrap(),
@@ -476,6 +480,7 @@ prop_compose! {
     }
 }
 
+#[cfg(feature = "object-store-gcs")]
 prop_compose! {
 pub fn gcs_bearer_credential()
     (bearer in any::<String>(),expires_after in  expiration_date()) -> GcsBearerCredential {
@@ -483,6 +488,7 @@ pub fn gcs_bearer_credential()
     }
 }
 
+#[cfg(feature = "object-store-gcs")]
 pub fn gcs_static_credentials() -> BoxedStrategy<GcsStaticCredentials> {
     use GcsStaticCredentials::*;
     prop_oneof![
@@ -494,6 +500,7 @@ pub fn gcs_static_credentials() -> BoxedStrategy<GcsStaticCredentials> {
     .boxed()
 }
 
+#[cfg(feature = "object-store-azure")]
 pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
     use AzureStaticCredentials::*;
     prop_oneof![
@@ -504,6 +511,7 @@ pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
     .boxed()
 }
 
+#[cfg(feature = "object-store-azure")]
 pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
     use AzureCredentials::*;
     prop_oneof![Just(FromEnv), azure_static_credentials().prop_map(Static)].boxed()

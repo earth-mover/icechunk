@@ -1086,6 +1086,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "object-store-fs")]
     #[tokio::test]
     async fn test_cannot_resolve_for_nonexistent_container() {
         let container = VirtualChunkContainer::new(
@@ -1110,6 +1111,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "object-store-fs")]
     #[tokio::test]
     async fn test_cannot_resolve_for_unauthorized_container() {
         let container = VirtualChunkContainer::new(
@@ -1134,6 +1136,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "object-store-fs")]
     #[tokio::test]
     async fn test_resolver_filters_out_invalid_containers() {
         // this may be a container manipulated on-disk to have a bad url-prefix

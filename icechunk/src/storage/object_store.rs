@@ -1066,7 +1066,7 @@ fn object_to_list_info(
     Some(ListInfo { id, created_at, size_bytes })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "object-store-fs"))]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use std::path::PathBuf;

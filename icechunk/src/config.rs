@@ -623,10 +623,7 @@ mod tests {
     use crate::{
         ObjectStoreConfig, RepositoryConfig,
         config::S3Options,
-        strategies::{
-            azure_credentials, gcs_static_credentials, repository_config,
-            s3_static_credentials,
-        },
+        strategies::{repository_config, s3_static_credentials},
         virtual_chunks::VirtualChunkContainer,
     };
 
@@ -634,10 +631,22 @@ mod tests {
 
     roundtrip_serialization_tests!(
         test_config_roundtrip - repository_config,
-        test_s3_static_credentials_roundtrip - s3_static_credentials,
-        test_gcs_static_credentials_roundtrip - gcs_static_credentials,
-        test_azure_credentials_roundtrip - azure_credentials
+        test_s3_static_credentials_roundtrip - s3_static_credentials
     );
+
+    #[cfg(feature = "object-store-gcs")]
+    roundtrip_serialization_tests!(
+        test_gcs_static_credentials_roundtrip - gcs_static_credentials
+    );
+
+    #[cfg(feature = "object-store-gcs")]
+    use crate::strategies::gcs_static_credentials;
+
+    #[cfg(feature = "object-store-azure")]
+    roundtrip_serialization_tests!(test_azure_credentials_roundtrip - azure_credentials);
+
+    #[cfg(feature = "object-store-azure")]
+    use crate::strategies::azure_credentials;
 
     #[icechunk_macros::test]
     fn test_merge_replaces_virtual_chunk_containers() {
