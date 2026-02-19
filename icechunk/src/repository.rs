@@ -543,12 +543,27 @@ impl Repository {
 
     #[instrument(skip_all)]
     pub async fn save_config(&self) -> RepositoryResult<storage::VersionInfo> {
-        Repository::store_config(
+        let version = Repository::store_config(
             self.storage().clone(),
             self.config(),
             &self.config_version,
         )
-        .await
+        .await?;
+
+        // Record the config change in the ops log (V2+ only)
+        if self.spec_version >= SpecVersionBin::V2dot0 {
+            let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+                Ok(Arc::new(
+                    repo_info.record_config_changed(self.spec_version(), backup_path)?,
+                ))
+            };
+            let _ = self
+                .asset_manager
+                .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+                .await?;
+        }
+
+        Ok(version)
     }
 
     #[instrument(skip_all)]
