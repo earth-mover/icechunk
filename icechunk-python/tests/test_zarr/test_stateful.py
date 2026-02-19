@@ -128,19 +128,19 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def rewrite_manifests(self, data: st.DataObject) -> None:
-        _ic = self.ic
-        sconfig = _ic.ManifestSplittingConfig.from_dict(
+        sconfig = self.ic.ManifestSplittingConfig.from_dict(
             {
-                _ic.ManifestSplitCondition.AnyArray(): {
-                    _ic.ManifestSplitDimCondition.Any(): data.draw(
+                self.ic.ManifestSplitCondition.AnyArray(): {
+                    self.ic.ManifestSplitDimCondition.Any(): data.draw(
                         st.integers(min_value=1, max_value=10)
                     )
                 }
             }
         )
 
-        config = _ic.RepositoryConfig(
-            inline_chunk_threshold_bytes=0, manifest=_ic.ManifestConfig(splitting=sconfig)
+        config = self.ic.RepositoryConfig(
+            inline_chunk_threshold_bytes=0,
+            manifest=self.ic.ManifestConfig(splitting=sconfig),
         )
         note(f"rewriting manifests with config {sconfig=!r}")
         self.repo = self.actor.open(self.storage, config=config)
