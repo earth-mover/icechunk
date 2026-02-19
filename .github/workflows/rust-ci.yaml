@@ -145,3 +145,65 @@ jobs:
 
         run: |
           cargo test --all --all-targets -- --ignored
+
+  wasm-build:
+    name: WASM Build
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./
+    env:
+      # Keep this as a compile smoke test; avoid failing on existing warnings in
+      # no-default-features wasm cfg combinations.
+      RUSTFLAGS: ""
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup default ${{ env.RUST_CHANNEL }}
+          rustup target add wasm32-wasip1-threads
+
+      - name: Install LLVM toolchain for wasm C deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm wasi-libc libc++-dev
+
+      - name: Show wasm clang include search paths
+        run: |
+          echo | clang --target=wasm32-wasi -E -x c - -v
+          echo '#include <limits.h>' | clang --target=wasm32-wasi -E -x c - -v > /dev/null
+          ls -la /usr/include/wasm32-wasi || true
+          ls -la /usr/lib/wasm32-wasi || true
+          test -f /usr/include/wasm32-wasi/limits.h && echo "found /usr/include/wasm32-wasi/limits.h"
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm-${{ env.RUST_CHANNEL }}
+
+      - name: Run wasm build check
+        env:
+          CC_wasm32_wasip1_threads: clang
+          CXX_wasm32_wasip1_threads: clang++
+          AR_wasm32_wasip1_threads: llvm-ar
+          CC_wasm32_wasi: clang
+          CXX_wasm32_wasi: clang++
+          AR_wasm32_wasi: llvm-ar
+          WASI_SYSROOT: /usr
+          CFLAGS_wasm32_wasip1_threads: --sysroot=/usr -isystem /usr/include/wasm32-wasi
+          CXXFLAGS_wasm32_wasip1_threads: --sysroot=/usr -isystem /usr/include/wasm32-wasi
+          CFLAGS_wasm32_wasi: --sysroot=/usr -isystem /usr/include/wasm32-wasi
+          CXXFLAGS_wasm32_wasi: --sysroot=/usr -isystem /usr/include/wasm32-wasi
+        run: |
+          cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
+
+      - name: Run no-default-features lib tests (proxy for wasm feature set)
+        run: |
+          cargo test -p icechunk --no-default-features --lib

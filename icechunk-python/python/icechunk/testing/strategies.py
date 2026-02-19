@@ -54,3 +54,24 @@ def splitting_configs(
                 key: draw(st.integers(min_value=1, max_value=size + 10))
             }
     return ic.ManifestSplittingConfig.from_dict(config_dict)
+
+
+@st.composite
+def repository_configs(
+    draw: st.DrawFn,
+    num_updates_per_repo_info_file: st.SearchStrategy[int] = st.integers(  # noqa: B008
+        min_value=1, max_value=50
+    ),
+    inline_chunk_threshold_bytes: st.SearchStrategy[int] | None = None,
+    splitting: st.SearchStrategy[ic.ManifestSplittingConfig] | None = None,
+) -> ic.RepositoryConfig:
+    manifest = None
+    if splitting is not None:
+        manifest = ic.ManifestConfig(splitting=draw(splitting))
+    return ic.RepositoryConfig(
+        num_updates_per_repo_info_file=draw(num_updates_per_repo_info_file),
+        inline_chunk_threshold_bytes=draw(inline_chunk_threshold_bytes)
+        if inline_chunk_threshold_bytes is not None
+        else None,
+        manifest=manifest,
+    )
