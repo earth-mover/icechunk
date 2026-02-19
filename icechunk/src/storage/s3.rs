@@ -909,32 +909,34 @@ impl S3Storage {
                 };
 
                 match sdk_err.as_service_error() {
-                Some(e) if e.is_no_such_key() => {
-                    Err(StorageErrorKind::ObjectNotFound.into())
+                    Some(e) if e.is_no_such_key() => {
+                        Err(StorageErrorKind::ObjectNotFound.into())
+                    }
+                    Some(_)
+                        if sdk_err
+                            .raw_response()
+                            .is_some_and(|x| x.status().as_u16() == 404) =>
+                    {
+                        // needed for Cloudflare R2 public bucket URLs
+                        // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
+                        // into anything useful. So we need to parse the raw response, and match
+                        // the status code.
+                        Err(StorageErrorKind::ObjectNotFound.into())
+                    }
+                    Some(_)
+                        // aws_sdk_s3 doesn't return an error when
+                        // status 304 (Not Modified) happens, so
+                        // check the http status code here and
+                        // return None to make it easy to catch
+                        // downstream
+                        if sdk_err
+                            .raw_response()
+                            .is_some_and(|x| x.status().as_u16() == 304) =>
+                    {
+                        Ok(None)
+                    }
+                    _ => Err(s3_get_err(sdk_err)),
                 }
-                Some(_)
-                    // aws_sdk_s3 doesn't return an error when status 304 (Not Modified)
-                    // happens, so check the http status code here and return None
-                    // catch it easily downstream
-                    if sdk_err
-                        .raw_response()
-                        .is_some_and(|x| x.status().as_u16() == 304) =>
-                {
-                    Ok(None)
-                }
-                Some(_)
-                    if sdk_err
-                        .raw_response()
-                        .is_some_and(|x| x.status().as_u16() == 404) =>
-                {
-                    // needed for Cloudflare R2 public bucket URLs
-                    // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
-                    // into anything useful. So we need to parse the raw response, and match
-                    // the status code.
-                    Err(StorageErrorKind::ObjectNotFound.into())
-                }
-                _ => Err(s3_get_err(sdk_err)),
-            }
             }
         }
     }

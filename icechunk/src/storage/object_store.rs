@@ -3,10 +3,9 @@
 //! Supports local filesystem, in-memory, Azure Blob, and Google Cloud Storage.
 
 use crate::private;
-use crate::storage::{
-    s3_config::{S3Credentials, S3Options},
-    strip_quotes,
-};
+#[cfg(feature = "object-store-s3")]
+use crate::storage::s3_config::{S3Credentials, S3Options};
+use crate::storage::strip_quotes;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
