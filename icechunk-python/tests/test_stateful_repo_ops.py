@@ -4,7 +4,10 @@ import datetime
 import itertools
 import json
 import operator
+import string
+import sys
 import textwrap
+from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import partial
@@ -44,6 +47,7 @@ from icechunk import (
     SnapshotInfo,
     Storage,
     in_memory_storage,
+    local_filesystem_storage,
 )
 from icechunk.testing.strategies import repository_configs
 from zarr.testing.stateful import SyncStoreWrapper
@@ -55,6 +59,17 @@ simple_attrs = st.dictionaries(
     st.integers(min_value=-10_000, max_value=10_000),
     max_size=5,
 )
+
+# Branches/tags are stored as files at ``refs/<name>``.  On case-insensitive
+# file systems (macOS APFS default), 'T' and 't' collide.
+if sys.platform == "darwin":
+    ref_name_text = st.text(
+        st.sampled_from(string.ascii_lowercase + string.digits),
+        min_size=1,
+        max_size=5,
+    )
+else:
+    ref_name_text = simple_text
 
 DEFAULT_BRANCH = "main"
 INITIAL_SNAPSHOT = "1CECHNKREP0F1RSTCMT0"
@@ -347,17 +362,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.storage: Storage | None = None
         self.actor = actor or Repository
 
-    @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
-    def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
-        self.storage = in_memory_storage()
-        config = data.draw(repository_configs())
-        self.model.spec_version = spec_version
-
-        self.repo = self.actor.create(
-            self.storage,
-            spec_version=spec_version,
-            config=config,
-        )
+    def _initialize_model_and_data(self, data: st.DataObject) -> None:
+        """Set up model state and initial data after repo is created/opened."""
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         snap = next(iter(self.repo.ancestry(branch=DEFAULT_BRANCH)))
@@ -375,11 +381,20 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model.num_updates = 1
 
         # initialize with some data always
-        # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
-        #       with an array's zarr.json
-        # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
         self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata))
 
+    @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
+    def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
+        self.storage = in_memory_storage()
+        config = data.draw(repository_configs())
+        self.model.spec_version = spec_version
+
+        self.repo = self.actor.create(
+            self.storage,
+            spec_version=spec_version,
+            config=config,
+        )
+        self._initialize_model_and_data(data)
         return DEFAULT_BRANCH
 
     def new_store(self) -> None:
@@ -401,7 +416,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 self.sync_store.set(path, value)
 
     @rule()
-    @precondition(lambda self: self.repo.spec_version == 1)
+    @precondition(lambda self: getattr(self.repo, "spec_version", 1) == 1)
     def upgrade_spec_version(self) -> None:
         # don't test simple cases of catching error upgradging a v2 spec
         # that should be covered in unit tests
@@ -422,7 +437,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         """
         assert self.storage is not None, "storage must be initialized"
         self.repo = self.actor.open(self.storage, config=config)
-        note(f"Reopened repository (spec_version={self.repo.spec_version})")
+        note(
+            f"Reopened repository (spec_version={getattr(self.repo, 'spec_version', 1)})"
+        )
 
         # Reopening discards uncommitted changes - reset model to last committed state
         branch = (
@@ -451,7 +468,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # https://github.com/earth-mover/icechunk/issues/1532
     @precondition(
         lambda self: (self.model.changes_made)
-        and (self.repo.spec_version >= 2)
+        and (getattr(self.repo, "spec_version", 1) >= 2)
         and len(self.model.commits) > 1
     )
     def amend(self, message: str) -> str:
@@ -514,7 +531,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 note(f"Expecting error when checking out branch {ref!r}")
                 self.repo.writable_session(ref)
 
-    @rule(name=simple_text, commit=commits, target=branches)
+    @rule(name=ref_name_text, commit=commits, target=branches)
     def create_branch(self, name: str, commit: str) -> str:
         note(f"Creating branch {name!r}")
 
@@ -531,7 +548,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         return name
 
     @precondition(lambda self: self.model.has_commits)
-    @rule(name=simple_text, commit_id=commits, target=tags)
+    @rule(name=ref_name_text, commit_id=commits, target=tags)
     def create_tag(self, name: str, commit_id: str) -> str:
         note(f"Creating tag {name!r} for commit {commit_id!r}")
 
@@ -615,7 +632,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # TODO: v1 has bugs in expire_snapshots, only test for v2
     # https://github.com/earth-mover/icechunk/issues/1520
     # https://github.com/earth-mover/icechunk/issues/1534
-    @precondition(lambda self: bool(self.model.commits) and self.repo.spec_version == 2)
+    @precondition(
+        lambda self: bool(self.model.commits)
+        and getattr(self.repo, "spec_version", 1) == 2
+    )
     @rule(
         data=st.data(),
         delta=st.timedeltas(
@@ -793,28 +813,73 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             assert len(ancestry_set) == len(ancestry)
             # the initial snapshot is in every possible branch
             # this is a python-only invariant
-            assert ancestry[-1] == self.initial_snapshot
+            assert ancestry[-1].id == self.initial_snapshot.id
 
 
 class TwoActorVersionControlStateMachine(VersionControlStateMachine):
     actors: dict[str, type[Repository]]
+    actor_storage_objects: dict[str, Storage] = {}
 
     def __init__(self) -> None:
         super().__init__(actor=None)
         self.actors = {"one": Repository, "two": Repository}
+        self.on_disk_storage_factory = defaultdict(lambda: local_filesystem_storage)
 
-    @initialize(data=st.data(), target=VersionControlStateMachine.branches)
-    def initialize(self, data: st.DataObject) -> str:
+    @initialize(
+        data=st.data(),
+        target=VersionControlStateMachine.branches,
+        spec_version=st.sampled_from([1, 2]),
+        use_in_memory_storage=st.booleans(),
+    )
+    def initialize(
+        self,
+        data: st.DataObject,
+        spec_version: Literal[1, 2],
+        use_in_memory_storage: bool,
+    ) -> str:
         choice = data.draw(st.sampled_from(list(self.actors.keys())))
         note(f"initializing with actor {choice!r}")
         self.actor = self.actors[choice]
-        return super().initialize(data, spec_version=1)
+
+        # Create storage - have to differentiate so that in multi-actor
+        # tests with different icechunk versions nothing breaks. icechunk_v1 cannot
+        # share in-memory storage with icehunk 2
+        if use_in_memory_storage:
+            # In-memory storage: all actors share the same object
+            self.storage = in_memory_storage()
+            for actor_name in self.actors.keys():
+                self.actor_storage_objects[actor_name] = self.storage
+        else:
+            # Filesystem storage: all actors share same tmpdir
+            # but need different Storage creation methods to abstract
+            # over multi version tests
+            import tempfile
+
+            tmpdir = tempfile.mkdtemp()
+            for actor_name in self.actors.keys():
+                self.actor_storage_objects[actor_name] = self.on_disk_storage_factory[
+                    actor_name
+                ](tmpdir)
+            self.storage = self.actor_storage_objects[choice]
+
+        # Try to create with spec_version, fall back without it for v1 compatibility
+        try:
+            self.repo = self.actor.create(self.storage, spec_version=spec_version)
+        except TypeError:
+            # v1 Repository.create() doesn't accept spec_version kwarg
+            self.repo = self.actor.create(self.storage)
+
+        # Initialize model and data
+        self._initialize_model_and_data(data)
+
+        return DEFAULT_BRANCH
 
     @rule(data=st.data())
     def reopen_repository(self, data: st.DataObject) -> None:
         choice = data.draw(st.sampled_from(tuple(self.actors)))
-        self.actor = self.actors[choice]
         note(f"reopening with actor {choice!r}")
+        self.actor = self.actors[choice]
+        self.storage = self.actor_storage_objects[choice]
         super().reopen_repository()
 
     @rule()

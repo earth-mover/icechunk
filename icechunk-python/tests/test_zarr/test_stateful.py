@@ -76,6 +76,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     def __init__(self, storage: Storage) -> None:
         self.storage = storage
+        self.actor: type[Repository] = Repository
+        self.ic = ic  # icechunk module, for constructing config types
         # Create a temporary repository with spec_version=1 in a separate storage
         # This will be replaced in init_store with the Hypothesis-sampled version
         # we need this in order to properly initialize the superclass MemoryStore
@@ -95,13 +97,14 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         note(f"Creating repository with spec_version={spec_version}")
 
         # Create repository with the drawn spec version
-        self.repo = Repository.create(self.storage, spec_version=spec_version)
+        self.repo = self.actor.create(self.storage, spec_version=spec_version)
         self.store = self.repo.writable_session("main").store
 
         super().init_store()
 
     @precondition(
-        lambda self: not self.store.session.has_uncommitted_changes
+        lambda self: self.ic.__version__ >= "2"
+        and not self.store.session.has_uncommitted_changes
         and bool(self.all_arrays)
     )
     @rule(data=st.data())
@@ -117,7 +120,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             )
         )
         note(f"reopening with config {config!r}")
-        self.repo = Repository.open(self.storage, config=config)
+        self.repo = self.actor.open(self.storage, config=config)
         if data.draw(st.booleans()):
             self.repo.save_config()
         self.store = self.repo.writable_session("main").store
@@ -125,21 +128,22 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def rewrite_manifests(self, data: st.DataObject) -> None:
-        sconfig = ic.ManifestSplittingConfig.from_dict(
+        _ic = self.ic
+        sconfig = _ic.ManifestSplittingConfig.from_dict(
             {
-                ic.ManifestSplitCondition.AnyArray(): {
-                    ic.ManifestSplitDimCondition.Any(): data.draw(
+                _ic.ManifestSplitCondition.AnyArray(): {
+                    _ic.ManifestSplitDimCondition.Any(): data.draw(
                         st.integers(min_value=1, max_value=10)
                     )
                 }
             }
         )
 
-        config = ic.RepositoryConfig(
-            inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)
+        config = _ic.RepositoryConfig(
+            inline_chunk_threshold_bytes=0, manifest=_ic.ManifestConfig(splitting=sconfig)
         )
         note(f"rewriting manifests with config {sconfig=!r}")
-        self.repo = Repository.open(self.storage, config=config)
+        self.repo = self.actor.open(self.storage, config=config)
         self.repo.rewrite_manifests(
             f"rewriting manifests with {sconfig!s}", branch="main"
         )
@@ -157,7 +161,11 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         assert get_before
 
         allow_empty = not self.store.session.has_uncommitted_changes
-        self.store.session.commit("foo", allow_empty=allow_empty)
+        # Try with allow_empty, fall back without it for v1 compatibility
+        try:
+            self.store.session.commit("foo", allow_empty=allow_empty)
+        except TypeError:
+            self.store.session.commit("foo")
 
         self.store = self.repo.writable_session("main").store
 
@@ -193,18 +201,18 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             )
 
     @rule()
-    @precondition(lambda self: self.repo.spec_version == 1)
+    @precondition(lambda self: getattr(self.repo, "spec_version", 1) == 1)
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     def upgrade_spec_version(self) -> None:
         """Upgrade repository from spec version 1 to version 2."""
         note("upgrading spec version from 1 to 2")
-        ic.upgrade_icechunk_repository(self.repo)
+        self.ic.upgrade_icechunk_repository(self.repo)
         # Reopen to pick up the upgraded spec version
-        self.repo = Repository.open(self.storage)
+        self.repo = self.actor.open(self.storage)
         self.store = self.repo.writable_session("main").store
 
     @rule(data=st.data(), num_moves=st.integers(min_value=0, max_value=5))
-    @precondition(lambda self: self.repo.spec_version >= 2)
+    @precondition(lambda self: getattr(self.repo, "spec_version", 1) >= 2)
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
     def move_operations(self, data: st.DataObject, num_moves: int) -> None:
@@ -367,11 +375,19 @@ class TwoActorZarrHierarchyStateMachine(ModifiedZarrHierarchyStateMachine):
     This test models two "actors" operating sequentially on the repo.
     """
 
-    actors: tuple[type[Repository], ...]
+    actors: dict[str, type[Repository]]
+    actor_storage_objects: dict[str, Storage]  # Storage object per actor
 
     def __init__(self, storage: Storage) -> None:
         super().__init__(storage)
-        self.actors = (Repository, Repository)
+        self.actors = {"one": Repository, "two": Repository}
+        self.actor_modules: dict[str, Any] = {"one": ic, "two": ic}
+        # Set up actor storage objects if not already set (subclass may have set them)
+        if not hasattr(self, "actor_storage_objects"):
+            self.actor_storage_objects = {}
+            # Both actors share the same storage by default (same Repository type)
+            for actor_name in self.actors.keys():
+                self.actor_storage_objects[actor_name] = storage
 
     @precondition(lambda _: False)
     @rule()
@@ -385,8 +401,13 @@ class TwoActorZarrHierarchyStateMachine(ModifiedZarrHierarchyStateMachine):
         if self.store.session.has_uncommitted_changes:
             self.commit_with_check(data)
 
-        actor = data.draw(st.sampled_from(self.actors))
-        self.repo = actor.open(self.storage)
+        # Draw an actor and use their storage object
+        actor_name = data.draw(st.sampled_from(list(self.actors.keys())))
+        self.actor = self.actors[actor_name]
+        self.ic = self.actor_modules[actor_name]
+        self.storage = self.actor_storage_objects[actor_name]
+
+        self.repo = self.actor.open(self.storage)
         self.store = self.repo.writable_session("main").store
 
 
