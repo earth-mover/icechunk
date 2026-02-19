@@ -246,6 +246,8 @@ impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
             virtual_chunk_containers,
             manifest,
             previous_file: None,
+            repo_update_retries: None,
+            num_updates_per_repo_info_file: None,
         })
     }
 }

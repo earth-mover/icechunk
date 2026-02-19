@@ -9,6 +9,22 @@ use napi_derive::napi;
 
 use crate::errors::IntoNapiResult;
 
+/// On WASM, some icechunk futures (e.g. from `get_chunk_reader`, `get_chunk_writer`)
+/// are not `Send` because WASM is single-threaded. However, napi's async runtime
+/// requires `Send` futures. This wrapper unsafely implements `Send` on WASM where
+/// it is safe because there is only one thread.
+///
+/// We wrap the `Arc<Store>` so that all futures produced from it are considered Send.
+#[cfg(target_family = "wasm")]
+struct SendStore(Arc<Store>);
+
+#[cfg(target_family = "wasm")]
+// SAFETY: WASM is single-threaded, so Send is not actually needed
+unsafe impl Send for SendStore {}
+// SAFETY: WASM is single-threaded, so Sync is not actually needed
+#[cfg(target_family = "wasm")]
+unsafe impl Sync for SendStore {}
+
 #[cfg(not(target_family = "wasm"))]
 use chrono::{DateTime, Utc};
 #[cfg(not(target_family = "wasm"))]
