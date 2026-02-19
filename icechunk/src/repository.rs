@@ -144,6 +144,8 @@ pub enum RepositoryErrorKind {
         "repository version error, this operation requires a repository that is at least version {minimum_spec_version}, please upgrade your on-disk format before executing this operation"
     )]
     BadRepoVersion { minimum_spec_version: SpecVersionBin },
+    #[error("concurrency error, lock could not be acquired")]
+    PoisonLock,
     #[error("unexpected error: {0}")]
     Other(String),
 }
