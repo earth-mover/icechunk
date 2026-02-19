@@ -56,6 +56,7 @@ class CrossVersionTwoActorVersionControlStateMachine(
     def __init__(self) -> None:
         super().__init__()
         self.actors = {"v2": ic.Repository, "v1": ic_v1.Repository}
+        self.actor_modules = {"v2": ic, "v1": ic_v1}
         # Set per-actor storage constructors
         self.on_disk_storage_factory = {
             "v2": ic.local_filesystem_storage,

@@ -354,13 +354,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     tags = Bundle("tags")
     branches = Bundle("branches")
 
-    def __init__(self, actor: Any = None) -> None:
+    def __init__(self, actor: Any = None, ic_module: Any = None) -> None:
         super().__init__()
 
         note("----------")
         self.model = Model()
         self.storage: Storage | None = None
         self.actor = actor or Repository
+        self.ic = ic_module or icechunk
 
     def _initialize_model_and_data(self, data: st.DataObject) -> None:
         """Set up model state and initial data after repo is created/opened."""
@@ -386,7 +387,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
     def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
         self.storage = in_memory_storage()
-        config = data.draw(repository_configs())
+        config = data.draw(repository_configs(ic_module=self.ic))
         self.model.spec_version = spec_version
 
         self.repo = self.actor.create(
@@ -427,7 +428,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @rule(data=st.data())
     def reopen_repository(self, data: st.DataObject) -> None:
-        config = data.draw(repository_configs())
+        config = data.draw(repository_configs(ic_module=self.ic))
         self._reopen_repository(config)
 
     def _reopen_repository(self, config: RepositoryConfig | None = None) -> None:
@@ -823,6 +824,7 @@ class TwoActorVersionControlStateMachine(VersionControlStateMachine):
     def __init__(self) -> None:
         super().__init__(actor=None)
         self.actors = {"one": Repository, "two": Repository}
+        self.actor_modules: dict[str, Any] = {"one": icechunk, "two": icechunk}
         self.actor_storage_objects = {}
         self.on_disk_storage_factory: dict[str, Callable[[str], Storage]] = defaultdict(
             lambda: local_filesystem_storage
@@ -843,6 +845,7 @@ class TwoActorVersionControlStateMachine(VersionControlStateMachine):
         choice = data.draw(st.sampled_from(list(self.actors.keys())))
         note(f"initializing with actor {choice!r}")
         self.actor = self.actors[choice]
+        self.ic = self.actor_modules[choice]
 
         # Create storage - have to differentiate so that in multi-actor
         # tests with different icechunk versions nothing breaks. icechunk_v1 cannot
@@ -884,6 +887,7 @@ class TwoActorVersionControlStateMachine(VersionControlStateMachine):
         choice = data.draw(st.sampled_from(tuple(self.actors)))
         note(f"switching to actor {choice!r}")
         self.actor = self.actors[choice]
+        self.ic = self.actor_modules[choice]
         self.storage = self.actor_storage_objects[choice]
         super().reopen_repository(data)
 
