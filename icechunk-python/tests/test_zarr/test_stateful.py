@@ -78,7 +78,11 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     def __init__(self, storage: Storage) -> None:
         self.storage = storage
         self.actor: type[Repository] = Repository
-        self.ic = ic  # icechunk module, for constructing config types
+        # keep a version of icechunk module
+        # this is necessary for subclasses that use multiple versions of icechunk
+        # to do things like construct config types correctly
+        self.ic = ic
+
         # Create a temporary repository with spec_version=1 in a separate storage
         # This will be replaced in init_store with the Hypothesis-sampled version
         # we need this in order to properly initialize the superclass MemoryStore
