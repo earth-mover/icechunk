@@ -1,13 +1,16 @@
 //! Proptest strategies for property-based testing.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[cfg(feature = "object-store-azure")]
+use crate::config::{AzureCredentials, AzureStaticCredentials};
 use crate::config::{
-    AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
-    CompressionConfig, GcsBearerCredential, GcsStaticCredentials, ManifestConfig,
+    CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig,
     ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
     ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
     RepoUpdateRetryConfig, S3Options, S3StaticCredentials,
 };
+#[cfg(feature = "object-store-gcs")]
+use crate::config::{GcsBearerCredential, GcsStaticCredentials};
 use crate::format::format_constants::SpecVersionBin;
 use crate::format::manifest::{
     ChunkPayload, ChunkRef, ManifestExtents, SecondsSinceEpoch, VirtualChunkLocation,
@@ -186,6 +189,7 @@ prop_compose! {
     }
 }
 
+#[cfg(feature = "object-store-azure")]
 prop_compose! {
     pub fn azure_options()
     (account in string_regex("[a-zA-Z0-9\\-_]+").unwrap(),
@@ -232,33 +236,45 @@ prop_compose! {
         use ObjectStoreConfig::*;
         match &store {
             InMemory => panic!("assumed not to be in memory"),
+            #[cfg(feature = "object-store-fs")]
             LocalFileSystem(path_buf) => {
                 VirtualChunkContainer::new(format!("file:///{}/", path_buf.to_string_lossy()),store).unwrap()
             }
+            #[cfg(feature = "object-store-http")]
             Http(_) => VirtualChunkContainer::new("http://example.com/".to_string(),store).unwrap(),
             S3Compatible(_) => VirtualChunkContainer::new("s3://somebucket/".to_string(),store).unwrap(),
             S3(_) => VirtualChunkContainer::new("s3://somebucket/".to_string(),store).unwrap(),
+            #[cfg(feature = "object-store-gcs")]
             Gcs(_) => VirtualChunkContainer::new("gcs://somebucket/".to_string(),store).unwrap(),
+            #[cfg(feature = "object-store-azure")]
             Azure(_) => VirtualChunkContainer::new("az://somebucket/".to_string(),store).unwrap(),
             Tigris(_) => VirtualChunkContainer::new("tigris://somebucket/".to_string(),store).unwrap(),
+            #[allow(unreachable_patterns)]
+            _ => panic!("unsupported store config for this feature set"),
         }
     }
 }
 
 pub fn object_store_config() -> BoxedStrategy<ObjectStoreConfig> {
     use ObjectStoreConfig::*;
-    prop_oneof![
-        Just(InMemory),
+    let mut strategies: Vec<BoxedStrategy<ObjectStoreConfig>> =
+        vec![Just(InMemory).boxed()];
+    #[cfg(feature = "object-store-fs")]
+    strategies.push(
         vec(string_regex("[a-zA-Z0-9\\-_]+").unwrap(), 1..4)
-            .prop_map(|s| LocalFileSystem(PathBuf::from(s.join("/")))),
-        s3_options().prop_map(S3),
-        s3_options().prop_map(S3Compatible),
-        s3_options().prop_map(Tigris),
-        any::<HashMap<String, String>>().prop_map(Gcs),
-        any::<HashMap<String, String>>().prop_map(Http),
-        azure_options().prop_map(Azure),
-    ]
-    .boxed()
+            .prop_map(|s| LocalFileSystem(PathBuf::from(s.join("/"))))
+            .boxed(),
+    );
+    strategies.push(s3_options().prop_map(S3).boxed());
+    strategies.push(s3_options().prop_map(S3Compatible).boxed());
+    strategies.push(s3_options().prop_map(Tigris).boxed());
+    #[cfg(feature = "object-store-gcs")]
+    strategies.push(any::<HashMap<String, String>>().prop_map(Gcs).boxed());
+    #[cfg(feature = "object-store-http")]
+    strategies.push(any::<HashMap<String, String>>().prop_map(Http).boxed());
+    #[cfg(feature = "object-store-azure")]
+    strategies.push(azure_options().prop_map(Azure).boxed());
+    proptest::strategy::Union::new(strategies).boxed()
 }
 
 pub fn bound<T>(inner: impl Strategy<Value = T>) -> impl Strategy<Value = Bound<T>>
@@ -465,6 +481,7 @@ prop_compose! {
     }
 }
 
+#[cfg(feature = "object-store-gcs")]
 prop_compose! {
 pub fn gcs_bearer_credential()
     (bearer in any::<String>(),expires_after in  expiration_date()) -> GcsBearerCredential {
@@ -472,6 +489,7 @@ pub fn gcs_bearer_credential()
     }
 }
 
+#[cfg(feature = "object-store-gcs")]
 pub fn gcs_static_credentials() -> BoxedStrategy<GcsStaticCredentials> {
     use GcsStaticCredentials::*;
     prop_oneof![
@@ -483,6 +501,7 @@ pub fn gcs_static_credentials() -> BoxedStrategy<GcsStaticCredentials> {
     .boxed()
 }
 
+#[cfg(feature = "object-store-azure")]
 pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
     use AzureStaticCredentials::*;
     prop_oneof![
@@ -493,6 +512,7 @@ pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
     .boxed()
 }
 
+#[cfg(feature = "object-store-azure")]
 pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
     use AzureCredentials::*;
     prop_oneof![Just(FromEnv), azure_static_credentials().prop_map(Static)].boxed()

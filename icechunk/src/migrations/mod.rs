@@ -347,7 +347,7 @@ async fn pointed_snapshots<'a>(
     Ok(res)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "object-store-fs"))]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::{collections::HashMap, path::Path};

@@ -13,7 +13,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use futures::{
-    FutureExt, Stream, StreamExt, TryStreamExt,
+    Stream, StreamExt, TryStreamExt,
     future::Either,
     stream::{self},
 };
@@ -26,7 +26,6 @@ use std::{
     convert::Infallible,
     future::{Future, ready},
     ops::Range,
-    pin::Pin,
     sync::Arc,
 };
 use thiserror::Error;
@@ -898,34 +897,28 @@ impl Session {
         path: &Path,
         coords: &ChunkIndices,
         byte_range: &ByteRange,
-    ) -> SessionResult<Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>>
+    ) -> SessionResult<Option<crate::compat::IcechunkBoxFuture<'_, SessionResult<Bytes>>>>
     {
         match self.get_chunk_ref(path, coords).await? {
             Some(ChunkPayload::Ref(ChunkRef { id, offset, length })) => {
                 let byte_range = byte_range.clone();
                 let asset_manager = Arc::clone(&self.asset_manager);
                 let byte_range = construct_valid_byte_range(&byte_range, offset, length);
-                Ok(Some(
-                    async move {
-                        // TODO: we don't have a way to distinguish if we want to pass a range or not
-                        asset_manager
-                            .fetch_chunk(&id, &byte_range)
-                            .await
-                            .map_err(|e| e.into())
-                    }
-                    .boxed(),
-                ))
+                Ok(Some(crate::compat::ic_boxed!(async move {
+                    // TODO: we don't have a way to distinguish if we want to pass a range or not
+                    asset_manager
+                        .fetch_chunk(&id, &byte_range)
+                        .await
+                        .map_err(|e| e.into())
+                })))
             }
             Some(ChunkPayload::Inline(bytes)) => {
                 let byte_range =
                     construct_valid_byte_range(byte_range, 0, bytes.len() as u64);
                 trace!("fetching inline chunk for range {:?}.", &byte_range);
-                Ok(Some(
-                    ready(Ok(
-                        bytes.slice(byte_range.start as usize..byte_range.end as usize)
-                    ))
-                    .boxed(),
-                ))
+                Ok(Some(crate::compat::ic_boxed!(ready(Ok(
+                    bytes.slice(byte_range.start as usize..byte_range.end as usize)
+                )))))
             }
             Some(ChunkPayload::Virtual(VirtualChunkRef {
                 location,
@@ -935,15 +928,12 @@ impl Session {
             })) => {
                 let byte_range = construct_valid_byte_range(byte_range, offset, length);
                 let resolver = Arc::clone(&self.virtual_resolver);
-                Ok(Some(
-                    async move {
-                        resolver
-                            .fetch_chunk(location.url(), &byte_range, checksum.as_ref())
-                            .await
-                            .map_err(|e| e.into())
-                    }
-                    .boxed(),
-                ))
+                Ok(Some(crate::compat::ic_boxed!(async move {
+                    resolver
+                        .fetch_chunk(location.url(), &byte_range, checksum.as_ref())
+                        .await
+                        .map_err(|e| e.into())
+                })))
             }
             None => Ok(None),
         }
@@ -970,21 +960,20 @@ impl Session {
         impl FnOnce(
             Bytes,
         )
-            -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
+            -> crate::compat::IcechunkBoxFuture<'static, SessionResult<ChunkPayload>>
         + use<>,
     > {
         let threshold = self.config().inline_chunk_threshold_bytes() as usize;
         let asset_manager = Arc::clone(&self.asset_manager);
         let fut = move |data: Bytes| {
-            async move {
+            crate::compat::ic_boxed!(async move {
                 let payload = if data.len() > threshold {
                     new_materialized_chunk(asset_manager.as_ref(), data).await?
                 } else {
                     new_inline_chunk(data)
                 };
                 Ok(payload)
-            }
-            .boxed()
+            })
         };
         Ok(fut)
     }
@@ -1838,7 +1827,7 @@ fn new_inline_chunk(data: Bytes) -> ChunkPayload {
 }
 
 pub async fn get_chunk(
-    reader: Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>,
+    reader: Option<crate::compat::IcechunkBoxFuture<'_, SessionResult<Bytes>>>,
 ) -> SessionResult<Option<Bytes>> {
     match reader {
         Some(reader) => Ok(Some(reader.await?)),
