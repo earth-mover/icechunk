@@ -438,6 +438,9 @@ pub struct RepositoryConfig {
 
     #[serde(default)]
     pub repo_update_retries: Option<RepoUpdateRetryConfig>,
+
+    #[serde(default)]
+    pub num_updates_per_repo_info_file: Option<u16>,
 }
 
 static DEFAULT_COMPRESSION: OnceLock<CompressionConfig> = OnceLock::new();
@@ -446,6 +449,7 @@ static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
 static DEFAULT_REPO_UPDATE_RETRY_CONFIG: OnceLock<RepoUpdateRetryConfig> =
     OnceLock::new();
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: u16 = 256;
+pub const DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE: u16 = 100;
 
 impl RepositoryConfig {
     pub fn inline_chunk_threshold_bytes(&self) -> u16 {
@@ -483,6 +487,11 @@ impl RepositoryConfig {
         self.repo_update_retries.as_ref().unwrap_or_else(|| {
             DEFAULT_REPO_UPDATE_RETRY_CONFIG.get_or_init(RepoUpdateRetryConfig::default)
         })
+    }
+
+    pub fn num_updates_per_repo_info_file(&self) -> u16 {
+        self.num_updates_per_repo_info_file
+            .unwrap_or(DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE)
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -551,6 +560,15 @@ impl RepositoryConfig {
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            num_updates_per_repo_info_file: match (
+                &self.num_updates_per_repo_info_file,
+                other.num_updates_per_repo_info_file,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
+                (Some(_), Some(theirs)) => Some(theirs),
             },
         }
     }
