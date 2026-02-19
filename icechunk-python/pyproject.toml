@@ -27,7 +27,7 @@ dependencies = ["zarr>=3.1.0"]
 dev = [
     { include-group = "test" },
     "mypy",
-    "ruff",
+    "ruff==0.8.0",
     "maturin>=1.7,<2.0",
     "maturin-import-hook>=0.3.0",
 ]
@@ -48,7 +48,7 @@ test = [
   "boto3-stubs[s3]",
   "termcolor",
   "pooch",
-  "netcdf4",
+  "h5netcdf",
   "matplotlib",
 ]
 benchmark = [
@@ -196,11 +196,7 @@ platforms = ["osx-arm64", "linux-64", "linux-aarch64", "win-64"]
 [tool.pixi.feature.docs.dependencies]
 cairo = ">=1.18.4,<2"
 
-[tool.pixi.feature.docs.tasks]
-docs-serve = "mkdocs serve -f docs/mkdocs.yml --livereload"
-docs-build = "mkdocs build -f docs/mkdocs.yml"
-
-[tool.pixi.feature.dev.dependencies]
+[tool.pixi.feature.build.dependencies]
 rust = "~=1.92.0"
 just = ">=1.46.0,<2"
 compilers = ">=1.11.0,<2"
@@ -210,18 +206,9 @@ pkgconfig = ">=1.5.5,<2"
 cargo-deny = ">=0.19.0,<0.20"
 pre-commit = ">=4.5.1,<5"
 
-[tool.pixi.feature.dev.tasks]
-develop = "maturin develop --uv"
-
-[tool.pixi.feature.test.dependencies]
-netcdf4 = ">=1.7.4,<2"
-
-[tool.pixi.feature.test.tasks]
-pytest = "pytest"
+[tool.pixi.feature.build.tasks]
+init = "maturin develop --uv"
 
 [tool.pixi.environments]
-default = { solve-group = "default" }
+all = { features = ["build", "dev", "docs", "test"], solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }
-dev = { features = ["dev"], solve-group = "default" }
-docs = { features = ["docs", "dev"], solve-group = "default" }
-test = { features = ["test"], solve-group = "default" }
