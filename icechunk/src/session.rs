@@ -1191,7 +1191,7 @@ impl Session {
     async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
         let update_type =
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
-
+        let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
@@ -1203,6 +1203,7 @@ impl Session {
                 None,
                 update_type.clone(),
                 backup_path,
+                num_updates,
             )?))
         };
 
@@ -1328,6 +1329,7 @@ impl Session {
                 merged
             })
             .unwrap_or(default_metadata);
+        let num_updates = self.config().num_updates_per_repo_info_file();
         {
             // we need to play this trick because we need to borrow from self twice
             // once to get the mutable change set, and other to compute
@@ -1351,6 +1353,7 @@ impl Session {
             commit_method,
             allow_empty,
             self.config.repo_update_retries().retries(),
+            num_updates,
         )
         .await?;
 
@@ -2534,6 +2537,7 @@ async fn do_commit(
     commit_method: CommitMethod,
     allow_empty: bool,
     retry_settings: &storage::RetriesSettings,
+    num_updates_per_repo_info_file: u16,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
 
@@ -2570,6 +2574,7 @@ async fn do_commit(
                 new_snapshot,
                 commit_method,
                 retry_settings,
+                num_updates_per_repo_info_file,
             )
             .await
         }
@@ -2636,6 +2641,7 @@ async fn do_commit_v2(
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
     retry_settings: &storage::RetriesSettings,
+    num_updates_per_repo_info_file: u16,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
@@ -2682,6 +2688,7 @@ async fn do_commit_v2(
             Some(branch_name),
             update_type,
             backup_path,
+            num_updates_per_repo_info_file,
         )?))
     };
 
@@ -3292,7 +3299,7 @@ mod tests {
         )
         .await?;
         let repo_info =
-            RepoInfo::initial(SpecVersionBin::current(), (&initial).try_into()?)
+            RepoInfo::initial(SpecVersionBin::current(), (&initial).try_into()?, 100)
                 .add_snapshot(
                     SpecVersionBin::current(),
                     snapshot.as_ref().try_into()?,
@@ -3302,6 +3309,7 @@ mod tests {
                         new_snap_id: snapshot.id().clone(),
                     },
                     "backup_path",
+                    100,
                 )?;
         asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 

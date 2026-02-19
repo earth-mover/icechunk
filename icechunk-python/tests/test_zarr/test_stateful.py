@@ -109,11 +109,13 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             st.lists(st.sampled_from(sorted(self.all_arrays)), max_size=3, unique=True)
         )
         arrays = tuple(zarr.open_array(self.model, path=path) for path in array_paths)
-        sconfig = data.draw(icst.splitting_configs(arrays=arrays))
-        config = ic.RepositoryConfig(
-            inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)
+        config = data.draw(
+            icst.repository_configs(
+                inline_chunk_threshold_bytes=st.just(0),
+                splitting=icst.splitting_configs(arrays=arrays),
+            )
         )
-        note(f"reopening with splitting config {sconfig=!r}")
+        note(f"reopening with config {config!r}")
         self.repo = Repository.open(self.storage, config=config)
         if data.draw(st.booleans()):
             self.repo.save_config()
