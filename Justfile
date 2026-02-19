@@ -86,6 +86,15 @@ mypy *args:
 py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *args:
   pre-commit run --all-files
 
+pytest *args:
+  cd icechunk-python && pytest {{args}}
+
+docs-serve *args:
+  mkdocs serve -f icechunk-python/docs/mkdocs.yml --livereload {{args}}
+
+docs-build *args:
+  mkdocs build -f icechunk-python/docs/mkdocs.yml {{args}}
+
 create-deepak-env name:
   mamba create -y -n icechunk-{{name}} python=3.12 ipykernel ipdb
   mamba activate icechunk-{{name}}
