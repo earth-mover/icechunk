@@ -3822,8 +3822,8 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await?;
 
-        // 6 commits
-        assert_eq!(overwritten.iter().filter(|s| s.starts_with("repo")).count(), 6);
+        // 6 commits + 1 config change recorded in ops log
+        assert_eq!(overwritten.iter().filter(|s| s.starts_with("repo")).count(), 7);
 
         // 1 config save
         assert_eq!(
