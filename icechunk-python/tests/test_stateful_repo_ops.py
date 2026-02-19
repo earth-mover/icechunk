@@ -345,9 +345,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model = Model()
         self.storage: Storage | None = None
 
+    def _make_storage(self) -> Storage:
+        return in_memory_storage()
+
     @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
     def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
-        self.storage = in_memory_storage()
+        self.storage = self._make_storage()
         config = data.draw(repository_configs())
         self.model.spec_version = spec_version
 
