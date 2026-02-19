@@ -30,17 +30,12 @@ We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rus
     Activate the developer shell (all following commands should be run within)
 
     ```bash
-    pixi shell -m icechunk-python/pyproject.toml -e all
-    ```
-    and then in the shell
-    ```bash
-    pixi run -e all init
+    pixi shell -m icechunk-python/pyproject.toml
     ```
     !!! Usage without pixi shell
         You could run all commands below using this pattern:
         ```shell
-        pixi run -e all init
-        pixi run -m icechunk-python/pyproject.toml -e all <your-command>
+        pixi run -m icechunk-python/pyproject.toml <your-command>
         ```
         This is used e.g. in the [Readthedocs build](https://github.com/earth-mover/icechunk/blob/main/.readthedocs.yaml).
 
