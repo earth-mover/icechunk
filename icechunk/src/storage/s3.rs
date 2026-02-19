@@ -922,7 +922,7 @@ impl S3Storage {
                 {
                     Ok(None)
                 }
-                _ => Err(s3_get_err(sdk_err)),
+                _ => Err(s3_get_err(dbg!(sdk_err))),
             },
         }
     }
