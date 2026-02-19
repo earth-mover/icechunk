@@ -2,13 +2,9 @@
 //!
 //! Supports local filesystem, in-memory, Azure Blob, and Google Cloud Storage.
 
-use crate::{
-    config::{
-        AzureCredentials, AzureStaticCredentials, GcsBearerCredential, GcsCredentials,
-        GcsCredentialsFetcher, GcsStaticCredentials, S3Credentials, S3Options,
-    },
-    private,
-};
+use crate::private;
+#[cfg(feature = "object-store-s3")]
+use crate::storage::s3_config::{S3Credentials, S3Options};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -16,18 +12,37 @@ use futures::{
     Stream, StreamExt, TryStreamExt,
     stream::{self, BoxStream},
 };
+#[cfg(any(
+    feature = "object-store-s3",
+    feature = "object-store-gcs",
+    feature = "object-store-azure",
+    feature = "object-store-http"
+))]
+use object_store::ClientConfigKey;
+#[cfg(feature = "object-store-s3")]
+use object_store::aws::AmazonS3Builder;
+#[cfg(feature = "object-store-azure")]
+use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
+#[cfg(feature = "object-store-gcs")]
+use object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey};
+#[cfg(feature = "object-store-http")]
+use object_store::http::HttpBuilder;
+#[cfg(feature = "object-store-fs")]
+use object_store::local::LocalFileSystem;
 use object_store::{
-    Attribute, AttributeValue, Attributes, BackoffConfig, ClientConfigKey,
-    CredentialProvider, GetOptions, ObjectMeta, ObjectStore, ObjectStoreExt as _,
-    PutMode, PutOptions, RetryConfig, StaticCredentialProvider, UpdateVersion,
-    aws::AmazonS3Builder,
-    azure::{AzureConfigKey, MicrosoftAzureBuilder},
-    gcp::{GcpCredential, GoogleCloudStorageBuilder, GoogleConfigKey},
-    http::HttpBuilder,
-    local::LocalFileSystem,
-    memory::InMemory,
+    Attribute, AttributeValue, Attributes, GetOptions, ObjectMeta, ObjectStore,
+    ObjectStoreExt as _, PutMode, PutOptions, UpdateVersion, memory::InMemory,
     path::Path as ObjectPath,
 };
+#[cfg(any(
+    feature = "object-store-s3",
+    feature = "object-store-gcs",
+    feature = "object-store-azure",
+    feature = "object-store-http"
+))]
+use object_store::{BackoffConfig, RetryConfig};
+#[cfg(any(feature = "object-store-gcs", feature = "object-store-azure"))]
+use object_store::{CredentialProvider, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -49,6 +64,77 @@ use super::{
     RetriesSettings, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
     VersionInfo, VersionedUpdateResult,
 };
+
+// --- GCS credential types ---
+
+#[cfg(feature = "object-store-gcs")]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+// We need to adjacently tag because we more than one variant with matching inner types https://github.com/serde-rs/serde/issues/1307
+#[serde(tag = "gcs_static_credential_type", content = "__field0")]
+#[serde(rename_all = "snake_case")]
+pub enum GcsStaticCredentials {
+    ServiceAccount(PathBuf),
+    ServiceAccountKey(String),
+    ApplicationCredentials(PathBuf),
+    BearerToken(GcsBearerCredential),
+}
+
+#[cfg(feature = "object-store-gcs")]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct GcsBearerCredential {
+    pub bearer: String,
+    pub expires_after: Option<DateTime<Utc>>,
+}
+
+#[cfg(feature = "object-store-gcs")]
+impl From<&GcsBearerCredential> for GcpCredential {
+    fn from(value: &GcsBearerCredential) -> Self {
+        GcpCredential { bearer: value.bearer.clone() }
+    }
+}
+
+#[cfg(feature = "object-store-gcs")]
+#[async_trait]
+#[typetag::serde(tag = "gcs_credentials_fetcher_type")]
+pub trait GcsCredentialsFetcher: fmt::Debug + Sync + Send {
+    async fn get(&self) -> Result<GcsBearerCredential, String>;
+}
+
+/// Google Cloud Storage authentication credentials.
+#[cfg(feature = "object-store-gcs")]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[serde(tag = "gcs_credential_type")]
+#[serde(rename_all = "snake_case")]
+pub enum GcsCredentials {
+    #[default]
+    FromEnv,
+    Anonymous,
+    Static(GcsStaticCredentials),
+    Refreshable(Arc<dyn GcsCredentialsFetcher>),
+}
+
+// --- Azure credential types ---
+
+#[cfg(feature = "object-store-azure")]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+// We need to adjacently tag because we more than one variant with matching inner types https://github.com/serde-rs/serde/issues/1307
+#[serde(tag = "az_static_credential_type", content = "__field0")]
+#[serde(rename_all = "snake_case")]
+pub enum AzureStaticCredentials {
+    AccessKey(String),
+    SASToken(String),
+    BearerToken(String),
+}
+
+/// Azure Blob Storage authentication credentials.
+#[cfg(feature = "object-store-azure")]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "az_credential_type")]
+#[serde(rename_all = "snake_case")]
+pub enum AzureCredentials {
+    FromEnv,
+    Static(AzureStaticCredentials),
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ObjectStorage {
@@ -73,6 +159,7 @@ impl ObjectStorage {
     /// Create an local filesystem Storage implementation
     ///
     /// This implementation should not be used in production code.
+    #[cfg(feature = "object-store-fs")]
     pub async fn new_local_filesystem(
         prefix: &StdPath,
     ) -> Result<ObjectStorage, StorageError> {
@@ -85,6 +172,7 @@ impl ObjectStorage {
         Ok(storage)
     }
 
+    #[cfg(feature = "object-store-s3")]
     pub async fn new_s3(
         bucket: String,
         prefix: Option<String>,
@@ -98,6 +186,7 @@ impl ObjectStorage {
         Ok(storage)
     }
 
+    #[cfg(feature = "object-store-azure")]
     pub async fn new_azure(
         account: String,
         container: String,
@@ -117,6 +206,7 @@ impl ObjectStorage {
         Ok(storage)
     }
 
+    #[cfg(feature = "object-store-gcs")]
     pub fn new_gcs(
         bucket: String,
         prefix: Option<String>,
@@ -130,6 +220,7 @@ impl ObjectStorage {
         Ok(storage)
     }
 
+    #[cfg(feature = "object-store-http")]
     pub fn new_http(
         url: Url,
         config: Option<HashMap<ClientConfigKey, String>>,
@@ -483,17 +574,20 @@ impl ObjectStoreBackend for InMemoryObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-fs")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LocalFileSystemObjectStoreBackend {
     path: PathBuf,
 }
 
+#[cfg(feature = "object-store-fs")]
 impl fmt::Display for LocalFileSystemObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "LocalFileSystemObjectStoreBackend(path={})", self.path.display())
     }
 }
 
+#[cfg(feature = "object-store-fs")]
 #[typetag::serde(name = "local_file_system_object_store_provider")]
 impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
     fn mk_object_store(
@@ -540,12 +634,14 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-http")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HttpObjectStoreBackend {
     pub url: String,
     pub config: Option<HashMap<ClientConfigKey, String>>,
 }
 
+#[cfg(feature = "object-store-http")]
 impl fmt::Display for HttpObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -564,6 +660,7 @@ impl fmt::Display for HttpObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-http")]
 #[typetag::serde(name = "http_object_store_provider")]
 impl ObjectStoreBackend for HttpObjectStoreBackend {
     fn mk_object_store(
@@ -620,14 +717,16 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-s3")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct S3ObjectStoreBackend {
-    bucket: String,
-    prefix: Option<String>,
-    credentials: Option<S3Credentials>,
-    config: Option<S3Options>,
+    pub bucket: String,
+    pub prefix: Option<String>,
+    pub credentials: Option<S3Credentials>,
+    pub config: Option<S3Options>,
 }
 
+#[cfg(feature = "object-store-s3")]
 impl fmt::Display for S3ObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -640,6 +739,7 @@ impl fmt::Display for S3ObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-s3")]
 #[typetag::serde(name = "s3_object_store_provider")]
 impl ObjectStoreBackend for S3ObjectStoreBackend {
     fn mk_object_store(
@@ -718,6 +818,7 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-azure")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AzureObjectStoreBackend {
     pub account: String,
@@ -727,6 +828,7 @@ pub struct AzureObjectStoreBackend {
     pub config: Option<HashMap<AzureConfigKey, String>>,
 }
 
+#[cfg(feature = "object-store-azure")]
 impl fmt::Display for AzureObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -739,6 +841,7 @@ impl fmt::Display for AzureObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-azure")]
 #[typetag::serde(name = "azure_object_store_provider")]
 impl ObjectStoreBackend for AzureObjectStoreBackend {
     fn mk_object_store(
@@ -799,6 +902,7 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-gcs")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GcsObjectStoreBackend {
     pub bucket: String,
@@ -807,6 +911,7 @@ pub struct GcsObjectStoreBackend {
     pub config: Option<HashMap<GoogleConfigKey, String>>,
 }
 
+#[cfg(feature = "object-store-gcs")]
 impl fmt::Display for GcsObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -818,6 +923,7 @@ impl fmt::Display for GcsObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-gcs")]
 #[typetag::serde(name = "gcs_object_store_provider")]
 impl ObjectStoreBackend for GcsObjectStoreBackend {
     fn mk_object_store(
@@ -896,12 +1002,14 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
     }
 }
 
+#[cfg(feature = "object-store-gcs")]
 #[derive(Debug)]
 pub struct GcsRefreshableCredentialProvider {
     last_credential: Arc<RwLock<Option<GcsBearerCredential>>>,
     refresher: Arc<dyn GcsCredentialsFetcher>,
 }
 
+#[cfg(feature = "object-store-gcs")]
 impl GcsRefreshableCredentialProvider {
     pub fn new(refresher: Arc<dyn GcsCredentialsFetcher>) -> Self {
         Self { last_credential: Arc::new(RwLock::new(None)), refresher }
@@ -936,6 +1044,7 @@ impl GcsRefreshableCredentialProvider {
 }
 
 #[async_trait]
+#[cfg(feature = "object-store-gcs")]
 impl CredentialProvider for GcsRefreshableCredentialProvider {
     type Credential = GcpCredential;
 
@@ -957,7 +1066,7 @@ fn object_to_list_info(
     Some(ListInfo { id, created_at, size_bytes })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "object-store-fs"))]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use std::path::PathBuf;

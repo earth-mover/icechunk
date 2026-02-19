@@ -1749,7 +1749,6 @@ mod tests {
             manifest::{ChunkPayload, ManifestSplits},
             snapshot::{ArrayShape, DimensionName},
         },
-        new_local_filesystem_storage,
         ops::manifests::rewrite_manifests,
         session::{CommitMethod, SessionError, get_chunk},
         storage::new_in_memory_storage,
@@ -3321,8 +3320,11 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "object-store-fs")]
     #[tokio::test]
     async fn creation_in_non_empty_directory_fails() -> Result<(), Box<dyn Error>> {
+        use crate::new_local_filesystem_storage;
+
         let repo_dir = TempDir::new()?;
 
         let storage: Arc<dyn Storage + Send + Sync> =
