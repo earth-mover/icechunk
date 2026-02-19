@@ -1,0 +1,35 @@
+
+[package]
+authors = ["Matt Iannucci <matt@earthmover.io>"]
+edition = "2024"
+name = "icechunk-js"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "3.0.0", features = ["async", "tokio_rt", "serde-json", "chrono_date"] }
+napi-derive = "3.0.0"
+tokio = { version = "1", features = ["sync"] }
+bytes = "1"
+futures = "0.3"
+serde_json = "1"
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+chrono = "0.4"
+async-trait = "0.1.89"
+typetag = "0.2.21"
+rand = "0.10.0"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+icechunk = { path = "../icechunk" }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+icechunk = { path = "../icechunk", default-features = false }
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+strip = "symbols"
