@@ -220,10 +220,10 @@ class Model:
 
     def delete_tag(self, tag: str) -> None:
         self._delete_tag(tag)
-        self.deleted_tags.add(tag)
         self.num_updates += 1
 
     def _delete_tag(self, tag: str) -> None:
+        self.deleted_tags.add(tag)
         del self.tags[tag]
 
     def create_tag(self, tag_name: str, commit_id: str) -> None:
@@ -759,6 +759,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.check_branches()
         self.check_ancestry()
         self.check_ops_log()
+        self.check_repo_info()
 
     def check_list_prefix_from_root(self) -> None:
         model_list = self.model.list_prefix("")
@@ -816,8 +817,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         info = self.repo.inspect_repo_info()
 
-        assert info.spec_version == ver
+        assert info["spec_version"] == ver
         assert set(info["deleted_tags"]) == self.model.deleted_tags
+        assert info["metadata"] == {}
+
+        # TODO: something about latest_updates
+        # assert info["latest_updates"]
+
+        # the remaining fields (snapshots, branches, tags) are checked by the other invariants
 
 
 VersionControlStateMachine.TestCase.settings = settings(
