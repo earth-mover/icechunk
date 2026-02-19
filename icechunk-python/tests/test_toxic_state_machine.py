@@ -7,11 +7,20 @@
 
 import time
 
+import hypothesis.strategies as st
 from hypothesis import note, settings
 
-from icechunk import Storage, s3_storage
+from icechunk import Storage, StorageRetriesSettings, StorageSettings, s3_storage
 from icechunk.testing import toxiproxy
+from icechunk.testing.strategies import repository_configs
 from tests.test_stateful_repo_ops import VersionControlStateMachine
+
+NETWORK_STREAM_TIMEOUT_SECONDS = 1
+STORAGE_RETRIES = StorageRetriesSettings(
+    max_tries=3,
+    initial_backoff_ms=100,
+    max_backoff_ms=1000,
+)
 
 
 class CreepingDeathStateMachine(VersionControlStateMachine):
@@ -47,6 +56,11 @@ class CreepingDeathStateMachine(VersionControlStateMachine):
         note(f"Deleting proxy {self.proxy_name}")
         self.toxi.delete_proxy(self.proxy_name)
 
+    def _repository_configs(self) -> st.SearchStrategy:
+        return repository_configs(
+            storage_settings=st.just(StorageSettings(retries=STORAGE_RETRIES)),
+        )
+
     def _make_storage(self) -> Storage:
         prefix = f"creeping-death-{time.time()}"
         return s3_storage(
@@ -58,6 +72,7 @@ class CreepingDeathStateMachine(VersionControlStateMachine):
             prefix=prefix,
             access_key_id="minio123",
             secret_access_key="minio123",
+            network_stream_timeout_seconds=NETWORK_STREAM_TIMEOUT_SECONDS,
         )
 
 

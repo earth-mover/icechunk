@@ -348,10 +348,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def _make_storage(self) -> Storage:
         return in_memory_storage()
 
+    def _repository_configs(self) -> st.SearchStrategy:
+        return repository_configs()
+
     @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
     def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
         self.storage = self._make_storage()
-        config = data.draw(repository_configs())
+        config = data.draw(self._repository_configs())
         self.model.spec_version = spec_version
 
         self.repo = Repository.create(
@@ -413,7 +416,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @rule(data=st.data())
     def reopen_repository(self, data: st.DataObject) -> None:
-        config = data.draw(repository_configs())
+        config = data.draw(self._repository_configs())
         self._reopen_repository(config)
 
     def _reopen_repository(self, config: RepositoryConfig | None = None) -> None:

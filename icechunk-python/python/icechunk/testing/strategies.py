@@ -64,6 +64,7 @@ def repository_configs(
     ),
     inline_chunk_threshold_bytes: st.SearchStrategy[int] | None = None,
     splitting: st.SearchStrategy[ic.ManifestSplittingConfig] | None = None,
+    storage_settings: st.SearchStrategy[ic.StorageSettings] | None = None,
 ) -> ic.RepositoryConfig:
     manifest = None
     if splitting is not None:
@@ -74,4 +75,5 @@ def repository_configs(
         if inline_chunk_threshold_bytes is not None
         else None,
         manifest=manifest,
+        storage=draw(storage_settings) if storage_settings is not None else None,
     )
