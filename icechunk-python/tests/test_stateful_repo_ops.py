@@ -353,10 +353,16 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model = Model()
         self.storage: Storage | None = None
 
-    @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([2]))
-    def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
+    @initialize(
+        array_meta=v3_array_metadata,
+        config=repository_configs(),
+        target=branches,
+        spec_version=st.sampled_from([2]),
+    )
+    def initialize(
+        self, array_meta, config: RepositoryConfig, spec_version: Literal[1, 2]
+    ) -> str:
         self.storage = in_memory_storage()
-        config = data.draw(repository_configs())
         self.model.spec_version = spec_version
 
         self.repo = Repository.create(
@@ -384,7 +390,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
         #       with an array's zarr.json
         # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
-        self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata))
+        self.set_doc(path="zarr.json", value=array_meta)
 
         return DEFAULT_BRANCH
 
