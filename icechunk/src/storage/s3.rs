@@ -897,19 +897,19 @@ impl S3Storage {
                         .into())
                 }
             },
-            Err(sdk_err) => match sdk_err.as_service_error() {
-                Some(e) if e.is_no_such_key() => {
-                    Err(StorageErrorKind::ObjectNotFound.into())
-                }
-                Some(_)
-                    if sdk_err
-                        .raw_response()
-                        .is_some_and(|x| x.status().as_u16() == 404) =>
+            Err(sdk_err) => {
+                // aws_sdk_s3 on R2 can return a response error (checksum mismatch)
+                // when status 304 (Not Modified) happens, so we need to check
+                // the if it happens here, before other regular checks when
+                // the response is well-formed.
+                if let SdkError::ResponseError(ref e) = sdk_err
+                    && e.raw().status().as_u16() == 304
                 {
-                    // needed for Cloudflare R2 public bucket URLs
-                    // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
-                    // into anything useful. So we need to parse the raw response, and match
-                    // the status code.
+                    return Ok(None);
+                };
+
+                match sdk_err.as_service_error() {
+                Some(e) if e.is_no_such_key() => {
                     Err(StorageErrorKind::ObjectNotFound.into())
                 }
                 Some(_)
@@ -922,8 +922,20 @@ impl S3Storage {
                 {
                     Ok(None)
                 }
-                _ => Err(s3_get_err(dbg!(sdk_err))),
-            },
+                Some(_)
+                    if sdk_err
+                        .raw_response()
+                        .is_some_and(|x| x.status().as_u16() == 404) =>
+                {
+                    // needed for Cloudflare R2 public bucket URLs
+                    // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
+                    // into anything useful. So we need to parse the raw response, and match
+                    // the status code.
+                    Err(StorageErrorKind::ObjectNotFound.into())
+                }
+                _ => Err(s3_get_err(sdk_err)),
+            }
+            }
         }
     }
 }
