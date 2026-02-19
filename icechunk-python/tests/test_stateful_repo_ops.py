@@ -5,9 +5,9 @@ import itertools
 import json
 import operator
 import textwrap
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, wraps
 from typing import Any, Literal, Self, cast
 
 import numpy as np
@@ -327,6 +327,20 @@ class Model:
         return deleted
 
 
+def advised(fn: Callable) -> Callable:
+    """Decorator that routes rule execution through self._rule_advice.
+
+    Subclasses can override _rule_advice to intercept every rule call,
+    e.g. to inject network faults around the operation.
+    """
+
+    @wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        return self._rule_advice(fn, *args, **kwargs)
+
+    return wrapper
+
+
 class VersionControlStateMachine(RuleBasedStateMachine):
     """
     We use bundles to track the state, since Hypothesis will then
@@ -347,6 +361,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     def _make_storage(self) -> Storage:
         return in_memory_storage()
+
+    def _rule_advice(self, fn: Callable, *args: Any, **kwargs: Any) -> Any:
+        return fn(self, *args, **kwargs)
 
     def _repository_configs(self) -> st.SearchStrategy:
         return repository_configs()
@@ -394,6 +411,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         return NewSyncStoreWrapper(self.session.store)
 
     @rule(path=metadata_paths, value=v3_array_metadata)
+    @advised
     def set_doc(self, path: str, value: Buffer) -> None:
         note(f"setting path {path!r} with {value.to_bytes()!r}")
         if self.model.branch is not None:
@@ -406,6 +424,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @rule()
     @precondition(lambda self: self.repo.spec_version == 1)
+    @advised
     def upgrade_spec_version(self) -> None:
         # don't test simple cases of catching error upgradging a v2 spec
         # that should be covered in unit tests
@@ -415,6 +434,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self._reopen_repository()
 
     @rule(data=st.data())
+    @advised
     def reopen_repository(self, data: st.DataObject) -> None:
         config = data.draw(self._repository_configs())
         self._reopen_repository(config)
@@ -439,6 +459,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @rule(message=st.text(max_size=MAX_TEXT_SIZE), target=commits)
     @precondition(lambda self: self.model.changes_made)
+    @advised
     def commit(self, message: str) -> str:
         branch = self.session.branch
         assert branch is not None
@@ -458,6 +479,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         and (self.repo.spec_version >= 2)
         and len(self.model.commits) > 1
     )
+    @advised
     def amend(self, message: str) -> str:
         branch = self.session.branch
         assert branch is not None
@@ -475,6 +497,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         return commit_id
 
     @rule(ref=commits)
+    @advised
     def checkout_commit(self, ref: str) -> None:
         if ref not in self.model.commits:
             note(f"Checking out commit {ref}, expecting error")
@@ -488,6 +511,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.check_commit(ref)
 
     @rule(ref=tags)
+    @advised
     def checkout_tag(self, ref: str) -> None:
         """
         Tags and branches are combined here since checkout magically works for both.
@@ -505,6 +529,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 self.repo.readonly_session(tag=ref)
 
     @rule(ref=branches)
+    @advised
     def checkout_branch(self, ref: str) -> None:
         # TODO: sometimes readonly?
         branch_head = self.model.branch_heads.get(ref)
@@ -519,6 +544,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 self.repo.writable_session(ref)
 
     @rule(name=simple_text, commit=commits, target=branches)
+    @advised
     def create_branch(self, name: str, commit: str) -> str:
         note(f"Creating branch {name!r}")
 
@@ -536,6 +562,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @precondition(lambda self: self.model.has_commits)
     @rule(name=simple_text, commit_id=commits, target=tags)
+    @advised
     def create_tag(self, name: str, commit_id: str) -> str:
         note(f"Creating tag {name!r} for commit {commit_id!r}")
 
@@ -556,6 +583,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @precondition(lambda self: self.model.changes_made)
     @rule()
+    @advised
     def discard_changes(self) -> None:
         note(f"Discarding changes (branch={self.model.branch})")
         self.session.discard_changes()
@@ -574,6 +602,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # (as is expected)
     @precondition(lambda self: not self.model.changes_made)
     @rule(branch=branches, commit=commits)
+    @advised
     def reset_branch(self, branch: str, commit: str) -> None:
         if branch not in self.model.branch_heads or commit not in self.model.commits:
             note(f"resetting branch {branch}, expecting error.")
@@ -597,6 +626,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.model.checkout_branch(checkout_branch)
 
     @rule(branch=consumes(branches))
+    @advised
     def delete_branch(self, branch: str) -> None:
         note(f"Deleting branch {branch!r}")
         if branch in self.model.branch_heads:
@@ -628,6 +658,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         delete_expired_branches=st.booleans(),
         delete_expired_tags=st.booleans(),
     )
+    @advised
     def expire_snapshots(
         self,
         data: st.DataObject,
@@ -700,6 +731,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # (small) difference in tests
         delta=st.integers(min_value=-86400, max_value=86400).filter(lambda x: x != 0),
     )
+    @advised
     def garbage_collect(self, data: st.DataObject, delta: int) -> None:
         commit_time = data.draw(st.sampled_from(self.model.commit_times))
         older_than = commit_time + datetime.timedelta(seconds=delta)
