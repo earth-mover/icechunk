@@ -25,7 +25,7 @@ rand = "0.10.0"
 icechunk = { path = "../icechunk" }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-icechunk = { path = "../icechunk", default-features = false }
+icechunk = { path = "../icechunk", default-features = false, features = ["napi-send-contract"] }
 
 [build-dependencies]
 napi-build = "2"
