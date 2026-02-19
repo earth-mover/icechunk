@@ -995,6 +995,50 @@ class StorageRetriesSettings:
         """
         ...
 
+class StorageTimeoutSettings:
+    """Configuration for AWS SDK timeout settings.
+
+    Controls connect, read, and operation timeouts for the underlying S3 client."""
+
+    def __new__(
+        cls,
+        connect_timeout_ms: int | None = None,
+        read_timeout_ms: int | None = None,
+        operation_timeout_ms: int | None = None,
+        operation_attempt_timeout_ms: int | None = None,
+    ) -> StorageTimeoutSettings:
+        """
+        Create a new `StorageTimeoutSettings` object
+
+        Parameters
+        ----------
+        connect_timeout_ms: int | None
+            The timeout for establishing a connection in milliseconds.
+        read_timeout_ms: int | None
+            The timeout for reading a response in milliseconds.
+        operation_timeout_ms: int | None
+            The timeout for the entire operation (including retries) in milliseconds.
+        operation_attempt_timeout_ms: int | None
+            The timeout for a single attempt of an operation in milliseconds.
+        """
+        ...
+    @property
+    def connect_timeout_ms(self) -> int | None: ...
+    @connect_timeout_ms.setter
+    def connect_timeout_ms(self, value: int | None) -> None: ...
+    @property
+    def read_timeout_ms(self) -> int | None: ...
+    @read_timeout_ms.setter
+    def read_timeout_ms(self, value: int | None) -> None: ...
+    @property
+    def operation_timeout_ms(self) -> int | None: ...
+    @operation_timeout_ms.setter
+    def operation_timeout_ms(self, value: int | None) -> None: ...
+    @property
+    def operation_attempt_timeout_ms(self) -> int | None: ...
+    @operation_attempt_timeout_ms.setter
+    def operation_attempt_timeout_ms(self, value: int | None) -> None: ...
+
 class StorageConcurrencySettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
@@ -1066,6 +1110,7 @@ class StorageSettings:
         cls,
         concurrency: StorageConcurrencySettings | None = None,
         retries: StorageRetriesSettings | None = None,
+        timeouts: StorageTimeoutSettings | None = None,
         unsafe_use_conditional_create: bool | None = None,
         unsafe_use_conditional_update: bool | None = None,
         unsafe_use_metadata: bool | None = None,
@@ -1084,6 +1129,9 @@ class StorageSettings:
 
         retries: StorageRetriesSettings | None
             The configuration for how Icechunk retries failed requests.
+
+        timeouts: StorageTimeoutSettings | None
+            The configuration for AWS SDK timeout settings.
 
         unsafe_use_conditional_update: bool | None
             If set to False, Icechunk loses some of its consistency guarantees.
@@ -1147,6 +1195,19 @@ class StorageSettings:
 
     @retries.setter
     def retries(self, value: StorageRetriesSettings | None) -> None: ...
+    @property
+    def timeouts(self) -> StorageTimeoutSettings | None:
+        """
+        The configuration for AWS SDK timeout settings.
+
+        Returns
+        -------
+        StorageTimeoutSettings | None
+            The timeout configuration.
+        """
+
+    @timeouts.setter
+    def timeouts(self, value: StorageTimeoutSettings | None) -> None: ...
     @property
     def unsafe_use_conditional_update(self) -> bool | None:
         """True if Icechunk will use conditional PUT operations for updates in the object store"""
