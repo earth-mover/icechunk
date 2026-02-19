@@ -45,7 +45,7 @@ jobs:
           cache: true
           activate-environment: true
           environments: >-
-            dev
+            all
           manifest-path: icechunk-python/pyproject.toml
 
       - name: Run formatting checks

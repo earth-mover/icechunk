@@ -15,4 +15,4 @@ build:
       - pixi run -m icechunk-python -e docs develop
     build:
          html:
-           - pixi run -m icechunk-python docs-build --site-dir $READTHEDOCS_OUTPUT/html
+           - just docs-build --site-dir $READTHEDOCS_OUTPUT/html
