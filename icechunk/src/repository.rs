@@ -283,7 +283,7 @@ impl Repository {
                     None,
                 )
                 .await
-                .map_err(RepositoryError::from);
+                .map_err(RepositoryError::from)?;
             }
 
             Ok::<_, RepositoryError>(())
