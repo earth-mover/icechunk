@@ -80,4 +80,4 @@ def repository_configs(
     # num_updates_per_repo_info_file is v2-only
     if hasattr(ice.RepositoryConfig(), "num_updates_per_repo_info_file"):
         kwargs["num_updates_per_repo_info_file"] = draw(num_updates_per_repo_info_file)
-    return ice.RepositoryConfig(**kwargs)
+    return ice.RepositoryConfig(**kwargs)  # type: ignore[no-any-return]

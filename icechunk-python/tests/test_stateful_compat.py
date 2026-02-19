@@ -7,7 +7,6 @@ icechunk (v2) and icechunk (v1) side by side.
 Requires:
   - icechunk     (v2, current dev build)
   - icechunk_v1  (latest 1.x from PyPI, renamed via third-wheel)
-  - hypothesis, xarray, numpy, zarr
 
 Skipped entirely if icechunk_v1 is not installed.
 """
