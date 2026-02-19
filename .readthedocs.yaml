@@ -10,9 +10,6 @@ build:
          - asdf plugin add pixi
          - asdf install pixi latest
          - asdf global pixi latest
-    install:
-      - pixi install -m icechunk-python -e docs
-      - pixi run -m icechunk-python -e docs develop
     build:
          html:
-           - just docs-build --site-dir $READTHEDOCS_OUTPUT/html
+           - pixi run -m icechunk-python/pyproject.toml -e all just docs-build --site-dir $READTHEDOCS_OUTPUT/html
