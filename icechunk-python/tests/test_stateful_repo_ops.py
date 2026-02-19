@@ -885,7 +885,7 @@ class TwoActorVersionControlStateMachine(VersionControlStateMachine):
         note(f"switching to actor {choice!r}")
         self.actor = self.actors[choice]
         self.storage = self.actor_storage_objects[choice]
-        super().reopen_repository()
+        super().reopen_repository(data)
 
 
 def test_two_actors() -> None:
