@@ -166,7 +166,7 @@ jobs:
           source .venv/bin/activate
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
-          uv pip install "$WHEEL" pytest pytest-asyncio hypothesis xarray numpy zarr
+          uv pip install "$WHEEL" --group test
           uvx --from "git+https://github.com/earth-mover/third-wheel" \
             third-wheel download icechunk --version ">=1,<2" \
             --rename icechunk_v1 \
