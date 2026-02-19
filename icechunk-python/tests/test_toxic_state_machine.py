@@ -4,13 +4,18 @@
 # 1. Be careful about retry settings
 # 2. Add some base latency to make sure we trigger stuff?
 # 3. write some chunks too!
+# 4. draw values for toxics
+# 5. I need to test the repo backup stuff, make sure we can reproduce some retries there; might need extra logging in IC rust
+# 6. Hyper seems to be trying more than `max_tries`!
 
-import inspect
+import threading
 import time
+from collections.abc import Callable
+from typing import Any
 
 import hypothesis.strategies as st
 from hypothesis import note, settings
-from hypothesis.stateful import rule, invariant
+from hypothesis.stateful import invariant
 
 from icechunk import Storage, StorageRetriesSettings, StorageSettings, s3_storage
 from icechunk.testing import toxiproxy
@@ -19,7 +24,7 @@ from tests.test_stateful_repo_ops import VersionControlStateMachine
 
 NETWORK_STREAM_TIMEOUT_SECONDS = 1
 STORAGE_RETRIES = StorageRetriesSettings(
-    max_tries=3,
+    max_tries=1,
     initial_backoff_ms=10,
     max_backoff_ms=4000,
 )
@@ -33,9 +38,7 @@ class CreepingDeathStateMachine(VersionControlStateMachine):
     2. We apply a randomly generated set of Toxics just before firing a @rule of the superclass.
     3. We remove the Toxic *during* the execution of the @rule, thus "healing" the network.
        Parameters of the Toxic are tweaked to test retries (:crossed_fingers:).
-
-    Doing that within the confines of a Hypothesis state machine test is not easy.
-    More details are in the docstrings for functions below, particularly __init_subclass__ & schedule_toxics
+    More details are in the docstrings for functions below, particularly schedule_toxics & _rule_advise
     """
 
     toxi: toxiproxy.ToxiproxyClient
@@ -53,10 +56,10 @@ class CreepingDeathStateMachine(VersionControlStateMachine):
 
         # Add some base latency to make sure we can do stuff
         base_dn = toxiproxy.Latency(
-            name="base latency dn", latency=10, jitter=0, stream="downstream"
+            name="base latency dn", latency_ms=10, jitter_ms=0, stream="downstream"
         )
         base_up = toxiproxy.Latency(
-            name="base latency up", latency=10, jitter=0, stream="upstream"
+            name="base latency up", latency_ms=10, jitter_ms=0, stream="upstream"
         )
         self.toxi.add_toxic(self.proxy_name, base_dn)
         self.toxi.add_toxic(self.proxy_name, base_up)
@@ -65,6 +68,38 @@ class CreepingDeathStateMachine(VersionControlStateMachine):
     def teardown(self) -> None:
         note(f"Deleting proxy {self.proxy_name}")
         self.toxi.delete_proxy(self.proxy_name)
+
+    def _rule_advice(self, fn: Callable, *args: Any, **kwargs: Any) -> Any:
+        """
+        The challenge:
+          > Hypothesis calls rule.function(machine, **data) directly —
+          > it caches Rule objects from inspect.getmembers(cls) at class setup time.
+        Thus simply overriding __get__ or __getattribute__ will not do :(.
+
+        So instead we define an "advice" that runs before every rule.
+        Here, this advice schedules the *setting* of Toxics and their *removal* using threading.Timer.
+        This is nicely sync (plays well with hypothesis), and simulates the effect of a bad
+        connection healing itself. Time durations are tweaked so that we retry at least once.
+
+        See `schedule_toxics` for more details about the approach to setting Toxics.
+        """
+        if not self.pending_toxics:
+            return fn(self, *args, **kwargs)
+
+        for toxic in self.pending_toxics:
+            self.toxi.add_toxic(self.proxy_name, toxic)
+            # set the remove toxic action to run after a bit
+            threading.Timer(
+                7,
+                self.toxi.remove_toxic,
+                kwargs={"proxy_name": self.proxy_name, "toxic_name": toxic.name},
+            ).start()
+
+        ret = fn(self, *args, **kwargs)
+
+        self.pending_toxics = ()
+
+        return ret
 
     @invariant()
     def schedule_toxics(self):
@@ -86,8 +121,8 @@ class CreepingDeathStateMachine(VersionControlStateMachine):
         self.pending_toxics = (
             toxiproxy.LimitData(name="data_limit_dn", bytes=10, stream="downstream"),
             toxiproxy.LimitData(name="data_limit_up", bytes=10, stream="upstream"),
-            toxiproxy.SlowClose(name="slow_close_dn", delay=2000, stream="downstream"),
-            toxiproxy.SlowClose(name="slow_close_up", delay=2000, stream="downstream"),
+            toxiproxy.SlowClose(name="slow_close_dn", delay_ms=2000, stream="downstream"),
+            toxiproxy.SlowClose(name="slow_close_up", delay_ms=2000, stream="downstream"),
         )
 
     def _repository_configs(self) -> st.SearchStrategy:
@@ -110,36 +145,5 @@ class CreepingDeathStateMachine(VersionControlStateMachine):
         )
 
 
-CreepingDeathStateMachine.TestCase.settings = settings(
-    deadline=None,
-    max_examples=50,
-)
-
-
-def wrap_rules(cls):
-    """
-    This wild approach was cooked up by Claude. The challenge:
-      > Hypothesis calls rule.function(machine, **data) directly —
-      > it caches Rule objects from inspect.getmembers(cls) at class setup time.
-    Thus simply overriding __get__ or __getattribute__ will not do :(.
-
-    So we wrap each of the superclass methods at init time,
-    with a decorator that schedules the *setting* of Toxics and their *removal* using threading.Timer.
-    This is nicely sync (plays well with hypothesis), and simulates the effect of a bad
-    connection healing itself. Time durations are tweaked so that we retry at least once.
-
-    See `schedule_toxics` for more details about the approach to setting Toxics.
-    """
-
-    for name, method in inspect.getmembers(cls):
-        if not getattr(method, "hypothesis_stateful_rule", None):
-            continue
-
-        @functools.wraps(method)
-        def wrapper(self, *args, **kwargs):
-            pass
-        
-        import pdb; pdb.set_trace()
-        pass
-
-CreepingDeathTest = wrap_rules(CreepingDeathStateMachine).TestCase
+CreepingDeathStateMachine.TestCase.settings = settings(deadline=None, max_examples=50)
+CreepingDeathTest = CreepingDeathStateMachine.TestCase
