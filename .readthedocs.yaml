@@ -2,14 +2,11 @@ version: 2
 
 build:
   os: ubuntu-24.04
-  tools:
-      python: "latest"
-
   jobs:
     create_environment:
-         - asdf plugin add pixi
-         - asdf install pixi latest
-         - asdf global pixi latest
+      - asdf plugin add pixi
+      - asdf install pixi latest
+      - asdf global pixi latest
     build:
-         html:
-           - pixi run -m icechunk-python/pyproject.toml just docs-build --site-dir $READTHEDOCS_OUTPUT/html
+      html:
+        - pixi run -m icechunk-python/pyproject.toml just docs-build --site-dir $READTHEDOCS_OUTPUT/html
