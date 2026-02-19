@@ -1905,6 +1905,7 @@ impl PyStorage {
     }
 
     #[classmethod]
+    #[pyo3(signature = (base_url, config=None))]
     pub(crate) fn new_http(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
