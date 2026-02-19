@@ -1788,11 +1788,14 @@ class Repository:
         return await self._repository.inspect_snapshot_async(snapshot_id, pretty=pretty)
 
     def inspect_repo_info(self) -> dict[str, Any]:
-        return json.loads(self._repository.inspect_repo_info())
+        result: dict[str, Any] = json.loads(self._repository.inspect_repo_info())
+        return result
 
     async def inspect_repo_info_async(self) -> dict[str, Any]:
-        result = await self._repository.inspect_repo_info_async()
-        return json.loads(result)
+        result: dict[str, Any] = json.loads(
+            await self._repository.inspect_repo_info_async()
+        )
+        return result
 
     @property
     def spec_version(self) -> int:
