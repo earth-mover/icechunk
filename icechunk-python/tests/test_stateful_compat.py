@@ -81,7 +81,7 @@ class CrossVersionTwoActorVersionControlStateMachine(
         spec_version: Literal[1, 2],
         use_in_memory_storage: bool,
     ) -> str:
-        return super().initialize(data, spec_version, use_in_memory_storage)
+        return super().initialize(data, spec_version, use_in_memory_storage)  # type: ignore[return-value]
 
 
 def test_two_actors_cross_version() -> None:

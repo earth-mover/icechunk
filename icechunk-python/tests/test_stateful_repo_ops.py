@@ -8,7 +8,7 @@ import string
 import sys
 import textwrap
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Literal, Self, cast
@@ -824,7 +824,9 @@ class TwoActorVersionControlStateMachine(VersionControlStateMachine):
         super().__init__(actor=None)
         self.actors = {"one": Repository, "two": Repository}
         self.actor_storage_objects = {}
-        self.on_disk_storage_factory = defaultdict(lambda: local_filesystem_storage)
+        self.on_disk_storage_factory: dict[str, Callable[[str], Storage]] = defaultdict(
+            lambda: local_filesystem_storage
+        )
 
     @initialize(
         data=st.data(),
