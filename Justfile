@@ -95,10 +95,11 @@ docs-serve *args:
 docs-build *args:
   mkdocs build -f icechunk-python/docs/mkdocs.yml {{args}}
 
-create-deepak-env name:
-  mamba create -y -n icechunk-{{name}} python=3.12 ipykernel ipdb
-  mamba activate icechunk-{{name}}
-  just coiled-ice-create {{name}}
-
-coiled-ice-create version:
-  pip install coiled arraylake icechunk=='{{version}}' watermark xarray bokeh
+all-checks:
+  just pytest
+  just py-pre-commit
+  just mypy
+  just ruff
+  just ruff-format
+  just pre-commit-python
+  just pre-commit-ci

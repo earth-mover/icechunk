@@ -210,5 +210,5 @@ pre-commit = ">=4.5.1,<5"
 init = "maturin develop --uv"
 
 [tool.pixi.environments]
-all = { features = ["build", "dev", "docs", "test"], solve-group = "default" }
+default = { features = ["build", "dev", "docs", "test"], solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }
