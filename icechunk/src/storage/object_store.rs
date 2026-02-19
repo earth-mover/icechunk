@@ -490,15 +490,7 @@ impl Storage for ObjectStorage {
                 Ok(GetModifiedResult::Modified { data: Box::pin(reader), new_version })
             }
             Ok(None) => Ok(GetModifiedResult::OnLatestVersion),
-            Err(sdk_err) => match sdk_err.kind {
-                StorageErrorKind::ObjectStore(ref e) => match &**e {
-                    object_store::Error::NotModified { .. } => {
-                        Ok(GetModifiedResult::OnLatestVersion)
-                    }
-                    _ => Err(sdk_err),
-                },
-                _ => Err(sdk_err),
-            },
+            Err(e) => Err(e),
         }
     }
 
@@ -562,6 +554,7 @@ impl ObjectStorage {
             Err(object_store::Error::NotFound { .. }) => {
                 Err(StorageErrorKind::ObjectNotFound.into())
             }
+            Err(object_store::Error::NotModified { .. }) => Ok(None),
             Err(err) => Err(Box::new(err).into()),
         }
     }

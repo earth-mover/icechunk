@@ -830,12 +830,7 @@ impl Storage for S3Storage {
                 Ok(GetModifiedResult::Modified { data: Box::pin(reader), new_version })
             }
             Ok(None) => Ok(GetModifiedResult::OnLatestVersion),
-            Err(sdk_err) => match sdk_err.kind {
-                StorageErrorKind::OnLatestVersion => {
-                    Ok(GetModifiedResult::OnLatestVersion)
-                }
-                _ => Err(sdk_err),
-            },
+            Err(e) => Err(e),
         }
     }
 
@@ -919,13 +914,13 @@ impl S3Storage {
                 }
                 Some(_)
                     // aws_sdk_s3 doesn't return an error when status 304 (Not Modified)
-                    // happens, so return this info as an error here so we can
+                    // happens, so check the http status code here and return None
                     // catch it easily downstream
                     if sdk_err
                         .raw_response()
                         .is_some_and(|x| x.status().as_u16() == 304) =>
                 {
-                    Err(StorageErrorKind::OnLatestVersion.into())
+                    Ok(None)
                 }
                 _ => Err(s3_get_err(sdk_err)),
             },

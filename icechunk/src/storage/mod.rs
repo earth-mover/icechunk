@@ -109,8 +109,6 @@ pub enum StorageErrorKind {
     },
     #[error("Redirect Storage error: {0}")]
     BadRedirect(String),
-    #[error("Tried conditional retrieval, object is on latest version")]
-    OnLatestVersion,
     #[error("storage error: {0}")]
     Other(String),
 }
