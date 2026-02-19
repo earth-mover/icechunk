@@ -1,23 +1,24 @@
 // Conditional Send bound for WASM compatibility.
-// WASM is single-threaded so Send is not needed, and some dependencies
-// (e.g. backon's GlooTimersSleep) don't implement Send on WASM.
+// Single-threaded WASM does not need `Send`, and some dependencies
+// (e.g. backon's GlooTimersSleep) are not `Send` there.
+// Enable `napi-send-contract` to force `Send` futures on WASM for napi compatibility checks.
 
 use std::{future::Future, pin::Pin};
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "napi-send-contract"))]
 pub type IcechunkBoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-#[cfg(target_family = "wasm")]
+#[cfg(all(target_family = "wasm", not(feature = "napi-send-contract")))]
 pub type IcechunkBoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(any(not(target_family = "wasm"), feature = "napi-send-contract"))]
 macro_rules! ic_boxed {
     ($fut:expr) => {
         futures::FutureExt::boxed($fut)
     };
 }
 
-#[cfg(target_family = "wasm")]
+#[cfg(all(target_family = "wasm", not(feature = "napi-send-contract")))]
 macro_rules! ic_boxed {
     ($fut:expr) => {
         futures::FutureExt::boxed_local($fut)
