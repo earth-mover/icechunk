@@ -136,7 +136,7 @@ impl Storage for LoggingStorage {
         &self,
         settings: &Settings,
         path: &str,
-        previous_version: Option<VersionInfo>,
+        previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
         self.backend.get_object_conditional(settings, path, previous_version).await
     }

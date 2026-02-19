@@ -472,19 +472,21 @@ impl AssetManager {
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
         self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        #[allow(clippy::expect_used)]
-        let repo_cache = self.repo_cache.read().expect("Poison lock").clone();
+        let repo_cache =
+            self.repo_cache.read().map_err(|_| RepositoryErrorKind::PoisonLock)?.clone();
         match fetch_repo_info_from_path(
             self.storage.as_ref(),
             &self.storage_settings,
             REPO_INFO_FILE_PATH,
-            repo_cache.as_ref().map(|(_, info)| info.clone()),
+            repo_cache.as_ref().map(|(_, info)| info),
         )
         .await
         {
             Ok(Some((repo_info, version_info))) => {
-                #[allow(clippy::expect_used)]
-                let mut repo_cache = self.repo_cache.write().expect("Poison lock");
+                let mut repo_cache = self
+                    .repo_cache
+                    .write()
+                    .map_err(|_| RepositoryErrorKind::PoisonLock)?;
                 *repo_cache = Some((repo_info.clone(), version_info.clone()));
 
                 return Ok((repo_info, version_info));
@@ -519,30 +521,38 @@ impl AssetManager {
             .await
     }
 
-    #[instrument(skip(self, info))]
-    pub async fn create_repo_info(
+    pub async fn write_repo_info(
         &self,
         info: Arc<RepoInfo>,
+        version: &VersionInfo,
+        backup_path: Option<&str>,
     ) -> RepositoryResult<VersionInfo> {
         let new_version = write_repo_info(
             info.clone(),
             self.spec_version(),
-            &storage::VersionInfo::for_creation(),
+            version,
             self.compression_level,
-            None,
+            backup_path,
             self.storage.as_ref(),
             &self.storage_settings,
             None,
         )
         .await?;
 
-        #[allow(clippy::expect_used)]
         {
-            *self.repo_cache.write().expect("Poison lock") =
+            *self.repo_cache.write().map_err(|_| RepositoryErrorKind::PoisonLock)? =
                 Some((info, new_version.clone()));
         }
 
         Ok(new_version)
+    }
+
+    #[instrument(skip(self, info))]
+    pub async fn create_repo_info(
+        &self,
+        info: Arc<RepoInfo>,
+    ) -> RepositoryResult<VersionInfo> {
+        self.write_repo_info(info, &storage::VersionInfo::for_creation(), None).await
     }
 
     #[instrument(skip(self, retry_settings, update))]
@@ -588,20 +598,6 @@ impl AssetManager {
             {
                 res @ Ok(_) => {
                     debug!(attempts, "Repo info object updated successfully");
-
-                    #[allow(clippy::expect_used)]
-                    {
-                        let mut repo_cache =
-                            self.repo_cache.write().expect("Poison lock");
-
-                        *repo_cache = Some((
-                            new_repo.clone(),
-                            res.as_ref()
-                                .expect("Logic bus, res should be available")
-                                .clone(),
-                        ));
-                    }
-
                     return res;
                 }
                 Err(RepositoryError {
@@ -1369,7 +1365,7 @@ pub async fn fetch_repo_info_from_path(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     path: &str,
-    previous_version: Option<VersionInfo>,
+    previous_version: Option<&VersionInfo>,
 ) -> RepositoryResult<Option<(Arc<RepoInfo>, VersionInfo)>> {
     debug!("Downloading repo info");
     match storage.get_object_conditional(storage_settings, path, previous_version).await {

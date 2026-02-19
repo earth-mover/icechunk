@@ -849,9 +849,7 @@ pub async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Err
     with_storage(|_, storage| async move {
         let storage_settings = storage.default_settings().await?;
         let id = SnapshotId::random();
-        let mut bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
-        bytes[42] = 42;
-        bytes[43] = 99;
+        let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
 
         let path = format!("{MANIFESTS_FILE_PATH}/{id}");
 
@@ -874,9 +872,33 @@ pub async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Err
 
         // conditional get, should return OnLatestVersion
         let res = storage
-            .get_object_conditional(&storage_settings, path.as_str(), Some(version))
+            .get_object_conditional(&storage_settings, path.as_str(), Some(&version))
             .await?;
         assert!(matches!(res, storage::GetModifiedResult::OnLatestVersion));
+
+        // conditional get without a version, should return Modified
+        let res = storage
+            .get_object_conditional(&storage_settings, path.as_str(), None)
+            .await?;
+        if let storage::GetModifiedResult::Modified { data, .. } = res {
+            assert_eq!(async_read_to_bytes(data).await?.as_slice(), bytes);
+        } else {
+            panic!("Didn't return data");
+        }
+
+        // conditional get random etag, should return Modified
+        let res = storage
+            .get_object_conditional(
+                &storage_settings,
+                path.as_str(),
+                Some(&VersionInfo::from_etag_only("0xbadc0ffee".to_string())),
+            )
+            .await?;
+        if let storage::GetModifiedResult::Modified { data, .. } = res {
+            assert_eq!(async_read_to_bytes(data).await?.as_slice(), bytes);
+        } else {
+            panic!("Didn't return data");
+        }
 
         Ok(())
     })

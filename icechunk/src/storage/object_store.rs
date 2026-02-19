@@ -477,7 +477,7 @@ impl Storage for ObjectStorage {
         &self,
         settings: &Settings,
         path: &str,
-        previous_version: Option<VersionInfo>,
+        previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
         match self
             .get_object_range_conditional(settings, path, None, previous_version)
@@ -526,7 +526,7 @@ impl ObjectStorage {
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-        previous_version: Option<VersionInfo>,
+        previous_version: Option<&VersionInfo>,
     ) -> StorageResult<
         Option<(
             Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,

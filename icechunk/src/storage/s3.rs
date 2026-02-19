@@ -818,7 +818,7 @@ impl Storage for S3Storage {
         &self,
         settings: &Settings,
         path: &str,
-        previous_version: Option<VersionInfo>,
+        previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
         match self
             .get_object_range_conditional(settings, path, None, previous_version)
@@ -830,10 +830,11 @@ impl Storage for S3Storage {
             }
             Ok(None) => Ok(GetModifiedResult::OnLatestVersion),
             Err(sdk_err) => match sdk_err.kind {
+                // aws_sdk_s3 doesn't return an error when status 304 (Not Modified)
+                // happens, so we need to dig into the response and check for the status code
                 StorageErrorKind::S3GetObjectError(e)
                     if e.raw_response().is_some_and(|x| x.status().as_u16() == 304) =>
                 {
-                    // Object not modified
                     Ok(GetModifiedResult::OnLatestVersion)
                 }
                 _ => Err(sdk_err),
@@ -866,7 +867,7 @@ impl S3Storage {
         settings: &Settings,
         path: &str,
         range: Option<&Range<u64>>,
-        previous_version: Option<VersionInfo>,
+        previous_version: Option<&VersionInfo>,
     ) -> StorageResult<
         Option<(
             Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,

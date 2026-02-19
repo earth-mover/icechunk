@@ -508,7 +508,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         &self,
         settings: &Settings,
         path: &str,
-        previous_version: Option<VersionInfo>,
+        previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult>;
 
     /// Delete a stream of objects, by their id string representations

@@ -382,7 +382,7 @@ impl Storage for RedirectStorage {
         &self,
         settings: &Settings,
         path: &str,
-        previous_version: Option<VersionInfo>,
+        previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
         self.backend()
             .await?
