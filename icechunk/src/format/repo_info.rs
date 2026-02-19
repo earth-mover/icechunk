@@ -366,7 +366,9 @@ impl RepoInfo {
             };
 
         let all_updates = new_updates.into_iter().chain(previous_updates);
-        let mut repo_before_updates = None;
+        // If we didn't overflow (all previous updates fit in the new file),
+        // preserve the old file's chain pointer so older history remains reachable.
+        let mut repo_before_updates = previous_info;
 
         let num_updates = num_updates_per_file as usize;
         let updates: Vec<_> = all_updates
@@ -398,12 +400,6 @@ impl RepoInfo {
             updates.len() <= num_updates + 1,
             "Too many latest updates in repo file"
         );
-
-        // If we didn't overflow (all previous updates fit in the new file),
-        // preserve the old file's chain pointer so older history remains reachable.
-        if repo_before_updates.is_none() {
-            repo_before_updates = previous_info;
-        }
 
         let size = (num_updates - 1).min(updates.len() - 1);
         let updates = builder.create_vector(&updates[0..=size]);
@@ -784,6 +780,7 @@ impl RepoInfo {
         &self,
         spec_version: SpecVersionBin,
         previous_file: &str,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
         Self::from_parts(
@@ -799,6 +796,8 @@ impl RepoInfo {
                 previous_updates: self.latest_updates()?,
             },
             Some(previous_file),
+            num_updates_per_file,
+            self.repo_before_updates()?,
         )
     }
 

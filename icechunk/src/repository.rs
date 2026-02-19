@@ -554,10 +554,13 @@ impl Repository {
 
         // Record the config change in the ops log (V2+ only)
         if self.spec_version >= SpecVersionBin::V2dot0 {
+            let num_updates = self.config.num_updates_per_repo_info_file();
             let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
-                Ok(Arc::new(
-                    repo_info.record_config_changed(self.spec_version(), backup_path)?,
-                ))
+                Ok(Arc::new(repo_info.record_config_changed(
+                    self.spec_version(),
+                    backup_path,
+                    num_updates,
+                )?))
             };
             let _ = self
                 .asset_manager
