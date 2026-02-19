@@ -879,9 +879,10 @@ class TwoActorVersionControlStateMachine(VersionControlStateMachine):
         return DEFAULT_BRANCH
 
     @rule(data=st.data())
-    def reopen_repository(self, data: st.DataObject) -> None:
+    def switch_actor(self, data: st.DataObject) -> None:
+        """Switch to a randomly chosen actor and reopen the repository."""
         choice = data.draw(st.sampled_from(tuple(self.actors)))
-        note(f"reopening with actor {choice!r}")
+        note(f"switching to actor {choice!r}")
         self.actor = self.actors[choice]
         self.storage = self.actor_storage_objects[choice]
         super().reopen_repository()
