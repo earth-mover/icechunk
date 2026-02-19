@@ -623,7 +623,7 @@ impl AssetManager {
             Err(guard) => {
                 trace!(%chunk_id, ?range, "Downloading chunk");
                 let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
-                let chunk = (|| async {
+                let retry = (|| async {
                     let permit = self.request_semaphore.acquire().await?;
                     let (read, _) = self
                         .storage
@@ -647,12 +647,15 @@ impl AssetManager {
                         .with_max_delay(Duration::from_millis(
                             self.storage_settings.retries().max_backoff_ms().into(),
                         )),
-                )
-                .when(|e| format!("{e:?}").contains("StreamingError"))
-                .notify(|_err, duration| {
-                    debug!("retrying on stalled stream error after {:?}.", duration)
-                })
-                .await?;
+                );
+                #[cfg(feature = "napi-send-contract")]
+                let retry = retry.sleep(tokio::time::sleep);
+                let chunk = retry
+                    .when(|e| format!("{e:?}").contains("StreamingError"))
+                    .notify(|_err, duration| {
+                        debug!("retrying on stalled stream error after {:?}.", duration)
+                    })
+                    .await?;
                 let _fail_is_ok = guard.insert(chunk.clone());
                 Ok(chunk)
             }

@@ -104,6 +104,7 @@ workspace = true
 
 [features]
 default = ["s3", "object-store-s3", "object-store-gcs", "object-store-azure", "object-store-http", "object-store-fs", "redirect"]
+napi-send-contract = []
 s3 = [
   "dep:aws-sdk-s3",
   "dep:aws-config",
