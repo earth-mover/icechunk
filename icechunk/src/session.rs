@@ -13,7 +13,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use futures::{
-    FutureExt, Stream, StreamExt, TryStreamExt,
+    Stream, StreamExt, TryStreamExt,
     future::Either,
     stream::{self},
 };
@@ -26,7 +26,6 @@ use std::{
     convert::Infallible,
     future::{Future, ready},
     ops::Range,
-    pin::Pin,
     sync::Arc,
 };
 use thiserror::Error;
@@ -898,34 +897,28 @@ impl Session {
         path: &Path,
         coords: &ChunkIndices,
         byte_range: &ByteRange,
-    ) -> SessionResult<Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>>
+    ) -> SessionResult<Option<crate::compat::IcechunkBoxFuture<'_, SessionResult<Bytes>>>>
     {
         match self.get_chunk_ref(path, coords).await? {
             Some(ChunkPayload::Ref(ChunkRef { id, offset, length })) => {
                 let byte_range = byte_range.clone();
                 let asset_manager = Arc::clone(&self.asset_manager);
                 let byte_range = construct_valid_byte_range(&byte_range, offset, length);
-                Ok(Some(
-                    async move {
-                        // TODO: we don't have a way to distinguish if we want to pass a range or not
-                        asset_manager
-                            .fetch_chunk(&id, &byte_range)
-                            .await
-                            .map_err(|e| e.into())
-                    }
-                    .boxed(),
-                ))
+                Ok(Some(crate::compat::ic_boxed!(async move {
+                    // TODO: we don't have a way to distinguish if we want to pass a range or not
+                    asset_manager
+                        .fetch_chunk(&id, &byte_range)
+                        .await
+                        .map_err(|e| e.into())
+                })))
             }
             Some(ChunkPayload::Inline(bytes)) => {
                 let byte_range =
                     construct_valid_byte_range(byte_range, 0, bytes.len() as u64);
                 trace!("fetching inline chunk for range {:?}.", &byte_range);
-                Ok(Some(
-                    ready(Ok(
-                        bytes.slice(byte_range.start as usize..byte_range.end as usize)
-                    ))
-                    .boxed(),
-                ))
+                Ok(Some(crate::compat::ic_boxed!(ready(Ok(
+                    bytes.slice(byte_range.start as usize..byte_range.end as usize)
+                )))))
             }
             Some(ChunkPayload::Virtual(VirtualChunkRef {
                 location,
@@ -935,15 +928,12 @@ impl Session {
             })) => {
                 let byte_range = construct_valid_byte_range(byte_range, offset, length);
                 let resolver = Arc::clone(&self.virtual_resolver);
-                Ok(Some(
-                    async move {
-                        resolver
-                            .fetch_chunk(location.url(), &byte_range, checksum.as_ref())
-                            .await
-                            .map_err(|e| e.into())
-                    }
-                    .boxed(),
-                ))
+                Ok(Some(crate::compat::ic_boxed!(async move {
+                    resolver
+                        .fetch_chunk(location.url(), &byte_range, checksum.as_ref())
+                        .await
+                        .map_err(|e| e.into())
+                })))
             }
             None => Ok(None),
         }
@@ -970,21 +960,20 @@ impl Session {
         impl FnOnce(
             Bytes,
         )
-            -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
+            -> crate::compat::IcechunkBoxFuture<'static, SessionResult<ChunkPayload>>
         + use<>,
     > {
         let threshold = self.config().inline_chunk_threshold_bytes() as usize;
         let asset_manager = Arc::clone(&self.asset_manager);
         let fut = move |data: Bytes| {
-            async move {
+            crate::compat::ic_boxed!(async move {
                 let payload = if data.len() > threshold {
                     new_materialized_chunk(asset_manager.as_ref(), data).await?
                 } else {
                     new_inline_chunk(data)
                 };
                 Ok(payload)
-            }
-            .boxed()
+            })
         };
         Ok(fut)
     }
@@ -1202,7 +1191,7 @@ impl Session {
     async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
         let update_type =
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
-
+        let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
@@ -1214,6 +1203,7 @@ impl Session {
                 None,
                 update_type.clone(),
                 backup_path,
+                num_updates,
             )?))
         };
 
@@ -1339,6 +1329,7 @@ impl Session {
                 merged
             })
             .unwrap_or(default_metadata);
+        let num_updates = self.config().num_updates_per_repo_info_file();
         {
             // we need to play this trick because we need to borrow from self twice
             // once to get the mutable change set, and other to compute
@@ -1362,6 +1353,7 @@ impl Session {
             commit_method,
             allow_empty,
             self.config.repo_update_retries().retries(),
+            num_updates,
         )
         .await?;
 
@@ -1835,7 +1827,7 @@ fn new_inline_chunk(data: Bytes) -> ChunkPayload {
 }
 
 pub async fn get_chunk(
-    reader: Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>,
+    reader: Option<crate::compat::IcechunkBoxFuture<'_, SessionResult<Bytes>>>,
 ) -> SessionResult<Option<Bytes>> {
     match reader {
         Some(reader) => Ok(Some(reader.await?)),
@@ -2545,6 +2537,7 @@ async fn do_commit(
     commit_method: CommitMethod,
     allow_empty: bool,
     retry_settings: &storage::RetriesSettings,
+    num_updates_per_repo_info_file: u16,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
 
@@ -2581,6 +2574,7 @@ async fn do_commit(
                 new_snapshot,
                 commit_method,
                 retry_settings,
+                num_updates_per_repo_info_file,
             )
             .await
         }
@@ -2647,6 +2641,7 @@ async fn do_commit_v2(
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
     retry_settings: &storage::RetriesSettings,
+    num_updates_per_repo_info_file: u16,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
@@ -2693,6 +2688,7 @@ async fn do_commit_v2(
             Some(branch_name),
             update_type,
             backup_path,
+            num_updates_per_repo_info_file,
         )?))
     };
 
@@ -3303,7 +3299,7 @@ mod tests {
         )
         .await?;
         let repo_info =
-            RepoInfo::initial(SpecVersionBin::current(), (&initial).try_into()?)
+            RepoInfo::initial(SpecVersionBin::current(), (&initial).try_into()?, 100)
                 .add_snapshot(
                     SpecVersionBin::current(),
                     snapshot.as_ref().try_into()?,
@@ -3313,6 +3309,7 @@ mod tests {
                         new_snap_id: snapshot.id().clone(),
                     },
                     "backup_path",
+                    100,
                 )?;
         asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 

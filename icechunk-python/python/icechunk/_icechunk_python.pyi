@@ -1223,6 +1223,7 @@ class RepositoryConfig:
         virtual_chunk_containers: dict[str, VirtualChunkContainer] | None = None,
         manifest: ManifestConfig | None = None,
         repo_update_retries: RepoUpdateRetryConfig | None = None,
+        num_updates_per_repo_info_file: int | None = None,
     ) -> RepositoryConfig:
         """
         Create a new `RepositoryConfig` object
@@ -1439,6 +1440,12 @@ class RepositoryConfig:
         Clear all virtual chunk containers from the repository.
         """
         ...
+    @property
+    def num_updates_per_repo_info_file(self) -> int | None:
+        """The number of updates per repo info file."""
+        ...
+    @num_updates_per_repo_info_file.setter
+    def num_updates_per_repo_info_file(self, value: int | None) -> None: ...
     def merge(self, other: RepositoryConfig) -> RepositoryConfig:
         """
         Merge another RepositoryConfig with this one.

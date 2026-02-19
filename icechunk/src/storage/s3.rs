@@ -5,13 +5,10 @@ use std::{
     sync::Arc, time::Duration,
 };
 
-use crate::{
-    Storage, StorageError,
-    config::{S3Credentials, S3CredentialsFetcher, S3Options},
-    format::ChunkOffset,
-    private,
-    storage::strip_quotes,
+pub use super::s3_config::{
+    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
 };
+use crate::{Storage, StorageError, format::ChunkOffset, private};
 use async_trait::async_trait;
 use aws_config::{
     AppName, BehaviorVersion, meta::region::RegionProviderChain, retry::RetryConfig,
@@ -47,8 +44,55 @@ use typed_path::Utf8UnixPath;
 
 use super::{
     DeleteObjectsResult, ListInfo, Settings, StorageErrorKind, StorageResult,
-    VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests,
+    VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests, strip_quotes,
 };
+
+fn s3_get_err(err: impl std::error::Error + Send + Sync + 'static) -> StorageError {
+    StorageErrorKind::S3GetObjectError(Box::new(err)).into()
+}
+
+fn s3_put_err(err: impl std::error::Error + Send + Sync + 'static) -> StorageError {
+    StorageErrorKind::S3PutObjectError(Box::new(err)).into()
+}
+
+fn s3_create_multipart_err(
+    err: impl std::error::Error + Send + Sync + 'static,
+) -> StorageError {
+    StorageErrorKind::S3CreateMultipartUploadError(Box::new(err)).into()
+}
+
+fn s3_upload_part_err(
+    err: impl std::error::Error + Send + Sync + 'static,
+) -> StorageError {
+    StorageErrorKind::S3UploadPartError(Box::new(err)).into()
+}
+
+fn s3_complete_multipart_err(
+    err: impl std::error::Error + Send + Sync + 'static,
+) -> StorageError {
+    StorageErrorKind::S3CompleteMultipartUploadError(Box::new(err)).into()
+}
+
+fn s3_copy_err(err: impl std::error::Error + Send + Sync + 'static) -> StorageError {
+    StorageErrorKind::S3CopyObjectError(Box::new(err)).into()
+}
+
+fn s3_head_err(err: impl std::error::Error + Send + Sync + 'static) -> StorageError {
+    StorageErrorKind::S3HeadObjectError(Box::new(err)).into()
+}
+
+fn s3_list_err(err: impl std::error::Error + Send + Sync + 'static) -> StorageError {
+    StorageErrorKind::S3ListObjectError(Box::new(err)).into()
+}
+
+fn s3_delete_err(err: impl std::error::Error + Send + Sync + 'static) -> StorageError {
+    StorageErrorKind::S3DeleteObjectError(Box::new(err)).into()
+}
+
+#[allow(dead_code)]
+fn s3_stream_err(err: impl std::error::Error + Send + Sync + 'static) -> StorageError {
+    StorageErrorKind::S3StreamError(Box::new(err)).into()
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct S3Storage {
@@ -355,9 +399,7 @@ impl S3Storage {
                 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    Err(StorageError::from(Box::new(
-                        SdkError::<PutObjectError>::ServiceError(err),
-                    )))
+                    Err(s3_put_err(SdkError::<PutObjectError>::ServiceError(err)))
                 }
             }
             // S3 API documents this
@@ -367,12 +409,10 @@ impl S3Storage {
                 if status == 409 || status == 412 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    Err(StorageError::from(Box::new(
-                        SdkError::<PutObjectError>::ResponseError(err),
-                    )))
+                    Err(s3_put_err(SdkError::<PutObjectError>::ResponseError(err)))
                 }
             }
-            Err(err) => Err(Box::new(err).into()),
+            Err(err) => Err(s3_put_err(err)),
         }
     }
 
@@ -411,7 +451,7 @@ impl S3Storage {
             multi = multi.storage_class(klass);
         }
 
-        let create_res = multi.send().await.map_err(Box::new)?;
+        let create_res = multi.send().await.map_err(s3_create_multipart_err)?;
         let upload_id =
             create_res.upload_id().ok_or(StorageError::from(StorageErrorKind::Other(
                 "No upload_id in create multipart upload result".to_string(),
@@ -456,7 +496,7 @@ impl S3Storage {
             })
             .try_collect::<Vec<_>>()
             .await
-            .map_err(Box::new)?;
+            .map_err(s3_upload_part_err)?;
 
         let completed_parts =
             CompletedMultipartUpload::builder().set_parts(Some(completed_parts)).build();
@@ -504,11 +544,9 @@ impl S3Storage {
                 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    Err(StorageError::from(Box::new(SdkError::<
-                        CompleteMultipartUploadError,
-                    >::ServiceError(
-                        err
-                    ))))
+                    Err(s3_complete_multipart_err(
+                        SdkError::<CompleteMultipartUploadError>::ServiceError(err),
+                    ))
                 }
             }
             // S3 API documents this
@@ -518,12 +556,12 @@ impl S3Storage {
                 if status == 409 || status == 412 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    Err(StorageError::from(Box::new(
+                    Err(s3_complete_multipart_err(
                         SdkError::<PutObjectError>::ResponseError(err),
-                    )))
+                    ))
                 }
             }
-            Err(err) => Err(Box::new(err).into()),
+            Err(err) => Err(s3_complete_multipart_err(err)),
         }
     }
 }
@@ -617,9 +655,7 @@ impl Storage for S3Storage {
                 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    Err(StorageError::from(Box::new(
-                        SdkError::<CopyObjectError>::ServiceError(err),
-                    )))
+                    Err(s3_copy_err(SdkError::<CopyObjectError>::ServiceError(err)))
                 }
             }
             // S3 API documents this
@@ -629,9 +665,7 @@ impl Storage for S3Storage {
                 if status == 409 || status == 412 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    Err(StorageError::from(Box::new(
-                        SdkError::<PutObjectError>::ResponseError(err),
-                    )))
+                    Err(s3_copy_err(SdkError::<PutObjectError>::ResponseError(err)))
                 }
             }
             Err(sdk_err) => match sdk_err.as_service_error() {
@@ -646,7 +680,7 @@ impl Storage for S3Storage {
                     // the status code.
                     Err(StorageErrorKind::ObjectNotFound.into())
                 }
-                _ => Err(Box::new(sdk_err).into()),
+                _ => Err(s3_copy_err(sdk_err)),
             },
         }
     }
@@ -673,7 +707,7 @@ impl Storage for S3Storage {
             .into_paginator()
             .send()
             .into_stream_03x()
-            .map_err(Box::new)
+            .map_err(s3_list_err)
             .try_filter_map(|page| {
                 let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
                 ready(Ok(contents))
@@ -726,7 +760,7 @@ impl Storage for S3Storage {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
-        let res = req.send().await.map_err(Box::new)?;
+        let res = req.send().await.map_err(s3_delete_err)?;
 
         if let Some(err) = res.errors.as_ref().and_then(|e| e.first()) {
             tracing::error!(
@@ -766,7 +800,7 @@ impl Storage for S3Storage {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
-        let res = req.send().await.map_err(Box::new)?;
+        let res = req.send().await.map_err(s3_head_err)?;
 
         let res = res.last_modified.ok_or(StorageErrorKind::Other(
             "Object has no last_modified field".to_string(),
@@ -823,7 +857,7 @@ impl Storage for S3Storage {
                     // the status code.
                     Err(StorageErrorKind::ObjectNotFound.into())
                 }
-                _ => Err(Box::new(sdk_err).into()),
+                _ => Err(s3_get_err(sdk_err)),
             },
         }
     }
@@ -878,8 +912,6 @@ impl ProvideRefreshableCredentials {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use icechunk_macros::tokio_test;
-
-    use crate::config::{S3Credentials, S3Options, S3StaticCredentials};
 
     use super::*;
 

@@ -316,7 +316,7 @@ pub async fn repo_info_json(
     Ok(res)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "object-store-fs"))]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
