@@ -203,3 +203,7 @@ jobs:
           CXXFLAGS_wasm32_wasi: --sysroot=/usr -isystem /usr/include/wasm32-wasi
         run: |
           cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
+
+      - name: Run no-default-features lib tests (proxy for wasm feature set)
+        run: |
+          cargo test -p icechunk --no-default-features --lib
