@@ -19,7 +19,7 @@ use icechunk::{
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
         transaction_log::Diff,
     },
-    inspect::snapshot_json,
+    inspect::{repo_info_json, snapshot_json},
     migrations,
     ops::{
         gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
@@ -2057,7 +2057,7 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, branch, metadata=None))]
+    #[pyo3(signature = (message, *, branch, metadata=None))]
     pub(crate) fn rewrite_manifests(
         &self,
         py: Python<'_>,
@@ -2085,7 +2085,7 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, branch, metadata=None))]
+    #[pyo3(signature = (message, *, branch, metadata=None))]
     fn rewrite_manifests_async<'py>(
         &'py self,
         py: Python<'py>,
@@ -2131,9 +2131,10 @@ impl PyRepository {
         py.detach(move || {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                    let asset_manager = {
+                    let (asset_manager, num_updates) = {
                         let lock = self.0.read().await;
-                        Arc::clone(lock.asset_manager())
+                        let num_updates = lock.config().num_updates_per_repo_info_file();
+                        (Arc::clone(lock.asset_manager()), num_updates)
                     };
 
                     let result = expire(
@@ -2150,6 +2151,7 @@ impl PyRepository {
                             ExpiredRefAction::Ignore
                         },
                         None,
+                        num_updates,
                     )
                     .await
                     .map_err(PyIcechunkStoreError::GCError)?;
@@ -2176,9 +2178,10 @@ impl PyRepository {
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py::<_, HashSet<String>>(py, async move {
-            let asset_manager = {
+            let (asset_manager, num_updates) = {
                 let lock = repository.read().await;
-                Arc::clone(lock.asset_manager())
+                let num_updates = lock.config().num_updates_per_repo_info_file();
+                (Arc::clone(lock.asset_manager()), num_updates)
             };
 
             let result = expire(
@@ -2195,6 +2198,7 @@ impl PyRepository {
                     ExpiredRefAction::Ignore
                 },
                 None,
+                num_updates,
             )
             .await
             .map_err(PyIcechunkStoreError::GCError)?;
@@ -2224,13 +2228,15 @@ impl PyRepository {
                         max_concurrent_manifest_fetches,
                         dry_run,
                     );
-                    let asset_manager = {
+                    let (asset_manager, num_updates) = {
                         let lock = self.0.read().await;
-                        Arc::clone(lock.asset_manager())
+                        let num_updates = lock.config().num_updates_per_repo_info_file();
+                        (Arc::clone(lock.asset_manager()), num_updates)
                     };
-                    let result = garbage_collect(asset_manager, &gc_config, None)
-                        .await
-                        .map_err(PyIcechunkStoreError::GCError)?;
+                    let result =
+                        garbage_collect(asset_manager, &gc_config, None, num_updates)
+                            .await
+                            .map_err(PyIcechunkStoreError::GCError)?;
                     Ok::<_, PyIcechunkStoreError>(result.into())
                 })?;
 
@@ -2258,11 +2264,12 @@ impl PyRepository {
                 max_concurrent_manifest_fetches,
                 dry_run,
             );
-            let asset_manager = {
+            let (asset_manager, num_updates) = {
                 let lock = repository.read().await;
-                Arc::clone(lock.asset_manager())
+                let num_updates = lock.config().num_updates_per_repo_info_file();
+                (Arc::clone(lock.asset_manager()), num_updates)
             };
-            let result = garbage_collect(asset_manager, &gc_config, None)
+            let result = garbage_collect(asset_manager, &gc_config, None, num_updates)
                 .await
                 .map_err(PyIcechunkStoreError::GCError)?;
             Ok(result.into())
@@ -2357,6 +2364,34 @@ impl PyRepository {
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             let res = snapshot_json(lock.asset_manager(), &snap, pretty)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(res)
+        })
+    }
+
+    #[pyo3(signature = (*, pretty = true))]
+    fn inspect_repo_info(&self, pretty: bool) -> PyResult<String> {
+        let result = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(async move {
+                let lock = self.0.read().await;
+                let res = repo_info_json(lock.asset_manager(), pretty).await?;
+                Ok(res)
+            })
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
+        Ok(result)
+    }
+
+    #[pyo3(signature = (*, pretty = true))]
+    fn inspect_repo_info_async<'py>(
+        &self,
+        py: Python<'py>,
+        pretty: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let lock = repository.read().await;
+            let res = repo_info_json(lock.asset_manager(), pretty)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(res)

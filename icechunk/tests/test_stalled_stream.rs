@@ -54,6 +54,7 @@ fn create_proxied_storage(
 }
 
 #[icechunk_macros::tokio_test]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 async fn test_stalled_stream_with_toxiproxy() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to toxiproxy
     let client = Client::new("http://localhost:8474");
@@ -68,19 +69,21 @@ async fn test_stalled_stream_with_toxiproxy() -> Result<(), Box<dyn std::error::
 
     // Create a proxy: toxiproxy listens on 9002, forwards to MinIO on 9000
     let name = format!("minio_test_{}", uuid::Uuid::new_v4());
-    let proxy = client.create_proxy(&name, "0.0.0.0:9002", "minio:9000").await?;
-    println!("Created proxy: {} -> minio:9000", name);
+    let proxy = client.create_proxy(&name, "0.0.0.0:9002", "rustfs:9000").await?;
+    println!("Created proxy: {} -> rustfs:9000", name);
 
     // Create storage with 2-second grace period for stalled stream detection
     let storage = create_proxied_storage(9002, 2)?;
 
     // Use fewer, faster retries to reduce test time
-    let mut settings = icechunk::storage::Settings::default();
-    settings.retries = Some(RetriesSettings {
-        max_tries: Some(NonZeroU16::new(3).unwrap()),
-        initial_backoff_ms: Some(100),
-        max_backoff_ms: Some(1000),
-    });
+    let settings = icechunk::storage::Settings {
+        retries: Some(RetriesSettings {
+            max_tries: Some(NonZeroU16::new(3).unwrap()),
+            initial_backoff_ms: Some(100),
+            max_backoff_ms: Some(1000),
+        }),
+        ..Default::default()
+    };
 
     let manager = AssetManager::new_no_cache(
         storage.clone() as Arc<dyn Storage + Send + Sync>,
