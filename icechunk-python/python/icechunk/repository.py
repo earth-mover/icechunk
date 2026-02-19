@@ -1,4 +1,5 @@
 import datetime
+import json
 import warnings
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
@@ -1785,6 +1786,13 @@ class Repository:
         self, snapshot_id: str, *, pretty: bool = True
     ) -> str:
         return await self._repository.inspect_snapshot_async(snapshot_id, pretty=pretty)
+
+    def inspect_repo_info(self) -> dict[str, Any]:
+        return json.loads(self._repository.inspect_repo_info())
+
+    async def inspect_repo_info_async(self) -> dict[str, Any]:
+        result = await self._repository.inspect_repo_info_async()
+        return json.loads(result)
 
     @property
     def spec_version(self) -> int:
