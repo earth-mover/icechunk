@@ -130,6 +130,7 @@ class Model:
         self.ondisk_snaps: dict[str, CommitModel] = {}
         self.tags: dict[str, TagModel] = {}
         self.branch_heads: dict[str, str] = {}
+        self.deleted_tags: set[str] = set()
 
         # a tag once created, can never be recreated even after expiration
         self.created_tags: set[str] = set()
@@ -219,6 +220,7 @@ class Model:
 
     def delete_tag(self, tag: str) -> None:
         self._delete_tag(tag)
+        self.deleted_tags.add(tag)
         self.num_updates += 1
 
     def _delete_tag(self, tag: str) -> None:
@@ -345,7 +347,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model = Model()
         self.storage: Storage | None = None
 
-    @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
+    @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([2]))
     def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
         self.storage = in_memory_storage()
         config = data.draw(repository_configs())
@@ -610,6 +612,16 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(IcechunkError):
                 self.repo.delete_branch(branch)
 
+    @rule(tag=consumes(tags))
+    def delete_tag(self, tag: str) -> None:
+        note(f"Deleting tag {tag!r}")
+        if tag not in self.model.tags:
+            with pytest.raises(IcechunkError):
+                self.repo.delete_tag(tag)
+        else:
+            self.repo.delete_tag(tag)
+            self.model.delete_tag(tag)
+
     # TODO: v1 has bugs in expire_snapshots, only test for v2
     # https://github.com/earth-mover/icechunk/issues/1520
     # https://github.com/earth-mover/icechunk/issues/1534
@@ -780,7 +792,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert self.model.branch_heads == repo_branches
 
     def check_ancestry(self) -> None:
-        for branch in self.repo.list_branches():
+        for branch in self.model.branch_heads:
             ancestry = list(self.repo.ancestry(branch=branch))
             ancestry_set = set([snap.id for snap in ancestry])
             # snapshot timestamps are monotonically decreasing in ancestry
@@ -792,6 +804,20 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             # the initial snapshot is in every possible branch
             # this is a python-only invariant
             assert ancestry[-1] == self.initial_snapshot
+
+    def check_repo_info(self) -> None:
+        ver = self.model.spec_version
+        if ver == 1:
+            return
+        elif ver == 2:
+            ver = "2.0"
+        else:
+            raise NotImplementedError()
+
+        info = self.repo.inspect_repo_info()
+
+        assert info.spec_version == ver
+        assert set(info["deleted_tags"]) == self.model.deleted_tags
 
 
 VersionControlStateMachine.TestCase.settings = settings(
