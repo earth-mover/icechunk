@@ -274,19 +274,16 @@ impl Repository {
                 // missing snapshot/tx data.
                 asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
             } else {
-                // Write snapshot and branch ref concurrently
-                let write_branch = async {
-                    refs::update_branch(
-                        storage_c.as_ref(),
-                        settings_ref,
-                        Ref::DEFAULT_BRANCH,
-                        new_snapshot.id().clone(),
-                        None,
-                    )
-                    .await
-                    .map_err(RepositoryError::from)
-                };
-                try_join!(write_snap, write_branch)?;
+                write_snap.await?;
+                refs::update_branch(
+                    storage_c.as_ref(),
+                    settings_ref,
+                    Ref::DEFAULT_BRANCH,
+                    new_snapshot.id().clone(),
+                    None,
+                )
+                .await
+                .map_err(RepositoryError::from);
             }
 
             Ok::<_, RepositoryError>(())
