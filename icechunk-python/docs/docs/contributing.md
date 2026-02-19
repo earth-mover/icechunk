@@ -36,6 +36,14 @@ We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rus
     ```bash
     pixi run -e all init
     ```
+    !!! Usage without pixi shell
+        You could run all commands below using this pattern:
+        ```shell
+        pixi run -e all init
+        pixi run -m icechunk-python/pyproject.toml -e all <your-command>
+        ```
+        This is used e.g. in the [Readthedocs build](https://github.com/earth-mover/icechunk/blob/main/.readthedocs.yaml).
+
 
 === "uv"
 
@@ -136,7 +144,7 @@ We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rus
 
     ```bash
     just ruff-format
-    just ruff
+    just ruff # add --fix to automatically apply safe fixes
     just mypy
     just py-pre-commit
     ```
