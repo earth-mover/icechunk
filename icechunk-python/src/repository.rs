@@ -1030,7 +1030,7 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let exists = Repository::exists(storage.0)
+                let exists = Repository::exists(storage.0, None)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(exists)
@@ -1041,7 +1041,7 @@ impl PyRepository {
     #[staticmethod]
     fn exists_async(py: Python<'_>, storage: PyStorage) -> PyResult<Bound<'_, PyAny>> {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let exists = Repository::exists(storage.0)
+            let exists = Repository::exists(storage.0, None)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(exists)
@@ -1053,7 +1053,7 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let spec_version = Repository::fetch_spec_version(storage.0)
+                let spec_version = Repository::fetch_spec_version(storage.0, None)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(spec_version.map(|v| v as u8))
@@ -1067,7 +1067,7 @@ impl PyRepository {
         storage: PyStorage,
     ) -> PyResult<Bound<'_, PyAny>> {
         pyo3_async_runtimes::tokio::future_into_py::<_, Option<u8>>(py, async move {
-            let spec_version = Repository::fetch_spec_version(storage.0)
+            let spec_version = Repository::fetch_spec_version(storage.0, None)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(spec_version.map(|v| v as u8))
