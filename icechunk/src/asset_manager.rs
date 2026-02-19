@@ -472,8 +472,10 @@ impl AssetManager {
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
         self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
+        // Cloning here so lock is immediately released
         let repo_cache =
             self.repo_cache.read().map_err(|_| RepositoryErrorKind::PoisonLock)?.clone();
+
         match fetch_repo_info_from_path(
             self.storage.as_ref(),
             &self.storage_settings,
