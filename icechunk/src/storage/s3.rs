@@ -18,14 +18,13 @@ use aws_sdk_s3::{
     Client,
     config::{
         Builder, ConfigBag, IdentityCache, Intercept, ProvideCredentials, Region,
-        RuntimeComponents, StalledStreamProtectionConfig, http::HttpResponse,
+        RuntimeComponents, StalledStreamProtectionConfig,
         interceptors::BeforeTransmitInterceptorContextMut,
     },
     error::{BoxError, SdkError},
     operation::{
         complete_multipart_upload::CompleteMultipartUploadError,
-        copy_object::CopyObjectError, get_object::GetObjectError,
-        put_object::PutObjectError,
+        copy_object::CopyObjectError, put_object::PutObjectError,
     },
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
@@ -832,21 +831,8 @@ impl Storage for S3Storage {
             }
             Ok(None) => Ok(GetModifiedResult::OnLatestVersion),
             Err(sdk_err) => match sdk_err.kind {
-                // aws_sdk_s3 doesn't return an error when status 304 (Not Modified)
-                // happens, so we need to dig into the response and check for the status code
-                StorageErrorKind::S3GetObjectError(ref e) => {
-                    // We need to cast back to sdk_err to be able
-                    // to check for status 304
-                    if let Some(error) =
-                        e.downcast_ref::<SdkError<GetObjectError, HttpResponse>>()
-                        && error
-                            .raw_response()
-                            .is_some_and(|x| x.status().as_u16() == 304)
-                    {
-                        Ok(GetModifiedResult::OnLatestVersion)
-                    } else {
-                        Err(sdk_err)
-                    }
+                StorageErrorKind::OnLatestVersion => {
+                    Ok(GetModifiedResult::OnLatestVersion)
                 }
                 _ => Err(sdk_err),
             },
@@ -930,6 +916,16 @@ impl S3Storage {
                     // into anything useful. So we need to parse the raw response, and match
                     // the status code.
                     Err(StorageErrorKind::ObjectNotFound.into())
+                }
+                Some(_)
+                    // aws_sdk_s3 doesn't return an error when status 304 (Not Modified)
+                    // happens, so return this info as an error here so we can
+                    // catch it easily downstream
+                    if sdk_err
+                        .raw_response()
+                        .is_some_and(|x| x.status().as_u16() == 304) =>
+                {
+                    Err(StorageErrorKind::OnLatestVersion.into())
                 }
                 _ => Err(s3_get_err(sdk_err)),
             },
