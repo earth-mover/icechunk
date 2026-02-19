@@ -117,6 +117,8 @@ class Model:
         self.spec_version = 1  # will be overwritten on `@initialize`
         self.num_updates: int = 0
 
+        self.metadata = {}
+
         self.initial_snapshot_id: str | None = None
         self.changes_made: bool = False
 
@@ -186,6 +188,10 @@ class Model:
         """Amend the HEAD commit."""
         # this is simple because we aren't modeling the branch as a list of commits
         self.commit(snap)
+
+    def set_metadata(self, meta) -> None:
+        self.metadata = meta
+        self.num_updates += 1
 
     def checkout_commit(self, ref: str) -> None:
         assert str(ref) in self.commits
@@ -399,6 +405,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             # not at branch head, modifications not possible.
             with pytest.raises(IcechunkError, match="read-only store"):
                 self.sync_store.set(path, value)
+
+    @precondition(lambda self: self.model.spec_version >= 2)
+    @rule(meta=simple_attrs)
+    def set_metadata(self, meta: str) -> None:
+        note(f"setting metadata {meta!r}")
+        self.repo.set_metadata(meta)
+        self.model.set_metadata(meta)
 
     @rule()
     @precondition(lambda self: self.repo.spec_version == 1)
@@ -819,7 +832,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         assert info["spec_version"] == ver
         assert set(info["deleted_tags"]) == self.model.deleted_tags
-        assert info["metadata"] == {}
+        assert info["metadata"] == self.model.metadata
 
         # TODO: something about latest_updates
         # assert info["latest_updates"]
