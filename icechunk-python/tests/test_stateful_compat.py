@@ -15,6 +15,7 @@ Skipped entirely if icechunk_v1 is not installed.
 import tempfile
 
 import pytest
+from packaging.version import Version
 
 import icechunk as ic
 
@@ -62,6 +63,12 @@ class CrossVersionTwoActorVersionControlStateMachine(
             "v1": ic_v1.local_filesystem_storage,
         }
 
+    # Disabled: v1 actor doesn't support spec version upgrade.
+    @rule()
+    @precondition(lambda self: False)
+    def upgrade_spec_version(self) -> None:
+        pass
+
     @initialize(
         data=st.data(),
         target=TwoActorVersionControlStateMachine.branches,
@@ -106,6 +113,12 @@ class CrossVersionTwoActorZarrHierarchyStateMachine(
         }
         self.actor_modules = {"v2": ic, "v1": ic_v1}
 
+    # Disabled: v1 actor doesn't support spec version upgrade.
+    @rule()
+    @precondition(lambda self: False)
+    def upgrade_spec_version(self) -> None:
+        pass
+
     @initialize(spec_version=st.just(1), data=st.data())
     def init_store(self, spec_version: int, data: st.DataObject) -> None:
         """Override to draw actor and create with v1 compatibility."""
@@ -121,8 +134,9 @@ class CrossVersionTwoActorZarrHierarchyStateMachine(
 
         try:
             self.repo = self.actor.create(self.storage, spec_version=spec_version)
-        except TypeError:
-            # v1 Repository.create() doesn't accept spec_version kwarg
+        except TypeError as e:
+            if "spec_version" not in str(e):
+                raise
             self.repo = self.actor.create(self.storage)
         self.store = self.repo.writable_session("main").store
 
@@ -133,7 +147,7 @@ class CrossVersionTwoActorZarrHierarchyStateMachine(
     @rule(data=st.data())
     @precondition(
         lambda self: self.store.session.has_uncommitted_changes
-        or self.ic.__version__ >= "2"
+        or Version(self.ic.__version__).major >= 2
     )
     def commit_with_check(self, data: st.DataObject) -> None:
         return super().commit_with_check(data)

@@ -14,6 +14,7 @@ from hypothesis.stateful import (
     rule,
     run_state_machine_as_test,
 )
+from packaging.version import Version
 
 import icechunk as ic
 import zarr
@@ -103,7 +104,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         super().init_store()
 
     @precondition(
-        lambda self: self.ic.__version__ >= "2"
+        lambda self: Version(self.ic.__version__).major >= 2
         and not self.store.session.has_uncommitted_changes
         and bool(self.all_arrays)
     )
@@ -164,7 +165,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # Try with allow_empty, fall back without it for v1 compatibility
         try:
             self.store.session.commit("foo", allow_empty=allow_empty)
-        except TypeError:
+        except TypeError as e:
+            if "allow_empty" not in str(e):
+                raise
             self.store.session.commit("foo")
 
         self.store = self.repo.writable_session("main").store
@@ -389,11 +392,6 @@ class TwoActorZarrHierarchyStateMachine(ModifiedZarrHierarchyStateMachine):
             for actor_name in self.actors.keys():
                 self.actor_storage_objects[actor_name] = storage
 
-    @precondition(lambda _: False)
-    @rule()
-    def upgrade_spec_version(self) -> None:
-        pass
-
     @rule(data=st.data())
     def reopen_with_new_actor(self, data: st.DataObject) -> None:
         # We use the Zarr's memory store as the model,
@@ -430,8 +428,8 @@ def test_zarr_hierarchy() -> None:
 
 
 def test_zarr_hierarchy_two_actors() -> None:
-    def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
-        return ModifiedZarrHierarchyStateMachine(in_memory_storage())
+    def mk_test_instance_sync() -> TwoActorZarrHierarchyStateMachine:
+        return TwoActorZarrHierarchyStateMachine(in_memory_storage())
 
     run_state_machine_as_test(  # type: ignore[no-untyped-call]
         mk_test_instance_sync, settings=settings(report_multiple_bugs=False)

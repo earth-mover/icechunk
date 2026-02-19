@@ -818,11 +818,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
 class TwoActorVersionControlStateMachine(VersionControlStateMachine):
     actors: dict[str, type[Repository]]
-    actor_storage_objects: dict[str, Storage] = {}
+    actor_storage_objects: dict[str, Storage]
 
     def __init__(self) -> None:
         super().__init__(actor=None)
         self.actors = {"one": Repository, "two": Repository}
+        self.actor_storage_objects = {}
         self.on_disk_storage_factory = defaultdict(lambda: local_filesystem_storage)
 
     @initialize(
@@ -865,8 +866,9 @@ class TwoActorVersionControlStateMachine(VersionControlStateMachine):
         # Try to create with spec_version, fall back without it for v1 compatibility
         try:
             self.repo = self.actor.create(self.storage, spec_version=spec_version)
-        except TypeError:
-            # v1 Repository.create() doesn't accept spec_version kwarg
+        except TypeError as e:
+            if "spec_version" not in str(e):
+                raise
             self.repo = self.actor.create(self.storage)
 
         # Initialize model and data
@@ -881,11 +883,6 @@ class TwoActorVersionControlStateMachine(VersionControlStateMachine):
         self.actor = self.actors[choice]
         self.storage = self.actor_storage_objects[choice]
         super().reopen_repository()
-
-    @rule()
-    @precondition(lambda self: False)
-    def upgrade_spec_version(self) -> None:
-        pass
 
 
 def test_two_actors() -> None:
