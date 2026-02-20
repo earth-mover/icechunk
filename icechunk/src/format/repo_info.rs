@@ -194,8 +194,13 @@ impl RepoInfo {
                 generated::Ref::create(&mut builder, &args)
             })
             .collect::<Vec<_>>();
-        // FIXME: shouldn't be assert
-        assert!(main_found);
+        if !main_found {
+            return Err(IcechunkFormatErrorKind::BranchNotFound {
+                branch: Ref::DEFAULT_BRANCH.to_string(),
+            }
+            .into());
+        }
+
         let branches = builder.create_vector(&branches);
 
         let deleted_tags = sorted_deleted_tags

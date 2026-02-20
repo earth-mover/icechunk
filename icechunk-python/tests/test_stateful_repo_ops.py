@@ -117,6 +117,8 @@ class Model:
         self.spec_version = 1  # will be overwritten on `@initialize`
         self.num_updates: int = 0
 
+        self.metadata: dict[str, Any] = {}
+
         self.initial_snapshot_id: str | None = None
         self.changes_made: bool = False
 
@@ -130,6 +132,7 @@ class Model:
         self.ondisk_snaps: dict[str, CommitModel] = {}
         self.tags: dict[str, TagModel] = {}
         self.branch_heads: dict[str, str] = {}
+        self.deleted_tags: set[str] = set()
 
         # a tag once created, can never be recreated even after expiration
         self.created_tags: set[str] = set()
@@ -186,6 +189,10 @@ class Model:
         # this is simple because we aren't modeling the branch as a list of commits
         self.commit(snap)
 
+    def set_metadata(self, meta: dict[str, Any]) -> None:
+        self.metadata = meta
+        self.num_updates += 1
+
     def checkout_commit(self, ref: str) -> None:
         assert str(ref) in self.commits
         # deepcopy so that we allow changes, but the committed store remains unchanged
@@ -222,6 +229,7 @@ class Model:
         self.num_updates += 1
 
     def _delete_tag(self, tag: str) -> None:
+        self.deleted_tags.add(tag)
         del self.tags[tag]
 
     def create_tag(self, tag_name: str, commit_id: str) -> None:
@@ -345,10 +353,16 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model = Model()
         self.storage: Storage | None = None
 
-    @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
-    def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
+    @initialize(
+        array_meta=v3_array_metadata,
+        config=repository_configs(),
+        target=branches,
+        spec_version=st.sampled_from([2]),
+    )
+    def initialize(
+        self, array_meta: Buffer, config: RepositoryConfig, spec_version: Literal[1, 2]
+    ) -> str:
         self.storage = in_memory_storage()
-        config = data.draw(repository_configs())
         self.model.spec_version = spec_version
 
         self.repo = Repository.create(
@@ -376,7 +390,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
         #       with an array's zarr.json
         # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
-        self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata))
+        self.set_doc(path="zarr.json", value=array_meta)
 
         return DEFAULT_BRANCH
 
@@ -397,6 +411,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             # not at branch head, modifications not possible.
             with pytest.raises(IcechunkError, match="read-only store"):
                 self.sync_store.set(path, value)
+
+    @precondition(lambda self: self.model.spec_version >= 2)
+    @rule(meta=simple_attrs)
+    def set_metadata(self, meta: dict[str, Any]) -> None:
+        note(f"setting metadata {meta!r}")
+        self.repo.set_metadata(meta)
+        self.model.set_metadata(meta)
 
     @rule()
     @precondition(lambda self: self.repo.spec_version == 1)
@@ -610,6 +631,16 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(IcechunkError):
                 self.repo.delete_branch(branch)
 
+    @rule(tag=consumes(tags))
+    def delete_tag(self, tag: str) -> None:
+        note(f"Deleting tag {tag!r}")
+        if tag not in self.model.tags:
+            with pytest.raises(IcechunkError):
+                self.repo.delete_tag(tag)
+        else:
+            self.repo.delete_tag(tag)
+            self.model.delete_tag(tag)
+
     # TODO: v1 has bugs in expire_snapshots, only test for v2
     # https://github.com/earth-mover/icechunk/issues/1520
     # https://github.com/earth-mover/icechunk/issues/1534
@@ -747,6 +778,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.check_branches()
         self.check_ancestry()
         self.check_ops_log()
+        self.check_repo_info()
 
     def check_list_prefix_from_root(self) -> None:
         model_list = self.model.list_prefix("")
@@ -780,7 +812,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert self.model.branch_heads == repo_branches
 
     def check_ancestry(self) -> None:
-        for branch in self.repo.list_branches():
+        for branch in self.model.branch_heads:
             ancestry = list(self.repo.ancestry(branch=branch))
             ancestry_set = set([snap.id for snap in ancestry])
             # snapshot timestamps are monotonically decreasing in ancestry
@@ -792,6 +824,26 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             # the initial snapshot is in every possible branch
             # this is a python-only invariant
             assert ancestry[-1] == self.initial_snapshot
+
+    def check_repo_info(self) -> None:
+        ver = self.model.spec_version
+        if ver == 1:
+            return
+        elif ver == 2:
+            expected = "2.0"
+        else:
+            raise NotImplementedError()
+
+        info = self.repo.inspect_repo_info()
+
+        assert info["spec_version"] == expected
+        assert set(info["deleted_tags"]) == self.model.deleted_tags
+        assert info["metadata"] == self.model.metadata
+
+        # TODO: something about latest_updates
+        # assert info["latest_updates"]
+
+        # the remaining fields (snapshots, branches, tags) are checked by the other invariants
 
 
 VersionControlStateMachine.TestCase.settings = settings(
