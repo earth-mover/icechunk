@@ -374,6 +374,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model.num_updates = 1
 
         # initialize with some data always
+        # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
+        #       with an array's zarr.json
+        # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
         self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata))
 
     @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
