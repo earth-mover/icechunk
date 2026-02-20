@@ -560,12 +560,11 @@ impl Repository {
         );
 
         // For V2+ repos, try reading config from the repo info object first
-        if spec_version >= SpecVersionBin::V2dot0 {
-            if let Ok((repo_info, version)) = am.fetch_repo_info().await {
-                if let Ok(Some(config)) = repo_info.config() {
-                    return Ok(Some((config, version)));
-                }
-            }
+        if spec_version >= SpecVersionBin::V2dot0
+            && let Ok((repo_info, version)) = am.fetch_repo_info().await
+            && let Ok(Some(config)) = repo_info.config()
+        {
+            return Ok(Some((config, version)));
         }
 
         // Fall back to config.yaml (V1 repos, or old V2 repos without embedded config)
