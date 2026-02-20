@@ -121,26 +121,13 @@ class CrossVersionTwoActorZarrHierarchyStateMachine(
     @initialize(spec_version=st.just(1), data=st.data())
     def init_store(self, spec_version: int, data: st.DataObject) -> None:
         """Override to draw actor and create with v1 compatibility."""
-        from zarr.testing.stateful import ZarrHierarchyStateMachine
 
         # Draw an actor and set self.actor / self.ic / self.storage
         actor_name = data.draw(st.sampled_from(list(self.actors.keys())))
         self.actor = self.actors[actor_name]
         self.ic = self.actor_modules[actor_name]
         self.storage = self.actor_storage_objects[actor_name]
-
-        note(f"Creating repository with spec_version={spec_version}, actor={self.actor}")
-
-        try:
-            self.repo = self.actor.create(self.storage, spec_version=spec_version)
-        except TypeError as e:
-            if "spec_version" not in str(e):
-                raise
-            self.repo = self.actor.create(self.storage)
-        self.store = self.repo.writable_session("main").store
-
-        # Call grandparent's init_store for zarr-level init
-        ZarrHierarchyStateMachine.init_store(self)
+        super().init_store(self, spec_version=spec_version)
 
     # v1 doesn't support empty commits, so only allow them when the actor is v2
     @rule(data=st.data())

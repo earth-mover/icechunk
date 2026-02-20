@@ -99,10 +99,13 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         """Override parent's init_store to sample spec_version and create repository."""
         # necessary to control the order of calling. if multiple intiliazes they will be
         # called by hypothesis in a random order
-        note(f"Creating repository with spec_version={spec_version}")
+        note(f"Creating repository with spec_version={spec_version}, actor={self.actor}")
 
         # Create repository with the drawn spec version
-        self.repo = self.actor.create(self.storage, spec_version=spec_version)
+        if Version(self.ic.__version__).major >= 2:
+            self.repo = self.actor.create(self.storage, spec_version=spec_version)
+        else:
+            self.repo = self.actor.create(self.storage)
         self.store = self.repo.writable_session("main").store
 
         super().init_store()
