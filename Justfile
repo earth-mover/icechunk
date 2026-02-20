@@ -77,10 +77,32 @@ pre-commit-python:
 bench-compare *args:
   pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short {{args}}
 
-create-deepak-env name:
-  mamba create -y -n icechunk-{{name}} python=3.12 ipykernel ipdb
-  mamba activate icechunk-{{name}}
-  just coiled-ice-create {{name}}
+ruff-format *args:
+  ruff format
 
-coiled-ice-create version:
-  pip install coiled arraylake icechunk=='{{version}}' watermark xarray bokeh
+ruff *args:
+  ruff check --show-fixes icechunk-python/ {{args}}
+
+mypy *args:
+  cd icechunk-python && mypy python tests {{args}}
+
+py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *args:
+  pre-commit run --all-files
+
+pytest *args:
+  cd icechunk-python && pytest {{args}}
+
+docs-serve *args:
+  mkdocs serve -f icechunk-python/docs/mkdocs.yml --livereload {{args}}
+
+docs-build *args:
+  mkdocs build -f icechunk-python/docs/mkdocs.yml {{args}}
+
+all-checks:
+  just pytest
+  just py-pre-commit
+  just mypy
+  just ruff
+  just ruff-format
+  just pre-commit-python
+  just pre-commit-ci
