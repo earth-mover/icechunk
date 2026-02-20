@@ -355,6 +355,17 @@ impl RepoInfo {
             "A backup path must be provided if and only if there are previous updates"
         );
 
+        // Reject updates whose timestamp is not strictly newer than the top of the ops log
+        if let Some(Ok((_, latest_time, _))) = &last_update
+            && update.update_time <= *latest_time
+        {
+            return Err(IcechunkFormatErrorKind::InvalidUpdateTimestampOrdering {
+                latest_time: *latest_time,
+                new_time: update.update_time,
+            }
+            .into());
+        }
+
         let new_updates: Box<dyn Iterator<Item = _>> =
             if let Some(last_update) = last_update {
                 Box::new(
@@ -1309,8 +1320,9 @@ mod tests {
         let snap2 = SnapshotInfo {
             id: id2.clone(),
             parent_id: Some(id1.clone()),
+            flushed_at: DateTime::from_timestamp_micros(2_000_000).unwrap(),
             message: "snap 2".to_string(),
-            ..snap1.clone()
+            metadata: Default::default(),
         };
         let repo = repo.add_snapshot(
             SpecVersionBin::current(),
@@ -1341,8 +1353,9 @@ mod tests {
         let snap3 = SnapshotInfo {
             id: id3.clone(),
             parent_id: Some(id2.clone()),
+            flushed_at: DateTime::from_timestamp_micros(3_000_000).unwrap(),
             message: "snap 3".to_string(),
-            ..snap2.clone()
+            metadata: Default::default(),
         };
         let repo = repo.add_snapshot(
             SpecVersionBin::current(),
@@ -1418,8 +1431,9 @@ mod tests {
         let snap2 = SnapshotInfo {
             id: id2.clone(),
             parent_id: Some(id1.clone()),
+            flushed_at: Utc::now(),
             message: "snap 2".to_string(),
-            ..snap1.clone()
+            metadata: Default::default(),
         };
         let repo = repo.add_snapshot(
             SpecVersionBin::current(),
@@ -1593,6 +1607,102 @@ mod tests {
                 UpdateType::BranchCreatedUpdate { name: (n - 2 - idx).to_string() }
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_timestamp_ordering_rejected() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let id1 = SnapshotId::random();
+        let snap1 = SnapshotInfo {
+            id: id1.clone(),
+            parent_id: None,
+            flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
+            message: "snap 1".to_string(),
+            metadata: Default::default(),
+        };
+        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1, 100);
+
+        // Attempting add_snapshot with a timestamp equal to the top of the ops log
+        // should fail
+        let id2 = SnapshotId::random();
+        let snap2 = SnapshotInfo {
+            id: id2.clone(),
+            parent_id: Some(id1.clone()),
+            flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
+            message: "snap 2".to_string(),
+            metadata: Default::default(),
+        };
+        let result = repo.add_snapshot(
+            SpecVersionBin::current(),
+            snap2,
+            Some("main"),
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: id2.clone(),
+            },
+            "backup",
+            100,
+        );
+        assert!(matches!(
+            result,
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::InvalidUpdateTimestampOrdering { .. },
+                ..
+            })
+        ));
+
+        // Attempting add_snapshot with a timestamp older than the top of the ops log
+        // should also fail
+        let id3 = SnapshotId::random();
+        let snap3 = SnapshotInfo {
+            id: id3.clone(),
+            parent_id: Some(id1.clone()),
+            flushed_at: DateTime::from_timestamp_micros(500_000).unwrap(),
+            message: "snap 3".to_string(),
+            metadata: Default::default(),
+        };
+        let result = repo.add_snapshot(
+            SpecVersionBin::current(),
+            snap3,
+            Some("main"),
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: id3.clone(),
+            },
+            "backup",
+            100,
+        );
+        assert!(matches!(
+            result,
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::InvalidUpdateTimestampOrdering { .. },
+                ..
+            })
+        ));
+
+        // Attempting add_snapshot with a strictly newer timestamp should succeed
+        let id4 = SnapshotId::random();
+        let snap4 = SnapshotInfo {
+            id: id4.clone(),
+            parent_id: Some(id1.clone()),
+            flushed_at: DateTime::from_timestamp_micros(2_000_000).unwrap(),
+            message: "snap 4".to_string(),
+            metadata: Default::default(),
+        };
+        let result = repo.add_snapshot(
+            SpecVersionBin::current(),
+            snap4,
+            Some("main"),
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: id4.clone(),
+            },
+            "backup",
+            100,
+        );
+        assert!(result.is_ok());
 
         Ok(())
     }
