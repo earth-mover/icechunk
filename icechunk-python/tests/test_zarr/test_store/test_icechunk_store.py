@@ -55,21 +55,21 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     @pytest.fixture
     async def store(self, store_kwargs: dict[str, Any]) -> IcechunkStore:
         read_only = store_kwargs.pop("read_only")
-        repo = Repository.open_or_create(**store_kwargs)
+        repo = await Repository.open_or_create_async(**store_kwargs)
         if read_only:
-            session = repo.readonly_session(branch="main")
+            session = await repo.readonly_session_async(branch="main")
         else:
-            session = repo.writable_session("main")
+            session = await repo.writable_session_async("main")
         return session.store
 
     @pytest.fixture
     async def store_not_open(self, store_kwargs: dict[str, Any]) -> IcechunkStore:
         read_only = store_kwargs.pop("read_only")
-        repo = Repository.open_or_create(**store_kwargs)
+        repo = await Repository.open_or_create_async(**store_kwargs)
         if read_only:
-            session = repo.readonly_session(branch="main")
+            session = await repo.readonly_session_async(branch="main")
         else:
-            session = repo.writable_session("main")
+            session = await repo.writable_session_async("main")
 
         store = session.store
         store._is_open = False
@@ -98,11 +98,11 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def test_store_open_read_only(
         self, store: IcechunkStore, store_kwargs: dict[str, Any], read_only: bool
     ) -> None:
-        repo = Repository.open(**store_kwargs)
+        repo = await Repository.open_async(**store_kwargs)
         if read_only:
-            session = repo.readonly_session(branch="main")
+            session = await repo.readonly_session_async(branch="main")
         else:
-            session = repo.writable_session("main")
+            session = await repo.writable_session_async("main")
         store = session.store
         assert store._is_open
         assert store.read_only == read_only
@@ -111,8 +111,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         self, store: IcechunkStore, store_kwargs: dict[str, Any]
     ) -> None:
         kwargs = {**store_kwargs}
-        repo = Repository.open(**kwargs)
-        session = repo.readonly_session(branch="main")
+        repo = await Repository.open_async(**kwargs)
+        session = await repo.readonly_session_async(branch="main")
         store = session.store
 
         assert store.read_only

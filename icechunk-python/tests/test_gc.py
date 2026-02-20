@@ -1,3 +1,4 @@
+import asyncio
 import time
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -31,9 +32,9 @@ def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 @pytest.mark.parametrize("use_async", [True, False])
 async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> None:
-    prefix, repo = mk_repo(any_spec_version)
+    prefix, repo = await asyncio.to_thread(mk_repo, any_spec_version)
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     group = zarr.group(store=store, overwrite=True)
@@ -44,24 +45,24 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
         dtype="i4",
         fill_value=-1,
     )
-    session.commit("array created")
+    await session.commit_async("array created")
 
     for i in range(20):
-        session = repo.writable_session("main")
+        session = await repo.writable_session_async("main")
         store = session.store
         group = zarr.open_group(store=store)
         array = cast("zarr.core.array.Array[Any]", group["array"])
         array[i] = i
-        session.commit(f"written coord {i}")
+        await session.commit_async(f"written coord {i}")
 
     old = datetime.now(UTC)
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
     group = zarr.open_group(store=store)
     array = cast("zarr.core.array.Array[Any]", group["array"])
     array[999] = 0
-    session.commit("written coord 999")
+    await session.commit_async("written coord 999")
 
     client = get_minio_client()
 
@@ -105,7 +106,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     if use_async:
         expired_snapshots = await repo.expire_snapshots_async(old)
     else:
-        expired_snapshots = repo.expire_snapshots(old)
+        expired_snapshots = await asyncio.to_thread(repo.expire_snapshots, old)
     # empty array + 20 old versions
     assert len(expired_snapshots) == 21
 
@@ -135,7 +136,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     if use_async:
         gc_result = await repo.garbage_collect_async(old, dry_run=True)
     else:
-        gc_result = repo.garbage_collect(old, dry_run=True)
+        gc_result = await asyncio.to_thread(repo.garbage_collect, old, dry_run=True)
     space_after = space_used()
 
     assert space_before == space_after
@@ -154,7 +155,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     if use_async:
         gc_result = await repo.garbage_collect_async(old)
     else:
-        gc_result = repo.garbage_collect(old)
+        gc_result = await asyncio.to_thread(repo.garbage_collect, old)
 
     space_after = space_used()
 
@@ -204,7 +205,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     )
 
     # we can still read the array
-    session = repo.readonly_session(branch="main")
+    session = await repo.readonly_session_async(branch="main")
     store = session.store
     group = zarr.open_group(store=store, mode="r")
     array = cast("zarr.core.array.Array[Any]", group["array"])

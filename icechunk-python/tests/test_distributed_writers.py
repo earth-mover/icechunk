@@ -1,3 +1,4 @@
+import asyncio
 import time
 import warnings
 from typing import Any, cast
@@ -70,8 +71,8 @@ async def test_distributed_writers(
     does a distributed commit. When done, we open the store again and verify
     we can write everything we have written.
     """
-    repo = mk_repo(any_spec_version, use_object_store)
-    session = repo.writable_session(branch="main")
+    repo = await asyncio.to_thread(mk_repo, any_spec_version, use_object_store)
+    session = await repo.writable_session_async(branch="main")
     store = session.store
 
     shape = (CHUNKS_PER_DIM * CHUNK_DIM_SIZE,) * 2
@@ -86,22 +87,22 @@ async def test_distributed_writers(
         dtype="f8",
         fill_value=float("nan"),
     )
-    first_snap = session.commit("array created")
+    first_snap = await session.commit_async("array created")
 
-    def do_writes(branch_name: str) -> None:
-        repo.create_branch(branch_name, first_snap)
-        session = repo.writable_session(branch=branch_name)
+    async def do_writes(branch_name: str) -> None:
+        await repo.create_branch_async(branch_name, first_snap)
+        session = await repo.writable_session_async(branch=branch_name)
         fork = session.fork()
         group = zarr.open_group(store=fork.store)
         zarray = cast("zarr.Array[Any]", group["array"])
         merged_session = store_dask(sources=[dask_array], targets=[zarray])
-        session.merge(merged_session)
-        commit_res = session.commit("distributed commit")
+        await session.merge_async(merged_session)
+        commit_res = await session.commit_async("distributed commit")
         assert commit_res
 
     async def verify(branch_name: str) -> None:
         # Lets open a new store to verify the results
-        readonly_session = repo.readonly_session(branch=branch_name)
+        readonly_session = await repo.readonly_session_async(branch=branch_name)
         store = readonly_session.store
         all_keys = [key async for key in store.list_prefix("/")]
         assert (
@@ -116,9 +117,9 @@ async def test_distributed_writers(
             assert_eq(roundtripped, dask_array)  # type: ignore [no-untyped-call]
 
     with Client(dashboard_address=":0"):  # type: ignore[no-untyped-call]
-        do_writes("with-processes")
+        await do_writes("with-processes")
         await verify("with-processes")
 
     with dask.config.set(scheduler="threads"):
-        do_writes("with-threads")
+        await do_writes("with-threads")
         await verify("with-threads")
