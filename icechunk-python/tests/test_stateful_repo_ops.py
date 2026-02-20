@@ -62,14 +62,7 @@ simple_attrs = st.dictionaries(
 
 # Branches/tags are stored as files at ``refs/<name>``.  On case-insensitive
 # file systems (macOS APFS default), 'T' and 't' collide.
-if sys.platform == "darwin":
-    ref_name_text = st.text(
-        st.sampled_from(string.ascii_lowercase + string.digits),
-        min_size=1,
-        max_size=5,
-    )
-else:
-    ref_name_text = simple_text
+ref_name_text = simple_text.map(lambda x: x.lower() if sys.platform == "darwin" else x)
 
 DEFAULT_BRANCH = "main"
 INITIAL_SNAPSHOT = "1CECHNKREP0F1RSTCMT0"
