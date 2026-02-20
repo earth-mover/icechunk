@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
+use std::sync::RwLock;
 use std::{
     io::{BufReader, Read},
     ops::Range,
@@ -26,6 +27,7 @@ use tokio::{
 use tokio_util::io::SyncIoBridge;
 use tracing::{Span, debug, instrument, trace, warn};
 
+use crate::storage::GetModifiedResult;
 use crate::{
     RepositoryConfig, Storage, StorageError,
     config::CachingConfig,
@@ -84,6 +86,9 @@ pub struct AssetManager {
 
     #[serde(skip)]
     request_semaphore: Semaphore,
+
+    #[serde(skip)]
+    repo_cache: RwLock<Option<(Arc<RepoInfo>, VersionInfo)>>,
 }
 
 impl private::Sealed for AssetManager {}
@@ -155,6 +160,7 @@ impl AssetManager {
             snapshot_cache_size_warned: AtomicBool::new(false),
             manifest_cache_size_warned: AtomicBool::new(false),
             request_semaphore: Semaphore::new(max_concurrent_requests as usize),
+            repo_cache: RwLock::new(None),
         }
     }
 
@@ -465,7 +471,36 @@ impl AssetManager {
         &self,
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
         self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
-        fetch_repo_info(self.storage.as_ref(), &self.storage_settings).await
+
+        // Cloning here so lock is immediately released
+        let repo_cache =
+            self.repo_cache.read().map_err(|_| RepositoryErrorKind::PoisonLock)?.clone();
+
+        match fetch_repo_info_from_path(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            REPO_INFO_FILE_PATH,
+            repo_cache.as_ref().map(|(_, info)| info),
+        )
+        .await
+        {
+            Ok(Some((repo_info, version_info))) => {
+                let mut repo_cache = self
+                    .repo_cache
+                    .write()
+                    .map_err(|_| RepositoryErrorKind::PoisonLock)?;
+                *repo_cache = Some((repo_info.clone(), version_info.clone()));
+
+                return Ok((repo_info, version_info));
+            }
+            Ok(None) => {
+                #[allow(clippy::expect_used)]
+                return Ok(repo_cache.expect(
+                    "Logic bug in fetch_repo_info, repo_cache should exist here",
+                ));
+            }
+            Err(e) => return Err(e),
+        }
     }
 
     pub fn fail_unless_spec_at_least(
@@ -488,22 +523,38 @@ impl AssetManager {
             .await
     }
 
+    pub async fn write_repo_info(
+        &self,
+        info: Arc<RepoInfo>,
+        version: &VersionInfo,
+        backup_path: Option<&str>,
+    ) -> RepositoryResult<VersionInfo> {
+        let new_version = write_repo_info(
+            info.clone(),
+            self.spec_version(),
+            version,
+            self.compression_level,
+            backup_path,
+            self.storage.as_ref(),
+            &self.storage_settings,
+            None,
+        )
+        .await?;
+
+        {
+            *self.repo_cache.write().map_err(|_| RepositoryErrorKind::PoisonLock)? =
+                Some((info, new_version.clone()));
+        }
+
+        Ok(new_version)
+    }
+
     #[instrument(skip(self, info))]
     pub async fn create_repo_info(
         &self,
         info: Arc<RepoInfo>,
     ) -> RepositoryResult<VersionInfo> {
-        write_repo_info(
-            info,
-            self.spec_version(),
-            &storage::VersionInfo::for_creation(),
-            self.compression_level,
-            None,
-            self.storage.as_ref(),
-            &self.storage_settings,
-            None,
-        )
-        .await
+        self.write_repo_info(info, &storage::VersionInfo::for_creation(), None).await
     }
 
     #[instrument(skip(self, retry_settings, update))]
@@ -1284,7 +1335,13 @@ pub async fn fetch_repo_info(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
-    fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH).await
+    fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH, None)
+        .await
+        .map(|repo| {
+            // Since we didn't give a previous version, there must be a result here
+            #[allow(clippy::expect_used)]
+            repo.expect("Logic bug, must have a repo_info here")
+        })
 }
 
 async fn fetch_repo_info_backup(
@@ -1296,29 +1353,37 @@ async fn fetch_repo_info_backup(
         storage,
         storage_settings,
         format!("{OVERWRITTEN_FILES_PATH}/{file_name}").as_str(),
+        None,
     )
     .await
+    .map(|repo| {
+        // Since we didn't give a previous version, there must be a result here
+        #[allow(clippy::expect_used)]
+        repo.expect("Logic bug, must have a repo_info here")
+    })
 }
 
 pub async fn fetch_repo_info_from_path(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     path: &str,
-) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
+    previous_version: Option<&VersionInfo>,
+) -> RepositoryResult<Option<(Arc<RepoInfo>, VersionInfo)>> {
     debug!("Downloading repo info");
-    match storage.get_object(storage_settings, path, None).await {
-        Ok((result, version)) => {
+    match storage.get_object_conditional(storage_settings, path, previous_version).await {
+        Ok(GetModifiedResult::Modified { data, new_version }) => {
             let span = Span::current();
             tokio::task::spawn_blocking(move || {
                 let _entered = span.entered();
                 let (spec_version, decompressor) =
-                    check_and_get_decompressor(result, FileTypeBin::RepoInfo)?;
+                    check_and_get_decompressor(data, FileTypeBin::RepoInfo)?;
                 deserialize_repo_info(spec_version, decompressor)
-                    .map(|ri| (Arc::new(ri), version))
+                    .map(|ri| Some((Arc::new(ri), new_version)))
                     .map_err(RepositoryError::from)
             })
             .await?
         }
+        Ok(GetModifiedResult::OnLatestVersion) => Ok(None),
         Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
             Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
         }

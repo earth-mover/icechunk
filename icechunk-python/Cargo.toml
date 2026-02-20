@@ -49,7 +49,3 @@ default = ["cli"]
 
 [lints]
 workspace = true
-
-[profile.perf]
-inherits = "release"
-debug = 1
