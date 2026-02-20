@@ -225,6 +225,12 @@ pub async fn migrate_1_to_2(
     info!("Found {} non-dangling snapshots", all_snapshots.len());
 
     info!("Creating repository info file");
+    let config = repo.config().clone();
+    let config_bytes: Vec<u8> = flexbuffers::to_vec(&config).map_err(|e| {
+        IcechunkFormatError::from(IcechunkFormatErrorKind::SerializationErrorFlexBuffers(
+            Box::new(e),
+        ))
+    })?;
     let repo_info = Arc::new(RepoInfo::new(
         SpecVersionBin::V2dot0,
         tags,
@@ -243,6 +249,7 @@ pub async fn migrate_1_to_2(
         None,
         repo.config().num_updates_per_repo_info_file(),
         None,
+        Some(config_bytes.as_slice()),
     )?);
 
     if dry_run {
