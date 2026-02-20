@@ -35,7 +35,7 @@ repo_ops_mod.IcechunkError = (ic.IcechunkError, ic_v1.IcechunkError)  # type: ig
 from typing import Literal
 
 import hypothesis.strategies as st
-from hypothesis import note, settings
+from hypothesis import settings
 from hypothesis.stateful import initialize, precondition, rule, run_state_machine_as_test
 
 from tests.test_stateful_repo_ops import TwoActorVersionControlStateMachine

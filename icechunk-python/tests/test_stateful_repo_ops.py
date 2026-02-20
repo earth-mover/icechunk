@@ -4,7 +4,6 @@ import datetime
 import itertools
 import json
 import operator
-import string
 import sys
 import textwrap
 from collections import defaultdict
@@ -822,6 +821,9 @@ class TwoActorVersionControlStateMachine(VersionControlStateMachine):
         self.on_disk_storage_factory: dict[str, Callable[[str], Storage]] = defaultdict(
             lambda: local_filesystem_storage
         )
+
+    def _make_storage(self):
+        return self.ic.in_memory_storage()
 
     @initialize(
         data=st.data(),
