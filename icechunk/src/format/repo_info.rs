@@ -1666,7 +1666,7 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1, 100);
+        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1, 100, None);
 
         // Attempting add_snapshot with a timestamp equal to the top of the ops log
         // should fail
