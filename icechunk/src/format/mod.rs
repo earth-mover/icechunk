@@ -16,6 +16,7 @@ use std::{
 
 use ::flatbuffers::InvalidFlatbuffer;
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use flatbuffers::generated;
 use format_constants::FileTypeBin;
 use manifest::{VirtualReferenceError, VirtualReferenceErrorKind};
@@ -330,6 +331,10 @@ pub enum IcechunkFormatErrorKind {
     Path(#[from] PathError),
     #[error("invalid timestamp in file")]
     InvalidTimestamp,
+    #[error(
+        "update timestamp is invalid, please verify if the machine clock has drifted: update time: `{new_time}`, latest update time: `{latest_time}`"
+    )]
+    InvalidUpdateTimestamp { latest_time: DateTime<Utc>, new_time: DateTime<Utc> },
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
