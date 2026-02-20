@@ -6,14 +6,14 @@ import json
 import operator
 import sys
 import textwrap
-from collections import defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Literal, Self, cast
 
 import numpy as np
 import pytest
+from packaging.version import Version
 
 import icechunk
 from zarr.core.buffer import Buffer, default_buffer_prototype
@@ -35,7 +35,6 @@ from hypothesis.stateful import (
     invariant,
     precondition,
     rule,
-    run_state_machine_as_test,
 )
 
 import zarr.testing.strategies as zrst
@@ -45,8 +44,6 @@ from icechunk import (
     RepositoryConfig,
     SnapshotInfo,
     Storage,
-    in_memory_storage,
-    local_filesystem_storage,
 )
 from icechunk.testing.strategies import repository_configs
 from zarr.testing.stateful import SyncStoreWrapper
@@ -379,17 +376,27 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
         self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata))
 
+    def _make_storage(self):
+        return self.ic.in_memory_storage()
+
     @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
     def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
-        self.storage = in_memory_storage()
+        self.storage = self._make_storage()
         config = data.draw(repository_configs(ic_module=self.ic))
         self.model.spec_version = spec_version
 
-        self.repo = self.actor.create(
-            self.storage,
-            spec_version=spec_version,
-            config=config,
-        )
+        if Version(self.ic.__version__).major >= 2:
+            self.repo = self.actor.create(
+                self.storage,
+                spec_version=spec_version,
+                config=config,
+            )
+        else:
+            self.repo = self.actor.create(
+                self.storage,
+                config=config,
+            )
+
         self._initialize_model_and_data(data)
         return DEFAULT_BRANCH
 
@@ -810,93 +817,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             # the initial snapshot is in every possible branch
             # this is a python-only invariant
             assert ancestry[-1].id == self.initial_snapshot.id
-
-
-class TwoActorVersionControlStateMachine(VersionControlStateMachine):
-    actors: dict[str, type[Repository]]
-    actor_storage_objects: dict[str, Storage]
-
-    def __init__(self) -> None:
-        super().__init__(actor=None)
-        self.actors = {"one": Repository, "two": Repository}
-        self.actor_modules: dict[str, Any] = {"one": icechunk, "two": icechunk}
-        self.actor_storage_objects = {}
-        self.on_disk_storage_factory: dict[str, Callable[[str], Storage]] = defaultdict(
-            lambda: local_filesystem_storage
-        )
-
-    def _make_storage(self):
-        return self.ic.in_memory_storage()
-
-    @initialize(
-        data=st.data(),
-        target=VersionControlStateMachine.branches,
-        spec_version=st.sampled_from([1, 2]),
-        use_in_memory_storage=st.booleans(),
-    )
-    def initialize(
-        self,
-        data: st.DataObject,
-        spec_version: Literal[1, 2],
-        use_in_memory_storage: bool,
-    ) -> str:
-        choice = data.draw(st.sampled_from(list(self.actors.keys())))
-        note(f"initializing with actor {choice!r}")
-        self.actor = self.actors[choice]
-        self.ic = self.actor_modules[choice]
-
-        # Create storage - have to differentiate so that in multi-actor
-        # tests with different icechunk versions nothing breaks. icechunk_v1 cannot
-        # share in-memory storage with icehunk 2
-        if use_in_memory_storage:
-            # In-memory storage: all actors share the same object
-            self.storage = in_memory_storage()
-            for actor_name in self.actors.keys():
-                self.actor_storage_objects[actor_name] = self.storage
-        else:
-            # Filesystem storage: all actors share same tmpdir
-            # but need different Storage creation methods to abstract
-            # over multi version tests
-            import tempfile
-
-            tmpdir = tempfile.mkdtemp()
-            for actor_name in self.actors.keys():
-                self.actor_storage_objects[actor_name] = self.on_disk_storage_factory[
-                    actor_name
-                ](tmpdir)
-            self.storage = self.actor_storage_objects[choice]
-
-        # Try to create with spec_version, fall back without it for v1 compatibility
-        try:
-            self.repo = self.actor.create(self.storage, spec_version=spec_version)
-        except TypeError as e:
-            if "spec_version" not in str(e):
-                raise
-            self.repo = self.actor.create(self.storage)
-
-        # Initialize model and data
-        self._initialize_model_and_data(data)
-
-        return DEFAULT_BRANCH
-
-    @rule(data=st.data())
-    def switch_actor(self, data: st.DataObject) -> None:
-        """Switch to a randomly chosen actor and reopen the repository."""
-        choice = data.draw(st.sampled_from(tuple(self.actors)))
-        note(f"switching to actor {choice!r}")
-        self.actor = self.actors[choice]
-        self.ic = self.actor_modules[choice]
-        self.storage = self.actor_storage_objects[choice]
-        super().reopen_repository(data)
-
-
-def test_two_actors() -> None:
-    def mk_test_instance_sync() -> TwoActorVersionControlStateMachine:
-        return TwoActorVersionControlStateMachine()
-
-    run_state_machine_as_test(  # type: ignore[no-untyped-call]
-        mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
-    )
 
 
 VersionControlStateMachine.TestCase.settings = settings(

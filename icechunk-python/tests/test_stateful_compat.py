@@ -32,20 +32,21 @@ import tests.test_stateful_repo_ops as repo_ops_mod
 
 repo_ops_mod.IcechunkError = (ic.IcechunkError, ic_v1.IcechunkError)  # type: ignore[assignment,attr-defined]
 
-from typing import Literal
 
 import hypothesis.strategies as st
-from hypothesis import settings
+from hypothesis import note, settings
 from hypothesis.stateful import initialize, precondition, rule, run_state_machine_as_test
 
-from tests.test_stateful_repo_ops import TwoActorVersionControlStateMachine
+from tests.test_stateful_repo_ops import (
+    VersionControlStateMachine,
+)
 from tests.test_zarr.test_stateful import (
     TwoActorZarrHierarchyStateMachine,
 )
 
 
-class CrossVersionTwoActorVersionControlStateMachine(
-    TwoActorVersionControlStateMachine,
+class CrossVersionVersionControlStateMachine(
+    VersionControlStateMachine,
 ):
     """Two-actor version control test: one actor is v2, the other is v1.
 
@@ -53,14 +54,10 @@ class CrossVersionTwoActorVersionControlStateMachine(
     """
 
     def __init__(self) -> None:
-        super().__init__()
         self.actors = {"v2": ic.Repository, "v1": ic_v1.Repository}
         self.actor_modules = {"v2": ic, "v1": ic_v1}
-        # Set per-actor storage constructors
-        self.on_disk_storage_factory = {
-            "v2": ic.local_filesystem_storage,
-            "v1": ic_v1.local_filesystem_storage,
-        }
+        self._storage_path = tempfile.mkdtemp()
+        super().__init__(actor=None)
 
     # Disabled: v1 actor doesn't support spec version upgrade.
     @rule()
@@ -68,24 +65,34 @@ class CrossVersionTwoActorVersionControlStateMachine(
     def upgrade_spec_version(self) -> None:
         pass
 
+    def _make_storage(self):
+        return self.ic.local_filesystem_storage(self._storage_path)
+
     @initialize(
         data=st.data(),
-        target=TwoActorVersionControlStateMachine.branches,
-        spec_version=st.just(1),  # Always v1 for cross-version compat
-        use_in_memory_storage=st.just(False),  # Filesystem storage
+        target=VersionControlStateMachine.branches,
     )
-    def initialize(
-        self,
-        data: st.DataObject,
-        spec_version: Literal[1, 2],
-        use_in_memory_storage: bool,
-    ) -> str:
-        return super().initialize(data, spec_version, use_in_memory_storage)  # type: ignore[return-value]
+    def initialize(self, data: st.DataObject) -> str:
+        choice = data.draw(st.sampled_from(list(self.actors.keys())))
+        note(f"initializing with actor {choice!r}")
+        self.actor = self.actors[choice]
+        self.ic = self.actor_modules[choice]
+        return super().initialize(data, spec_version=1)
+
+    @rule(data=st.data())
+    def switch_actor(self, data: st.DataObject) -> None:
+        """Switch to a randomly chosen actor and reopen the repository."""
+        choice = data.draw(st.sampled_from(tuple(self.actors)))
+        note(f"switching to actor {choice!r}")
+        self.actor = self.actors[choice]
+        self.ic = self.actor_modules[choice]
+        self.storage = self._make_storage()
+        super().reopen_repository(data)
 
 
 def test_two_actors_cross_version() -> None:
     run_state_machine_as_test(  # type: ignore[no-untyped-call]
-        CrossVersionTwoActorVersionControlStateMachine,
+        CrossVersionVersionControlStateMachine,
         settings=settings(report_multiple_bugs=False),
     )
 
