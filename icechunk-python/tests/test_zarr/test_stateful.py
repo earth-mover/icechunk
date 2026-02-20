@@ -83,6 +83,13 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # to do things like construct config types correctly
         self.ic = ic
 
+        # Two-actor setup: actors can be overridden by subclasses
+        self.actors: dict[str, type[Repository]] = {"one": Repository, "two": Repository}
+        self.actor_modules: dict[str, Any] = {"one": ic, "two": ic}
+        self.actor_storage_objects: dict[str, Storage] = {
+            name: storage for name in self.actors
+        }
+
         # Create a temporary repository with spec_version=1 in a separate storage
         # This will be replaced in init_store with the Hypothesis-sampled version
         # we need this in order to properly initialize the superclass MemoryStore
@@ -368,34 +375,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             del group[group_name]
         self.all_groups.remove(group_path)
 
-    @rule()
-    def pickle_objects(self) -> None:
-        if not self.store.session.has_uncommitted_changes:
-            session = self.store.session.fork()
-            pickle.loads(pickle.dumps(session))
-
-        pickle.loads(pickle.dumps(self.repo))
-
-
-class TwoActorZarrHierarchyStateMachine(ModifiedZarrHierarchyStateMachine):
-    """
-    This test models two "actors" operating sequentially on the repo.
-    """
-
-    actors: dict[str, type[Repository]]
-    actor_storage_objects: dict[str, Storage]  # Storage object per actor
-
-    def __init__(self, storage: Storage) -> None:
-        super().__init__(storage)
-        self.actors = {"one": Repository, "two": Repository}
-        self.actor_modules: dict[str, Any] = {"one": ic, "two": ic}
-        # Set up actor storage objects if not already set (subclass may have set them)
-        if not hasattr(self, "actor_storage_objects"):
-            self.actor_storage_objects = {}
-            # Both actors share the same storage by default (same Repository type)
-            for actor_name in self.actors.keys():
-                self.actor_storage_objects[actor_name] = storage
-
     @rule(data=st.data())
     def reopen_with_new_actor(self, data: st.DataObject) -> None:
         # We use the Zarr's memory store as the model,
@@ -412,10 +391,18 @@ class TwoActorZarrHierarchyStateMachine(ModifiedZarrHierarchyStateMachine):
         self.repo = self.actor.open(self.storage)
         self.store = self.repo.writable_session("main").store
 
+    @rule()
+    def pickle_objects(self) -> None:
+        if not self.store.session.has_uncommitted_changes:
+            session = self.store.session.fork()
+            pickle.loads(pickle.dumps(session))
+
+        pickle.loads(pickle.dumps(self.repo))
+
 
 def test_two_actors() -> None:
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
-        return TwoActorZarrHierarchyStateMachine(in_memory_storage())
+        return ModifiedZarrHierarchyStateMachine(in_memory_storage())
 
     run_state_machine_as_test(  # type: ignore[no-untyped-call]
         mk_test_instance_sync, settings=settings(report_multiple_bugs=False)

@@ -41,7 +41,7 @@ from tests.test_stateful_repo_ops import (
     VersionControlStateMachine,
 )
 from tests.test_zarr.test_stateful import (
-    TwoActorZarrHierarchyStateMachine,
+    ModifiedZarrHierarchyStateMachine,
 )
 
 
@@ -98,7 +98,7 @@ def test_two_actors_cross_version() -> None:
 
 
 class CrossVersionTwoActorZarrHierarchyStateMachine(
-    TwoActorZarrHierarchyStateMachine,
+    ModifiedZarrHierarchyStateMachine,
 ):
     """Two-actor Zarr hierarchy test: one actor is v2, the other is v1.
 
@@ -134,7 +134,7 @@ class CrossVersionTwoActorZarrHierarchyStateMachine(
         self.actor = self.actors[actor_name]
         self.ic = self.actor_modules[actor_name]
         self.storage = self.actor_storage_objects[actor_name]
-        super().init_store(self, spec_version=spec_version)
+        super().init_store(spec_version=spec_version)
 
     # v1 doesn't support empty commits, so only allow them when the actor is v2
     @rule(data=st.data())
