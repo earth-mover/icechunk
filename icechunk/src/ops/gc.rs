@@ -436,6 +436,7 @@ async fn delete_snapshots_from_repo_info(
             .filter_ok(|si| keep_snapshots.contains(&si.id))
             .try_collect()?;
 
+        let config_bytes = repo_info.config_bytes_raw()?;
         let new_repo_info = RepoInfo::new(
             asset_manager.spec_version(),
             repo_info.tags()?,
@@ -451,6 +452,7 @@ async fn delete_snapshots_from_repo_info(
             Some(backup_path),
             num_updates_per_repo_info_file,
             repo_info.repo_before_updates()?,
+            config_bytes.as_deref(),
         )?;
 
         Ok(Arc::new(new_repo_info))
@@ -834,6 +836,7 @@ pub async fn expire_v2(
                 Ref::Branch(_) => None,
             }),
         );
+        let config_bytes = repo_info.config_bytes_raw()?;
         let new_repo_info = RepoInfo::new(
             asset_manager.spec_version(),
             tags,
@@ -849,6 +852,7 @@ pub async fn expire_v2(
             Some(backup_path),
             num_updates_per_repo_info_file,
             repo_info.repo_before_updates()?,
+            config_bytes.as_deref(),
         )?;
 
         Ok(Arc::new(new_repo_info))
