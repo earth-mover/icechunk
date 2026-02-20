@@ -1026,11 +1026,17 @@ impl PyRepository {
     }
 
     #[staticmethod]
-    fn exists(py: Python<'_>, storage: PyStorage) -> PyResult<bool> {
+    #[pyo3(signature = (storage, storage_settings=None))]
+    fn exists(
+        py: Python<'_>,
+        storage: PyStorage,
+        storage_settings: Option<Py<PyStorageSettings>>,
+    ) -> PyResult<bool> {
+        let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let exists = Repository::exists(storage.0)
+                let exists = Repository::exists(storage.0, settings)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(exists)
@@ -1039,9 +1045,15 @@ impl PyRepository {
     }
 
     #[staticmethod]
-    fn exists_async(py: Python<'_>, storage: PyStorage) -> PyResult<Bound<'_, PyAny>> {
+    #[pyo3(signature = (storage, storage_settings=None))]
+    fn exists_async(
+        py: Python<'_>,
+        storage: PyStorage,
+        storage_settings: Option<Py<PyStorageSettings>>,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let exists = Repository::exists(storage.0)
+            let exists = Repository::exists(storage.0, settings)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(exists)
@@ -1049,11 +1061,17 @@ impl PyRepository {
     }
 
     #[staticmethod]
-    fn fetch_spec_version(py: Python<'_>, storage: PyStorage) -> PyResult<Option<u8>> {
+    #[pyo3(signature = (storage, storage_settings=None))]
+    fn fetch_spec_version(
+        py: Python<'_>,
+        storage: PyStorage,
+        storage_settings: Option<Py<PyStorageSettings>>,
+    ) -> PyResult<Option<u8>> {
+        let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let spec_version = Repository::fetch_spec_version(storage.0)
+                let spec_version = Repository::fetch_spec_version(storage.0, settings)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(spec_version.map(|v| v as u8))
@@ -1062,12 +1080,15 @@ impl PyRepository {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (storage, storage_settings=None))]
     fn fetch_spec_version_async(
         py: Python<'_>,
         storage: PyStorage,
+        storage_settings: Option<Py<PyStorageSettings>>,
     ) -> PyResult<Bound<'_, PyAny>> {
+        let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
         pyo3_async_runtimes::tokio::future_into_py::<_, Option<u8>>(py, async move {
-            let spec_version = Repository::fetch_spec_version(storage.0)
+            let spec_version = Repository::fetch_spec_version(storage.0, settings)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(spec_version.map(|v| v as u8))

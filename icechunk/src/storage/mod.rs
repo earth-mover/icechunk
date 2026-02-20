@@ -544,8 +544,8 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         Ok(res.clone())
     }
 
-    async fn root_is_clean(&self) -> StorageResult<bool> {
-        match self.list_objects(&Settings::default(), "").await?.next().await {
+    async fn root_is_clean(&self, settings: &Settings) -> StorageResult<bool> {
+        match self.list_objects(settings, "").await?.next().await {
             None => Ok(true),
             Some(Ok(_)) => Ok(false),
             Some(Err(err)) => Err(err),
@@ -920,16 +920,16 @@ mod tests {
 
         let repo_dir = TempDir::new().unwrap();
         let s = new_local_filesystem_storage(repo_dir.path()).await.unwrap();
-        assert!(s.root_is_clean().await.unwrap());
+        assert!(s.root_is_clean(&Settings::default()).await.unwrap());
 
         let mut file = File::create(repo_dir.path().join("foo.txt")).unwrap();
         write!(file, "hello").unwrap();
-        assert!(!s.root_is_clean().await.unwrap());
+        assert!(!s.root_is_clean(&Settings::default()).await.unwrap());
 
         let inside_existing =
             PathBuf::from_iter([repo_dir.path().as_os_str().to_str().unwrap(), "foo"]);
         let s = new_local_filesystem_storage(&inside_existing).await.unwrap();
-        assert!(s.root_is_clean().await.unwrap());
+        assert!(s.root_is_clean(&Settings::default()).await.unwrap());
     }
 
     #[cfg(feature = "object-store-gcs")]
