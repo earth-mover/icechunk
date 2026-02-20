@@ -5,6 +5,7 @@
 use crate::private;
 #[cfg(feature = "object-store-s3")]
 use crate::storage::s3_config::{S3Credentials, S3Options};
+use crate::storage::strip_quotes;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -56,13 +57,14 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::{OnceCell, RwLock};
+use tokio_util::io::StreamReader;
 use tracing::instrument;
 use url::Url;
 
 use super::{
-    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, ListInfo,
-    RetriesSettings, Settings, Storage, StorageError, StorageErrorKind, StorageResult,
-    VersionInfo, VersionedUpdateResult,
+    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
+    ListInfo, RetriesSettings, Settings, Storage, StorageError, StorageErrorKind,
+    StorageResult, VersionInfo, VersionedUpdateResult,
 };
 
 // --- GCS credential types ---
@@ -471,6 +473,26 @@ impl Storage for ObjectStorage {
         Ok(res.last_modified)
     }
 
+    #[instrument(skip(self, settings))]
+    async fn get_object_conditional(
+        &self,
+        settings: &Settings,
+        path: &str,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<GetModifiedResult> {
+        match self
+            .get_object_range_conditional(settings, path, None, previous_version)
+            .await
+        {
+            Ok(Some((stream, new_version))) => {
+                let reader = StreamReader::new(stream.map_err(std::io::Error::other));
+                Ok(GetModifiedResult::Modified { data: Box::pin(reader), new_version })
+            }
+            Ok(None) => Ok(GetModifiedResult::OnLatestVersion),
+            Err(e) => Err(e),
+        }
+    }
+
     #[instrument(skip(self))]
     async fn get_object_range(
         &self,
@@ -481,12 +503,41 @@ impl Storage for ObjectStorage {
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
+        self.get_object_range_conditional(settings, path, range, None).await.map(|v| {
+            // If we got a result, then we can unwrap safely here:
+            // Errors would be in the other branch, and None is only expected
+            // if previous_version was passed in function call, but we set it to None
+            #[allow(clippy::expect_used)]
+            v.expect("Logic bug in get_object_range_conditional, should not get None")
+        })
+    }
+}
+
+impl ObjectStorage {
+    async fn get_object_range_conditional(
+        &self,
+        settings: &Settings,
+        path: &str,
+        range: Option<&Range<u64>>,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<
+        Option<(
+            Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+            VersionInfo,
+        )>,
+    > {
         let full_key = self.prefixed_path(path);
         let range = range.map(|range| {
             let usize_range = range.start..range.end;
             usize_range.into()
         });
-        let opts = GetOptions { range, ..Default::default() };
+        let opts = GetOptions {
+            range,
+            if_none_match: previous_version
+                .as_ref()
+                .and_then(|v| v.etag().map(|e| strip_quotes(e).into())),
+            ..Default::default()
+        };
         let res = self.get_client(settings).await.get_opts(&full_key, opts).await;
 
         match res {
@@ -497,11 +548,12 @@ impl Storage for ObjectStorage {
                 };
                 let stream =
                     Box::pin(result.into_stream().map_err(|e| Box::new(e).into()));
-                Ok((stream, version))
+                Ok(Some((stream, version)))
             }
             Err(object_store::Error::NotFound { .. }) => {
                 Err(StorageErrorKind::ObjectNotFound.into())
             }
+            Err(object_store::Error::NotModified { .. }) => Ok(None),
             Err(err) => Err(Box::new(err).into()),
         }
     }

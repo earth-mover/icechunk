@@ -26,8 +26,8 @@ use crate::{
 use crate::{private, storage::StorageErrorKind};
 
 use super::{
-    DeleteObjectsResult, ListInfo, Settings, Storage, StorageError, StorageResult,
-    VersionInfo, VersionedUpdateResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
+    StorageResult, VersionInfo, VersionedUpdateResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -376,5 +376,17 @@ impl Storage for RedirectStorage {
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
         self.backend().await?.get_object_last_modified(path, settings).await
+    }
+
+    async fn get_object_conditional(
+        &self,
+        settings: &Settings,
+        path: &str,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<GetModifiedResult> {
+        self.backend()
+            .await?
+            .get_object_conditional(settings, path, previous_version)
+            .await
     }
 }
