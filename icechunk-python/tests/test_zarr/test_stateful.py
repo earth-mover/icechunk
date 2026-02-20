@@ -6,7 +6,7 @@ from typing import Any, TypeVar
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import assume, note, settings
+from hypothesis import assume, note
 from hypothesis.stateful import (
     initialize,
     invariant,
@@ -391,9 +391,7 @@ def test_zarr_hierarchy() -> None:
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(in_memory_storage())
 
-    run_state_machine_as_test(  # type: ignore[no-untyped-call]
-        mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
-    )
+    run_state_machine_as_test(mk_test_instance_sync)  # type: ignore[no-untyped-call]
 
 
 def test_zarr_store() -> None:

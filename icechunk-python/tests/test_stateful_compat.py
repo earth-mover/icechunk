@@ -165,6 +165,5 @@ def test_two_actors_zarr_cross_version() -> None:
         return CrossVersionTwoActorZarrHierarchyStateMachine(tempfile.mkdtemp())
 
     run_state_machine_as_test(  # type: ignore[no-untyped-call]
-        mk_test_instance_sync,
-        settings=settings(report_multiple_bugs=False),
+        mk_test_instance_sync
     )
