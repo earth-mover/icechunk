@@ -359,7 +359,7 @@ impl RepoInfo {
         if let Some(Ok((_, latest_time, _))) = &last_update
             && update.update_time <= *latest_time
         {
-            return Err(IcechunkFormatErrorKind::InvalidUpdateTimestampOrdering {
+            return Err(IcechunkFormatErrorKind::InvalidUpdateTimestamp {
                 latest_time: *latest_time,
                 new_time: update.update_time,
             }
@@ -1648,7 +1648,7 @@ mod tests {
         assert!(matches!(
             result,
             Err(IcechunkFormatError {
-                kind: IcechunkFormatErrorKind::InvalidUpdateTimestampOrdering { .. },
+                kind: IcechunkFormatErrorKind::InvalidUpdateTimestamp { .. },
                 ..
             })
         ));
@@ -1677,7 +1677,7 @@ mod tests {
         assert!(matches!(
             result,
             Err(IcechunkFormatError {
-                kind: IcechunkFormatErrorKind::InvalidUpdateTimestampOrdering { .. },
+                kind: IcechunkFormatErrorKind::InvalidUpdateTimestamp { .. },
                 ..
             })
         ));

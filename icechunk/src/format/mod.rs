@@ -332,9 +332,9 @@ pub enum IcechunkFormatErrorKind {
     #[error("invalid timestamp in file")]
     InvalidTimestamp,
     #[error(
-        "update timestamp `{new_time}` is not newer than the latest update `{latest_time}`"
+        "update timestamp is invalid, please verify if the machine clock has drifted: update time: `{new_time}`, latest update time: `{latest_time}`"
     )]
-    InvalidUpdateTimestampOrdering { latest_time: DateTime<Utc>, new_time: DateTime<Utc> },
+    InvalidUpdateTimestamp { latest_time: DateTime<Utc>, new_time: DateTime<Utc> },
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
