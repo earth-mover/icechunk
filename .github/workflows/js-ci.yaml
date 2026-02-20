@@ -1,0 +1,281 @@
+name: JS CI
+
+env:
+  DEBUG: napi:*
+  APP_NAME: icechunk
+  MACOSX_DEPLOYMENT_TARGET: "10.13"
+  CARGO_INCREMENTAL: "1"
+
+on:
+  push:
+    branches:
+      - main
+      - "support/**"
+    paths:
+      - "icechunk/**"
+      - "icechunk-js/**"
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "icechunk/**"
+      - "icechunk-js/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    defaults:
+      run:
+        working-directory: ./icechunk-js
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: windows-latest
+            build: yarn build --target x86_64-pc-windows-msvc
+            target: x86_64-pc-windows-msvc
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            build: yarn build --target x86_64-unknown-linux-gnu --use-napi-cross
+          - host: macos-latest
+            target: aarch64-apple-darwin
+            build: yarn build --target aarch64-apple-darwin
+          - host: ubuntu-latest
+            target: wasm32-wasip1-threads
+            build: yarn build --target wasm32-wasip1-threads
+            setup: |
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends clang llvm wasi-libc libc++-dev
+              echo "CC_wasm32_wasip1_threads=clang" >> $GITHUB_ENV
+              echo "CXX_wasm32_wasip1_threads=clang++" >> $GITHUB_ENV
+              echo "AR_wasm32_wasip1_threads=llvm-ar" >> $GITHUB_ENV
+              echo "CC_wasm32_wasi=clang" >> $GITHUB_ENV
+              echo "CXX_wasm32_wasi=clang++" >> $GITHUB_ENV
+              echo "AR_wasm32_wasi=llvm-ar" >> $GITHUB_ENV
+              echo "WASI_SYSROOT=/usr" >> $GITHUB_ENV
+              echo "CFLAGS_wasm32_wasip1_threads=--sysroot=/usr -isystem /usr/include/wasm32-wasi" >> $GITHUB_ENV
+              echo "CXXFLAGS_wasm32_wasip1_threads=--sysroot=/usr -isystem /usr/include/wasm32-wasi" >> $GITHUB_ENV
+              echo "CFLAGS_wasm32_wasi=--sysroot=/usr -isystem /usr/include/wasm32-wasi" >> $GITHUB_ENV
+              echo "CXXFLAGS_wasm32_wasi=--sysroot=/usr -isystem /usr/include/wasm32-wasi" >> $GITHUB_ENV
+    name: stable - ${{ matrix.settings.target }} - node@22
+    runs-on: ${{ matrix.settings.host }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: yarn
+          cache-dependency-path: icechunk-js/yarn.lock
+      - name: Install
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.settings.target }}
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.napi-rs
+            .cargo-cache
+            target/
+          key: ${{ matrix.settings.target }}-cargo-${{ matrix.settings.host }}
+      - uses: mlugg/setup-zig@v2
+        if: ${{ contains(matrix.settings.target, 'musl') }}
+        with:
+          version: 0.14.1
+      - name: Install cargo-zigbuild
+        uses: taiki-e/install-action@v2
+        if: ${{ contains(matrix.settings.target, 'musl') }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: cargo-zigbuild
+      - name: Setup toolchain
+        run: ${{ matrix.settings.setup }}
+        if: ${{ matrix.settings.setup }}
+        shell: bash
+      - name: Install dependencies
+        run: yarn install
+      - name: Build
+        run: ${{ matrix.settings.build }}
+        shell: bash
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: |
+            icechunk-js/${{ env.APP_NAME }}.*.node
+            icechunk-js/${{ env.APP_NAME }}.*.wasm
+          if-no-files-found: error
+
+  test-macOS-windows-binding:
+    name: Test bindings on ${{ matrix.settings.target }} - node@${{ matrix.node }}
+    needs:
+      - build
+    defaults:
+      run:
+        working-directory: ./icechunk-js
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            architecture: x64
+          - host: macos-latest
+            target: aarch64-apple-darwin
+            architecture: arm64
+        node:
+          - "20"
+          - "22"
+    runs-on: ${{ matrix.settings.host }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: yarn
+          cache-dependency-path: icechunk-js/yarn.lock
+          architecture: ${{ matrix.settings.architecture }}
+      - name: Install dependencies
+        run: yarn install
+      - name: Download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: ./icechunk-js
+      - name: List packages
+        run: ls -R .
+        shell: bash
+      - name: Test bindings
+        run: yarn test
+
+  test-linux-binding:
+    name: Test bindings on ${{ matrix.target }} - node@${{ matrix.node }}
+    needs:
+      - build
+    defaults:
+      run:
+        working-directory: ./icechunk-js
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+        node:
+          - "20"
+          - "22"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: yarn
+          cache-dependency-path: icechunk-js/yarn.lock
+      - name: Install dependencies
+        run: yarn install
+      - name: Download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: bindings-${{ matrix.target }}
+          path: ./icechunk-js
+      - name: List packages
+        run: ls -R .
+        shell: bash
+      - name: Test bindings
+        run: yarn test
+
+  test-wasi:
+    name: Test WASI target
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./icechunk-js
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: yarn
+          cache-dependency-path: icechunk-js/yarn.lock
+      - name: Install dependencies
+        run: |
+          yarn config set supportedArchitectures.cpu "wasm32"
+          yarn install
+      - name: Download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: bindings-wasm32-wasip1-threads
+          path: ./icechunk-js
+      - name: List packages
+        run: ls -R .
+        shell: bash
+      - name: Test bindings
+        run: yarn test
+        env:
+          NAPI_RS_FORCE_WASI: 1
+
+  publish:
+    name: Publish
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'publish-npm')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./icechunk-js
+    permissions:
+      contents: write
+      id-token: write
+    needs:
+      - test-macOS-windows-binding
+      - test-linux-binding
+      - test-wasi
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: yarn
+          cache-dependency-path: icechunk-js/yarn.lock
+      - name: Install dependencies
+        run: yarn install
+      - name: Create npm dirs
+        run: yarn napi create-npm-dirs
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: ./icechunk-js/artifacts
+      - name: Move artifacts
+        run: yarn artifacts
+      - name: List packages
+        run: ls -R ./npm
+        shell: bash
+      - name: Publish
+        run: |
+          npm config set provenance true
+          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+          VERSION=$(node -p "require('./package.json').version")
+          if echo "$VERSION" | grep -q "-"; then
+            TAG=${VERSION%%-*}; TAG=${VERSION#"$TAG"-}; TAG=${TAG%%.*}
+            npm publish --access public --tag "$TAG"
+          else
+            npm publish --access public
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

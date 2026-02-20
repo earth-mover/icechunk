@@ -23,3 +23,7 @@ jobs:
         uses: codespell-project/codespell-problem-matcher@v1.2.0
       - name: Codespell
         uses: codespell-project/actions-codespell@v2
+        with:
+          skip: .git*,*.svg,*.lock,*lock.json,*.css,.codespellrc,*.cjs
+          ignore_words_list: crate,firs,anc
+          check_hidden: true
