@@ -44,6 +44,7 @@ from icechunk._icechunk_python import (
     RepoInitializedUpdate,
     RepoMigratedUpdate,
     RepositoryConfig,
+    RepoUpdateRetryConfig,
     S3Credentials,
     S3Options,
     S3StaticCredentials,
@@ -156,6 +157,7 @@ __all__ = [
     "RebaseFailedError",
     "RepoInitializedUpdate",
     "RepoMigratedUpdate",
+    "RepoUpdateRetryConfig",
     "Repository",
     "RepositoryConfig",
     "S3Credentials",
@@ -273,7 +275,7 @@ def upgrade_icechunk_repository(
     )
 
 
-ManifestSplittingConfig.from_dict = from_dict  # type: ignore[method-assign]
-ManifestSplittingConfig.to_dict = to_dict  # type: ignore[method-assign]
+ManifestSplittingConfig.from_dict = staticmethod(from_dict)  # type: ignore[method-assign]
+ManifestSplittingConfig.to_dict = to_dict  # type: ignore[method-assign,assignment]
 
 initialize_logs()

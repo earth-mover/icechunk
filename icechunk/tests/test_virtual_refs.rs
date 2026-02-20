@@ -148,7 +148,12 @@ async fn create_local_repository(
         )
         .unwrap(),
         VirtualChunkContainer::new(
-            "gcs://earthmover-sample-data/".to_string(),
+            "gcs://al-public-test-bucket/".to_string(),
+            ObjectStoreConfig::Gcs(Default::default()),
+        )
+        .unwrap(),
+        VirtualChunkContainer::new(
+            "gcs://gcp-public-data-arco-era5/".to_string(),
             ObjectStoreConfig::Gcs(Default::default()),
         )
         .unwrap(),
@@ -168,7 +173,11 @@ async fn create_local_repository(
             Some(Credentials::S3(S3Credentials::Anonymous)),
         ),
         (
-            "gcs://earthmover-sample-data".to_string(),
+            "gcs://al-public-test-bucket".to_string(),
+            Some(Credentials::Gcs(GcsCredentials::Anonymous)),
+        ),
+        (
+            "gcs://gcp-public-data-arco-era5".to_string(),
             Some(Credentials::Gcs(GcsCredentials::Anonymous)),
         ),
     ]
@@ -279,7 +288,7 @@ async fn write_chunks_to_minio(chunks: impl Iterator<Item = (String, Bytes)>) {
         client
             .put_object()
             .bucket(bucket_name.clone())
-            .key(key)
+            .key(key.strip_prefix('/').unwrap())
             .body(bytes.into())
             .send()
             .await
@@ -746,7 +755,7 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
 
     let ref1 = VirtualChunkRef {
         location: VirtualChunkLocation::from_absolute_path(
-            "gcs://earthmover-sample-data/netcdf/test_echam_spectral.nc",
+            "gcs://al-public-test-bucket/netcdf_test_echam_spectral.nc",
         )?,
         offset: 22306,
         length: 288,
@@ -773,7 +782,7 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
 
     let ref_expired = VirtualChunkRef {
         location: VirtualChunkLocation::from_absolute_path(
-            "gcs://earthmover-sample-data/netcdf/test_echam_spectral.nc",
+            "gcs://al-public-test-bucket/netcdf_test_echam_spectral.nc",
         )?,
         offset: 22306,
         length: 288,
@@ -781,7 +790,7 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
     };
     let ref_bad_tag = VirtualChunkRef {
         location: VirtualChunkLocation::from_absolute_path(
-            "gcs://earthmover-sample-data/netcdf/test_echam_spectral.nc",
+            "gcs://al-public-test-bucket/netcdf_test_echam_spectral.nc",
         )?,
         offset: 22306,
         length: 288,
@@ -794,19 +803,15 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
     store.set_virtual_ref("year/c/3", ref_expired, false).await?;
     store.set_virtual_ref("year/c/4", ref_bad_tag, false).await?;
 
-    // FIXME: enable this once object_store can access public buckets without credentials
-    // otherwise we get an error in GHA
-    if false {
-        let chunk = store.get("year/c/0", &ByteRange::ALL).await.unwrap();
-        assert_eq!(chunk.len(), 288);
-        let chunk = store.get("year/c/1", &ByteRange::ALL).await.unwrap();
-        assert_eq!(chunk.len(), 400);
-        let chunk = store.get("year/c/2", &ByteRange::ALL).await.unwrap();
-        assert_eq!(chunk.len(), 100);
+    let chunk = store.get("year/c/0", &ByteRange::ALL).await.unwrap();
+    assert_eq!(chunk.len(), 288);
+    let chunk = store.get("year/c/1", &ByteRange::ALL).await.unwrap();
+    assert_eq!(chunk.len(), 400);
+    let chunk = store.get("year/c/2", &ByteRange::ALL).await.unwrap();
+    assert_eq!(chunk.len(), 100);
 
-        assert!(store.get("year/c/3", &ByteRange::ALL).await.is_err());
-        assert!(store.get("year/c/4", &ByteRange::ALL).await.is_err());
-    }
+    assert!(store.get("year/c/3", &ByteRange::ALL).await.is_err());
+    assert!(store.get("year/c/4", &ByteRange::ALL).await.is_err());
     Ok(())
 }
 

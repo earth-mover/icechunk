@@ -489,7 +489,7 @@ pub async fn fetch_branch_tip(
     Ok(fetch_branch(storage, storage_settings, name).await?.0)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "object-store-fs"))]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::sync::Arc;

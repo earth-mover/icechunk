@@ -2401,6 +2401,7 @@ mod tests {
         assert!(correct_error);
     }
 
+    #[cfg(feature = "object-store-fs")]
     #[tokio::test]
     async fn test_serialize() {
         let repo_dir = TempDir::new().expect("could not create temp dir");
