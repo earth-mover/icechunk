@@ -3,6 +3,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 import hypothesis.strategies as st
+from packaging.version import Version
 
 import icechunk as ic
 import zarr
@@ -78,6 +79,6 @@ def repository_configs(
         "manifest": manifest,
     }
     # num_updates_per_repo_info_file is v2-only
-    if hasattr(ice.RepositoryConfig(), "num_updates_per_repo_info_file"):
+    if Version(ice.__version__).major >= 2:
         kwargs["num_updates_per_repo_info_file"] = draw(num_updates_per_repo_info_file)
     return ice.RepositoryConfig(**kwargs)  # type: ignore[no-any-return]

@@ -166,12 +166,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         assert get_before
 
         allow_empty = not self.store.session.has_uncommitted_changes
-        # Try with allow_empty, fall back without it for v1 compatibility
-        try:
+        if Version(self.ic.__version__).major >= 2:
             self.store.session.commit("foo", allow_empty=allow_empty)
-        except TypeError as e:
-            if "allow_empty" not in str(e):
-                raise
+        else:
             self.store.session.commit("foo")
 
         self.store = self.repo.writable_session("main").store
