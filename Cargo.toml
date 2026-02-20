@@ -17,7 +17,38 @@ sign-commit = true
 sign-tag = true
 push = false
 
+# Recommended configs for maximizing runtime speed
+# https://nnethercote.github.io/perf-book/build-configuration.html#maximizing-runtime-speed
+# This impacts compile time (since it becomes serial instead of parallel)
+# but can lead to 20-30% faster runtime
+[profile.release]
+lto = "thin"
+codegen-units = 1
 
 [profile.perf]
 inherits = "release"
 debug = 1
+
+# Enable a small amount of optimization in debug mode
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only" # allow file:line info in backtraces
+
+# Enable higher optimizations for dependencies, but not our code
+# Setting it to "2" because gets most optimizations, without
+# the compile time impact of "3"
+[profile.dev.package."*"]
+opt-level = 2
+
+# The CI profile optimizes for reduced compile times, since they
+# dominate runtime in github actions, and cache between runs
+# doesn't always work well.
+[profile.ci]
+inherits = "dev"
+opt-level = 0
+debug = 0
+
+# Dependencies tend to cache better between runs,
+# enable a small bit of optimization in this case.
+[profile.ci.package."*"]
+opt-level = 1
