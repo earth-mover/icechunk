@@ -117,7 +117,7 @@ class Model:
         self.spec_version = 1  # will be overwritten on `@initialize`
         self.num_updates: int = 0
 
-        self.metadata = {}
+        self.metadata: dict[str, Any] = {}
 
         self.initial_snapshot_id: str | None = None
         self.changes_made: bool = False
@@ -189,7 +189,7 @@ class Model:
         # this is simple because we aren't modeling the branch as a list of commits
         self.commit(snap)
 
-    def set_metadata(self, meta) -> None:
+    def set_metadata(self, meta: dict[str, Any]) -> None:
         self.metadata = meta
         self.num_updates += 1
 
@@ -360,7 +360,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         spec_version=st.sampled_from([2]),
     )
     def initialize(
-        self, array_meta, config: RepositoryConfig, spec_version: Literal[1, 2]
+        self, array_meta: Buffer, config: RepositoryConfig, spec_version: Literal[1, 2]
     ) -> str:
         self.storage = in_memory_storage()
         self.model.spec_version = spec_version
@@ -414,7 +414,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @precondition(lambda self: self.model.spec_version >= 2)
     @rule(meta=simple_attrs)
-    def set_metadata(self, meta: str) -> None:
+    def set_metadata(self, meta: dict[str, Any]) -> None:
         note(f"setting metadata {meta!r}")
         self.repo.set_metadata(meta)
         self.model.set_metadata(meta)
@@ -830,13 +830,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         if ver == 1:
             return
         elif ver == 2:
-            ver = "2.0"
+            expected = "2.0"
         else:
             raise NotImplementedError()
 
         info = self.repo.inspect_repo_info()
 
-        assert info["spec_version"] == ver
+        assert info["spec_version"] == expected
         assert set(info["deleted_tags"]) == self.model.deleted_tags
         assert info["metadata"] == self.model.metadata
 
