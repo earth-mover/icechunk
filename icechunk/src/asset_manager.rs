@@ -519,7 +519,14 @@ impl AssetManager {
                         "Logic bug in fetch_repo_info, repo_cache should exist here",
                     ));
                 } else {
-                    todo!("return error")
+                    // It is very surprising to get to this branch:
+                    // - repo info cache is not being used
+                    // - but when conditionally retrieving the repo info
+                    //   without a version, which should fetch and return
+                    //   the repo info, we got back a result saying it
+                    //   didn't change!
+                    // This is very much panic or unreachable territory...
+                    unreachable!()
                 }
             }
             Err(e) => return Err(e),
