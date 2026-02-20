@@ -429,6 +429,16 @@ static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: u16 = 256;
 
 impl RepositoryConfig {
+    /// Merge backend storage defaults into this config. The backend defaults
+    /// become the base, with any existing storage settings overriding them.
+    pub fn with_storage_defaults(mut self, defaults: storage::Settings) -> Self {
+        self.storage = Some(match self.storage {
+            Some(s) => defaults.merge(s),
+            None => defaults,
+        });
+        self
+    }
+
     pub fn inline_chunk_threshold_bytes(&self) -> u16 {
         self.inline_chunk_threshold_bytes.unwrap_or(512)
     }
