@@ -74,13 +74,17 @@ pre-commit-python:
   just format "-p icechunk-python"
   just lint "-p icechunk-python"
 
+# install benchmark deps and build icechunk in release mode
+bench-build:
+  cd icechunk-python && uv sync --group benchmark && env -u CONDA_PREFIX uv run maturin develop --uv --release
+
+# create/refresh benchmark datasets (run once, or after format changes)
+bench-setup *args='':
+  cd icechunk-python && uv run pytest -nauto -m --benchmark-disable setup_benchmarks benchmarks/ {{args}}
+
+# run benchmarks (pass extra pytest args, e.g.: just bench "-k getsize")
+bench *args='':
+  cd icechunk-python && uv run pytest --benchmark-autosave benchmarks/ {{args}}
+
 bench-compare *args:
-  pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short {{args}}
-
-create-deepak-env name:
-  mamba create -y -n icechunk-{{name}} python=3.12 ipykernel ipdb
-  mamba activate icechunk-{{name}}
-  just coiled-ice-create {{name}}
-
-coiled-ice-create version:
-  pip install coiled arraylake icechunk=='{{version}}' watermark xarray bokeh
+  cd icechunk-python && uv run pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short {{args}}

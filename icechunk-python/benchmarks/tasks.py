@@ -212,8 +212,7 @@ def write(
 
     # TODO: record time & byte size?
     with timer.time(op="merge_changeset", **timer_context):
-        if not isinstance(executor, futures.ThreadPoolExecutor):
-            session.merge(*(res.session for res in results))
+        session.merge(*(res.session for res in results))
     assert session.has_uncommitted_changes
 
     with timer.time(op="commit", **timer_context):

@@ -11,8 +11,10 @@ from icechunk import (
     Repository,
     RepositoryConfig,
     Session,
+    VirtualChunkContainer,
     VirtualChunkSpec,
     local_filesystem_storage,
+    s3_store,
 )
 
 NUM_CHUNK_REFS = 10_000
@@ -185,7 +187,12 @@ def test_write_split_manifest_refs_full_rewrite(
     benchmark, splitting, large_write_dataset
 ) -> None:
     dataset = large_write_dataset
-    config = repo_config_with(splitting=splitting)
+    config = repo_config_with(
+        splitting=splitting,
+        virtual_chunk_containers=[
+            VirtualChunkContainer("s3://foo/", s3_store(region="us-east-1"))
+        ],
+    )
     assert config is not None
     if hasattr(config.manifest, "splitting"):
         assert config.manifest.splitting == splitting
@@ -228,7 +235,12 @@ def test_write_split_manifest_refs_append(
     benchmark, splitting, large_write_dataset
 ) -> None:
     dataset = large_write_dataset
-    config = repo_config_with(splitting=splitting)
+    config = repo_config_with(
+        splitting=splitting,
+        virtual_chunk_containers=[
+            VirtualChunkContainer("s3://foo/", s3_store(region="us-east-1"))
+        ],
+    )
     assert config is not None
     if hasattr(config.manifest, "splitting"):
         assert config.manifest.splitting == splitting
