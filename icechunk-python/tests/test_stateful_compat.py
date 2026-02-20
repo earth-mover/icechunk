@@ -110,7 +110,7 @@ class CrossVersionTwoActorZarrHierarchyStateMachine(
         storage = ic.local_filesystem_storage(tmpdir)
         super().__init__(storage)
 
-        # Override actors and set up per-actor storage/module objects
+        # Set up per-actor storage/module objects for cross-version testing
         self.actors = {"v2": ic.Repository, "v1": ic_v1.Repository}
         self._tmpdir = tmpdir
         self.actor_storage_objects = {
@@ -135,6 +135,20 @@ class CrossVersionTwoActorZarrHierarchyStateMachine(
         self.ic = self.actor_modules[actor_name]
         self.storage = self.actor_storage_objects[actor_name]
         super().init_store(spec_version=spec_version)
+
+    @rule(data=st.data())
+    def switch_actor(self, data: st.DataObject) -> None:
+        if self.store.session.has_uncommitted_changes:
+            self.commit_with_check(data)
+
+        # Draw an actor and use their storage object
+        actor_name = data.draw(st.sampled_from(list(self.actors.keys())))
+        self.actor = self.actors[actor_name]
+        self.ic = self.actor_modules[actor_name]
+        self.storage = self.actor_storage_objects[actor_name]
+
+        self.repo = self.actor.open(self.storage)
+        self.store = self.repo.writable_session("main").store
 
     # v1 doesn't support empty commits, so only allow them when the actor is v2
     @rule(data=st.data())

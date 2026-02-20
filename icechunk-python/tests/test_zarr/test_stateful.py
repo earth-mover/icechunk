@@ -83,13 +83,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # to do things like construct config types correctly
         self.ic = ic
 
-        # Two-actor setup: actors can be overridden by subclasses
-        self.actors: dict[str, type[Repository]] = {"one": Repository, "two": Repository}
-        self.actor_modules: dict[str, Any] = {"one": ic, "two": ic}
-        self.actor_storage_objects: dict[str, Storage] = {
-            name: storage for name in self.actors
-        }
-
         # Create a temporary repository with spec_version=1 in a separate storage
         # This will be replaced in init_store with the Hypothesis-sampled version
         # we need this in order to properly initialize the superclass MemoryStore
@@ -376,17 +369,11 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self.all_groups.remove(group_path)
 
     @rule(data=st.data())
-    def reopen_with_new_actor(self, data: st.DataObject) -> None:
+    def reopen_repository(self, data: st.DataObject) -> None:
         # We use the Zarr's memory store as the model,
         # Since we cannot `reset_branch` on the model; we must commit here.
         if self.store.session.has_uncommitted_changes:
             self.commit_with_check(data)
-
-        # Draw an actor and use their storage object
-        actor_name = data.draw(st.sampled_from(list(self.actors.keys())))
-        self.actor = self.actors[actor_name]
-        self.ic = self.actor_modules[actor_name]
-        self.storage = self.actor_storage_objects[actor_name]
 
         self.repo = self.actor.open(self.storage)
         self.store = self.repo.writable_session("main").store
@@ -398,15 +385,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             pickle.loads(pickle.dumps(session))
 
         pickle.loads(pickle.dumps(self.repo))
-
-
-def test_two_actors() -> None:
-    def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
-        return ModifiedZarrHierarchyStateMachine(in_memory_storage())
-
-    run_state_machine_as_test(  # type: ignore[no-untyped-call]
-        mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
-    )
 
 
 def test_zarr_hierarchy() -> None:
