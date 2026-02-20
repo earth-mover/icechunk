@@ -147,6 +147,8 @@ pub enum RepositoryErrorKind {
     BadRepoVersion { minimum_spec_version: SpecVersionBin },
     #[error("concurrency error, lock could not be acquired")]
     PoisonLock,
+    #[error("storage settings missing after config merge")]
+    StorageSettingsMissing,
     #[error("unexpected error: {0}")]
     Other(String),
 }
@@ -222,13 +224,14 @@ impl Repository {
             Some(ref config) => config != &RepositoryConfig::default(),
             None => false,
         };
-        // Merge the given config with the defaults
-        let config =
-            config.map(|c| RepositoryConfig::default().merge(c)).unwrap_or_default();
-        let storage_settings = match config.storage() {
-            Some(s) => s.clone(),
-            None => storage.default_settings().await?,
-        };
+        // Merge the given config with the defaults, including backend storage defaults
+        let default_config =
+            RepositoryConfig::default_with_storage(storage.default_settings().await?);
+        let config = config.map(|c| default_config.merge(c)).unwrap_or(default_config);
+        let storage_settings = config
+            .storage()
+            .cloned()
+            .ok_or(RepositoryErrorKind::StorageSettingsMissing)?;
 
         let spec_version = spec_version.unwrap_or_default();
 
@@ -405,17 +408,22 @@ impl Repository {
             }
         };
 
+        let storage_defaults =
+            RepositoryConfig::default_with_storage(storage.default_settings().await?);
         let final_config = match default_config {
             Some(default_config) => {
-                config.map(|c| default_config.merge(c)).unwrap_or(default_config)
+                let base = storage_defaults.merge(default_config);
+                config.map(|c| base.merge(c)).unwrap_or(base)
             }
-            None => config.unwrap_or_default(),
+            None => {
+                config.map(|c| storage_defaults.merge(c)).unwrap_or(storage_defaults)
+            }
         };
 
-        let storage_settings = match final_config.storage() {
-            Some(s) => s.clone(),
-            None => storage.default_settings().await?,
-        };
+        let storage_settings = final_config
+            .storage()
+            .cloned()
+            .ok_or(RepositoryErrorKind::StorageSettingsMissing)?;
 
         let asset_manager = Arc::new(AssetManager::new_with_config(
             Arc::clone(&storage),
@@ -557,15 +565,15 @@ impl Repository {
         config: Option<RepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<Credentials>>>,
     ) -> RepositoryResult<Self> {
-        // Merge the given config with the current config
-        let config = config
-            .map(|c| self.config().merge(c))
-            .unwrap_or_else(|| self.config().clone());
-
-        let storage_settings = match config.storage() {
-            Some(s) => s.clone(),
-            None => self.storage.default_settings().await?,
-        };
+        // Merge the given config with the current config, including backend storage defaults
+        let storage_defaults =
+            RepositoryConfig::default_with_storage(self.storage.default_settings().await?);
+        let current_config = storage_defaults.merge(self.config().clone());
+        let config = config.map(|c| current_config.merge(c)).unwrap_or(current_config);
+        let storage_settings = config
+            .storage()
+            .cloned()
+            .ok_or(RepositoryErrorKind::StorageSettingsMissing)?;
 
         Self::new(
             self.spec_version,
