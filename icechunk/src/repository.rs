@@ -548,13 +548,27 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<Option<(RepositoryConfig, storage::VersionInfo)>> {
         let settings = storage.default_settings().await?;
+        let spec_version =
+            Self::fetch_spec_version(Arc::clone(&storage)).await?.unwrap_or_default();
+
         let am = AssetManager::new_no_cache(
-            storage,
+            Arc::clone(&storage),
             settings,
-            SpecVersionBin::current(),
+            spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
+
+        // For V2+ repos, try reading config from the repo info object first
+        if spec_version >= SpecVersionBin::V2dot0 {
+            if let Ok((repo_info, version)) = am.fetch_repo_info().await {
+                if let Ok(Some(config)) = repo_info.config() {
+                    return Ok(Some((config, version)));
+                }
+            }
+        }
+
+        // Fall back to config.yaml (V1 repos, or old V2 repos without embedded config)
         am.fetch_config().await
     }
 
@@ -1832,12 +1846,14 @@ mod tests {
         let repo =
             Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
 
-        // V2 repos don't write config.yaml
-        assert!(Repository::fetch_config(Arc::clone(&storage)).await?.is_none());
-        // it inits with the default config
+        // config is embedded in repo info from creation
         assert_eq!(repo.config(), &RepositoryConfig::default());
+        assert_eq!(
+            Repository::fetch_config(Arc::clone(&storage)).await?.unwrap().0,
+            RepositoryConfig::default()
+        );
 
-        // config is embedded in repo info from creation, reopening reads it back
+        // reopening reads config from repo info
         let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
         assert_eq!(repo.config(), &RepositoryConfig::default());
 
@@ -1858,12 +1874,19 @@ mod tests {
         let version = repo.save_config().await?;
         assert_ne!(version, storage::VersionInfo::for_creation());
 
+        // fetch_config reads from repo info
+        assert_eq!(
+            Repository::fetch_config(Arc::clone(&storage))
+                .await?
+                .unwrap()
+                .0
+                .inline_chunk_threshold_bytes(),
+            42
+        );
+
         // verify loading again gets the value from persistent config in repo info
         let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 42);
-
-        // V2 repos still don't write config.yaml
-        assert!(Repository::fetch_config(Arc::clone(&storage)).await?.is_none());
 
         // creating a repo we can override certain config atts:
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
@@ -1896,11 +1919,7 @@ mod tests {
         // and we can save the merge — persists into repo info
         let version = repo.save_config().await?;
         assert_ne!(version, storage::VersionInfo::for_creation());
-
-        // verify by reopening
-        let repo = Repository::open(None, storage, HashMap::new()).await?;
-        assert_eq!(repo.config().inline_chunk_threshold_bytes(), 20);
-        assert_eq!(repo.config().caching().num_chunk_refs(), 100);
+        assert_eq!(&Repository::fetch_config(storage).await?.unwrap().0, repo.config());
 
         Ok(())
     }
