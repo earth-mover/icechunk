@@ -1322,7 +1322,7 @@ mod tests {
             parent_id: Some(id1.clone()),
             flushed_at: DateTime::from_timestamp_micros(2_000_000).unwrap(),
             message: "snap 2".to_string(),
-            metadata: Default::default(),
+            ..snap1.clone()
         };
         let repo = repo.add_snapshot(
             SpecVersionBin::current(),
@@ -1355,7 +1355,7 @@ mod tests {
             parent_id: Some(id2.clone()),
             flushed_at: DateTime::from_timestamp_micros(3_000_000).unwrap(),
             message: "snap 3".to_string(),
-            metadata: Default::default(),
+            ..snap2.clone()
         };
         let repo = repo.add_snapshot(
             SpecVersionBin::current(),
@@ -1433,7 +1433,7 @@ mod tests {
             parent_id: Some(id1.clone()),
             flushed_at: Utc::now(),
             message: "snap 2".to_string(),
-            metadata: Default::default(),
+            ..snap1.clone()
         };
         let repo = repo.add_snapshot(
             SpecVersionBin::current(),
