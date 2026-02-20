@@ -170,9 +170,27 @@ class Session:
         return self._session.config
 
     def move(self, from_path: str, to_path: str) -> None:
+        """Move or rename a node (array or group) in the hierarchy.
+
+        This is a metadata-only operation—no data is copied. Requires a rearrange session.
+
+        Parameters
+        ----------
+        from_path : str
+            The current path of the node (e.g., "/data/raw").
+        to_path : str
+            The new path for the node (e.g., "/data/v1").
+
+        Examples
+        --------
+        >>> session = repo.rearrange_session("main")
+        >>> session.move("/data/raw", "/data/v1")
+        >>> session.commit("Renamed raw to v1")
+        """
         return self._session.move_node(from_path, to_path)
 
     async def move_async(self, from_path: str, to_path: str) -> None:
+        """Async version of :meth:`move`."""
         return await self._session.move_node_async(from_path, to_path)
 
     def all_virtual_chunk_locations(self) -> list[str]:
@@ -191,10 +209,75 @@ class Session:
         array_path: str,
         shift_chunk: Callable[[Iterable[int]], Iterable[int] | None],
     ) -> None:
+        """Reindex chunks in an array by applying a transformation function.
+
+        Parameters
+        ----------
+        array_path : str
+            Path to the array.
+        shift_chunk : Callable
+            Function that receives chunk coordinates and returns new coordinates,
+            or None to discard the chunk.
+        """
         return self._session.reindex_array(array_path, shift_chunk)
 
-    def shift_array(self, array_path: str, offset: Iterable[int]) -> None:
-        return self._session.shift_array(array_path, offset)
+    def shift_array(
+        self,
+        array_path: str,
+        chunk_offset: Iterable[int],
+    ) -> tuple[int, ...]:
+        """Shift all chunks in an array by the given chunk offset.
+
+        Chunks that shift out of bounds are discarded. Vacated positions retain
+        stale chunk references — the caller typically writes new data there.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array to shift.
+        chunk_offset : Iterable[int]
+            Offset added to each chunk coordinate. A chunk at index ``x`` moves
+            to ``x + chunk_offset``. For a 3D array, ``chunk_offset=(1, 0, -2)``
+            moves the chunk at ``(i, j, k)`` to ``(i+1, j, k-2)``.
+
+        Returns
+        -------
+        tuple[int, ...]
+            The shift in element space (``chunk_offset * chunk_size`` per dimension).
+            For example, with ``chunk_size=10`` and ``chunk_offset=(2,)``, returns
+            ``(20,)`` — useful for slicing the region that needs new data.
+
+        Notes
+        -----
+        To shift right while preserving all data, first resize the array using zarr's
+        array.resize(), then use shift_array.
+        """
+        return tuple(self._session.shift_array(array_path, list(chunk_offset)))
+
+    def roll_array(
+        self,
+        array_path: str,
+        chunk_offset: Iterable[int],
+    ) -> tuple[int, ...]:
+        """Roll (circular shift) all chunks in an array by the given chunk offset.
+
+        Chunks that shift out of one end wrap around to the other side.
+        No data is lost — this is a circular buffer operation.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array to roll.
+        chunk_offset : Iterable[int]
+            Offset added to each chunk coordinate (with wraparound). A chunk at
+            index ``x`` moves to ``(x + chunk_offset) % num_chunks``.
+
+        Returns
+        -------
+        tuple[int, ...]
+            The index shift in element space (chunk_offset * chunk_size for each dimension).
+        """
+        return tuple(self._session.roll_array(array_path, list(chunk_offset)))
 
     async def all_virtual_chunk_locations_async(self) -> list[str]:
         """

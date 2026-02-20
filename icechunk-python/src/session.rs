@@ -226,7 +226,11 @@ impl PySession {
         })
     }
 
-    pub fn shift_array(&mut self, array_path: String, offset: Vec<i64>) -> PyResult<()> {
+    pub fn shift_array(
+        &mut self,
+        array_path: String,
+        chunk_offset: Vec<i64>,
+    ) -> PyResult<Vec<i64>> {
         let array_path = Path::new(array_path.as_str())
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
@@ -234,11 +238,31 @@ impl PySession {
         // TODO: detach
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let mut session = self.0.write().await;
-            session
-                .shift_array(&array_path, offset.as_slice())
+            let element_shift = session
+                .shift_array(&array_path, chunk_offset.as_slice())
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
-            Ok(())
+            Ok(element_shift)
+        })
+    }
+
+    pub fn roll_array(
+        &mut self,
+        array_path: String,
+        chunk_offset: Vec<i64>,
+    ) -> PyResult<Vec<i64>> {
+        let array_path = Path::new(array_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+
+        // TODO: detach
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            let mut session = self.0.write().await;
+            let element_shift = session
+                .roll_array(&array_path, chunk_offset.as_slice())
+                .await
+                .map_err(PyIcechunkStoreError::SessionError)?;
+            Ok(element_shift)
         })
     }
 
