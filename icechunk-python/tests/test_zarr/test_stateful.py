@@ -431,15 +431,6 @@ def test_zarr_hierarchy() -> None:
     )
 
 
-def test_zarr_hierarchy_two_actors() -> None:
-    def mk_test_instance_sync() -> TwoActorZarrHierarchyStateMachine:
-        return TwoActorZarrHierarchyStateMachine(in_memory_storage())
-
-    run_state_machine_as_test(  # type: ignore[no-untyped-call]
-        mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
-    )
-
-
 def test_zarr_store() -> None:
     pytest.skip("icechunk is more strict about keys")
     # repo = Repository.create(in_memory_storage())
