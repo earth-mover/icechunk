@@ -659,7 +659,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @rule(name=simple_text, commit=commits, target=branches)
     def create_branch(self, name: str, commit: str) -> str:
-        note(f"Creating branch {name!r}")
+        note(f"Creating branch {name!r} for commit {commit!r}")
 
         # we can create a tag and branch with the same name
         if name not in self.model.branch_heads and commit in self.model.commits:
