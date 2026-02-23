@@ -2340,6 +2340,28 @@ async fn do_flush(
     let old_snapshot =
         flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await?;
 
+    let previous_tx_log = if commit_method == CommitMethod::NewCommit {
+        // We won't be merging with a previous tx log, so no need to retrieve it
+        None
+    } else {
+        let previous_log =
+            flush_data.asset_manager.fetch_transaction_log(&old_snapshot.id()).await?;
+
+        // need to check if previous tx log has moves / this is a rearrange session
+        if previous_log.has_moves() && commit_method == CommitMethod::Amend {
+            match flush_data.change_set {
+                ChangeSet::Edit(_) => {
+                    return Err(SessionErrorKind::RearrangeSessionOnly.into());
+                }
+                ChangeSet::Rearrange(_) => {
+                    // Fine for now
+                }
+            }
+        }
+
+        Some(previous_log)
+    };
+
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
     for node in old_snapshot.iter().filter_ok(|node| node.node_type() == NodeType::Array)
@@ -2490,14 +2512,7 @@ async fn do_flush(
     let new_tx_log = if commit_method == CommitMethod::NewCommit {
         this_tx_log
     } else {
-        let previous_log =
-            flush_data.asset_manager.fetch_transaction_log(&old_snapshot.id()).await?;
-        if previous_log.has_moves() && commit_method == CommitMethod::Amend {
-            // need to check if new_tx_log has moves / this is a rearrange session
-            if !this_tx_log.has_moves() {
-                return Err(SessionErrorKind::RearrangeSessionOnly.into());
-            }
-        }
+        let previous_log = previous_tx_log.unwrap();
         // FIXME: this should execute in a non-blocking context
         TransactionLog::merge(&new_snapshot_id, [previous_log.as_ref(), &this_tx_log])
     };
