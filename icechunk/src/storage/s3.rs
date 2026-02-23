@@ -39,12 +39,14 @@ use futures::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
+use tokio_util::io::StreamReader;
 use tracing::{error, instrument};
 use typed_path::Utf8UnixPath;
 
 use super::{
-    DeleteObjectsResult, ListInfo, Settings, StorageErrorKind, StorageResult,
-    VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests, strip_quotes,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, StorageErrorKind,
+    StorageResult, VersionInfo, VersionedUpdateResult, split_in_multiple_equal_requests,
+    strip_quotes,
 };
 
 fn s3_get_err(err: impl std::error::Error + Send + Sync + 'static) -> StorageError {
@@ -812,6 +814,26 @@ impl Storage for S3Storage {
         Ok(res)
     }
 
+    #[instrument(skip(self, settings))]
+    async fn get_object_conditional(
+        &self,
+        settings: &Settings,
+        path: &str,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<GetModifiedResult> {
+        match self
+            .get_object_range_conditional(settings, path, None, previous_version)
+            .await
+        {
+            Ok(Some((stream, new_version))) => {
+                let reader = StreamReader::new(stream.map_err(std::io::Error::other));
+                Ok(GetModifiedResult::Modified { data: Box::pin(reader), new_version })
+            }
+            Ok(None) => Ok(GetModifiedResult::OnLatestVersion),
+            Err(e) => Err(e),
+        }
+    }
+
     async fn get_object_range(
         &self,
         settings: &Settings,
@@ -821,44 +843,101 @@ impl Storage for S3Storage {
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
+        self.get_object_range_conditional(settings, path, range, None).await.map(|v| {
+            // If we got a result, then we can unwrap safely here:
+            // Errors would be in the other branch, and None is only expected
+            // if previous_version was passed in function call, but we set it to None
+            #[allow(clippy::expect_used)]
+            v.expect("Logic bug in get_object_range_conditional, should not get None")
+        })
+    }
+}
+
+impl S3Storage {
+    async fn get_object_range_conditional(
+        &self,
+        settings: &Settings,
+        path: &str,
+        range: Option<&Range<u64>>,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<
+        Option<(
+            Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+            VersionInfo,
+        )>,
+    > {
         let client = self.get_client(settings).await;
         let bucket = self.bucket.clone();
         let key = self.prefixed_path(path);
+
         let mut req = client.get_object().bucket(bucket).key(key);
+
         if let Some(range) = range {
             req = req.range(range_to_header(range));
         }
+
         if self.config.requester_pays {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
+
+        if let Some(previous_version) = previous_version.as_ref()
+            && let Some(etag) = previous_version.etag()
+        {
+            req = req.if_none_match(strip_quotes(etag));
+        };
+
         match req.send().await {
             Ok(output) => match output.e_tag {
                 Some(etag) => {
                     let stream = stream2stream(output.body).err_into();
-                    Ok((Box::pin(stream), VersionInfo::from_etag_only(etag)))
+                    Ok(Some((Box::pin(stream), VersionInfo::from_etag_only(etag))))
                 }
                 None => {
                     Err(StorageErrorKind::Other("Object should have an etag".to_string())
                         .into())
                 }
             },
-            Err(sdk_err) => match sdk_err.as_service_error() {
-                Some(e) if e.is_no_such_key() => {
-                    Err(StorageErrorKind::ObjectNotFound.into())
-                }
-                Some(_)
-                    if sdk_err
-                        .raw_response()
-                        .is_some_and(|x| x.status().as_u16() == 404) =>
+            Err(sdk_err) => {
+                // aws_sdk_s3 on R2 can return a response error (checksum mismatch)
+                // when status 304 (Not Modified) happens, so we need to check
+                // the if it happens here, before other regular checks when
+                // the response is well-formed.
+                if let SdkError::ResponseError(ref e) = sdk_err
+                    && e.raw().status().as_u16() == 304
                 {
-                    // needed for Cloudflare R2 public bucket URLs
-                    // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
-                    // into anything useful. So we need to parse the raw response, and match
-                    // the status code.
-                    Err(StorageErrorKind::ObjectNotFound.into())
+                    return Ok(None);
+                };
+
+                match sdk_err.as_service_error() {
+                    Some(e) if e.is_no_such_key() => {
+                        Err(StorageErrorKind::ObjectNotFound.into())
+                    }
+                    Some(_)
+                        if sdk_err
+                            .raw_response()
+                            .is_some_and(|x| x.status().as_u16() == 404) =>
+                    {
+                        // needed for Cloudflare R2 public bucket URLs
+                        // if object doesn't exist we get a 404 that isn't parsed by the AWS SDK
+                        // into anything useful. So we need to parse the raw response, and match
+                        // the status code.
+                        Err(StorageErrorKind::ObjectNotFound.into())
+                    }
+                    Some(_)
+                        // aws_sdk_s3 doesn't return an error when
+                        // status 304 (Not Modified) happens, so
+                        // check the http status code here and
+                        // return None to make it easy to catch
+                        // downstream
+                        if sdk_err
+                            .raw_response()
+                            .is_some_and(|x| x.status().as_u16() == 304) =>
+                    {
+                        Ok(None)
+                    }
+                    _ => Err(s3_get_err(sdk_err)),
                 }
-                _ => Err(s3_get_err(sdk_err)),
-            },
+            }
         }
     }
 }

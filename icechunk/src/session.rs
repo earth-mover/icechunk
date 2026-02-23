@@ -2545,6 +2545,11 @@ async fn do_commit(
         return Err(SessionErrorKind::NoChangesToCommit.into());
     }
 
+    // Cannot amend the initial commit
+    if commit_method == CommitMethod::Amend && snapshot_id.is_initial() {
+        return Err(SessionErrorKind::NoAmendForInitialCommit.into());
+    }
+
     let properties = properties.unwrap_or_default();
     let flush_data =
         FlushProcess::new(Arc::clone(&asset_manager), change_set, snapshot_id, splits);
@@ -2661,7 +2666,7 @@ async fn do_commit_v2(
             (CommitMethod::NewCommit, _) => parent_snapshot_id.clone(),
             (CommitMethod::Amend, Some(parent_id)) => parent_id,
             (CommitMethod::Amend, None) => {
-                return Err(RepositoryErrorKind::NoAmendForInitialCommit.into());
+                unreachable!("do_commit() disallows amend on initial commit")
             }
         };
 
@@ -4271,6 +4276,20 @@ mod tests {
     #[tokio_test]
     async fn test_amend() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let amend_result =
+            session.amend("cannot amend initial commit", None, false).await;
+        assert!(amend_result.is_err());
+        assert!(amend_result.unwrap_err().to_string().contains("first commit"));
+
+        let mut session = repo.writable_session("main").await?;
+        let amend_result = session.amend("cannot amend initial commit", None, true).await;
+        assert!(amend_result.is_err());
+        assert!(amend_result.unwrap_err().to_string().contains("first commit"));
+
+        // Now make a proper first commit
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         let snap1 = session.commit("make root", None).await?;
