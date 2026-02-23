@@ -262,6 +262,9 @@ class Model:
     def __getitem__(self, key: str) -> Buffer:
         return cast(Buffer, self.store[key])
 
+    def get(self, key: str) -> Buffer | None:
+        return self.store.get(key)
+
     def upgrade(self) -> None:
         self.ops_log.append(RepoMigratedUpdateModel(self.spec_version, 2))
 
@@ -511,11 +514,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # We have so many rules now it is hard to build up long history
         # instead we explicitly add a rule to make a lot of commits
         commit_ids = []
-        prev_paths = set()
         for _ in range(ncommits):
-            path = data.draw(metadata_paths.filter(lambda path: path not in prev_paths))
-            prev_paths.add(path)
-            self.set_doc(path, data.draw(v3_array_metadata))
+            # annoyingly we need to ensure we overwrite with different data, otherwise icechunk doesn't like it.
+            path, meta = data.draw(
+                st.tuples(metadata_paths, v3_array_metadata).filter(
+                    lambda pm: self.model.get(pm[0]) != pm[1]
+                )
+            )
+            self.set_doc(path, meta)
             commit_ids.append(self.commit(data.draw(st.text(max_size=MAX_TEXT_SIZE))))
         return multiple(*commit_ids)
 
