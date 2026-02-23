@@ -240,7 +240,7 @@ impl Repository {
             config.max_concurrent_requests(),
         ));
 
-        if !storage.root_is_clean().await? {
+        if !storage.root_is_clean(&storage_settings).await? {
             return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
         }
 
@@ -307,7 +307,7 @@ impl Repository {
             config_version
         };
 
-        debug_assert!(Self::exists(Arc::clone(&storage)).await.unwrap_or(false));
+        debug_assert!(Self::exists(Arc::clone(&storage), None).await.unwrap_or(false));
         Self::new(
             spec_version,
             config,
@@ -339,7 +339,10 @@ impl Repository {
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
 
-        let fetch_version = Self::fetch_spec_version(Arc::clone(&storage));
+        let storage_c = Arc::clone(&storage);
+        let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
+        let fetch_version =
+            tokio::spawn(Self::fetch_spec_version(storage_c, user_settings));
         let fetch_config_yaml = temp_am.fetch_config();
 
         // Use join! (not try_join!) so that a config.yaml error doesn't fail the
@@ -347,7 +350,7 @@ impl Repository {
         let (spec_version_result, config_yaml_result) =
             join!(fetch_version, fetch_config_yaml);
 
-        let spec_version = match spec_version_result? {
+        let spec_version = match spec_version_result?? {
             Some(v) => Ok(v),
             None => {
                 Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
@@ -421,7 +424,9 @@ impl Repository {
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
         create_version: Option<SpecVersionBin>,
     ) -> RepositoryResult<Self> {
-        if Self::exists(Arc::clone(&storage)).await? {
+        let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
+        if Self::fetch_spec_version(Arc::clone(&storage), user_settings).await?.is_some()
+        {
             Self::open(config, storage, authorize_virtual_chunk_access).await
         } else {
             Self::create(config, storage, authorize_virtual_chunk_access, create_version)
@@ -461,19 +466,27 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn exists(
         storage: Arc<dyn Storage + Send + Sync>,
+        settings: Option<storage::Settings>,
     ) -> RepositoryResult<bool> {
-        Ok(Self::fetch_spec_version(storage).await?.is_some())
+        Ok(Self::fetch_spec_version(storage, settings).await?.is_some())
     }
 
     #[instrument(skip_all)]
     pub async fn fetch_spec_version(
         storage: Arc<dyn Storage + Send + Sync>,
+        settings: Option<storage::Settings>,
     ) -> RepositoryResult<Option<SpecVersionBin>> {
+        let settings = match settings {
+            Some(s) => s,
+            None => storage.default_settings().await?,
+        };
+
         let storage_c = Arc::clone(&storage);
+        let settings_c = settings.clone();
         let is_v1 = async move {
             match refs::fetch_branch_tip(
                 storage_c.as_ref(),
-                &storage_c.default_settings().await?,
+                &settings_c,
                 Ref::DEFAULT_BRANCH,
             )
             .await
@@ -488,7 +501,7 @@ impl Repository {
         let after_v1 = async move {
             let temp_asset_manager = Arc::new(AssetManager::new_no_cache(
                 Arc::clone(&storage),
-                storage.default_settings().await?,
+                settings,
                 SpecVersionBin::current(),
                 1, // we are only reading, compression doesn't matter
                 DEFAULT_MAX_CONCURRENT_REQUESTS,
@@ -562,8 +575,9 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<Option<(RepositoryConfig, storage::VersionInfo)>> {
         let settings = storage.default_settings().await?;
-        let spec_version =
-            Self::fetch_spec_version(Arc::clone(&storage)).await?.unwrap_or_default();
+        let spec_version = Self::fetch_spec_version(Arc::clone(&storage), None)
+            .await?
+            .unwrap_or_default();
 
         let am = AssetManager::new_no_cache(
             Arc::clone(&storage),
