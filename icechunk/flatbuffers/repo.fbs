@@ -120,6 +120,9 @@ table Repo {
   latest_updates: [Update] (required);
 
   repo_before_updates: string;
+
+  // RepositoryConfig serialized as flexbuffers
+  config: [uint8];
 }
 
 root_type Repo;
