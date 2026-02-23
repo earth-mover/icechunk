@@ -87,7 +87,9 @@ v3_array_metadata = zrst.array_metadata(
 # from the perspective of the model. So we define some simpler classes for the purposes of checking
 @dataclass
 class UpdateModel:
-    def __eq__(self, other) -> bool:
+    ictype = ic.UpdateType
+
+    def __eq__(self, other: object) -> bool:
         if not isinstance(other, self.ictype):
             return NotImplemented
         return all(getattr(self, f.name) == getattr(other, f.name) for f in fields(self))
@@ -285,11 +287,13 @@ class Model:
 
     def commit(self, snap: SnapshotInfo) -> None:
         self._commit(snap)
+        assert self.branch is not None
         self.ops_log.append(NewCommitUpdateModel(self.branch, snap.id))
 
     def amend(self, snap: SnapshotInfo) -> None:
         """Amend the HEAD commit."""
         # this is simple because we aren't modeling the branch as a list of commits
+        assert self.branch is not None
         prev_snap_id = self.branch_heads[self.branch]
         self._commit(snap)
         self.ops_log.append(CommitAmendedUpdateModel(self.branch, prev_snap_id, snap.id))
