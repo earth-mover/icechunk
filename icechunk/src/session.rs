@@ -2512,9 +2512,18 @@ async fn do_flush(
     let new_tx_log = if commit_method == CommitMethod::NewCommit {
         this_tx_log
     } else {
-        let previous_log = previous_tx_log.unwrap();
-        // FIXME: this should execute in a non-blocking context
-        TransactionLog::merge(&new_snapshot_id, [previous_log.as_ref(), &this_tx_log])
+        // Previous tx log was fetched in the beginning of do_flush,
+        // so it will be available here. Just to be sure, still use
+        // .map and .unwrap_or_else to avoid unwrapping.
+        previous_tx_log
+            .map(|previous_log| {
+                // FIXME: this should execute in a non-blocking context
+                TransactionLog::merge(
+                    &new_snapshot_id,
+                    [previous_log.as_ref(), &this_tx_log],
+                )
+            })
+            .unwrap_or_else(|| this_tx_log)
     };
 
     flush_data
