@@ -6,7 +6,7 @@ from typing import Any, TypeVar
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import assume, note, settings
+from hypothesis import assume, note
 from hypothesis.stateful import (
     initialize,
     invariant,
@@ -14,6 +14,7 @@ from hypothesis.stateful import (
     rule,
     run_state_machine_as_test,
 )
+from packaging.version import Version
 
 import icechunk as ic
 import zarr
@@ -33,6 +34,8 @@ PROTOTYPE = default_buffer_prototype()
 
 class ModelStore(MemoryStore):
     """MemoryStore with move and copy methods for testing."""
+
+    spec_version: int
 
     async def move(self, source: str, dest: str) -> None:
         """Move all keys from source to dest.
@@ -72,9 +75,16 @@ Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     store: ic.IcechunkStore  # Override parent class type annotation
     model: ModelStore  # Override to add move() method
+    storage: ic.Storage
 
     def __init__(self, storage: Storage) -> None:
         self.storage = storage
+        self.actor: type[Repository] = Repository
+        # keep a version of icechunk module
+        # this is necessary for subclasses that use multiple versions of icechunk
+        # to do things like construct config types correctly
+        self.ic = ic
+
         # Create a temporary repository with spec_version=1 in a separate storage
         # This will be replaced in init_store with the Hypothesis-sampled version
         # we need this in order to properly initialize the superclass MemoryStore
@@ -84,6 +94,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         super().__init__(temp_store)
         # Replace parent's MemoryStore with our ModelStore that has move()
         self.model = ModelStore()
+        self.model.spec_version = 1
         zarr.group(store=self.model)
 
     @initialize(spec_version=st.sampled_from([1, 2]))
@@ -91,16 +102,21 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         """Override parent's init_store to sample spec_version and create repository."""
         # necessary to control the order of calling. if multiple intiliazes they will be
         # called by hypothesis in a random order
-        note(f"Creating repository with spec_version={spec_version}")
+        note(f"Creating repository with spec_version={spec_version}, actor={self.actor}")
 
         # Create repository with the drawn spec version
-        self.repo = Repository.create(self.storage, spec_version=spec_version)
+        if Version(self.ic.__version__).major >= 2:
+            self.repo = self.actor.create(self.storage, spec_version=spec_version)
+        else:
+            self.repo = self.actor.create(self.storage)
         self.store = self.repo.writable_session("main").store
+        self.model.spec_version = spec_version
 
         super().init_store()
 
     @precondition(
-        lambda self: not self.store.session.has_uncommitted_changes
+        lambda self: Version(self.ic.__version__).major >= 2
+        and not self.store.session.has_uncommitted_changes
         and bool(self.all_arrays)
     )
     @rule(data=st.data())
@@ -116,7 +132,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             )
         )
         note(f"reopening with config {config!r}")
-        self.repo = Repository.open(self.storage, config=config)
+        self.repo = self.actor.open(self.storage, config=config)
         if data.draw(st.booleans()):
             self.repo.save_config()
         self.store = self.repo.writable_session("main").store
@@ -124,21 +140,22 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def rewrite_manifests(self, data: st.DataObject) -> None:
-        sconfig = ic.ManifestSplittingConfig.from_dict(
+        sconfig = self.ic.ManifestSplittingConfig.from_dict(
             {
-                ic.ManifestSplitCondition.AnyArray(): {
-                    ic.ManifestSplitDimCondition.Any(): data.draw(
+                self.ic.ManifestSplitCondition.AnyArray(): {
+                    self.ic.ManifestSplitDimCondition.Any(): data.draw(
                         st.integers(min_value=1, max_value=10)
                     )
                 }
             }
         )
 
-        config = ic.RepositoryConfig(
-            inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)
+        config = self.ic.RepositoryConfig(
+            inline_chunk_threshold_bytes=0,
+            manifest=self.ic.ManifestConfig(splitting=sconfig),
         )
         note(f"rewriting manifests with config {sconfig=!r}")
-        self.repo = Repository.open(self.storage, config=config)
+        self.repo = self.actor.open(self.storage, config=config)
         self.repo.rewrite_manifests(
             f"rewriting manifests with {sconfig!s}", branch="main"
         )
@@ -156,7 +173,10 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         assert get_before
 
         allow_empty = not self.store.session.has_uncommitted_changes
-        self.store.session.commit("foo", allow_empty=allow_empty)
+        if Version(self.ic.__version__).major >= 2:
+            self.store.session.commit("foo", allow_empty=allow_empty)
+        else:
+            self.store.session.commit("foo")
 
         self.store = self.repo.writable_session("main").store
 
@@ -192,18 +212,19 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             )
 
     @rule()
-    @precondition(lambda self: self.repo.spec_version == 1)
+    @precondition(lambda self: self.model.spec_version == 1)
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     def upgrade_spec_version(self) -> None:
         """Upgrade repository from spec version 1 to version 2."""
         note("upgrading spec version from 1 to 2")
-        ic.upgrade_icechunk_repository(self.repo)
+        self.ic.upgrade_icechunk_repository(self.repo)
         # Reopen to pick up the upgraded spec version
-        self.repo = Repository.open(self.storage)
+        self.repo = self.actor.open(self.storage)
         self.store = self.repo.writable_session("main").store
+        self.model.spec_version = 2
 
     @rule(data=st.data(), num_moves=st.integers(min_value=0, max_value=5))
-    @precondition(lambda self: self.repo.spec_version >= 2)
+    @precondition(lambda self: self.model.spec_version >= 2)
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
     def move_operations(self, data: st.DataObject, num_moves: int) -> None:
@@ -352,6 +373,16 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             del group[group_name]
         self.all_groups.remove(group_path)
 
+    @rule(data=st.data())
+    def reopen_repository(self, data: st.DataObject) -> None:
+        # We use the Zarr's memory store as the model,
+        # Since we cannot `reset_branch` on the model; we must commit here.
+        if self.store.session.has_uncommitted_changes:
+            self.commit_with_check(data)
+
+        self.repo = self.actor.open(self.storage)
+        self.store = self.repo.writable_session("main").store
+
     @rule()
     def pickle_objects(self) -> None:
         if not self.store.session.has_uncommitted_changes:
@@ -365,9 +396,7 @@ def test_zarr_hierarchy() -> None:
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(in_memory_storage())
 
-    run_state_machine_as_test(  # type: ignore[no-untyped-call]
-        mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
-    )
+    run_state_machine_as_test(mk_test_instance_sync)  # type: ignore[no-untyped-call]
 
 
 def test_zarr_store() -> None:
