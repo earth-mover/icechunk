@@ -94,7 +94,6 @@ class CrossVersionVersionControlStateMachine(
 def test_two_actors_cross_version() -> None:
     run_state_machine_as_test(  # type: ignore[no-untyped-call]
         CrossVersionVersionControlStateMachine,
-        settings=settings(report_multiple_bugs=False),
     )
 
 
