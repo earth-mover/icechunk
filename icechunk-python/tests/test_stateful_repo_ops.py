@@ -816,6 +816,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             assert len(ancestry_set) == len(ancestry)
             # the initial snapshot is in every possible branch
             # this is a python-only invariant
+            # Compare by ID: cross-version tests may have ancestry populated
+            # by SnapshotInfos from different icechunk version
+            # so full object equality can fail.
             assert ancestry[-1].id == self.initial_snapshot.id
 
 
