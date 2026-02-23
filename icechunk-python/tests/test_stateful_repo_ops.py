@@ -31,6 +31,7 @@ from hypothesis.stateful import (
     consumes,
     initialize,
     invariant,
+    multiple,
     precondition,
     rule,
 )
@@ -504,6 +505,20 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def sync_store(self) -> NewSyncStoreWrapper:
         return NewSyncStoreWrapper(self.session.store)
 
+    @precondition(lambda self: self.model.branch is not None)
+    @rule(data=st.data(), ncommits=st.integers(3, 10), target=commits)
+    def set_and_commit(self, data: st.DataObject, ncommits: int) -> Any:
+        # We have so many rules now it is hard to build up long history
+        # instead we explicitly add a rule to make a lot of commits
+        commit_ids = []
+        prev_paths = set()
+        for _ in range(ncommits):
+            path = data.draw(metadata_paths.filter(lambda path: path not in prev_paths))
+            prev_paths.add(path)
+            self.set_doc(path, data.draw(v3_array_metadata))
+            commit_ids.append(self.commit(data.draw(st.text(max_size=MAX_TEXT_SIZE))))
+        return multiple(*commit_ids)
+
     @rule(path=metadata_paths, value=v3_array_metadata)
     def set_doc(self, path: str, value: Buffer) -> None:
         note(f"setting path {path!r} with {value.to_bytes()!r}")
@@ -925,6 +940,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             # the initial snapshot is in every possible branch
             # this is a python-only invariant
             assert ancestry[-1] == self.initial_snapshot
+            n = len(ancestry)
+            bucket = f"{n // 10 * 10}-{n // 10 * 10 + 9}"
+            event(f"ancestry length: {bucket}")
 
     def check_repo_info(self) -> None:
         ver = self.model.spec_version
@@ -960,9 +978,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 for update in ops
                 if update.backup_path is not None
             )
-            n = len(backups)
-            bucket = f"{n // 10 * 10}-{n // 10 * 10 + 9}"
-            event(f"backups exist: {bucket}")
+            if len(backups) > 0:
+                event("backups exist")
             assert backups.issubset(paths)
 
     def check_ops_log(self) -> None:
