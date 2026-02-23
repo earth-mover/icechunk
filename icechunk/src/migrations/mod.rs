@@ -12,8 +12,8 @@ use crate::{
     Repository, StorageError,
     error::ICError,
     format::{
-        IcechunkFormatError, IcechunkFormatErrorKind, REPO_INFO_FILE_PATH, SnapshotId,
-        V1_REFS_FILE_PATH,
+        CONFIG_FILE_PATH, IcechunkFormatError, IcechunkFormatErrorKind,
+        REPO_INFO_FILE_PATH, SnapshotId, V1_REFS_FILE_PATH,
         format_constants::SpecVersionBin,
         repo_info::{RepoInfo, UpdateInfo, UpdateType},
         snapshot::SnapshotInfo,
@@ -180,6 +180,12 @@ async fn do_migrate(
             error!("Migration failed");
             return Err(MigrationErrorKind::Unknown.into());
         }
+
+        // Config is now embedded in the repo info, so the V1 config.yaml is no longer needed.
+        // This is best-effort — a failure here doesn't invalidate the migration.
+        if let Err(err) = delete_config_yaml(repo).await {
+            warn!("Failed to delete V1 config.yaml: {err}, continuing anyway");
+        }
     }
 
     info!(
@@ -305,6 +311,19 @@ async fn delete_v1_refs(repo: &Repository) -> MigrationResult<()> {
         );
         Err(MigrationErrorKind::Unknown.into())
     }
+}
+
+async fn delete_config_yaml(repo: &Repository) -> MigrationResult<()> {
+    info!("Deleting V1 config.yaml");
+    repo.storage()
+        .delete_objects(
+            repo.storage_settings(),
+            "",
+            stream::iter([(CONFIG_FILE_PATH.to_string(), 0)]).boxed(),
+        )
+        .await?;
+    info!("V1 config.yaml deleted");
+    Ok(())
 }
 
 /// Function copied from IC 1.0 with some changes
