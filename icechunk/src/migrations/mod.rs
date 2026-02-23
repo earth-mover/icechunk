@@ -1,3 +1,5 @@
+//! Upgrade repositories between Icechunk format versions.
+
 use std::{collections::HashSet, sync::Arc, time::Instant};
 
 use async_stream::try_stream;
@@ -239,6 +241,8 @@ pub async fn migrate_1_to_2(
             previous_updates: [],
         },
         None,
+        repo.config().num_updates_per_repo_info_file(),
+        None,
     )?);
 
     if dry_run {
@@ -343,7 +347,7 @@ async fn pointed_snapshots<'a>(
     Ok(res)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "object-store-fs"))]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::{collections::HashMap, path::Path};

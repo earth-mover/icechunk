@@ -14,7 +14,7 @@ on:
         default: false
         type: boolean
       use_git_version:
-        description: 'Use git-based version for nightly builds'
+        description: 'Use git-based version (e.g., 2.0.0-alpha.0-dev123+gabc1234). If false, uses Cargo.toml version.'
         required: true
         default: true
         type: boolean
@@ -149,15 +149,14 @@ jobs:
       - name: Stand up docker services
         run: |
           docker compose up -d
-      - name: Wait for MinIO to be ready
+      - name: Wait for RustFS to be ready
         run: |
           for _ in {1..10}; do
-              if curl --silent --fail http://localhost:9000/minio/health/live; then
+              if curl --silent --fail http://rustfs:9000/health; then
               break
               fi
               sleep 3
           done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'

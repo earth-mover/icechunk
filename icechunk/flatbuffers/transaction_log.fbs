@@ -41,11 +41,11 @@ table TransactionLog {
   // sorted in ascending order
   deleted_arrays: [ObjectId8] (required);
 
-  // node ids of the groups that had user definitions modified in this transaction
+  // node ids of the arrays that had user definitions modified in this transaction
   // sorted in ascending order
   updated_arrays: [ObjectId8] (required);
 
-  // node ids of the arrays that had user definitions modified in this transaction
+  // node ids of the groups that had user definitions modified in this transaction
   // sorted in ascending order
   updated_groups: [ObjectId8] (required);
 

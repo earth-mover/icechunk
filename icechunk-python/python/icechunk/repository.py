@@ -1,4 +1,5 @@
 import datetime
+import json
 import warnings
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
@@ -14,6 +15,7 @@ from icechunk._icechunk_python import (
     RepositoryConfig,
     SnapshotInfo,
     Storage,
+    StorageSettings,
     UpdateType,
 )
 from icechunk.credentials import AnyCredential
@@ -315,7 +317,10 @@ class Repository:
         )
 
     @staticmethod
-    def exists(storage: Storage) -> bool:
+    def exists(
+        storage: Storage,
+        storage_settings: StorageSettings | None = None,
+    ) -> bool:
         """
         Check if a repository exists at the given storage location.
 
@@ -323,16 +328,21 @@ class Repository:
         ----------
         storage : Storage
             The storage configuration for the repository.
+        storage_settings : StorageSettings | None
+            Optional storage settings to use for the initial storage call.
 
         Returns
         -------
         bool
             True if the repository exists, False otherwise.
         """
-        return PyRepository.exists(storage)
+        return PyRepository.exists(storage, storage_settings)
 
     @staticmethod
-    async def exists_async(storage: Storage) -> bool:
+    async def exists_async(
+        storage: Storage,
+        storage_settings: StorageSettings | None = None,
+    ) -> bool:
         """
         Check if a repository exists at the given storage location (async version).
 
@@ -340,13 +350,67 @@ class Repository:
         ----------
         storage : Storage
             The storage configuration for the repository.
+        storage_settings : StorageSettings | None
+            Optional storage settings to use for the initial storage call.
 
         Returns
         -------
         bool
             True if the repository exists, False otherwise.
         """
-        return await PyRepository.exists_async(storage)
+        return await PyRepository.exists_async(storage, storage_settings)
+
+    @staticmethod
+    def fetch_spec_version(
+        storage: Storage,
+        storage_settings: StorageSettings | None = None,
+    ) -> int | None:
+        """
+        Fetch the spec version of a repository without fully opening it.
+
+        This is useful for checking the repository format version before opening,
+        for example to know what version of the library is needed to open it.
+
+        Parameters
+        ----------
+        storage : Storage
+            The storage configuration for the repository.
+        storage_settings : StorageSettings | None
+            Optional storage settings to use for the initial storage call.
+
+        Returns
+        -------
+        int | None
+            The spec version of the repository if it exists, None if no repository
+            exists at the given location.
+        """
+        return PyRepository.fetch_spec_version(storage, storage_settings)
+
+    @staticmethod
+    async def fetch_spec_version_async(
+        storage: Storage,
+        storage_settings: StorageSettings | None = None,
+    ) -> int | None:
+        """
+        Fetch the spec version of a repository without fully opening it (async version).
+
+        This is useful for checking the repository format version before opening,
+        for example to know what version of the library is needed to open it.
+
+        Parameters
+        ----------
+        storage : Storage
+            The storage configuration for the repository.
+        storage_settings : StorageSettings | None
+            Optional storage settings to use for the initial storage call.
+
+        Returns
+        -------
+        int | None
+            The spec version of the repository if it exists, None if no repository
+            exists at the given location.
+        """
+        return await PyRepository.fetch_spec_version_async(storage, storage_settings)
 
     def __getstate__(self) -> object:
         return {
@@ -1743,6 +1807,16 @@ class Repository:
         self, snapshot_id: str, *, pretty: bool = True
     ) -> str:
         return await self._repository.inspect_snapshot_async(snapshot_id, pretty=pretty)
+
+    def inspect_repo_info(self) -> dict[str, Any]:
+        result: dict[str, Any] = json.loads(self._repository.inspect_repo_info())
+        return result
+
+    async def inspect_repo_info_async(self) -> dict[str, Any]:
+        result: dict[str, Any] = json.loads(
+            await self._repository.inspect_repo_info_async()
+        )
+        return result
 
     @property
     def spec_version(self) -> int:

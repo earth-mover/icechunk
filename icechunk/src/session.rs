@@ -1,9 +1,19 @@
+//! The transaction context for reading and writing data.
+//!
+//! A [`Session`] tracks a base snapshot, accumulates changes in a [`ChangeSet`],
+//! and handles committing them.
+//!
+//! Sessions come in three modes:
+//! - **Read-only**: Can read data, ChangeSet is unused
+//! - **Writable**: Can read and write chunks/metadata
+//! - **Rearrange**: Can move/rename nodes (no chunk writes)
+
 use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use futures::{
-    FutureExt, Stream, StreamExt, TryStreamExt,
+    Stream, StreamExt, TryStreamExt,
     future::Either,
     stream::{self},
 };
@@ -16,7 +26,6 @@ use std::{
     convert::Infallible,
     future::{Future, ready},
     ops::Range,
-    pin::Pin,
     sync::Arc,
 };
 use thiserror::Error;
@@ -52,6 +61,17 @@ use crate::{
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
+
+/// The mode of a session, determining what operations are allowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionMode {
+    /// Cannot modify the repository.
+    Readonly,
+    /// Can modify arrays/groups but cannot move nodes.
+    Writable,
+    /// Can only move/rename nodes in the hierarchy.
+    Rearrange,
+}
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -91,7 +111,9 @@ pub enum SessionErrorKind {
     NotAGroup { node: Box<NodeSnapshot>, message: String },
     #[error("node already exists at `{node:?}`: {message}")]
     AlreadyExists { node: Box<NodeSnapshot>, message: String },
-    #[error("cannot commit, no changes made to the session")]
+    #[error(
+        "cannot commit, no changes made to the session (use `allow_empty=true` to commit anyway)"
+    )]
     NoChangesToCommit,
     #[error("invalid snapshot timestamp ordering. parent: `{parent}`, child: `{child}` ")]
     InvalidSnapshotTimestampOrdering { parent: DateTime<Utc>, child: DateTime<Utc> },
@@ -225,6 +247,15 @@ impl ManifestSplits {
 
 pub type ReindexOperationResult = Result<Option<ChunkIndices>, SessionError>;
 
+/// A transaction context for reading and writing Icechunk data.
+///
+/// Sessions track a base snapshot, accumulate changes in a [`ChangeSet`],
+/// and handle committing them.
+///
+/// Three modes:
+/// - **Read-only**: Can read data, ChangeSet is unused
+/// - **Writable**: Can read and write chunks/metadata
+/// - **Rearrange**: Can move/rename nodes (no chunk writes)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     config: RepositoryConfig,
@@ -324,6 +355,18 @@ impl Session {
 
     pub fn read_only(&self) -> bool {
         self.branch_name.is_none()
+    }
+
+    /// Returns the mode of this session.
+    pub fn mode(&self) -> SessionMode {
+        if self.branch_name.is_none() {
+            SessionMode::Readonly
+        } else {
+            match &self.change_set {
+                ChangeSet::Edit(_) => SessionMode::Writable,
+                ChangeSet::Rearrange(_) => SessionMode::Rearrange,
+            }
+        }
     }
 
     pub fn snapshot_id(&self) -> &SnapshotId {
@@ -771,7 +814,7 @@ impl Session {
     ///
     /// This function doesn't return [`Bytes`] directly to avoid locking the ref to self longer
     /// than needed. We want the bytes to be pulled from object store without holding a ref to the
-    /// [`Repository`], that way, writes can happen concurrently.
+    /// [`crate::Repository`], that way, writes can happen concurrently.
     ///
     /// The result of calling this function is None, if the chunk reference is not present in the
     /// repository, or a [`Future`] that will fetch the bytes, possibly failing.
@@ -798,34 +841,28 @@ impl Session {
         path: &Path,
         coords: &ChunkIndices,
         byte_range: &ByteRange,
-    ) -> SessionResult<Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>>
+    ) -> SessionResult<Option<crate::compat::IcechunkBoxFuture<'_, SessionResult<Bytes>>>>
     {
         match self.get_chunk_ref(path, coords).await? {
             Some(ChunkPayload::Ref(ChunkRef { id, offset, length })) => {
                 let byte_range = byte_range.clone();
                 let asset_manager = Arc::clone(&self.asset_manager);
                 let byte_range = construct_valid_byte_range(&byte_range, offset, length);
-                Ok(Some(
-                    async move {
-                        // TODO: we don't have a way to distinguish if we want to pass a range or not
-                        asset_manager
-                            .fetch_chunk(&id, &byte_range)
-                            .await
-                            .map_err(|e| e.into())
-                    }
-                    .boxed(),
-                ))
+                Ok(Some(crate::compat::ic_boxed!(async move {
+                    // TODO: we don't have a way to distinguish if we want to pass a range or not
+                    asset_manager
+                        .fetch_chunk(&id, &byte_range)
+                        .await
+                        .map_err(|e| e.into())
+                })))
             }
             Some(ChunkPayload::Inline(bytes)) => {
                 let byte_range =
                     construct_valid_byte_range(byte_range, 0, bytes.len() as u64);
                 trace!("fetching inline chunk for range {:?}.", &byte_range);
-                Ok(Some(
-                    ready(Ok(
-                        bytes.slice(byte_range.start as usize..byte_range.end as usize)
-                    ))
-                    .boxed(),
-                ))
+                Ok(Some(crate::compat::ic_boxed!(ready(Ok(
+                    bytes.slice(byte_range.start as usize..byte_range.end as usize)
+                )))))
             }
             Some(ChunkPayload::Virtual(VirtualChunkRef {
                 location,
@@ -835,15 +872,12 @@ impl Session {
             })) => {
                 let byte_range = construct_valid_byte_range(byte_range, offset, length);
                 let resolver = Arc::clone(&self.virtual_resolver);
-                Ok(Some(
-                    async move {
-                        resolver
-                            .fetch_chunk(location.url(), &byte_range, checksum.as_ref())
-                            .await
-                            .map_err(|e| e.into())
-                    }
-                    .boxed(),
-                ))
+                Ok(Some(crate::compat::ic_boxed!(async move {
+                    resolver
+                        .fetch_chunk(location.url(), &byte_range, checksum.as_ref())
+                        .await
+                        .map_err(|e| e.into())
+                })))
             }
             None => Ok(None),
         }
@@ -854,7 +888,7 @@ impl Session {
     /// The reason to use this design, instead of simple pass the [`Bytes`] is to avoid holding a
     /// reference to the repository while the payload is uploaded to object store. This way, the
     /// reference is hold very briefly, and then an owned object is obtained which can do the actual
-    /// upload without holding any [`Repository`] references.
+    /// upload without holding any [`crate::Repository`] references.
     ///
     /// Example usage:
     /// ```ignore
@@ -870,21 +904,20 @@ impl Session {
         impl FnOnce(
             Bytes,
         )
-            -> Pin<Box<dyn Future<Output = SessionResult<ChunkPayload>> + Send>>
+            -> crate::compat::IcechunkBoxFuture<'static, SessionResult<ChunkPayload>>
         + use<>,
     > {
         let threshold = self.config().inline_chunk_threshold_bytes() as usize;
         let asset_manager = Arc::clone(&self.asset_manager);
         let fut = move |data: Bytes| {
-            async move {
+            crate::compat::ic_boxed!(async move {
                 let payload = if data.len() > threshold {
                     new_materialized_chunk(asset_manager.as_ref(), data).await?
                 } else {
                     new_inline_chunk(data)
                 };
                 Ok(payload)
-            }
-            .boxed()
+            })
         };
         Ok(fut)
     }
@@ -1053,7 +1086,18 @@ impl Session {
         message: &str,
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
-        self._commit(message, properties, false, CommitMethod::NewCommit).await
+        self.commit_with_options(message, properties, false).await
+    }
+
+    #[instrument(skip(self, properties))]
+    pub async fn commit_with_options(
+        &mut self,
+        message: &str,
+        properties: Option<SnapshotProperties>,
+        allow_empty: bool,
+    ) -> SessionResult<SnapshotId> {
+        self._commit(message, properties, false, CommitMethod::NewCommit, allow_empty)
+            .await
     }
 
     #[instrument(skip(self, properties))]
@@ -1061,17 +1105,18 @@ impl Session {
         &mut self,
         message: &str,
         properties: Option<SnapshotProperties>,
+        allow_empty: bool,
     ) -> SessionResult<SnapshotId> {
         // Icechunk 1 doesn't support amend
         self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        self._commit(message, properties, false, CommitMethod::Amend).await
+        self._commit(message, properties, false, CommitMethod::Amend, allow_empty).await
     }
 
     async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
         let update_type =
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
-
+        let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
@@ -1083,13 +1128,13 @@ impl Session {
                 None,
                 update_type.clone(),
                 backup_path,
+                num_updates,
             )?))
         };
 
         let _ = self
             .asset_manager
-            // FIXME: hardcoded retries
-            .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
         Ok(())
     }
@@ -1180,7 +1225,8 @@ impl Session {
             serde_json::to_value(self.config.manifest().splitting())?;
         let mut properties = properties.unwrap_or_default();
         properties.insert("splitting_config".to_string(), splitting_config_serialized);
-        self._commit(message, Some(properties), true, commit_method).await
+
+        self._commit(message, Some(properties), true, commit_method, true).await
     }
 
     #[instrument(skip(self, properties))]
@@ -1190,6 +1236,7 @@ impl Session {
         properties: Option<SnapshotProperties>,
         rewrite_manifests: bool,
         commit_method: CommitMethod,
+        allow_empty: bool,
     ) -> SessionResult<SnapshotId> {
         let Some(branch_name) = &self.branch_name else {
             return Err(SessionErrorKind::ReadOnlySession.into());
@@ -1211,6 +1258,7 @@ impl Session {
                 merged
             })
             .unwrap_or(default_metadata);
+        let num_updates = self.config().num_updates_per_repo_info_file();
         {
             // we need to play this trick because we need to borrow from self twice
             // once to get the mutable change set, and other to compute
@@ -1232,6 +1280,9 @@ impl Session {
             rewrite_manifests,
             commit_method,
             self.config.manifest().splitting(),
+            allow_empty,
+            self.config.repo_update_retries().retries(),
+            num_updates,
         )
         .await?;
 
@@ -1281,13 +1332,13 @@ impl Session {
     /// Detect and optionally fix conflicts between the current [`ChangeSet`] (or session) and
     /// the tip of the branch.
     ///
-    /// When [`Repository::commit`] method is called, the system validates that the tip of the
+    /// When [`Session::commit`] method is called, the system validates that the tip of the
     /// passed branch is exactly the same as the `snapshot_id` for the current session. If that
-    /// is not the case, the commit operation fails with [`SessionError::Conflict`].
+    /// is not the case, the commit operation fails with [`SessionErrorKind::Conflict`].
     ///
     /// In that situation, the user has two options:
     /// 1. Abort the session and start a new one with using the new branch tip as a parent.
-    /// 2. Use [`Repository::rebase`] to try to "fast-forward" the session through the new
+    /// 2. Use [`Session::rebase`] to try to "fast-forward" the session through the new
     ///    commits.
     ///
     /// The issue with option 1 is that all the writes that have been done in the session,
@@ -1302,7 +1353,7 @@ impl Session {
     /// and a new commit both wrote to the same chunk, or both updated user attributes for
     /// the same group.
     ///
-    /// This is what [`Repository::rebase`] helps with. It can detect conflicts to let
+    /// This is what [`Session::rebase`] helps with. It can detect conflicts to let
     /// the user fix them manually, or it can attempt to fix conflicts based on a policy.
     ///
     /// Example:
@@ -1339,7 +1390,7 @@ impl Session {
     /// When there are more than one commit between the parent snapshot and the tip of
     /// the branch, `rebase` iterates over all of them, older first, trying to fast-forward.
     /// If at some point it finds a conflict it cannot recover from, `rebase` leaves the
-    /// `Repository` in a consistent state, that would successfully commit on top
+    /// `Session` in a consistent state, that would successfully commit on top
     /// of the latest successfully fast-forwarded commit.
     #[instrument(skip(self, solver))]
     pub async fn rebase(
@@ -1673,7 +1724,7 @@ fn new_inline_chunk(data: Bytes) -> ChunkPayload {
 }
 
 pub async fn get_chunk(
-    reader: Option<Pin<Box<dyn Future<Output = SessionResult<Bytes>> + Send>>>,
+    reader: Option<crate::compat::IcechunkBoxFuture<'_, SessionResult<Bytes>>>,
 ) -> SessionResult<Option<Bytes>> {
     match reader {
         Some(reader) => Ok(Some(reader.await?)),
@@ -1681,7 +1732,6 @@ pub async fn get_chunk(
     }
 }
 
-/// Yields nodes in the base snapshot, applying any relevant updates in the changeset
 async fn updated_existing_nodes<'a>(
     parent_group: &Path,
     asset_manager: &AssetManager,
@@ -1919,7 +1969,7 @@ impl<'a> FlushProcess<'a> {
         let mut to = vec![];
         let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-        if let Some(new_manifest) = Manifest::from_stream(chunks)
+        if let Some(new_manifest) = Manifest::from_stream(&ManifestId::random(), chunks)
             .await
             .map_err(|e| SessionErrorKind::ManifestCreationError(Box::new(e)))?
         {
@@ -1960,10 +2010,7 @@ impl<'a> FlushProcess<'a> {
                         .filter(|chunk| extent.contains(&chunk.coord.0))
                         .map(Ok),
                 );
-                #[allow(clippy::expect_used)]
-                let new_ref = self.write_manifest_from_iterator(chunks).await.expect(
-                    "logic bug. for a new node, we must always write the manifest",
-                );
+                let new_ref = self.write_manifest_from_iterator(chunks).await?;
                 // new_ref is None if there were no chunks in the iterator
                 if let Some(new_ref) = new_ref {
                     self.manifest_refs.entry(node_id.clone()).or_default().push(new_ref);
@@ -2201,10 +2248,6 @@ async fn do_flush(
     commit_method: CommitMethod,
     split_config: &ManifestSplittingConfig,
 ) -> SessionResult<Arc<Snapshot>> {
-    if !rewrite_manifests && flush_data.change_set.is_empty() {
-        return Err(SessionErrorKind::NoChangesToCommit.into());
-    }
-
     let old_snapshot =
         flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await?;
 
@@ -2419,8 +2462,21 @@ async fn do_commit(
     rewrite_manifests: bool,
     commit_method: CommitMethod,
     split_config: &ManifestSplittingConfig,
+    allow_empty: bool,
+    retry_settings: &storage::RetriesSettings,
+    num_updates_per_repo_info_file: u16,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
+
+    if !allow_empty && change_set.is_empty() {
+        return Err(SessionErrorKind::NoChangesToCommit.into());
+    }
+
+    // Cannot amend the initial commit
+    if commit_method == CommitMethod::Amend && snapshot_id.is_initial() {
+        return Err(SessionErrorKind::NoAmendForInitialCommit.into());
+    }
+
     let properties = properties.unwrap_or_default();
     let flush_data =
         FlushProcess::new(Arc::clone(&asset_manager), change_set, snapshot_id);
@@ -2455,6 +2511,8 @@ async fn do_commit(
                 snapshot_id,
                 new_snapshot,
                 commit_method,
+                retry_settings,
+                num_updates_per_repo_info_file,
             )
             .await
         }
@@ -2520,6 +2578,8 @@ async fn do_commit_v2(
     parent_snapshot_id: &SnapshotId,
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
+    retry_settings: &storage::RetriesSettings,
+    num_updates_per_repo_info_file: u16,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
@@ -2539,7 +2599,7 @@ async fn do_commit_v2(
             (CommitMethod::NewCommit, _) => parent_snapshot_id.clone(),
             (CommitMethod::Amend, Some(parent_id)) => parent_id,
             (CommitMethod::Amend, None) => {
-                return Err(RepositoryErrorKind::NoAmendForInitialCommit.into());
+                unreachable!("do_commit() disallows amend on initial commit")
             }
         };
 
@@ -2550,12 +2610,14 @@ async fn do_commit_v2(
         };
 
         let update_type = match commit_method {
-            CommitMethod::NewCommit => {
-                UpdateType::NewCommitUpdate { branch: branch_name.to_string() }
-            }
+            CommitMethod::NewCommit => UpdateType::NewCommitUpdate {
+                branch: branch_name.to_string(),
+                new_snap_id: new_snapshot_id.clone(),
+            },
             CommitMethod::Amend => UpdateType::CommitAmendedUpdate {
                 branch: branch_name.to_string(),
                 previous_snap_id: parent_snapshot.id.clone(),
+                new_snap_id: new_snapshot_id.clone(),
             },
         };
         Ok(Arc::new(repo_info.add_snapshot(
@@ -2564,13 +2626,11 @@ async fn do_commit_v2(
             Some(branch_name),
             update_type,
             backup_path,
+            num_updates_per_repo_info_file,
         )?))
     };
 
-    let res = asset_manager
-        // FIXME: hardcoded retries
-        .update_repo_info(AssetManager::limit_retries_repo_update(100, do_update))
-        .await?;
+    let res = asset_manager.update_repo_info(retry_settings, do_update).await?;
     Ok(res)
 }
 
@@ -2677,6 +2737,17 @@ mod tests {
     use async_trait::async_trait;
     use icechunk_macros::tokio_test;
     use itertools::{Itertools, assert_equal};
+
+    async fn assert_manifest_count(
+        asset_manager: &Arc<AssetManager>,
+        total_manifests: usize,
+    ) {
+        let expected = asset_manager.list_manifests().await.unwrap().count().await;
+        assert_eq!(
+            total_manifests, expected,
+            "Mismatch in manifest count: expected {expected}, but got {total_manifests}",
+        );
+    }
     use pretty_assertions::assert_eq;
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
@@ -2988,7 +3059,12 @@ mod tests {
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
                 .await?;
         }
-        session.commit("None", None).await?;
+        let first_snapshot = session.commit("None", None).await?;
+        let _session = repo
+            .readonly_session(&VersionInfo::SnapshotId(first_snapshot.clone()))
+            .await?;
+        // 2 manifests from first commit + 1 new manifest after second commit modifies a split
+        let initial_manifest_count = 3;
 
         let mut session = repo.writable_session("main").await?;
         // This is how Zarr resizes
@@ -3039,7 +3115,7 @@ mod tests {
         );
 
         // write manifests, check number of references in manifest
-        session.commit("updated", None).await?;
+        let _updated_snapshot = session.commit("updated", None).await?;
 
         // should still be deleted
         assert!(
@@ -3049,6 +3125,14 @@ mod tests {
         assert!(
             session.get_chunk_ref(&array_path, &ChunkIndices(vec![3])).await?.is_some()
         );
+
+        assert_manifest_count(repo.asset_manager(), initial_manifest_count).await;
+
+        // empty commit should not alter manifests
+        let mut session = repo.writable_session("main").await?;
+        let _empty_snapshot =
+            session.commit_with_options("empty commit", None, true).await?;
+        assert_manifest_count(repo.asset_manager(), initial_manifest_count).await;
 
         Ok(())
     }
@@ -3083,8 +3167,12 @@ mod tests {
             payload: ChunkPayload::Inline("hello".into()),
         };
 
-        let manifest =
-            Manifest::from_iter(vec![chunk1.clone(), chunk2.clone()]).await?.unwrap();
+        let manifest = Manifest::from_iter(
+            &ManifestId::random(),
+            vec![chunk1.clone(), chunk2.clone()],
+        )
+        .await?
+        .unwrap();
         let manifest = Arc::new(manifest);
         let manifest_id = manifest.id();
         let manifest_size = asset_manager.write_manifest(Arc::clone(&manifest)).await?;
@@ -3150,13 +3238,17 @@ mod tests {
         )
         .await?;
         let repo_info =
-            RepoInfo::initial(SpecVersionBin::current(), (&initial).try_into()?)
+            RepoInfo::initial(SpecVersionBin::current(), (&initial).try_into()?, 100)
                 .add_snapshot(
                     SpecVersionBin::current(),
                     snapshot.as_ref().try_into()?,
                     Some("main"),
-                    UpdateType::NewCommitUpdate { branch: "main".to_string() },
+                    UpdateType::NewCommitUpdate {
+                        branch: "main".to_string(),
+                        new_snap_id: snapshot.id().clone(),
+                    },
                     "backup_path",
+                    100,
                 )?;
         asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 
@@ -3658,8 +3750,8 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await?;
 
-        // 6 commits
-        assert_eq!(overwritten.iter().filter(|s| s.starts_with("repo")).count(), 6);
+        // 6 commits + 1 config change recorded in ops log
+        assert_eq!(overwritten.iter().filter(|s| s.starts_with("repo")).count(), 7);
 
         // 1 config save
         assert_eq!(
@@ -4118,16 +4210,30 @@ mod tests {
     #[tokio_test]
     async fn test_amend() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
+
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        session.commit("make root", None).await?;
+        let amend_result =
+            session.amend("cannot amend initial commit", None, false).await;
+        assert!(amend_result.is_err());
+        assert!(amend_result.unwrap_err().to_string().contains("first commit"));
+
+        let mut session = repo.writable_session("main").await?;
+        let amend_result = session.amend("cannot amend initial commit", None, true).await;
+        assert!(amend_result.is_err());
+        assert!(amend_result.unwrap_err().to_string().contains("first commit"));
+
+        // Now make a proper first commit
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let snap1 = session.commit("make root", None).await?;
 
         let mut session = repo.writable_session("main").await?;
         session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
         let before_amend1 = session.commit("will be amended", None).await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
-        let before_amend2 = session.amend("first amend", None).await?;
+        let before_amend2 = session.amend("first amend", None, false).await?;
 
         let main_version = VersionInfo::BranchTipRef("main".to_string());
         let anc: Vec<_> = repo
@@ -4155,7 +4261,7 @@ mod tests {
         session
             .add_group("/error".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        session.amend("second amend", None).await?;
+        let after_amend2 = session.amend("second amend", None, false).await?;
 
         let anc_from_tag: Vec<_> = repo
             .ancestry(&VersionInfo::TagRef("tag".to_string()))
@@ -4178,8 +4284,13 @@ mod tests {
             anc_from_main,
             vec!["second amend", "make root", "Repository initialized"]
         );
-        let updates =
-            repo.ops_log().await?.map_ok(|(_, up, _)| up).try_collect::<Vec<_>>().await?;
+        let updates = repo
+            .ops_log()
+            .await?
+            .0
+            .map_ok(|(_, up, _)| up)
+            .try_collect::<Vec<_>>()
+            .await?;
 
         use UpdateType::*;
         assert_eq!(
@@ -4187,18 +4298,127 @@ mod tests {
             vec![
                 CommitAmendedUpdate {
                     branch: "main".to_string(),
-                    previous_snap_id: before_amend2
+                    previous_snap_id: before_amend2.clone(),
+                    new_snap_id: after_amend2.clone(),
                 },
                 TagCreatedUpdate { name: "tag".to_string() },
                 CommitAmendedUpdate {
                     branch: "main".to_string(),
-                    previous_snap_id: before_amend1
+                    previous_snap_id: before_amend1.clone(),
+                    new_snap_id: before_amend2.clone(),
                 },
-                NewCommitUpdate { branch: "main".to_string() },
-                NewCommitUpdate { branch: "main".to_string() },
+                NewCommitUpdate {
+                    branch: "main".to_string(),
+                    new_snap_id: before_amend1
+                },
+                NewCommitUpdate { branch: "main".to_string(), new_snap_id: snap1 },
                 RepoInitializedUpdate,
             ]
         );
+
+        Ok(())
+    }
+
+    /// Integration test that fetch_snapshot_info correctly identifies initial vs non-initial.
+    #[tokio_test]
+    async fn test_fetch_snapshot_info_is_initial() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+        let asset_manager = repo.asset_manager();
+
+        // Look up the initial snapshot via the branch
+        let initial_snap_id = repo.lookup_branch("main").await?;
+        let initial_info = asset_manager.fetch_snapshot_info(&initial_snap_id).await?;
+        assert!(initial_info.is_initial());
+
+        // Non-initial snapshot should NOT be marked as initial
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let snap1 = session.commit("first commit", None).await?;
+
+        let snap1_info = asset_manager.fetch_snapshot_info(&snap1).await?;
+        assert!(!snap1_info.is_initial());
+
+        Ok(())
+    }
+
+    /// Test that the initial snapshot has an empty transaction log that can be fetched.
+    #[tokio_test]
+    async fn test_initial_snapshot_has_empty_transaction_log()
+    -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+        let asset_manager = repo.asset_manager();
+
+        let initial_snap_id = repo.lookup_branch("main").await?;
+        let tx_log = asset_manager.fetch_transaction_log(&initial_snap_id).await?;
+
+        // The transaction log should exist and be empty (no changes)
+        assert_eq!(tx_log.new_groups().count(), 0);
+        assert_eq!(tx_log.new_arrays().count(), 0);
+        assert_eq!(tx_log.deleted_groups().count(), 0);
+        assert_eq!(tx_log.deleted_arrays().count(), 0);
+        assert_eq!(tx_log.updated_groups().count(), 0);
+        assert_eq!(tx_log.updated_arrays().count(), 0);
+        assert_eq!(tx_log.updated_chunks().count(), 0);
+        assert_eq!(tx_log.moves().count(), 0);
+
+        // Diff from initial snapshot to first real commit should show the new group
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let snap1 = session.commit("first commit", None).await?;
+
+        let diff = repo
+            .diff(
+                &VersionInfo::SnapshotId(initial_snap_id),
+                &VersionInfo::SnapshotId(snap1),
+            )
+            .await?;
+        assert!(!diff.is_empty());
+        assert_eq!(&diff.new_groups, &[Path::root()].into());
+        assert!(diff.new_arrays.is_empty());
+        assert!(diff.deleted_groups.is_empty());
+        assert!(diff.deleted_arrays.is_empty());
+        assert!(diff.updated_groups.is_empty());
+        assert!(diff.updated_arrays.is_empty());
+        assert!(diff.updated_chunks.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_empty_commit() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let snap1 = session.commit("make root", None).await?;
+
+        let mut session = repo.writable_session("main").await?;
+        let result = session.commit("an empty commit", None).await;
+        assert!(matches!(
+            result,
+            Err(SessionError { kind: SessionErrorKind::NoChangesToCommit, .. })
+        ));
+
+        let mut session = repo.writable_session("main").await?;
+        let snap2 = session.commit_with_options("an empty commit", None, true).await?;
+        let snap2_info = repo.lookup_snapshot(&snap2).await?;
+        assert_eq!(snap2_info.parent_id, Some(snap1.clone()));
+
+        let diff = repo
+            .diff(
+                &VersionInfo::SnapshotId(snap1.clone()),
+                &VersionInfo::SnapshotId(snap2.clone()),
+            )
+            .await?;
+        assert!(diff.is_empty());
+
+        // Verify ancestry includes both commits (plus initial snapshot)
+        let ancestry: Vec<_> = repo
+            .ancestry(&VersionInfo::SnapshotId(snap2.clone()))
+            .await?
+            .map_ok(|si| si.id)
+            .try_collect()
+            .await?;
+        assert_eq!(ancestry, vec![snap2, snap1, Snapshot::INITIAL_SNAPSHOT_ID]);
 
         Ok(())
     }

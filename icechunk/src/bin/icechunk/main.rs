@@ -1,3 +1,5 @@
+//! Icechunk CLI binary entry point.
+
 use anyhow::Result;
 use clap::Parser;
 use icechunk::cli::interface::{IcechunkCLI, run_cli};

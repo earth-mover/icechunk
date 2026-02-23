@@ -4,8 +4,8 @@ use async_stream::try_stream;
 use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Store,
-    format::{ChunkIndices, Path},
-    session::{Session, SessionErrorKind},
+    format::{ChunkIndices, Path, manifest::ChunkPayload},
+    session::{Session, SessionErrorKind, SessionMode},
     store::{StoreError, StoreErrorKind},
 };
 use pyo3::{
@@ -26,6 +26,34 @@ use crate::{
 #[pyclass]
 #[derive(Clone)]
 pub struct PySession(pub Arc<RwLock<Session>>);
+
+#[pyclass(eq, eq_int, rename_all = "UPPERCASE")]
+#[derive(PartialEq)]
+pub enum ChunkType {
+    Uninitialized = 0,
+    Native = 1,
+    Virtual = 2,
+    Inline = 3,
+}
+
+/// The mode of a session, determining what operations are allowed.
+#[pyclass(name = "SessionMode", module = "icechunk", eq, rename_all = "UPPERCASE")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PySessionMode {
+    Readonly,
+    Writable,
+    Rearrange,
+}
+
+impl From<SessionMode> for PySessionMode {
+    fn from(mode: SessionMode) -> Self {
+        match mode {
+            SessionMode::Readonly => PySessionMode::Readonly,
+            SessionMode::Writable => PySessionMode::Writable,
+            SessionMode::Rearrange => PySessionMode::Rearrange,
+        }
+    }
+}
 
 #[pymethods]
 /// Most functions in this class block, so they need to `detach` so other
@@ -62,6 +90,12 @@ impl PySession {
     pub fn read_only(&self, py: Python<'_>) -> bool {
         // This is blocking function, we need to release the Gil
         py.detach(move || self.0.blocking_read().read_only())
+    }
+
+    #[getter]
+    pub fn mode(&self, py: Python<'_>) -> PySessionMode {
+        // This is blocking function, we need to release the Gil
+        py.detach(move || self.0.blocking_read().mode().into())
     }
 
     #[getter]
@@ -318,6 +352,29 @@ impl PySession {
         Ok(PyAsyncGenerator::new(prepared_list))
     }
 
+    pub fn chunk_type(
+        &self,
+        array_path: String,
+        coords: Vec<u32>,
+    ) -> PyResult<ChunkType> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(Self::chunk_type_inner(session, array_path, coords))
+    }
+
+    pub fn chunk_type_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        array_path: String,
+        coords: Vec<u32>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py::<_, ChunkType>(
+            py,
+            Self::chunk_type_inner(session, array_path, coords),
+        )
+    }
+
     pub fn merge(&self, other: &PySession, py: Python<'_>) -> PyResult<()> {
         // This is blocking function, we need to release the Gil
         py.detach(move || {
@@ -352,7 +409,7 @@ impl PySession {
         })
     }
 
-    #[pyo3(signature = (message, metadata=None, rebase_with=None, rebase_tries=1_000))]
+    #[pyo3(signature = (message, metadata=None, rebase_with=None, rebase_tries=1_000, allow_empty=false))]
     pub fn commit(
         &self,
         py: Python<'_>,
@@ -360,6 +417,7 @@ impl PySession {
         metadata: Option<PySnapshotProperties>,
         rebase_with: Option<PyConflictSolver>,
         rebase_tries: Option<u16>,
+        allow_empty: bool,
     ) -> PyResult<String> {
         let metadata = metadata.map(|m| m.into());
         // This is blocking function, we need to release the Gil
@@ -378,7 +436,7 @@ impl PySession {
                         )
                         .await
                 } else {
-                    session.commit(message, metadata).await
+                    session.commit_with_options(message, metadata, allow_empty).await
                 }
                 .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())
@@ -386,6 +444,7 @@ impl PySession {
         })
     }
 
+    #[pyo3(signature = (message, metadata=None, rebase_with=None, rebase_tries=1_000, allow_empty=false))]
     pub fn commit_async<'py>(
         &'py self,
         py: Python<'py>,
@@ -393,6 +452,7 @@ impl PySession {
         metadata: Option<PySnapshotProperties>,
         rebase_with: Option<PyConflictSolver>,
         rebase_tries: Option<u16>,
+        allow_empty: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let session = self.0.clone();
         let message = message.to_owned();
@@ -412,18 +472,20 @@ impl PySession {
                     )
                     .await
             } else {
-                session.commit(&message, metadata).await
+                session.commit_with_options(&message, metadata, allow_empty).await
             }
             .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(snapshot_id.to_string())
         })
     }
 
+    #[pyo3(signature = (message, metadata=None, allow_empty=false))]
     pub fn amend(
         &self,
         py: Python<'_>,
         message: &str,
         metadata: Option<PySnapshotProperties>,
+        allow_empty: bool,
     ) -> PyResult<String> {
         let metadata = metadata.map(|m| m.into());
         // This is blocking function, we need to release the Gil
@@ -431,7 +493,7 @@ impl PySession {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
                 let snapshot_id = session
-                    .amend(message, metadata)
+                    .amend(message, metadata, allow_empty)
                     .await
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())
@@ -439,11 +501,13 @@ impl PySession {
         })
     }
 
+    #[pyo3(signature = (message, metadata=None, allow_empty=false))]
     pub fn amend_async<'py>(
         &'py self,
         py: Python<'py>,
         message: &str,
         metadata: Option<PySnapshotProperties>,
+        allow_empty: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let session = self.0.clone();
         let message = message.to_owned();
@@ -452,7 +516,7 @@ impl PySession {
             let metadata = metadata.map(|m| m.into());
             let mut session = session.write().await;
             let snapshot_id = session
-                .amend(&message, metadata)
+                .amend(&message, metadata, allow_empty)
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(snapshot_id.to_string())
@@ -529,5 +593,32 @@ impl PySession {
             session.rebase(solver).await.map_err(PyIcechunkStoreError::SessionError)?;
             Ok(())
         })
+    }
+}
+
+impl PySession {
+    async fn chunk_type_inner(
+        session: Arc<RwLock<Session>>,
+        array_path: String,
+        coords: Vec<u32>,
+    ) -> PyResult<ChunkType> {
+        let session = session.read().await;
+        let array_path = Path::new(array_path.as_str())
+            .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
+            .map_err(PyIcechunkStoreError::StoreError)?;
+        let res = session
+            .get_chunk_ref(&array_path, &ChunkIndices(coords))
+            .await
+            .map_err(PyIcechunkStoreError::SessionError)?;
+
+        match res {
+            None => Ok(ChunkType::Uninitialized),
+            Some(ChunkPayload::Inline(_)) => Ok(ChunkType::Inline),
+            Some(ChunkPayload::Virtual(_)) => Ok(ChunkType::Virtual),
+            Some(ChunkPayload::Ref(_)) => Ok(ChunkType::Native),
+            Some(_) => {
+                Err(PyIcechunkStoreError::PyValueError("Invalid Chunk Type".into()))?
+            }
+        }
     }
 }

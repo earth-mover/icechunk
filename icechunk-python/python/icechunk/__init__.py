@@ -10,6 +10,7 @@ from icechunk._icechunk_python import (
     BranchDeletedUpdate,
     BranchResetUpdate,
     CachingConfig,
+    ChunkType,
     CommitAmendedUpdate,
     CompressionAlgorithm,
     CompressionConfig,
@@ -43,9 +44,11 @@ from icechunk._icechunk_python import (
     RepoInitializedUpdate,
     RepoMigratedUpdate,
     RepositoryConfig,
+    RepoUpdateRetryConfig,
     S3Credentials,
     S3Options,
     S3StaticCredentials,
+    SessionMode,
     SnapshotInfo,
     Storage,
     StorageConcurrencySettings,
@@ -119,6 +122,7 @@ __all__ = [
     "BranchDeletedUpdate",
     "BranchResetUpdate",
     "CachingConfig",
+    "ChunkType",
     "CommitAmendedUpdate",
     "CompressionAlgorithm",
     "CompressionConfig",
@@ -153,12 +157,14 @@ __all__ = [
     "RebaseFailedError",
     "RepoInitializedUpdate",
     "RepoMigratedUpdate",
+    "RepoUpdateRetryConfig",
     "Repository",
     "RepositoryConfig",
     "S3Credentials",
     "S3Options",
     "S3StaticCredentials",
     "Session",
+    "SessionMode",
     "SnapshotInfo",
     "Storage",
     "StorageConcurrencySettings",
@@ -269,7 +275,7 @@ def upgrade_icechunk_repository(
     )
 
 
-ManifestSplittingConfig.from_dict = from_dict  # type: ignore[method-assign]
-ManifestSplittingConfig.to_dict = to_dict  # type: ignore[method-assign]
+ManifestSplittingConfig.from_dict = staticmethod(from_dict)  # type: ignore[method-assign]
+ManifestSplittingConfig.to_dict = to_dict  # type: ignore[method-assign,assignment]
 
 initialize_logs()

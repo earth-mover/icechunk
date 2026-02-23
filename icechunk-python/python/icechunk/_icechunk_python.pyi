@@ -1,13 +1,20 @@
 import abc
 import datetime
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from enum import Enum
 from typing import Any, TypeAlias
 
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         region: str | None = None,
         endpoint_url: str | None = None,
         allow_http: bool = False,
@@ -15,7 +22,7 @@ class S3Options:
         force_path_style: bool = False,
         network_stream_timeout_seconds: int | None = None,
         requester_pays: bool = False,
-    ) -> None:
+    ) -> S3Options:
         """
         Create a new `S3Options` object
 
@@ -184,30 +191,36 @@ class S3Options:
 
 class ObjectStoreConfig:
     class InMemory:
-        def __init__(self) -> None: ...
+        def __new__(cls) -> ObjectStoreConfig.InMemory: ...
 
     class LocalFileSystem:
-        def __init__(self, path: str) -> None: ...
+        def __new__(cls, path: str) -> ObjectStoreConfig.LocalFileSystem: ...
 
     class S3Compatible:
-        def __init__(self, options: S3Options) -> None: ...
+        def __new__(cls, options: S3Options) -> ObjectStoreConfig.S3Compatible: ...
 
     class S3:
-        def __init__(self, options: S3Options) -> None: ...
+        def __new__(cls, options: S3Options) -> ObjectStoreConfig.S3: ...
 
     class Gcs:
-        def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
+        def __new__(
+            cls, opts: Mapping[str, str] | None = None
+        ) -> ObjectStoreConfig.Gcs: ...
 
     class Azure:
-        def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
+        def __new__(
+            cls, opts: Mapping[str, str] | None = None
+        ) -> ObjectStoreConfig.Azure: ...
 
     class Tigris:
-        def __init__(self, opts: S3Options) -> None: ...
+        def __new__(cls, opts: S3Options) -> ObjectStoreConfig.Tigris: ...
 
     class Http:
-        def __init__(self, opts: Mapping[str, str] | None = None) -> None: ...
+        def __new__(
+            cls, opts: Mapping[str, str] | None = None
+        ) -> ObjectStoreConfig.Http: ...
 
-AnyObjectStoreConfig = (
+_AnyObjectStoreConfig = (
     ObjectStoreConfig.InMemory
     | ObjectStoreConfig.LocalFileSystem
     | ObjectStoreConfig.S3
@@ -233,7 +246,9 @@ class VirtualChunkContainer:
     url_prefix: str
     store: ObjectStoreConfig
 
-    def __init__(self, url_prefix: str, store: AnyObjectStoreConfig):
+    def __new__(
+        cls, url_prefix: str, store: _AnyObjectStoreConfig
+    ) -> VirtualChunkContainer:
         """
         Create a new `VirtualChunkContainer` object
 
@@ -278,15 +293,15 @@ class VirtualChunkSpec:
         """
         ...
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         index: list[int],
         location: str,
         offset: int,
         length: int,
         etag_checksum: str | None = None,
         last_updated_at_checksum: datetime.datetime | None = None,
-    ) -> None: ...
+    ) -> VirtualChunkSpec: ...
 
 class CompressionAlgorithm(Enum):
     """Enum for selecting the compression algorithm used by Icechunk to write its metadata files
@@ -299,7 +314,7 @@ class CompressionAlgorithm(Enum):
 
     Zstd = 0
 
-    def __init__(self) -> None: ...
+    def __new__(cls) -> CompressionAlgorithm: ...
     @staticmethod
     def default() -> CompressionAlgorithm:
         """
@@ -315,9 +330,9 @@ class CompressionAlgorithm(Enum):
 class CompressionConfig:
     """Configuration for how Icechunk compresses its metadata files"""
 
-    def __init__(
-        self, algorithm: CompressionAlgorithm | None = None, level: int | None = None
-    ) -> None:
+    def __new__(
+        cls, algorithm: CompressionAlgorithm | None = None, level: int | None = None
+    ) -> CompressionConfig:
         """
         Create a new `CompressionConfig` object
 
@@ -386,14 +401,14 @@ class CompressionConfig:
 class CachingConfig:
     """Configuration for how Icechunk caches its metadata files"""
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         num_snapshot_nodes: int | None = None,
         num_chunk_refs: int | None = None,
         num_transaction_changes: int | None = None,
         num_bytes_attributes: int | None = None,
         num_bytes_chunks: int | None = None,
-    ) -> None:
+    ) -> CachingConfig:
         """
         Create a new `CachingConfig` object
 
@@ -578,12 +593,12 @@ class ManifestPreloadCondition:
 class ManifestPreloadConfig:
     """Configuration for how Icechunk manifest preload on session creation"""
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         max_total_refs: int | None = None,
         preload_if: ManifestPreloadCondition | None = None,
         max_arrays_to_scan: int | None = None,
-    ) -> None:
+    ) -> ManifestPreloadConfig:
         """
         Create a new `ManifestPreloadConfig` object
 
@@ -715,18 +730,18 @@ class ManifestSplitDimCondition:
     """Conditions for specifying dimensions along which to shard manifests."""
     class Axis:
         """Split along specified integer axis."""
-        def __init__(self, axis: int) -> None: ...
+        def __new__(cls, axis: int) -> ManifestSplitDimCondition.Axis: ...
 
     class DimensionName:
         """Split along specified named dimension."""
-        def __init__(self, regex: str) -> None: ...
+        def __new__(cls, regex: str) -> ManifestSplitDimCondition.DimensionName: ...
 
     class Any:
         """Split along any other unspecified dimension."""
-        def __init__(self) -> None: ...
+        def __new__(cls) -> ManifestSplitDimCondition.Any: ...
 
-DimSplitSize: TypeAlias = int
-SplitSizes: TypeAlias = tuple[
+_DimSplitSize: TypeAlias = int
+_SplitSizes: TypeAlias = tuple[
     tuple[
         ManifestSplitCondition,
         tuple[
@@ -734,7 +749,7 @@ SplitSizes: TypeAlias = tuple[
                 ManifestSplitDimCondition.Axis
                 | ManifestSplitDimCondition.DimensionName
                 | ManifestSplitDimCondition.Any,
-                DimSplitSize,
+                _DimSplitSize,
             ],
             ...,
         ],
@@ -758,7 +773,7 @@ class ManifestSplittingConfig:
         ],
     ) -> ManifestSplittingConfig: ...
     def to_dict(
-        config: ManifestSplittingConfig,
+        self,
     ) -> dict[
         ManifestSplitCondition,
         dict[
@@ -768,7 +783,7 @@ class ManifestSplittingConfig:
             int,
         ],
     ]: ...
-    def __init__(self, split_sizes: SplitSizes) -> None:
+    def __new__(cls, split_sizes: _SplitSizes) -> ManifestSplittingConfig:
         """Configuration for how Icechunk manifests will be split.
 
         Parameters
@@ -791,7 +806,7 @@ class ManifestSplittingConfig:
         pass
 
     @property
-    def split_sizes(self) -> SplitSizes:
+    def split_sizes(self) -> _SplitSizes:
         """
         Configuration for how Icechunk manifests will be split.
 
@@ -803,7 +818,7 @@ class ManifestSplittingConfig:
         ...
 
     @split_sizes.setter
-    def split_sizes(self, value: SplitSizes) -> None:
+    def split_sizes(self, value: _SplitSizes) -> None:
         """
         Set the sizes for how Icechunk manifests will be split.
 
@@ -817,11 +832,11 @@ class ManifestSplittingConfig:
 class ManifestConfig:
     """Configuration for how Icechunk manifests"""
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         preload: ManifestPreloadConfig | None = None,
         splitting: ManifestSplittingConfig | None = None,
-    ) -> None:
+    ) -> ManifestConfig:
         """
         Create a new `ManifestConfig` object
 
@@ -885,12 +900,12 @@ class StorageRetriesSettings:
 
     Icechunk retries failed requests with an exponential backoff algorithm."""
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         max_tries: int | None = None,
         initial_backoff_ms: int | None = None,
         max_backoff_ms: int | None = None,
-    ) -> None:
+    ) -> StorageRetriesSettings:
         """
         Create a new `StorageRetriesSettings` object
 
@@ -974,11 +989,11 @@ class StorageRetriesSettings:
 class StorageConcurrencySettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         max_concurrent_requests_for_object: int | None = None,
         ideal_concurrent_request_size: int | None = None,
-    ) -> None:
+    ) -> StorageConcurrencySettings:
         """
         Create a new `StorageConcurrencySettings` object
 
@@ -1038,8 +1053,8 @@ class StorageConcurrencySettings:
 class StorageSettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         concurrency: StorageConcurrencySettings | None = None,
         retries: StorageRetriesSettings | None = None,
         unsafe_use_conditional_create: bool | None = None,
@@ -1049,7 +1064,7 @@ class StorageSettings:
         metadata_storage_class: str | None = None,
         chunks_storage_class: str | None = None,
         minimum_size_for_multipart_upload: int | None = None,
-    ) -> None:
+    ) -> StorageSettings:
         """
         Create a new `StorageSettings` object
 
@@ -1173,11 +1188,32 @@ class StorageSettings:
     @minimum_size_for_multipart_upload.setter
     def minimum_size_for_multipart_upload(self, value: int) -> None: ...
 
+class RepoUpdateRetryConfig:
+    """Configuration for retries when updating the repo info object."""
+
+    def __new__(
+        cls,
+        default: StorageRetriesSettings | None = None,
+    ) -> RepoUpdateRetryConfig:
+        """
+        Create a new `RepoUpdateRetryConfig` object
+
+        Parameters
+        ----------
+        default: StorageRetriesSettings | None
+            Default retry settings for all repo update operations.
+        """
+        ...
+    @property
+    def default(self) -> StorageRetriesSettings | None: ...
+    @default.setter
+    def default(self, value: StorageRetriesSettings | None) -> None: ...
+
 class RepositoryConfig:
     """Configuration for an Icechunk repository"""
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         inline_chunk_threshold_bytes: int | None = None,
         get_partial_values_concurrency: int | None = None,
         compression: CompressionConfig | None = None,
@@ -1186,7 +1222,9 @@ class RepositoryConfig:
         storage: StorageSettings | None = None,
         virtual_chunk_containers: dict[str, VirtualChunkContainer] | None = None,
         manifest: ManifestConfig | None = None,
-    ) -> None:
+        repo_update_retries: RepoUpdateRetryConfig | None = None,
+        num_updates_per_repo_info_file: int | None = None,
+    ) -> RepositoryConfig:
         """
         Create a new `RepositoryConfig` object
 
@@ -1209,6 +1247,8 @@ class RepositoryConfig:
             The virtual chunk containers for the repository.
         manifest: ManifestConfig | None
             The manifest configuration for the repository.
+        repo_update_retries: RepoUpdateRetryConfig | None
+            Retry configuration for repo info update operations.
         """
         ...
     @staticmethod
@@ -1400,6 +1440,12 @@ class RepositoryConfig:
         Clear all virtual chunk containers from the repository.
         """
         ...
+    @property
+    def num_updates_per_repo_info_file(self) -> int | None:
+        """The number of updates per repo info file."""
+        ...
+    @num_updates_per_repo_info_file.setter
+    def num_updates_per_repo_info_file(self, value: int | None) -> None: ...
     def merge(self, other: RepositoryConfig) -> RepositoryConfig:
         """
         Merge another RepositoryConfig with this one.
@@ -1422,6 +1468,11 @@ class RepositoryConfig:
 
 class Diff:
     """The result of comparing two snapshots"""
+    def is_empty(self) -> bool:
+        """
+        Returns True if the diff contains no changes.
+        """
+        ...
     @property
     def new_groups(self) -> set[str]:
         """
@@ -1560,12 +1611,16 @@ class BranchResetUpdate(UpdateType):
 class NewCommitUpdate(UpdateType):
     @property
     def branch(self) -> str: ...
+    @property
+    def new_snap_id(self) -> str: ...
 
 class CommitAmendedUpdate(UpdateType):
     @property
-    def name(self) -> str: ...
+    def branch(self) -> str: ...
     @property
     def previous_snap_id(self) -> str: ...
+    @property
+    def new_snap_id(self) -> str: ...
 
 class NewDetachedSnapshotUpdate(UpdateType):
     @property
@@ -1600,7 +1655,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         spec_version: int | None = None,
     ) -> PyRepository: ...
     @classmethod
@@ -1609,7 +1664,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         spec_version: int | None = None,
     ) -> PyRepository: ...
     @classmethod
@@ -1618,7 +1673,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
     ) -> PyRepository: ...
     @classmethod
     async def open_async(
@@ -1626,7 +1681,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
     ) -> PyRepository: ...
     @classmethod
     def open_or_create(
@@ -1634,7 +1689,7 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         create_version: int | None = None,
     ) -> PyRepository: ...
     @classmethod
@@ -1643,15 +1698,27 @@ class PyRepository:
         storage: Storage,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         create_version: int | None = None,
     ) -> PyRepository: ...
     @staticmethod
-    def exists(storage: Storage) -> bool: ...
+    def exists(
+        storage: Storage, storage_settings: StorageSettings | None = None
+    ) -> bool: ...
     @staticmethod
-    async def exists_async(storage: Storage) -> bool: ...
+    async def exists_async(
+        storage: Storage, storage_settings: StorageSettings | None = None
+    ) -> bool: ...
+    @staticmethod
+    def fetch_spec_version(
+        storage: Storage, storage_settings: StorageSettings | None = None
+    ) -> int | None: ...
+    @staticmethod
+    async def fetch_spec_version_async(
+        storage: Storage, storage_settings: StorageSettings | None = None
+    ) -> int | None: ...
     @classmethod
-    def from_bytes(cls, data: bytes) -> PyRepository: ...
+    def from_bytes(cls, bytes: bytes) -> PyRepository: ...
     def as_bytes(self) -> bytes: ...
     @staticmethod
     def fetch_config(storage: Storage) -> RepositoryConfig | None: ...
@@ -1668,13 +1735,13 @@ class PyRepository:
         self,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = ...,
     ) -> PyRepository: ...
     async def reopen_async(
         self,
         *,
         config: RepositoryConfig | None = None,
-        authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
+        authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = ...,
     ) -> PyRepository: ...
     def set_default_commit_metadata(self, metadata: dict[str, Any]) -> None: ...
     def default_commit_metadata(self) -> dict[str, Any]: ...
@@ -1692,12 +1759,12 @@ class PyRepository:
         snapshot_id: str | None = None,
     ) -> AsyncIterator[SnapshotInfo]: ...
     def async_ops_log(self) -> AsyncIterator[UpdateType]: ...
-    def create_branch(self, branch: str, snapshot_id: str) -> None: ...
-    async def create_branch_async(self, branch: str, snapshot_id: str) -> None: ...
+    def create_branch(self, branch_name: str, snapshot_id: str) -> None: ...
+    async def create_branch_async(self, branch_name: str, snapshot_id: str) -> None: ...
     def list_branches(self) -> set[str]: ...
     async def list_branches_async(self) -> set[str]: ...
-    def lookup_branch(self, branch: str) -> str: ...
-    async def lookup_branch_async(self, branch: str) -> str: ...
+    def lookup_branch(self, branch_name: str) -> str: ...
+    async def lookup_branch_async(self, branch_name: str) -> str: ...
     def lookup_snapshot(self, snapshot_id: str) -> SnapshotInfo: ...
     async def lookup_snapshot_async(self, snapshot_id: str) -> SnapshotInfo: ...
     def list_manifest_files(self, snapshot_id: str) -> list[ManifestFileInfo]: ...
@@ -1705,23 +1772,24 @@ class PyRepository:
         self, snapshot_id: str
     ) -> list[ManifestFileInfo]: ...
     def reset_branch(
-        self, branch: str, to_snapshot_id: str, from_snapshot_id: str | None
+        self, branch_name: str, to_snapshot_id: str, from_snapshot_id: str | None
     ) -> None: ...
     async def reset_branch_async(
-        self, branch: str, to_snapshot_id: str, from_snapshot_id: str | None
+        self, branch_name: str, to_snapshot_id: str, from_snapshot_id: str | None
     ) -> None: ...
     def delete_branch(self, branch: str) -> None: ...
     async def delete_branch_async(self, branch: str) -> None: ...
     def delete_tag(self, tag: str) -> None: ...
     async def delete_tag_async(self, tag: str) -> None: ...
-    def create_tag(self, tag: str, snapshot_id: str) -> None: ...
-    async def create_tag_async(self, tag: str, snapshot_id: str) -> None: ...
+    def create_tag(self, tag_name: str, snapshot_id: str) -> None: ...
+    async def create_tag_async(self, tag_name: str, snapshot_id: str) -> None: ...
     def list_tags(self) -> set[str]: ...
     async def list_tags_async(self) -> set[str]: ...
     def lookup_tag(self, tag: str) -> str: ...
     async def lookup_tag_async(self, tag: str) -> str: ...
     def diff(
         self,
+        *,
         from_branch: str | None = None,
         from_tag: str | None = None,
         from_snapshot_id: str | None = None,
@@ -1731,6 +1799,7 @@ class PyRepository:
     ) -> Diff: ...
     async def diff_async(
         self,
+        *,
         from_branch: str | None = None,
         from_tag: str | None = None,
         from_snapshot_id: str | None = None,
@@ -1740,16 +1809,16 @@ class PyRepository:
     ) -> Diff: ...
     def readonly_session(
         self,
-        branch: str | None = None,
         *,
+        branch: str | None = None,
         tag: str | None = None,
         snapshot_id: str | None = None,
         as_of: datetime.datetime | None = None,
     ) -> PySession: ...
     async def readonly_session_async(
         self,
-        branch: str | None = None,
         *,
+        branch: str | None = None,
         tag: str | None = None,
         snapshot_id: str | None = None,
         as_of: datetime.datetime | None = None,
@@ -1810,34 +1879,61 @@ class PyRepository:
         max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
         max_concurrent_manifest_fetches: int = 500,
     ) -> ChunkStorageStats: ...
-    def total_chunks_storage(
-        self,
-        *,
-        max_snapshots_in_memory: int = 50,
-        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
-        max_concurrent_manifest_fetches: int = 500,
-    ) -> int: ...
-    async def total_chunks_storage_async(
-        self,
-        *,
-        max_snapshots_in_memory: int = 50,
-        max_compressed_manifest_mem_bytes: int = 512 * 1024 * 1024,
-        max_concurrent_manifest_fetches: int = 500,
-    ) -> int: ...
     def inspect_snapshot(self, snapshot_id: str, *, pretty: bool = True) -> str: ...
     async def inspect_snapshot_async(
         self, snapshot_id: str, *, pretty: bool = True
     ) -> str: ...
+    def inspect_repo_info(self, *, pretty: bool = True) -> str: ...
+    async def inspect_repo_info_async(self, *, pretty: bool = True) -> str: ...
     @property
     def spec_version(self) -> int: ...
 
+class ChunkType(Enum):
+    """Enum for Zarr chunk types
+
+    Attributes
+    ----------
+    Uninitialized: int
+        Chunk doesn't have a materialized type yet
+    Native: int
+        Regular Zarr chunks
+    Virtual: int
+        Chunk conforming to the VirtualiZarr spec
+    Inline: int
+        Chunk is store inline in the manifest
+    """
+
+    UNINITIALIZED = 0
+    NATIVE = 1
+    VIRTUAL = 2
+    INLINE = 3
+
+class SessionMode(Enum):
+    """Enum for session access modes
+
+    Attributes
+    ----------
+    READONLY: int
+        Session can only read data
+    WRITABLE: int
+        Session can read and write data
+    REARRANGE: int
+        Session can only move nodes and reindex arrays
+    """
+
+    READONLY = 0
+    WRITABLE = 1
+    REARRANGE = 2
+
 class PySession:
     @classmethod
-    def from_bytes(cls, data: bytes) -> PySession: ...
+    def from_bytes(cls, bytes: bytes) -> PySession: ...
     def __eq__(self, value: object) -> bool: ...
     def as_bytes(self) -> bytes: ...
     @property
     def read_only(self) -> bool: ...
+    @property
+    def mode(self) -> SessionMode: ...
     @property
     def snapshot_id(self) -> str: ...
     @property
@@ -1859,6 +1955,10 @@ class PySession:
     def chunk_coordinates(
         self, array_path: str, batch_size: int
     ) -> AsyncIterator[list[list[int]]]: ...
+    def chunk_type(self, array_path: str, coords: Sequence[int]) -> ChunkType: ...
+    async def chunk_type_async(
+        self, array_path: str, coords: Sequence[int]
+    ) -> ChunkType: ...
     @property
     def store(self) -> PyStore: ...
     @property
@@ -1871,6 +1971,7 @@ class PySession:
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> str: ...
     async def commit_async(
         self,
@@ -1878,6 +1979,7 @@ class PySession:
         metadata: dict[str, Any] | None = None,
         rebase_with: ConflictSolver | None = None,
         rebase_tries: int = 1_000,
+        allow_empty: bool = False,
     ) -> str: ...
     def flush(
         self,
@@ -1887,24 +1989,26 @@ class PySession:
     async def flush_async(
         self,
         message: str,
-        metadata: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None,
     ) -> str: ...
     def amend(
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        allow_empty: bool = False,
     ) -> str: ...
     async def amend_async(
         self,
         message: str,
         metadata: dict[str, Any] | None = None,
+        allow_empty: bool = False,
     ) -> str: ...
     def rebase(self, solver: ConflictSolver) -> None: ...
     async def rebase_async(self, solver: ConflictSolver) -> None: ...
 
 class PyStore:
     @classmethod
-    def from_bytes(cls, data: bytes) -> PyStore: ...
+    def from_bytes(cls, bytes: bytes) -> PyStore: ...
     def __eq__(self, value: object) -> bool: ...
     @property
     def read_only(self) -> bool: ...
@@ -1945,7 +2049,7 @@ class PyStore:
         offset: int,
         length: int,
         checksum: str | datetime.datetime | None,
-        validate_container: bool = False,
+        validate_container: bool,
     ) -> None: ...
     def set_virtual_refs(
         self,
@@ -1968,14 +2072,14 @@ class PyStore:
     ) -> None: ...
     @property
     def supports_listing(self) -> bool: ...
-    def list(self) -> PyAsyncStringGenerator: ...
-    def list_prefix(self, prefix: str) -> PyAsyncStringGenerator: ...
-    def list_dir(self, prefix: str) -> PyAsyncStringGenerator: ...
+    def list(self) -> _PyAsyncStringGenerator: ...
+    def list_prefix(self, prefix: str) -> _PyAsyncStringGenerator: ...
+    def list_dir(self, prefix: str) -> _PyAsyncStringGenerator: ...
     async def getsize(self, key: str) -> int: ...
     async def getsize_prefix(self, prefix: str) -> int: ...
 
-class PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
-    def __aiter__(self) -> PyAsyncStringGenerator: ...
+class _PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
+    def __aiter__(self) -> _PyAsyncStringGenerator: ...
     async def __anext__(self) -> str: ...
 
 class SnapshotInfo:
@@ -2006,15 +2110,11 @@ class SnapshotInfo:
         The metadata of the snapshot
         """
         ...
-    @property
-    def manifests(self) -> list[ManifestFileInfo]:
-        """
-        The manifests linked to this snapshot
-        """
-        ...
 
-class PyAsyncSnapshotGenerator(AsyncGenerator[SnapshotInfo, None], metaclass=abc.ABCMeta):
-    def __aiter__(self) -> PyAsyncSnapshotGenerator: ...
+class _PyAsyncSnapshotGenerator(
+    AsyncGenerator[SnapshotInfo, None], metaclass=abc.ABCMeta
+):
+    def __aiter__(self) -> _PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotInfo: ...
 
 class S3StaticCredentials:
@@ -2036,13 +2136,13 @@ class S3StaticCredentials:
     session_token: str | None
     expires_after: datetime.datetime | None
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         access_key_id: str,
         secret_access_key: str,
         session_token: str | None = None,
         expires_after: datetime.datetime | None = None,
-    ):
+    ) -> S3StaticCredentials:
         """
         Create a new `S3StaticCredentials` object
 
@@ -2063,40 +2163,45 @@ class S3Credentials:
     """Credentials for an S3 storage backend"""
     class FromEnv:
         """Uses credentials from environment variables"""
-        def __init__(self) -> None: ...
+        def __new__(cls) -> S3Credentials.FromEnv: ...
 
     class Anonymous:
         """Does not sign requests, useful for public buckets"""
-        def __init__(self) -> None: ...
+        def __new__(cls) -> S3Credentials.Anonymous: ...
 
     class Static:
-        """Uses s3 credentials without expiration
+        """Uses s3 credentials without expiration"""
+        def __new__(cls, credentials: S3StaticCredentials) -> S3Credentials.Static:
+            """Create static S3 credentials.
 
-        Parameters
-        ----------
-        credentials: S3StaticCredentials
-            The credentials to use for authentication.
-        """
-        def __init__(self, credentials: S3StaticCredentials) -> None: ...
+            Parameters
+            ----------
+            credentials: S3StaticCredentials
+                The credentials to use for authentication.
+            """
+            ...
 
     class Refreshable:
         """Allows for an outside authority to pass in a function that can be used to provide credentials.
 
         This is useful for credentials that have an expiration time, or are otherwise not known ahead of time.
-
-        Parameters
-        ----------
-        pickled_function: bytes
-            The pickled function to use to provide credentials.
-        current: S3StaticCredentials
-            The initial credentials. They will be returned the first time credentials
-            are requested and then deleted.
         """
-        def __init__(
-            self, pickled_function: bytes, current: S3StaticCredentials | None = None
-        ) -> None: ...
+        def __new__(
+            cls, pickled_function: bytes, current: S3StaticCredentials | None = None
+        ) -> S3Credentials.Refreshable:
+            """Create refreshable S3 credentials.
 
-AnyS3Credential = (
+            Parameters
+            ----------
+            pickled_function: bytes
+                The pickled function to use to provide credentials.
+            current: S3StaticCredentials
+                The initial credentials. They will be returned the first time credentials
+                are requested and then deleted.
+            """
+            ...
+
+_AnyS3Credential = (
     S3Credentials.Static
     | S3Credentials.Anonymous
     | S3Credentials.FromEnv
@@ -2109,9 +2214,9 @@ class GcsBearerCredential:
     This is a bearer token that has an expiration time.
     """
 
-    def __init__(
-        self, bearer: str, *, expires_after: datetime.datetime | None = None
-    ) -> None:
+    def __new__(
+        cls, bearer: str, *, expires_after: datetime.datetime | None = None
+    ) -> GcsBearerCredential:
         """Create a GcsBearerCredential object
 
         Parameters
@@ -2130,46 +2235,54 @@ class GcsBearerCredential:
 class GcsStaticCredentials:
     """Credentials for a google cloud storage backend"""
     class ServiceAccount:
-        """Credentials for a google cloud storage backend using a service account json file
+        """Credentials for a google cloud storage backend using a service account json file"""
+        def __new__(cls, path: str) -> GcsStaticCredentials.ServiceAccount:
+            """Create service account credentials.
 
-        Parameters
-        ----------
-        path: str
-            The path to the service account json file.
-        """
-        def __init__(self, path: str) -> None: ...
+            Parameters
+            ----------
+            path: str
+                The path to the service account json file.
+            """
+            ...
 
     class ServiceAccountKey:
-        """Credentials for a google cloud storage backend using a a serialized service account key
+        """Credentials for a google cloud storage backend using a serialized service account key"""
+        def __new__(cls, key: str) -> GcsStaticCredentials.ServiceAccountKey:
+            """Create service account key credentials.
 
-        Parameters
-        ----------
-        key: str
-            The serialized service account key.
-        """
-        def __init__(self, key: str) -> None: ...
+            Parameters
+            ----------
+            key: str
+                The serialized service account key.
+            """
+            ...
 
     class ApplicationCredentials:
-        """Credentials for a google cloud storage backend using application default credentials
+        """Credentials for a google cloud storage backend using application default credentials"""
+        def __new__(cls, path: str) -> GcsStaticCredentials.ApplicationCredentials:
+            """Create application default credentials.
 
-        Parameters
-        ----------
-        path: str
-            The path to the application default credentials (ADC) file.
-        """
-        def __init__(self, path: str) -> None: ...
+            Parameters
+            ----------
+            path: str
+                The path to the application default credentials (ADC) file.
+            """
+            ...
 
     class BearerToken:
-        """Credentials for a google cloud storage backend using a bearer token
+        """Credentials for a google cloud storage backend using a bearer token"""
+        def __new__(cls, token: str) -> GcsStaticCredentials.BearerToken:
+            """Create bearer token credentials.
 
-        Parameters
-        ----------
-        token: str
-            The bearer token to use for authentication.
-        """
-        def __init__(self, token: str) -> None: ...
+            Parameters
+            ----------
+            token: str
+                The bearer token to use for authentication.
+            """
+            ...
 
-AnyGcsStaticCredential = (
+_AnyGcsStaticCredential = (
     GcsStaticCredentials.ServiceAccount
     | GcsStaticCredentials.ServiceAccountKey
     | GcsStaticCredentials.ApplicationCredentials
@@ -2183,26 +2296,28 @@ class GcsCredentials:
     """
     class Anonymous:
         """Uses anonymous credentials"""
-        def __init__(self) -> None: ...
+        def __new__(cls) -> GcsCredentials.Anonymous: ...
 
     class FromEnv:
         """Uses credentials from environment variables"""
-        def __init__(self) -> None: ...
+        def __new__(cls) -> GcsCredentials.FromEnv: ...
 
     class Static:
         """Uses gcs credentials without expiration"""
-        def __init__(self, credentials: AnyGcsStaticCredential) -> None: ...
+        def __new__(
+            cls, credentials: _AnyGcsStaticCredential
+        ) -> GcsCredentials.Static: ...
 
     class Refreshable:
         """Allows for an outside authority to pass in a function that can be used to provide credentials.
 
         This is useful for credentials that have an expiration time, or are otherwise not known ahead of time.
         """
-        def __init__(
-            self, pickled_function: bytes, current: GcsBearerCredential | None = None
-        ) -> None: ...
+        def __new__(
+            cls, pickled_function: bytes, current: GcsBearerCredential | None = None
+        ) -> GcsCredentials.Refreshable: ...
 
-AnyGcsCredential = (
+_AnyGcsCredential = (
     GcsCredentials.Anonymous
     | GcsCredentials.FromEnv
     | GcsCredentials.Static
@@ -2212,36 +2327,42 @@ AnyGcsCredential = (
 class AzureStaticCredentials:
     """Credentials for an azure storage backend"""
     class AccessKey:
-        """Credentials for an azure storage backend using an access key
+        """Credentials for an azure storage backend using an access key"""
+        def __new__(cls, key: str) -> AzureStaticCredentials.AccessKey:
+            """Create access key credentials.
 
-        Parameters
-        ----------
-        key: str
-            The access key to use for authentication.
-        """
-        def __init__(self, key: str) -> None: ...
+            Parameters
+            ----------
+            key: str
+                The access key to use for authentication.
+            """
+            ...
 
     class SasToken:
-        """Credentials for an azure storage backend using a shared access signature token
+        """Credentials for an azure storage backend using a shared access signature token"""
+        def __new__(cls, token: str) -> AzureStaticCredentials.SasToken:
+            """Create SAS token credentials.
 
-        Parameters
-        ----------
-        token: str
-            The shared access signature token to use for authentication.
-        """
-        def __init__(self, token: str) -> None: ...
+            Parameters
+            ----------
+            token: str
+                The shared access signature token to use for authentication.
+            """
+            ...
 
     class BearerToken:
-        """Credentials for an azure storage backend using a bearer token
+        """Credentials for an azure storage backend using a bearer token"""
+        def __new__(cls, token: str) -> AzureStaticCredentials.BearerToken:
+            """Create bearer token credentials.
 
-        Parameters
-        ----------
-        token: str
-            The bearer token to use for authentication.
-        """
-        def __init__(self, token: str) -> None: ...
+            Parameters
+            ----------
+            token: str
+                The bearer token to use for authentication.
+            """
+            ...
 
-AnyAzureStaticCredential = (
+_AnyAzureStaticCredential = (
     AzureStaticCredentials.AccessKey
     | AzureStaticCredentials.SasToken
     | AzureStaticCredentials.BearerToken
@@ -2254,25 +2375,27 @@ class AzureCredentials:
     """
     class FromEnv:
         """Uses credentials from environment variables"""
-        def __init__(self) -> None: ...
+        def __new__(cls) -> AzureCredentials.FromEnv: ...
 
     class Static:
         """Uses azure credentials without expiration"""
-        def __init__(self, credentials: AnyAzureStaticCredential) -> None: ...
+        def __new__(
+            cls, credentials: _AnyAzureStaticCredential
+        ) -> AzureCredentials.Static: ...
 
-AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
+_AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
 
 class Credentials:
     class S3:
-        def __init__(self, credentials: AnyS3Credential) -> None: ...
+        def __new__(cls, credentials: _AnyS3Credential) -> Credentials.S3: ...
 
     class Gcs:
-        def __init__(self, credentials: GcsCredentials) -> None: ...
+        def __new__(cls, credentials: GcsCredentials) -> Credentials.Gcs: ...
 
     class Azure:
-        def __init__(self, credentials: AzureCredentials) -> None: ...
+        def __new__(cls, credentials: AzureCredentials) -> Credentials.Azure: ...
 
-AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
+_AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
 
 class Storage:
     """Storage configuration for an IcechunkStore
@@ -2296,7 +2419,7 @@ class Storage:
         config: S3Options,
         bucket: str,
         prefix: str | None,
-        credentials: AnyS3Credential | None = None,
+        credentials: _AnyS3Credential | None = None,
     ) -> Storage: ...
     @classmethod
     def new_s3_object_store(
@@ -2304,7 +2427,7 @@ class Storage:
         config: S3Options,
         bucket: str,
         prefix: str | None,
-        credentials: AnyS3Credential | None = None,
+        credentials: _AnyS3Credential | None = None,
     ) -> Storage: ...
     @classmethod
     def new_tigris(
@@ -2313,7 +2436,7 @@ class Storage:
         bucket: str,
         prefix: str | None,
         use_weak_consistency: bool,
-        credentials: AnyS3Credential | None = None,
+        credentials: _AnyS3Credential | None = None,
     ) -> Storage: ...
     @classmethod
     def new_in_memory(cls) -> Storage: ...
@@ -2324,19 +2447,18 @@ class Storage:
         cls,
         bucket: str,
         prefix: str | None,
-        credentials: AnyGcsCredential | None = None,
+        credentials: _AnyGcsCredential | None = None,
         *,
         config: dict[str, str] | None = None,
     ) -> Storage: ...
     @classmethod
     def new_r2(
         cls,
-        bucket: str | None,
-        prefix: str | None,
-        account_id: str | None,
-        credentials: AnyS3Credential | None = None,
-        *,
         config: S3Options,
+        bucket: str | None = None,
+        prefix: str | None = None,
+        account_id: str | None = None,
+        credentials: _AnyS3Credential | None = None,
     ) -> Storage: ...
     @classmethod
     def new_azure_blob(
@@ -2344,7 +2466,7 @@ class Storage:
         account: str,
         container: str,
         prefix: str,
-        credentials: AnyAzureCredential | None = None,
+        credentials: _AnyAzureCredential | None = None,
         *,
         config: dict[str, str] | None = None,
     ) -> Storage: ...
@@ -2398,13 +2520,13 @@ class BasicConflictSolver(ConflictSolver):
     - When a group is deleted that has been updated, `fail_on_delete_of_updated_group` will determine whether to fail the rebase operation
     """
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         *,
         on_chunk_conflict: VersionSelection = VersionSelection.UseOurs,
         fail_on_delete_of_updated_array: bool = False,
         fail_on_delete_of_updated_group: bool = False,
-    ) -> None:
+    ) -> BasicConflictSolver:
         """Create a BasicConflictSolver object with the given configuration options
 
         Parameters
@@ -2427,7 +2549,7 @@ class ConflictDetector(ConflictSolver):
     the rebase operation will succeed.
     """
 
-    def __init__(self) -> None: ...
+    def __new__(cls) -> ConflictDetector: ...
 
 class IcechunkError(Exception):
     """Base class for all Icechunk errors"""
@@ -2438,11 +2560,11 @@ class IcechunkError(Exception):
 class ConflictError(Exception):
     """An error that occurs when a conflict is detected"""
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         expected_parent: str | None = None,
         actual_parent: str | None = None,
-    ) -> None:
+    ) -> ConflictError:
         """
         Create a new ConflictError.
 
@@ -2516,12 +2638,12 @@ class ConflictType(Enum):
 class Conflict:
     """A conflict detected between snapshots"""
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         conflict_type: ConflictType,
         path: str,
         conflicted_chunks: list[list[int]] | None = None,
-    ) -> None:
+    ) -> Conflict:
         """
         Create a new Conflict.
 
@@ -2566,7 +2688,7 @@ class Conflict:
 class RebaseFailedError(IcechunkError):
     """An error that occurs when a rebase operation fails"""
 
-    def __init__(self, snapshot: str, conflicts: list[Conflict]) -> None:
+    def __new__(cls, snapshot: str, conflicts: list[Conflict]) -> RebaseFailedError:
         """
         Create a new RebaseFailedError.
 
@@ -2633,7 +2755,7 @@ def spec_version() -> int:
     ...
 
 def _upgrade_icechunk_repository(
-    repo: PyRepository, *, dry_run: bool = True, delete_unused_v1_files: bool = False
+    repo: PyRepository, *, dry_run: bool = True, delete_unused_v1_files: bool = True
 ) -> None:
     """
     Migrate a repository to the latest version of Icechunk.
@@ -2668,7 +2790,6 @@ class ChunkStorageStats:
         """Total bytes stored in inline chunks (stored directly in manifests)"""
         ...
 
-    @property
     def non_virtual_bytes(self) -> int:
         """
         Total bytes excluding virtual chunks.
@@ -2682,7 +2803,6 @@ class ChunkStorageStats:
         """
         ...
 
-    @property
     def total_bytes(self) -> int:
         """
         Total bytes across all chunk types.

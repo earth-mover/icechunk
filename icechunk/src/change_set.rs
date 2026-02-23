@@ -1,3 +1,9 @@
+//! Tracks uncommitted modifications during a session.
+//!
+//! Key types:
+//! - [`ChangeSet`] - Enum with variants for the two writable session modes
+//! - [`ArrayData`] - Array metadata (shape, dimension names, user attributes)
+
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
@@ -8,6 +14,7 @@ use std::{
 use bytes::Bytes;
 use itertools::{Either, Itertools as _};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::{
     format::{
@@ -18,6 +25,13 @@ use crate::{
     session::{SessionErrorKind, SessionResult},
 };
 
+// We have limitations on how many chunks we can save on a single commit.
+// Mostly due to flatbuffers not supporting 64-bit offsets,
+// but also because we can't do transaction log splitting (like we can with manifests).
+// For now we suggest smaller commits as a solution.
+// See discussion in https://github.com/earth-mover/icechunk/issues/1558 for more details
+const NUM_CHUNKS_LIMIT: u64 = 50_000_000;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArrayData {
     pub shape: ArrayShape,
@@ -27,13 +41,20 @@ pub struct ArrayData {
 
 type ChunkTable = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EditChanges {
     new_groups: HashMap<Path, (NodeId, Bytes)>,
     new_arrays: HashMap<Path, (NodeId, ArrayData)>,
     updated_arrays: HashMap<NodeId, ArrayData>,
     updated_groups: HashMap<NodeId, Bytes>,
     set_chunks: BTreeMap<NodeId, ChunkTable>,
+
+    // Number of chunks added to this change set
+    num_chunks: u64,
+
+    // Did we already print a warning about too many chunks in this change set?
+    excessive_num_chunks_warned: bool,
+
     // This map keeps track of any chunk deletes that are
     // outside the domain of the current array shape. This is needed to handle
     // the very unlikely case of multiple resizes in the same session.
@@ -134,6 +155,11 @@ impl MoveTracker {
     }
 }
 
+/// Uncommitted modifications accumulated during a session.
+///
+/// Two variants for the two writable session modes:
+/// - [`Edit`](ChangeSet::Edit) - New/updated/deleted arrays, groups, and chunks
+/// - [`Rearrange`](ChangeSet::Rearrange) - Move/rename operations
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 // we only keep one of this, their size difference doesn't affect us
 #[allow(clippy::large_enum_variant)]
@@ -395,7 +421,21 @@ impl ChangeSet {
     ) -> SessionResult<()> {
         // this implementation makes delete idempotent
         // it allows deleting a deleted chunk by repeatedly setting None.
-        self.edits_mut()?.set_chunks.entry(node_id).or_default().insert(coord, data);
+        let edits = self.edits_mut()?;
+        let old = edits.set_chunks.entry(node_id).or_default().insert(coord, data);
+
+        if old.is_none() {
+            edits.num_chunks += 1;
+        }
+
+        if edits.num_chunks > NUM_CHUNKS_LIMIT && !edits.excessive_num_chunks_warned {
+            warn!(
+                "There are more than {NUM_CHUNKS_LIMIT} chunk references being loaded into this commit. This is close to the maximum number of chunk modifications Icechunk supports in a single commit, we recommend to split into smaller commits."
+            );
+
+            edits.excessive_num_chunks_warned = true;
+        }
+
         Ok(())
     }
 
@@ -626,12 +666,13 @@ mod tests {
     use super::ChangeSet;
 
     use crate::{
-        change_set::{ArrayData, MoveTracker},
+        change_set::{ArrayData, EditChanges, MoveTracker},
         format::{
             ChunkIndices, NodeId, Path,
             manifest::{ChunkInfo, ChunkPayload},
             snapshot::ArrayShape,
         },
+        roundtrip_serialization_tests,
     };
 
     #[icechunk_macros::test]
@@ -863,4 +904,37 @@ mod tests {
             &Path::new("/other").unwrap(),
         );
     }
+
+    use crate::strategies::{
+        array_data, bytes, gen_move, large_chunk_indices, node_id, path, split_manifest,
+    };
+    use proptest::collection::{btree_map, hash_map, hash_set, vec};
+    use proptest::prelude::*;
+
+    prop_compose! {
+        fn edit_changes()(num_of_dims in 1..=5usize)(
+            new_groups in hash_map(path(),(node_id(), bytes()), 0..3),
+                new_arrays in hash_map(path(),(node_id(), array_data()), 0..3),
+           updated_arrays in hash_map(node_id(), array_data(), 0..3),
+           updated_groups in hash_map(node_id(), bytes(), 0..3),
+           set_chunks in btree_map(node_id(), split_manifest(), 0..3),
+            deleted_chunks_outside_bounds in btree_map(node_id(), hash_set(large_chunk_indices(num_of_dims), 0..3), 0..3),
+            deleted_groups in hash_set((path(), node_id()), 0..3),
+            deleted_arrays in hash_set((path(), node_id()), 0..3)
+        ) -> EditChanges {
+            EditChanges{new_groups, updated_groups, updated_arrays, set_chunks, num_chunks: 0, excessive_num_chunks_warned: false, deleted_chunks_outside_bounds, deleted_arrays, deleted_groups, new_arrays}
+        }
+    }
+
+    fn move_tracker() -> impl Strategy<Value = MoveTracker> {
+        vec(gen_move(), 1..5).prop_map(MoveTracker).boxed()
+    }
+
+    fn change_set() -> impl Strategy<Value = ChangeSet> {
+        use ChangeSet::*;
+        prop_oneof![edit_changes().prop_map(Edit), move_tracker().prop_map(Rearrange)]
+            .boxed()
+    }
+
+    roundtrip_serialization_tests!(serialize_and_deserialize_change_sets - change_set);
 }

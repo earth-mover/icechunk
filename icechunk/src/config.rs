@@ -1,67 +1,56 @@
-use core::fmt;
+//! Configuration types for repositories and storage.
+//!
+//! Key types:
+//! - [`RepositoryConfig`] - Main configuration for a repository
+//! - [`ObjectStoreConfig`] - Storage backend selection (S3, GCS, Azure, local, etc.)
+//! - [`S3Credentials`], [`GcsCredentials`], [`AzureCredentials`] - Cloud authentication
+//! - [`CachingConfig`] - Cache size limits
+//! - [`ManifestSplittingConfig`] - Controls how manifests are partitioned
+
 use std::{
-    collections::HashMap,
-    ops::Bound,
-    path::PathBuf,
-    sync::{Arc, OnceLock},
+    collections::HashMap, num::NonZeroU16, ops::Bound, path::PathBuf, sync::OnceLock,
 };
 
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use itertools::Either;
-pub use object_store::gcp::GcpCredential;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::{format::Path, storage, virtual_chunks::VirtualChunkContainer};
+use crate::{
+    format::Path,
+    storage::{self, RetriesSettings},
+    virtual_chunks::VirtualChunkContainer,
+};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct S3Options {
-    pub region: Option<String>,
-    pub endpoint_url: Option<String>,
-    pub anonymous: bool,
-    pub allow_http: bool,
-    // field was added in v0.2.6
-    #[serde(default = "default_force_path_style")]
-    pub force_path_style: bool,
-    pub network_stream_timeout_seconds: Option<u32>,
-    #[serde(default)]
-    pub requester_pays: bool,
-}
+// Re-export backend-specific types from their canonical modules so that existing
+// consumers (`crate::config::S3Options`, etc.) continue to work.
+#[cfg(feature = "object-store-azure")]
+pub use crate::storage::object_store::{AzureCredentials, AzureStaticCredentials};
+#[cfg(feature = "object-store-gcs")]
+pub use crate::storage::object_store::{
+    GcsBearerCredential, GcsCredentials, GcsCredentialsFetcher, GcsStaticCredentials,
+};
+pub use crate::storage::s3_config::{
+    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
+};
+#[cfg(feature = "object-store-gcs")]
+pub use object_store::gcp::GcpCredential;
 
-fn default_force_path_style() -> bool {
-    false
-}
-
-impl fmt::Display for S3Options {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "S3Options(region={}, endpoint_url={}, anonymous={}, allow_http={}, force_path_style={}, network_stream_timeout_seconds={}, requester_pays={})",
-            self.region.as_deref().unwrap_or("None"),
-            self.endpoint_url.as_deref().unwrap_or("None"),
-            self.anonymous,
-            self.allow_http,
-            self.force_path_style,
-            self.network_stream_timeout_seconds
-                .map(|n| n.to_string())
-                .unwrap_or("None".to_string()),
-            self.requester_pays,
-        )
-    }
-}
-
+/// Storage backend configuration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectStoreConfig {
     InMemory,
+    #[cfg(feature = "object-store-fs")]
     LocalFileSystem(PathBuf),
+    #[cfg(feature = "object-store-http")]
     Http(HashMap<String, String>),
     S3Compatible(S3Options),
     S3(S3Options),
+    #[cfg(feature = "object-store-gcs")]
     Gcs(HashMap<String, String>),
     /// For compatibility reason we cannot change this structure,
     /// but a key in this map should be "account"
+    #[cfg(feature = "object-store-azure")]
     Azure(HashMap<String, String>),
     Tigris(S3Options),
 }
@@ -98,6 +87,7 @@ impl CompressionConfig {
     }
 }
 
+/// Cache size configuration for in-memory caches.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct CachingConfig {
     #[serde(default)]
@@ -374,6 +364,42 @@ impl ManifestConfig {
     }
 }
 
+/// Retry configuration for repo info update operations.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RepoUpdateRetryConfig {
+    /// Default retry settings for all repo update operations.
+    #[serde(default)]
+    pub default: Option<RetriesSettings>,
+}
+
+static DEFAULT_REPO_UPDATE_RETRIES: OnceLock<RetriesSettings> = OnceLock::new();
+
+impl RepoUpdateRetryConfig {
+    fn default_retries() -> &'static RetriesSettings {
+        DEFAULT_REPO_UPDATE_RETRIES.get_or_init(|| RetriesSettings {
+            max_tries: Some(NonZeroU16::new(100).unwrap_or(NonZeroU16::MIN)),
+            initial_backoff_ms: Some(50),
+            max_backoff_ms: Some(30_000),
+        })
+    }
+
+    pub fn retries(&self) -> &RetriesSettings {
+        self.default.as_ref().unwrap_or(Self::default_retries())
+    }
+
+    pub fn merge(&self, other: Self) -> Self {
+        Self {
+            default: match (&self.default, other.default) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+        }
+    }
+}
+
+/// Configuration options for a repository.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepositoryConfig {
     /// Chunks smaller than this will be stored inline in the manifest
@@ -409,12 +435,21 @@ pub struct RepositoryConfig {
 
     #[serde(default)]
     pub previous_file: Option<String>,
+
+    #[serde(default)]
+    pub repo_update_retries: Option<RepoUpdateRetryConfig>,
+
+    #[serde(default)]
+    pub num_updates_per_repo_info_file: Option<u16>,
 }
 
 static DEFAULT_COMPRESSION: OnceLock<CompressionConfig> = OnceLock::new();
 static DEFAULT_CACHING: OnceLock<CachingConfig> = OnceLock::new();
 static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
+static DEFAULT_REPO_UPDATE_RETRY_CONFIG: OnceLock<RepoUpdateRetryConfig> =
+    OnceLock::new();
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: u16 = 256;
+pub const DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE: u16 = 100;
 
 impl RepositoryConfig {
     pub fn inline_chunk_threshold_bytes(&self) -> u16 {
@@ -446,6 +481,17 @@ impl RepositoryConfig {
 
     pub fn max_concurrent_requests(&self) -> u16 {
         self.max_concurrent_requests.unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS)
+    }
+
+    pub fn repo_update_retries(&self) -> &RepoUpdateRetryConfig {
+        self.repo_update_retries.as_ref().unwrap_or_else(|| {
+            DEFAULT_REPO_UPDATE_RETRY_CONFIG.get_or_init(RepoUpdateRetryConfig::default)
+        })
+    }
+
+    pub fn num_updates_per_repo_info_file(&self) -> u16 {
+        self.num_updates_per_repo_info_file
+            .unwrap_or(DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE)
     }
 
     pub fn merge(&self, other: Self) -> Self {
@@ -483,6 +529,8 @@ impl RepositoryConfig {
                 (Some(s), None) => Some(s.clone()),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
+            // For virtual_chunk_containers, replace rather than extend.
+            // This is consistent with other fields: if specified, it replaces.
             virtual_chunk_containers: match (
                 &self.virtual_chunk_containers,
                 other.virtual_chunk_containers,
@@ -490,11 +538,7 @@ impl RepositoryConfig {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
-                (Some(mine), Some(theirs)) => {
-                    let mut merged = mine.clone();
-                    merged.extend(theirs);
-                    Some(merged)
-                }
+                (Some(_), Some(theirs)) => Some(theirs),
             },
             manifest: match (&self.manifest, other.manifest) {
                 (None, None) => None,
@@ -506,6 +550,24 @@ impl RepositoryConfig {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),
+                (Some(_), Some(theirs)) => Some(theirs),
+            },
+            repo_update_retries: match (
+                &self.repo_update_retries,
+                other.repo_update_retries,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            num_updates_per_repo_info_file: match (
+                &self.num_updates_per_repo_info_file,
+                other.num_updates_per_repo_info_file,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(*c),
                 (Some(_), Some(theirs)) => Some(theirs),
             },
         }
@@ -540,117 +602,27 @@ impl RepositoryConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct S3StaticCredentials {
-    pub access_key_id: String,
-    pub secret_access_key: String,
-    pub session_token: Option<String>,
-    pub expires_after: Option<DateTime<Utc>>,
-}
-
-#[async_trait]
-#[typetag::serde(tag = "s3_credentials_fetcher_type")]
-pub trait S3CredentialsFetcher: fmt::Debug + Sync + Send {
-    async fn get(&self) -> Result<S3StaticCredentials, String>;
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
-#[serde(tag = "s3_credential_type")]
-#[serde(rename_all = "snake_case")]
-pub enum S3Credentials {
-    #[default]
-    FromEnv,
-    Anonymous,
-    Static(S3StaticCredentials),
-    Refreshable(Arc<dyn S3CredentialsFetcher>),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-// We need to adjacently tag because we more than one variant with matching inner types https://github.com/serde-rs/serde/issues/1307
-#[serde(tag = "gcs_static_credential_type", content = "__field0")]
-#[serde(rename_all = "snake_case")]
-pub enum GcsStaticCredentials {
-    ServiceAccount(PathBuf),
-    ServiceAccountKey(String),
-    ApplicationCredentials(PathBuf),
-    BearerToken(GcsBearerCredential),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct GcsBearerCredential {
-    pub bearer: String,
-    pub expires_after: Option<DateTime<Utc>>,
-}
-
-impl From<&GcsBearerCredential> for GcpCredential {
-    fn from(value: &GcsBearerCredential) -> Self {
-        GcpCredential { bearer: value.bearer.clone() }
-    }
-}
-
-#[async_trait]
-#[typetag::serde(tag = "gcs_credentials_fetcher_type")]
-pub trait GcsCredentialsFetcher: fmt::Debug + Sync + Send {
-    async fn get(&self) -> Result<GcsBearerCredential, String>;
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
-#[serde(tag = "gcs_credential_type")]
-#[serde(rename_all = "snake_case")]
-pub enum GcsCredentials {
-    #[default]
-    FromEnv,
-    Anonymous,
-    Static(GcsStaticCredentials),
-    Refreshable(Arc<dyn GcsCredentialsFetcher>),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-// We need to adjacently tag because we more than one variant with matching inner types https://github.com/serde-rs/serde/issues/1307
-#[serde(tag = "az_static_credential_type", content = "__field0")]
-#[serde(rename_all = "snake_case")]
-pub enum AzureStaticCredentials {
-    AccessKey(String),
-    SASToken(String),
-    BearerToken(String),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "az_credential_type")]
-#[serde(rename_all = "snake_case")]
-pub enum AzureCredentials {
-    FromEnv,
-    Static(AzureStaticCredentials),
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "credential_type")]
 #[serde(rename_all = "snake_case")]
 pub enum Credentials {
     S3(S3Credentials),
+    #[cfg(feature = "object-store-gcs")]
     Gcs(GcsCredentials),
+    #[cfg(feature = "object-store-azure")]
     Azure(AzureCredentials),
 }
 
-#[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use crate::strategies::{
-        azure_credentials, gcs_static_credentials, repository_config,
-        s3_static_credentials,
-    };
-
-    use proptest::prelude::*;
-
-    // This macro is used for creating property tests
-    // which check that serializing and deserializing
-    // an instance of a type T is equivalent to the
-    // identity function
-    // Given pairs of test names and arbitraries to be used
-    // for the tests, e.g., (n1, a1), (n2, a2),... (nx, ax)
-    // the tests can be created by doing
-    // roundtrip_serialization_tests!(n1 - a1, n2 - a2, .... nx - ax)
-    macro_rules! roundtrip_serialization_tests {
+// This macro is used for creating property tests
+// which check that serializing and deserializing
+// an instance of a type T is equivalent to the
+// identity function
+// Given pairs of test names and arbitraries to be used
+// for the tests, e.g., (n1, a1), (n2, a2),... (nx, ax)
+// the tests can be created by doing
+// roundtrip_serialization_tests!(n1 - a1, n2 - a2, .... nx - ax)
+#[macro_export]
+macro_rules! roundtrip_serialization_tests {
         ($($test_name: ident - $generator: ident), +) => {
                             $(
                 proptest!{
@@ -663,10 +635,218 @@ mod tests {
         }
     }
 
+#[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use crate::{
+        ObjectStoreConfig, RepositoryConfig,
+        config::S3Options,
+        strategies::{repository_config, s3_static_credentials},
+        virtual_chunks::VirtualChunkContainer,
+    };
+
+    use proptest::prelude::*;
+
     roundtrip_serialization_tests!(
         test_config_roundtrip - repository_config,
-        test_s3_static_credentials_roundtrip - s3_static_credentials,
-        test_gcs_static_credentials_roundtrip - gcs_static_credentials,
-        test_azure_credentials_roundtrip - azure_credentials
+        test_s3_static_credentials_roundtrip - s3_static_credentials
     );
+
+    #[cfg(feature = "object-store-gcs")]
+    roundtrip_serialization_tests!(
+        test_gcs_static_credentials_roundtrip - gcs_static_credentials
+    );
+
+    #[cfg(feature = "object-store-gcs")]
+    use crate::strategies::gcs_static_credentials;
+
+    #[cfg(feature = "object-store-azure")]
+    roundtrip_serialization_tests!(test_azure_credentials_roundtrip - azure_credentials);
+
+    #[cfg(feature = "object-store-azure")]
+    use crate::strategies::azure_credentials;
+
+    #[icechunk_macros::test]
+    fn test_merge_replaces_virtual_chunk_containers() {
+        // Create a config with a VCC
+        let mut config1 = RepositoryConfig::default();
+        config1.set_virtual_chunk_container(
+            VirtualChunkContainer::new(
+                "s3://bucket1/".to_string(),
+                ObjectStoreConfig::S3(S3Options {
+                    region: Some("us-east-1".to_string()),
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
+                    requester_pays: false,
+                }),
+            )
+            .unwrap(),
+        );
+
+        // Create a config with no VCCs (cleared)
+        let mut config2 = RepositoryConfig::default();
+        config2.clear_virtual_chunk_containers();
+
+        // Merge: config2 (empty VCCs) should replace config1's VCCs
+        let merged = config1.merge(config2);
+
+        // VCCs should be empty after merge
+        assert_eq!(
+            merged.virtual_chunk_containers,
+            Some(std::collections::HashMap::new()),
+            "Merging with cleared VCCs should result in empty VCCs"
+        );
+    }
+
+    #[icechunk_macros::test]
+    fn test_merge_replaces_virtual_chunk_containers_with_new_ones() {
+        // Create a config with VCC1
+        let mut config1 = RepositoryConfig::default();
+        config1.set_virtual_chunk_container(
+            VirtualChunkContainer::new(
+                "s3://bucket1/".to_string(),
+                ObjectStoreConfig::S3(S3Options {
+                    region: Some("us-east-1".to_string()),
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
+                    requester_pays: false,
+                }),
+            )
+            .unwrap(),
+        );
+
+        // Create a config with VCC2
+        let mut config2 = RepositoryConfig::default();
+        config2.set_virtual_chunk_container(
+            VirtualChunkContainer::new(
+                "s3://bucket2/".to_string(),
+                ObjectStoreConfig::S3(S3Options {
+                    region: Some("us-west-2".to_string()),
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
+                    requester_pays: false,
+                }),
+            )
+            .unwrap(),
+        );
+
+        // Merge: config2's VCCs should replace config1's VCCs
+        let merged = config1.merge(config2);
+
+        let vccs = merged.virtual_chunk_containers.unwrap();
+        assert_eq!(vccs.len(), 1, "Should have exactly one VCC after merge");
+        assert!(
+            vccs.contains_key("s3://bucket2/"),
+            "Should contain bucket2, not bucket1"
+        );
+        assert!(!vccs.contains_key("s3://bucket1/"), "Should not contain bucket1");
+    }
+
+    #[icechunk_macros::test]
+    fn test_yaml_config_deserialization() {
+        let mut yaml_parts = vec![
+            r#"
+inline_chunk_threshold_bytes: null
+get_partial_values_concurrency: null
+compression: null
+max_concurrent_requests: null
+caching: null
+storage: null
+virtual_chunk_containers:
+  s3://my-s3-bucket/:
+    name: null
+    url_prefix: s3://my-s3-bucket/
+    store: !s3
+      region: us-east-1
+      endpoint_url: null
+      anonymous: false
+      allow_http: false
+      force_path_style: false
+      network_stream_timeout_seconds: 60
+      requester_pays: false"#
+                .to_string(),
+        ];
+
+        #[cfg(feature = "object-store-http")]
+        yaml_parts.push(
+            r#"
+  https://example.com/data/:
+    name: null
+    url_prefix: https://example.com/data/
+    store: !http {}"#
+                .to_string(),
+        );
+
+        #[cfg(feature = "object-store-gcs")]
+        yaml_parts.push(
+            r#"
+  gcs://my-gcs-bucket/:
+    name: null
+    url_prefix: gcs://my-gcs-bucket/
+    store: !gcs {}"#
+                .to_string(),
+        );
+
+        yaml_parts.push("\nmanifest: null\n".to_string());
+        let yaml = yaml_parts.join("");
+
+        let config: RepositoryConfig = serde_yaml_ng::from_str(&yaml).unwrap();
+
+        let vccs = config.virtual_chunk_containers.as_ref().unwrap();
+
+        let mut expected_len = 1; // S3 is always present
+
+        // S3 container
+        let s3 = &vccs["s3://my-s3-bucket/"];
+        assert_eq!(s3.url_prefix(), "s3://my-s3-bucket/");
+        match &s3.store {
+            ObjectStoreConfig::S3(opts) => {
+                assert_eq!(opts.region, Some("us-east-1".to_string()));
+                assert!(!opts.anonymous);
+                assert!(!opts.allow_http);
+                assert!(!opts.force_path_style);
+                assert_eq!(opts.network_stream_timeout_seconds, Some(60));
+                assert!(!opts.requester_pays);
+            }
+            other => panic!("Expected S3, got {:?}", other),
+        }
+
+        // HTTP container
+        #[cfg(feature = "object-store-http")]
+        {
+            expected_len += 1;
+            let http = &vccs["https://example.com/data/"];
+            assert_eq!(http.url_prefix(), "https://example.com/data/");
+            assert!(matches!(http.store, ObjectStoreConfig::Http(_)));
+        }
+
+        // GCS container
+        #[cfg(feature = "object-store-gcs")]
+        {
+            expected_len += 1;
+            let gcs = &vccs["gcs://my-gcs-bucket/"];
+            assert_eq!(gcs.url_prefix(), "gcs://my-gcs-bucket/");
+            assert!(matches!(gcs.store, ObjectStoreConfig::Gcs(_)));
+        }
+
+        assert_eq!(vccs.len(), expected_len);
+
+        // All other top-level fields should be None
+        assert!(config.inline_chunk_threshold_bytes.is_none());
+        assert!(config.get_partial_values_concurrency.is_none());
+        assert!(config.compression.is_none());
+        assert!(config.max_concurrent_requests.is_none());
+        assert!(config.caching.is_none());
+        assert!(config.storage.is_none());
+        assert!(config.manifest.is_none());
+    }
 }

@@ -1,25 +1,41 @@
-//! General design:
-//! - Most things are async even if they don't need to be. Async propagates unfortunately. If
-//!   something can be async sometimes it needs to be async always. In our example: fetching from
-//!   storage.
-//! - There is a high level interface that knows about arrays, groups, user attributes, etc. This
-//!   is the [`repository::Repository`] type.
-//! - There is a low level interface that speaks zarr keys and values, and is used to provide the
-//!   zarr store that will be used from python. This is the [`zarr::Store`] type.
-//! - There is a translation language between low and high levels. When user writes to a zarr key,
-//!   we need to convert that key to the language of arrays and groups. This is implemented it the
-//!   [`zarr`] module
-//! - There is an abstract type for loading and saving of the Arrow datastructures.
-//!   This is the [`Storage`] trait. It knows how to fetch and write arrow.
-//!   We have:
-//!     - an in memory implementation
-//!     - an s3 implementation that writes to parquet
-//!     - a caching wrapper implementation
-//! - The datastructures are represented by concrete types in the [`mod@format`] modules.
-//!   These datastructures use Arrow RecordBatches for representation.
+//! A transactional storage engine for Zarr.
+//!
+//! Icechunk provides version-controlled, transactional access to Zarr data on cloud
+//! object storage. It adds a layer of indirection between Zarr keys and on-disk storage,
+//! enabling:
+//!
+//! - **Serializable isolation** - Reads are isolated from concurrent writes and always
+//!   use a committed snapshot. Writes are committed atomically and never partially visible.
+//! - **Time travel** - Previous snapshots remain accessible after new ones are written.
+//! - **Version control** - Repositories support branches (mutable) and tags (immutable)
+//!   that reference snapshots.
+//!
+//! # Core concepts
+//!
+//! A **repository** contains a Zarr hierarchy (groups and arrays) with full version history.
+//! Each update creates a new **snapshot** with a unique ID. **Branches** are mutable
+//! references to snapshots (like Git branches), while **tags** are immutable references
+//! (like Git tags). The default branch is `main`.
+//!
+//! # Key types
+//!
+//! - [`Repository`] - Handle to a versioned data store
+//! - [`session::Session`] - Transaction context for reading/writing data
+//! - [`Store`] - Zarr-compatible key-value interface backed by a Session
+//!
+//! # Architecture
+//!
+//! ```text
+//! Repository ─creates─► Session
+//!                           ├── ChangeSet (uncommitted modifications)
+//!                           └── AssetManager (typed I/O with caching)
+//!                                   └── Storage (S3, GCS, Azure, local, etc.)
+//! ```
+//!
 pub mod asset_manager;
 pub mod change_set;
 pub mod cli;
+pub mod compat;
 pub mod config;
 pub mod conflicts;
 pub mod error;
@@ -39,10 +55,13 @@ pub mod virtual_chunks;
 
 pub use config::{ObjectStoreConfig, RepositoryConfig};
 pub use repository::Repository;
-pub use storage::{
-    ObjectStorage, Storage, StorageError, new_in_memory_storage,
-    new_local_filesystem_storage, new_s3_storage,
-};
+#[cfg(feature = "object-store-fs")]
+pub use storage::new_local_filesystem_storage;
+#[cfg(feature = "object-store-s3")]
+pub use storage::new_s3_object_store_storage;
+#[cfg(feature = "s3")]
+pub use storage::new_s3_storage;
+pub use storage::{ObjectStorage, Storage, StorageError, new_in_memory_storage};
 pub use store::Store;
 
 mod private {

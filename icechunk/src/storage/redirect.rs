@@ -1,3 +1,5 @@
+//! Read-only storage that follows HTTP redirects to the underlying backend.
+
 use std::{ops::Range, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
@@ -11,18 +13,21 @@ use tokio::sync::OnceCell;
 use tracing::{debug, trace};
 use url::Url;
 
+use crate::config::{S3Credentials, S3Options};
+#[cfg(feature = "object-store-http")]
+use crate::storage::new_http_storage;
+#[cfg(feature = "object-store-gcs")]
+use crate::{config::GcsCredentials, storage::new_gcs_storage};
+#[cfg(feature = "s3")]
 use crate::{
-    config::{GcsCredentials, S3Credentials, S3Options},
-    new_s3_storage, private,
-    storage::{
-        StorageErrorKind, new_gcs_storage, new_http_storage, new_r2_storage,
-        new_tigris_storage,
-    },
+    new_s3_storage,
+    storage::{new_r2_storage, new_tigris_storage},
 };
+use crate::{private, storage::StorageErrorKind};
 
 use super::{
-    DeleteObjectsResult, ListInfo, Settings, Storage, StorageError, StorageResult,
-    VersionInfo, VersionedUpdateResult,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
+    StorageResult, VersionInfo, VersionedUpdateResult,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -77,6 +82,7 @@ impl RedirectStorage {
                     "Cannot build http client for redirect Storage instance: {e}"
                 )))
             })?;
+
         let req = client.get(self.url.clone()).build().map_err(|e| {
             StorageError::from(StorageErrorKind::BadRedirect(format!(
                 "Cannot build http request for redirect Storage instance: {e}"
@@ -107,6 +113,7 @@ impl RedirectStorage {
             )))
         })?;
         match url.scheme() {
+            #[cfg(feature = "s3")]
             "s3" => {
                 let (bucket, prefix) = repo_location(&url)?;
                 // TODO: figure out the region for the bucket using HeadBucket or something
@@ -129,6 +136,13 @@ impl RedirectStorage {
                     Some(S3Credentials::Anonymous),
                 )
             }
+            #[cfg(not(feature = "s3"))]
+            "s3" => Err(StorageErrorKind::BadRedirect(
+                "Redirect target uses `s3://` but the `s3` feature is disabled"
+                    .to_string(),
+            )
+            .into()),
+            #[cfg(feature = "s3")]
             "r2" => {
                 let (bucket, prefix) = repo_location(&url)?;
                 let region = repo_region(&url).ok();
@@ -151,6 +165,13 @@ impl RedirectStorage {
                     Some(S3Credentials::Anonymous),
                 )
             }
+            #[cfg(not(feature = "s3"))]
+            "r2" => Err(StorageErrorKind::BadRedirect(
+                "Redirect target uses `r2://` but the `s3` feature is disabled"
+                    .to_string(),
+            )
+            .into()),
+            #[cfg(feature = "s3")]
             "tigris" => {
                 let (bucket, prefix) = repo_location(&url)?;
                 let region = repo_region(&url).ok();
@@ -172,7 +193,14 @@ impl RedirectStorage {
                     true,
                 )
             }
+            #[cfg(not(feature = "s3"))]
+            "tigris" => Err(StorageErrorKind::BadRedirect(
+                "Redirect target uses `tigris://` but the `s3` feature is disabled"
+                    .to_string(),
+            )
+            .into()),
 
+            #[cfg(feature = "object-store-http")]
             "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => {
                 let mut base_url = url.clone();
                 // we can expect here because the scheme is already matched as http[s]
@@ -189,6 +217,14 @@ impl RedirectStorage {
                     .expect("Internal error, cannot set url scheme");
                 new_http_storage(base_url.to_string().as_str(), None)
             }
+            #[cfg(not(feature = "object-store-http"))]
+            "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => Err(
+                StorageErrorKind::BadRedirect(
+                    "Redirect target uses `http+icechunk://` or `https+icechunk://`, but the `http-store` feature is disabled".to_string(),
+                )
+                .into(),
+            ),
+            #[cfg(feature = "object-store-gcs")]
             "gs" | "gcs" => {
                 let (bucket, prefix) = repo_location(&url)?;
                 new_gcs_storage(
@@ -198,6 +234,12 @@ impl RedirectStorage {
                     None,
                 )
             }
+            #[cfg(not(feature = "object-store-gcs"))]
+            "gs" | "gcs" => Err(StorageErrorKind::BadRedirect(
+                "Redirect target uses `gs://`/`gcs://` but the `gcs` feature is disabled"
+                    .to_string(),
+            )
+            .into()),
             _ => Err(StorageErrorKind::BadRedirect(format!(
                 "Bad URL for redirect Storage, unknown scheme: {url}"
             ))
@@ -334,5 +376,17 @@ impl Storage for RedirectStorage {
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
         self.backend().await?.get_object_last_modified(path, settings).await
+    }
+
+    async fn get_object_conditional(
+        &self,
+        settings: &Settings,
+        path: &str,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<GetModifiedResult> {
+        self.backend()
+            .await?
+            .get_object_conditional(settings, path, previous_version)
+            .await
     }
 }

@@ -1,0 +1,227 @@
+site_name: Icechunk
+site_description: >-
+  Open-source, cloud-native transactional tensor storage engine
+site_author: Earthmover PBC
+site_url: !ENV [READTHEDOCS_CANONICAL_URL, 'https://icechunk.io']
+repo_url: https://github.com/earth-mover/icechunk
+repo_name: earth-mover/icechunk
+copyright: Earthmover PBC # @see overrides/partials/footer.html
+
+strict: true
+site_dir: ./.site
+
+extra_css:
+  - stylesheets/theme.css
+  - stylesheets/global.css
+  - stylesheets/notebooks.css
+
+extra_javascript:
+  - scripts/readthedocs.js
+
+theme:
+  name: material
+  custom_dir: overrides
+  logo: assets/logo-wire.svg
+  favicon: assets/favicon/favicon-96x96.png
+  palette:
+
+    # Palette toggle for automatic mode
+    #- media: "(prefers-color-scheme)"
+    #  toggle:
+    #    icon: material/brightness-auto
+    #    name: Switch to light mode
+
+    # Light Mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: light
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+
+    # Dark Mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+  features:
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.indexes
+    - navigation.footer
+    # - navigation.tabs
+    # - navigation.sections
+    - navigation.tabs.sticky
+    - navigation.top
+    #- navigation.expand
+    - toc.follow
+    - announce.dismiss
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+  font:
+    text: Roboto
+    code: Roboto Mono
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/earth-mover/icechunk
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/icechunk/
+    - icon: fontawesome/brands/rust
+      link: https://crates.io/crates/icechunk
+    - icon: fontawesome/brands/slack
+      link: https://join.slack.com/t/earthmover-community/shared_invite/zt-2cwje92ir-xU3CfdG8BI~4CJOJy~sceQ
+    - icon: fontawesome/brands/bluesky
+      link: https://bsky.app/profile/earthmover.io
+  generator: false
+  status:
+    new: Recently Added
+    deprecated: Deprecated
+  analytics:
+    provider: google
+    property: G-TNHH1RF342
+    feedback:
+      title: Was this page helpful?
+      ratings:
+        - icon: material/emoticon-happy-outline
+          name: This page was helpful
+          data: 1
+          note: >-
+            Thanks for your feedback!
+        - icon: material/emoticon-sad-outline
+          name: This page could be improved
+          data: 0
+          note: >-
+            Thanks for your feedback! Help us improve this page by
+            using our <a href="https://share.hsforms.com/10yWXT95yS6mWXg3bc1e4PQdl5u6" target="_blank" rel="noopener">feedback form</a>.
+  consent:
+    title: Cookie consent
+    description: >-
+      We use cookies to recognize your repeated visits and preferences, as well
+      as to measure the effectiveness of our documentation and whether users
+      find what they're searching for. With your consent, you're helping us to
+      make our documentation better.
+
+plugins:
+  #- mike # TODO: https://squidfunk.github.io/mkdocs-material/setup/setting-up-versioning/
+  #- optimize #TODO: https://squidfunk.github.io/mkdocs-material/plugins/optimize/
+  - search
+  - social
+  - include-markdown
+  - open-in-new-tab
+  - mkdocs-breadcrumbs-plugin:
+      exclude_paths:
+        #- icechunk-python
+        - assets
+        - stylesheets
+        - scripts
+        - index.md
+      generate_home_index: false
+  - mermaid2
+  - minify:
+      minify_html: true
+  - awesome-pages:
+      collapse_single_pages: true
+  - git-revision-date-localized:
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            docstring_style: numpy
+            docstring_section_style: "table"
+            filters: "public"
+            separate_signature: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            show_root_heading: true
+            summary: true
+            # Fix for cyclic alias issues on macOS
+            allow_inspection: false
+          paths: [../python]
+  - mkdocs-jupyter:
+      include_source: True
+      # include: ["*.ipynb"] # Default: ["*.py", "*.ipynb"]
+  - markdown-exec
+  - redirects:
+      redirect_maps:
+        # Redirects from icechunk-python subdirectory to root docs (post-reorganization)
+        # These redirects work with use_directory_urls: true (default)
+        'icechunk-python/quickstart/index.md': 'quickstart.md'
+        'icechunk-python/reference/index.md': 'reference.md'
+        'icechunk-python/async/index.md': 'async.md'
+        'icechunk-python/configuration/index.md': 'configuration.md'
+        'icechunk-python/storage/index.md': 'storage.md'
+        'icechunk-python/version-control/index.md': 'version-control.md'
+        'icechunk-python/expiration/index.md': 'expiration.md'
+        'icechunk-python/dask/index.md': 'dask.md'
+        'icechunk-python/xarray/index.md': 'xarray.md'
+        'icechunk-python/virtual/index.md': 'virtual.md'
+        'icechunk-python/concurrency/index.md': 'concurrency.md'
+        'icechunk-python/parallel/index.md': 'parallel.md'
+        'icechunk-python/performance/index.md': 'performance.md'
+        'icechunk-python/cheatsheets/git-users/index.md': 'icechunk-for-git-users.md'
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      toc_depth: 2
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      # make exceptions to highlighting of code:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:mermaid2.fence_mermaid_custom
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - attr_list
+  - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - toc:
+      permalink: "#"
+
+nav:
+  - Home: index.md
+  - Overview: overview.md
+  - Getting Started:
+    - Quickstart: quickstart.md
+    - How To: howto.md
+  - Understanding Icechunk:
+    - Core Concepts: concepts.md
+    - Transactions and Version Control: version-control.md
+    - Data Expiration and Garbage Collection: expiration.md
+    - Parallel / Distributed Writing: parallel.md
+    - FAQ: faq.md
+  - Guides:
+    - Configuration: configuration.md
+    - Storage: storage.md
+    - Dask: dask.md
+    - Xarray: xarray.md
+    - Tuning Performance: performance.md
+    - Virtual Datasets: virtual.md
+    - Async Usage: async.md
+    - Icechunk for Git Users: icechunk-for-git-users.md
+    - Creating Icechunk Datasets:
+      - Global Raster Data cube: ingestion/glad-ingest.ipynb
+  - Reference:
+    - Spec: spec.md
+    - Version Policy: version-policy.md
+    - Python API Reference: reference.md
+    - Icechunk Rust: icechunk-rust.md
+    - Contributing: contributing.md
+    - Migrate to 1.0: migration.md

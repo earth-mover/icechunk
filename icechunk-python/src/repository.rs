@@ -19,7 +19,7 @@ use icechunk::{
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
         transaction_log::Diff,
     },
-    inspect::snapshot_json,
+    inspect::{repo_info_json, snapshot_json},
     migrations,
     ops::{
         gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
@@ -305,6 +305,18 @@ impl From<Diff> for PyDiff {
 
 #[pymethods]
 impl PyDiff {
+    /// Returns true if the diff contains no changes.
+    pub fn is_empty(&self) -> bool {
+        self.new_groups.is_empty()
+            && self.new_arrays.is_empty()
+            && self.deleted_groups.is_empty()
+            && self.deleted_arrays.is_empty()
+            && self.updated_groups.is_empty()
+            && self.updated_arrays.is_empty()
+            && self.updated_chunks.is_empty()
+            && self.moved_nodes.is_empty()
+    }
+
     #[allow(clippy::unwrap_used)]
     pub fn __repr__(&self) -> String {
         let mut res = String::new();
@@ -519,6 +531,8 @@ pub(crate) struct PyBranchResetUpdate {
 pub(crate) struct PyNewCommitUpdate {
     #[pyo3(get)]
     branch: String,
+    #[pyo3(get)]
+    new_snap_id: String,
 }
 
 #[pyclass(name = "CommitAmendedUpdate", eq, extends=PyUpdateType)]
@@ -528,6 +542,8 @@ pub(crate) struct PyCommitAmendedUpdate {
     branch: String,
     #[pyo3(get)]
     previous_snap_id: String,
+    #[pyo3(get)]
+    new_snap_id: String,
 }
 
 #[pyclass(name = "NewDetachedSnapshotUpdate", eq, extends=PyUpdateType)]
@@ -605,7 +621,10 @@ impl PyBranchResetUpdate {
 #[pymethods]
 impl PyNewCommitUpdate {
     fn __repr__(&self) -> PyResult<String> {
-        Ok(format!("NewCommitUpdate(branch={})", self.branch))
+        Ok(format!(
+            "NewCommitUpdate(branch={}, new_snap_id={})",
+            self.branch, self.new_snap_id
+        ))
     }
 }
 
@@ -613,8 +632,8 @@ impl PyNewCommitUpdate {
 impl PyCommitAmendedUpdate {
     fn __repr__(&self) -> PyResult<String> {
         Ok(format!(
-            "CommitAmendedUpdate(branch={}, previous_snap_id={})",
-            self.branch, self.previous_snap_id
+            "CommitAmendedUpdate(branch={}, previous_snap_id={}, new_snap_id={})",
+            self.branch, self.previous_snap_id, self.new_snap_id,
         ))
     }
 }
@@ -734,27 +753,33 @@ fn mk_update_type(
             )?
             .into_any()
             .unbind(),
-            UpdateType::NewCommitUpdate { branch } => Bound::new(
+            UpdateType::NewCommitUpdate { branch, new_snap_id } => Bound::new(
                 py,
                 (
-                    PyNewCommitUpdate { branch: branch.clone() },
-                    PyUpdateType { updated_at, backup_path },
-                ),
-            )?
-            .into_any()
-            .unbind(),
-            UpdateType::CommitAmendedUpdate { branch, previous_snap_id } => Bound::new(
-                py,
-                (
-                    PyCommitAmendedUpdate {
+                    PyNewCommitUpdate {
                         branch: branch.clone(),
-                        previous_snap_id: previous_snap_id.to_string(),
+                        new_snap_id: new_snap_id.to_string(),
                     },
                     PyUpdateType { updated_at, backup_path },
                 ),
             )?
             .into_any()
             .unbind(),
+            UpdateType::CommitAmendedUpdate { branch, previous_snap_id, new_snap_id } => {
+                Bound::new(
+                    py,
+                    (
+                        PyCommitAmendedUpdate {
+                            branch: branch.clone(),
+                            previous_snap_id: previous_snap_id.to_string(),
+                            new_snap_id: new_snap_id.to_string(),
+                        },
+                        PyUpdateType { updated_at, backup_path },
+                    ),
+                )?
+                .into_any()
+                .unbind()
+            }
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id } => Bound::new(
                 py,
                 (
@@ -1001,11 +1026,17 @@ impl PyRepository {
     }
 
     #[staticmethod]
-    fn exists(py: Python<'_>, storage: PyStorage) -> PyResult<bool> {
+    #[pyo3(signature = (storage, storage_settings=None))]
+    fn exists(
+        py: Python<'_>,
+        storage: PyStorage,
+        storage_settings: Option<Py<PyStorageSettings>>,
+    ) -> PyResult<bool> {
+        let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let exists = Repository::exists(storage.0)
+                let exists = Repository::exists(storage.0, settings)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(exists)
@@ -1014,12 +1045,53 @@ impl PyRepository {
     }
 
     #[staticmethod]
-    fn exists_async(py: Python<'_>, storage: PyStorage) -> PyResult<Bound<'_, PyAny>> {
+    #[pyo3(signature = (storage, storage_settings=None))]
+    fn exists_async(
+        py: Python<'_>,
+        storage: PyStorage,
+        storage_settings: Option<Py<PyStorageSettings>>,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let exists = Repository::exists(storage.0)
+            let exists = Repository::exists(storage.0, settings)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(exists)
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (storage, storage_settings=None))]
+    fn fetch_spec_version(
+        py: Python<'_>,
+        storage: PyStorage,
+        storage_settings: Option<Py<PyStorageSettings>>,
+    ) -> PyResult<Option<u8>> {
+        let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let spec_version = Repository::fetch_spec_version(storage.0, settings)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(spec_version.map(|v| v as u8))
+            })
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (storage, storage_settings=None))]
+    fn fetch_spec_version_async(
+        py: Python<'_>,
+        storage: PyStorage,
+        storage_settings: Option<Py<PyStorageSettings>>,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
+        pyo3_async_runtimes::tokio::future_into_py::<_, Option<u8>>(py, async move {
+            let spec_version = Repository::fetch_spec_version(storage.0, settings)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(spec_version.map(|v| v as u8))
         })
     }
 
@@ -1345,7 +1417,7 @@ impl PyRepository {
             let ops = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move {
                     let repo = self.0.read().await;
-                    repo.ops_log().await
+                    repo.ops_log().await.map(|(stream, _, _)| stream)
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?
                 .map_err(PyIcechunkStoreError::RepositoryError)
@@ -2006,7 +2078,7 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, branch, metadata=None))]
+    #[pyo3(signature = (message, *, branch, metadata=None))]
     pub(crate) fn rewrite_manifests(
         &self,
         py: Python<'_>,
@@ -2034,7 +2106,7 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, branch, metadata=None))]
+    #[pyo3(signature = (message, *, branch, metadata=None))]
     fn rewrite_manifests_async<'py>(
         &'py self,
         py: Python<'py>,
@@ -2080,9 +2152,10 @@ impl PyRepository {
         py.detach(move || {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                    let asset_manager = {
+                    let (asset_manager, num_updates) = {
                         let lock = self.0.read().await;
-                        Arc::clone(lock.asset_manager())
+                        let num_updates = lock.config().num_updates_per_repo_info_file();
+                        (Arc::clone(lock.asset_manager()), num_updates)
                     };
 
                     let result = expire(
@@ -2098,6 +2171,8 @@ impl PyRepository {
                         } else {
                             ExpiredRefAction::Ignore
                         },
+                        None,
+                        num_updates,
                     )
                     .await
                     .map_err(PyIcechunkStoreError::GCError)?;
@@ -2124,9 +2199,10 @@ impl PyRepository {
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py::<_, HashSet<String>>(py, async move {
-            let asset_manager = {
+            let (asset_manager, num_updates) = {
                 let lock = repository.read().await;
-                Arc::clone(lock.asset_manager())
+                let num_updates = lock.config().num_updates_per_repo_info_file();
+                (Arc::clone(lock.asset_manager()), num_updates)
             };
 
             let result = expire(
@@ -2142,6 +2218,8 @@ impl PyRepository {
                 } else {
                     ExpiredRefAction::Ignore
                 },
+                None,
+                num_updates,
             )
             .await
             .map_err(PyIcechunkStoreError::GCError)?;
@@ -2171,13 +2249,15 @@ impl PyRepository {
                         max_concurrent_manifest_fetches,
                         dry_run,
                     );
-                    let asset_manager = {
+                    let (asset_manager, num_updates) = {
                         let lock = self.0.read().await;
-                        Arc::clone(lock.asset_manager())
+                        let num_updates = lock.config().num_updates_per_repo_info_file();
+                        (Arc::clone(lock.asset_manager()), num_updates)
                     };
-                    let result = garbage_collect(asset_manager, &gc_config)
-                        .await
-                        .map_err(PyIcechunkStoreError::GCError)?;
+                    let result =
+                        garbage_collect(asset_manager, &gc_config, None, num_updates)
+                            .await
+                            .map_err(PyIcechunkStoreError::GCError)?;
                     Ok::<_, PyIcechunkStoreError>(result.into())
                 })?;
 
@@ -2205,11 +2285,12 @@ impl PyRepository {
                 max_concurrent_manifest_fetches,
                 dry_run,
             );
-            let asset_manager = {
+            let (asset_manager, num_updates) = {
                 let lock = repository.read().await;
-                Arc::clone(lock.asset_manager())
+                let num_updates = lock.config().num_updates_per_repo_info_file();
+                (Arc::clone(lock.asset_manager()), num_updates)
             };
-            let result = garbage_collect(asset_manager, &gc_config)
+            let result = garbage_collect(asset_manager, &gc_config, None, num_updates)
                 .await
                 .map_err(PyIcechunkStoreError::GCError)?;
             Ok(result.into())
@@ -2304,6 +2385,34 @@ impl PyRepository {
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             let res = snapshot_json(lock.asset_manager(), &snap, pretty)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(res)
+        })
+    }
+
+    #[pyo3(signature = (*, pretty = true))]
+    fn inspect_repo_info(&self, pretty: bool) -> PyResult<String> {
+        let result = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(async move {
+                let lock = self.0.read().await;
+                let res = repo_info_json(lock.asset_manager(), pretty).await?;
+                Ok(res)
+            })
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
+        Ok(result)
+    }
+
+    #[pyo3(signature = (*, pretty = true))]
+    fn inspect_repo_info_async<'py>(
+        &self,
+        py: Python<'py>,
+        pretty: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let lock = repository.read().await;
+            let res = repo_info_json(lock.asset_manager(), pretty)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(res)

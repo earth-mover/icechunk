@@ -1,3 +1,5 @@
+//! Configurable conflict resolution with policies for common conflict types.
+
 use async_trait::async_trait;
 
 use crate::{

@@ -1,3 +1,5 @@
+//! Manifest optimization and rebuilding.
+
 use crate::{
     Repository,
     format::{SnapshotId, snapshot::SnapshotProperties},
