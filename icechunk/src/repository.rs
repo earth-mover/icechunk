@@ -26,12 +26,13 @@ use itertools::Itertools;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{sync::AcquireError, task::JoinError, try_join};
+use tokio::{join, sync::AcquireError, task::JoinError, try_join};
 use tracing::{Instrument, debug, error, instrument, trace};
 
 use crate::{
     Storage, StorageError,
     asset_manager::AssetManager,
+    change_set::ChangeSet,
     config::{
         Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestPreloadCondition,
         RepositoryConfig,
@@ -46,7 +47,7 @@ use crate::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
         },
-        transaction_log::{Diff, DiffBuilder},
+        transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
     refs::{self, Ref, RefError, RefErrorKind},
     session::{Session, SessionErrorKind, SessionResult},
@@ -240,7 +241,7 @@ impl Repository {
             config.max_concurrent_requests(),
         ));
 
-        if !storage.root_is_clean().await? {
+        if !storage.root_is_clean(&storage_settings).await? {
             return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
         }
 
@@ -248,17 +249,41 @@ impl Repository {
         let storage_c = Arc::clone(&storage);
         let settings_ref = &storage_settings;
         let num_updates = config.num_updates_per_repo_info_file();
+        let config_ref = &config;
         let create_repo_info = async move {
             // On create we need to create the default branch
             let new_snapshot = Arc::new(Snapshot::initial(spec_version)?);
-            asset_manager_c.write_snapshot(Arc::clone(&new_snapshot)).await?;
+            let write_snap = asset_manager_c.write_snapshot(Arc::clone(&new_snapshot));
 
             if spec_version >= SpecVersionBin::V2dot0 {
+                let empty_tx_log = TransactionLog::new(
+                    &Snapshot::INITIAL_SNAPSHOT_ID,
+                    &ChangeSet::for_edits(),
+                );
                 let snap_info = new_snapshot.as_ref().try_into()?;
-                let repo_info =
-                    Arc::new(RepoInfo::initial(spec_version, snap_info, num_updates));
-                let _ = asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
+                let config_to_store =
+                    if has_overriden_config { Some(config_ref) } else { None };
+                let repo_info = Arc::new(RepoInfo::initial(
+                    spec_version,
+                    snap_info,
+                    num_updates,
+                    config_to_store,
+                ));
+
+                // Write snapshot and transaction log concurrently first
+                let write_tx = asset_manager_c.write_transaction_log(
+                    Snapshot::INITIAL_SNAPSHOT_ID,
+                    Arc::new(empty_tx_log),
+                );
+                try_join!(write_snap, write_tx)?;
+
+                // Only write the repo info after both succeed, since the repo
+                // object is the entry point that makes the repository valid.
+                // Writing it last ensures we never create a repo pointing to
+                // missing snapshot/tx data.
+                asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
             } else {
+                write_snap.await?;
                 refs::update_branch(
                     storage_c.as_ref(),
                     settings_ref,
@@ -266,33 +291,42 @@ impl Repository {
                     new_snapshot.id().clone(),
                     None,
                 )
-                .await?;
+                .await
+                .map_err(RepositoryError::from)?;
             }
 
             Ok::<_, RepositoryError>(())
         }
         .in_current_span();
 
-        let storage_c = Arc::clone(&storage);
-        let config_c = config.clone();
-        let update_config = async move {
-            if has_overriden_config {
-                let version = Repository::store_config(
-                    storage_c,
-                    &config_c,
-                    &storage::VersionInfo::for_creation(),
-                )
-                .await?;
-                Ok::<_, RepositoryError>(version)
-            } else {
-                Ok(storage::VersionInfo::for_creation())
+        let config_version = if spec_version >= SpecVersionBin::V2dot0 {
+            // V2+ repos: config is already embedded in repo info, no config.yaml needed
+            create_repo_info.await?;
+            storage::VersionInfo::for_creation()
+        } else {
+            // V1 repos: write config.yaml separately
+            let storage_c = Arc::clone(&storage);
+            let config_c = config.clone();
+            let update_config = async move {
+                if has_overriden_config {
+                    let version = Repository::store_config(
+                        storage_c,
+                        &config_c,
+                        &storage::VersionInfo::for_creation(),
+                    )
+                    .await?;
+                    Ok::<_, RepositoryError>(version)
+                } else {
+                    Ok(storage::VersionInfo::for_creation())
+                }
             }
-        }
-        .in_current_span();
+            .in_current_span();
 
-        let (_, config_version) = try_join!(create_repo_info, update_config)?;
+            let (_, config_version) = try_join!(create_repo_info, update_config)?;
+            config_version
+        };
 
-        debug_assert!(Self::exists(Arc::clone(&storage)).await.unwrap_or(false));
+        debug_assert!(Self::exists(Arc::clone(&storage), None).await.unwrap_or(false));
         Self::new(
             spec_version,
             config,
@@ -311,81 +345,96 @@ impl Repository {
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
     ) -> RepositoryResult<Self> {
         debug!("Opening Repository");
-        let storage_c = Arc::clone(&storage);
-        let fetch_config = tokio::spawn(
-            async move { Self::fetch_config(storage_c).await }.in_current_span(),
+
+        // Launch spec version detection and an optimistic config.yaml fetch concurrently.
+        // For IC1 repos this avoids a sequential round-trip; for V2+ repos the config.yaml
+        // result is ignored (config lives in the repo info object instead).
+        let temp_settings = storage.default_settings().await?;
+        let temp_am = AssetManager::new_no_cache(
+            Arc::clone(&storage),
+            temp_settings,
+            SpecVersionBin::current(),
+            1,
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
 
         let storage_c = Arc::clone(&storage);
-        let find_spec_version = tokio::spawn(Self::fetch_spec_version(storage_c));
+        let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
+        let fetch_version =
+            tokio::spawn(Self::fetch_spec_version(storage_c, user_settings));
+        let fetch_config_yaml = temp_am.fetch_config();
 
-        let (config_res, spec_version_res) = try_join!(fetch_config, find_spec_version)?;
+        // Use join! (not try_join!) so that a config.yaml error doesn't fail the
+        // open for V2+ repos that never had a config.yaml file.
+        let (spec_version_result, config_yaml_result) =
+            join!(fetch_version, fetch_config_yaml);
 
-        // fail if repo doesn't exist
-        let spec_version = match spec_version_res {
-            Ok(Some(v)) => Ok(v),
-            Ok(None) => {
+        let spec_version = match spec_version_result?? {
+            Some(v) => Ok(v),
+            None => {
                 Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
             }
-            Err(err) => Err(err),
         }?;
         trace!(%spec_version, "Repository version found");
 
-        if let Some((default_config, config_version)) = config_res? {
-            trace!("Repository configuration found");
-            // Merge the given config with the defaults
-            let config =
-                config.map(|c| default_config.merge(c)).unwrap_or(default_config);
-
-            let storage_settings = match config.storage() {
-                Some(s) => s.clone(),
-                None => storage.default_settings().await?,
-            };
-
-            let asset_manager = Arc::new(AssetManager::new_with_config(
-                Arc::clone(&storage),
-                storage_settings.clone(),
-                spec_version,
-                config.caching(),
-                config.compression().level(),
-                config.max_concurrent_requests(),
-            ));
-
-            Self::new(
-                spec_version,
-                config,
-                config_version,
-                storage,
-                storage_settings,
-                asset_manager,
-                authorize_virtual_chunk_access,
-            )
+        let (default_config, config_version) = if spec_version >= SpecVersionBin::V2dot0 {
+            // For V2+ repos, read config from the repo info object.
+            // Only fall back to config.yaml for old V2 repos that predate embedded config.
+            let (repo_info, _) = temp_am.fetch_repo_info().await?;
+            match repo_info.config()? {
+                Some(embedded_config) => {
+                    trace!("Repository configuration found in repo info");
+                    (Some(embedded_config), storage::VersionInfo::for_creation())
+                }
+                None => {
+                    trace!(
+                        "No embedded config in repo info, attempting to fall back to config.yaml"
+                    );
+                    // Surface config.yaml errors only when we actually need the result
+                    match config_yaml_result? {
+                        Some((c, v)) => (Some(c), v),
+                        None => (None, storage::VersionInfo::for_creation()),
+                    }
+                }
+            }
         } else {
-            trace!("Repository configuration not found, using default as base");
-            let config = config.unwrap_or_default();
-            let storage_settings = match config.storage() {
-                Some(s) => s.clone(),
-                None => storage.default_settings().await?,
-            };
+            // V1 repos: use the config.yaml result we already fetched
+            match config_yaml_result? {
+                Some((c, v)) => (Some(c), v),
+                None => (None, storage::VersionInfo::for_creation()),
+            }
+        };
 
-            let asset_manager = Arc::new(AssetManager::new_with_config(
-                Arc::clone(&storage),
-                storage_settings.clone(),
-                spec_version,
-                config.caching(),
-                config.compression().level(),
-                config.max_concurrent_requests(),
-            ));
-            Self::new(
-                spec_version,
-                config,
-                storage::VersionInfo::for_creation(),
-                storage,
-                storage_settings,
-                asset_manager,
-                authorize_virtual_chunk_access,
-            )
-        }
+        let final_config = match default_config {
+            Some(default_config) => {
+                config.map(|c| default_config.merge(c)).unwrap_or(default_config)
+            }
+            None => config.unwrap_or_default(),
+        };
+
+        let storage_settings = match final_config.storage() {
+            Some(s) => s.clone(),
+            None => storage.default_settings().await?,
+        };
+
+        let asset_manager = Arc::new(AssetManager::new_with_config(
+            Arc::clone(&storage),
+            storage_settings.clone(),
+            spec_version,
+            final_config.caching(),
+            final_config.compression().level(),
+            final_config.max_concurrent_requests(),
+        ));
+
+        Self::new(
+            spec_version,
+            final_config,
+            config_version,
+            storage,
+            storage_settings,
+            asset_manager,
+            authorize_virtual_chunk_access,
+        )
     }
 
     pub async fn open_or_create(
@@ -394,7 +443,9 @@ impl Repository {
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
         create_version: Option<SpecVersionBin>,
     ) -> RepositoryResult<Self> {
-        if Self::exists(Arc::clone(&storage)).await? {
+        let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
+        if Self::fetch_spec_version(Arc::clone(&storage), user_settings).await?.is_some()
+        {
             Self::open(config, storage, authorize_virtual_chunk_access).await
         } else {
             Self::create(config, storage, authorize_virtual_chunk_access, create_version)
@@ -434,19 +485,27 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn exists(
         storage: Arc<dyn Storage + Send + Sync>,
+        settings: Option<storage::Settings>,
     ) -> RepositoryResult<bool> {
-        Ok(Self::fetch_spec_version(storage).await?.is_some())
+        Ok(Self::fetch_spec_version(storage, settings).await?.is_some())
     }
 
     #[instrument(skip_all)]
     pub async fn fetch_spec_version(
         storage: Arc<dyn Storage + Send + Sync>,
+        settings: Option<storage::Settings>,
     ) -> RepositoryResult<Option<SpecVersionBin>> {
+        let settings = match settings {
+            Some(s) => s,
+            None => storage.default_settings().await?,
+        };
+
         let storage_c = Arc::clone(&storage);
+        let settings_c = settings.clone();
         let is_v1 = async move {
             match refs::fetch_branch_tip(
                 storage_c.as_ref(),
-                &storage_c.default_settings().await?,
+                &settings_c,
                 Ref::DEFAULT_BRANCH,
             )
             .await
@@ -461,7 +520,7 @@ impl Repository {
         let after_v1 = async move {
             let temp_asset_manager = Arc::new(AssetManager::new_no_cache(
                 Arc::clone(&storage),
-                storage.default_settings().await?,
+                settings,
                 SpecVersionBin::current(),
                 1, // we are only reading, compression doesn't matter
                 DEFAULT_MAX_CONCURRENT_REQUESTS,
@@ -535,42 +594,60 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> RepositoryResult<Option<(RepositoryConfig, storage::VersionInfo)>> {
         let settings = storage.default_settings().await?;
+        let spec_version = Self::fetch_spec_version(Arc::clone(&storage), None)
+            .await?
+            .unwrap_or_default();
+
         let am = AssetManager::new_no_cache(
-            storage,
+            Arc::clone(&storage),
             settings,
-            SpecVersionBin::current(),
+            spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
+
+        // For V2+ repos, try reading config from the repo info object first
+        if spec_version >= SpecVersionBin::V2dot0
+            && let Ok((repo_info, version)) = am.fetch_repo_info().await
+            && let Ok(Some(config)) = repo_info.config()
+        {
+            return Ok(Some((config, version)));
+        }
+
+        // Fall back to config.yaml (V1 repos, or old V2 repos without embedded config)
         am.fetch_config().await
     }
 
     #[instrument(skip_all)]
     pub async fn save_config(&self) -> RepositoryResult<storage::VersionInfo> {
-        let version = Repository::store_config(
-            self.storage().clone(),
-            self.config(),
-            &self.config_version,
-        )
-        .await?;
-
-        // Record the config change in the ops log (V2+ only)
+        // For V2+ repos, write config into the repo info object atomically
         if self.spec_version >= SpecVersionBin::V2dot0 {
+            let config = self.config().clone();
             let num_updates = self.config.num_updates_per_repo_info_file();
-            let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
-                Ok(Arc::new(repo_info.record_config_changed(
-                    self.spec_version(),
+            let spec_version = self.spec_version();
+            let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str| {
+                Ok(Arc::new(repo_info.set_config(
+                    spec_version,
+                    &config,
                     backup_path,
                     num_updates,
                 )?))
             };
-            let _ = self
+            let version = self
                 .asset_manager
                 .update_repo_info(self.config.repo_update_retries().retries(), do_update)
                 .await?;
-        }
 
-        Ok(version)
+            Ok(version)
+        } else {
+            // V1 repos: write config.yaml only (no repo info)
+            Repository::store_config(
+                self.storage().clone(),
+                self.config(),
+                &self.config_version,
+            )
+            .await
+        }
     }
 
     #[instrument(skip_all)]
@@ -1483,7 +1560,8 @@ impl Repository {
         let fut: FuturesOrdered<_> = all_snaps
             .iter()
             .filter_map(|snap_info| {
-                if snap_info.is_initial() {
+                // v1 repos don't have transaction logs for initial snapshots
+                if self.spec_version == SpecVersionBin::V1dot0 && snap_info.is_initial() {
                     None
                 } else {
                     Some(
@@ -1815,19 +1893,15 @@ mod tests {
         let repo =
             Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
 
-        // initializing a repo does not create the config file
-        assert!(Repository::fetch_config(Arc::clone(&storage)).await?.is_none());
-        // it inits with the default config
+        // default config is not stored in repo info
         assert_eq!(repo.config(), &RepositoryConfig::default());
-        // updating the persistent config create a new file with default values
-        let version = repo.save_config().await?;
-        assert_ne!(version, storage::VersionInfo::for_creation());
-        assert_eq!(
-            Repository::fetch_config(Arc::clone(&storage)).await?.unwrap().0,
-            RepositoryConfig::default()
-        );
+        assert!(Repository::fetch_config(Arc::clone(&storage)).await?.is_none());
 
-        // reload the repo changing config
+        // reopening with default config still works
+        let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+        assert_eq!(repo.config(), &RepositoryConfig::default());
+
+        // reload the repo changing config via client override
         let repo = Repository::open(
             Some(RepositoryConfig {
                 inline_chunk_threshold_bytes: Some(42),
@@ -1840,9 +1914,11 @@ mod tests {
 
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 42);
 
-        // update the persistent config
+        // save the config — persists into repo info
         let version = repo.save_config().await?;
         assert_ne!(version, storage::VersionInfo::for_creation());
+
+        // fetch_config reads from repo info
         assert_eq!(
             Repository::fetch_config(Arc::clone(&storage))
                 .await?
@@ -1852,8 +1928,8 @@ mod tests {
             42
         );
 
-        // verify loading again gets the value from persistent config
-        let repo = Repository::open(None, storage, HashMap::new()).await?;
+        // verify loading again gets the value from persistent config in repo info
+        let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 42);
 
         // creating a repo we can override certain config atts:
@@ -1884,7 +1960,7 @@ mod tests {
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 20);
         assert_eq!(repo.config().caching().num_chunk_refs(), 100);
 
-        // and we can save the merge
+        // and we can save the merge — persists into repo info
         let version = repo.save_config().await?;
         assert_ne!(version, storage::VersionInfo::for_creation());
         assert_eq!(&Repository::fetch_config(storage).await?.unwrap().0, repo.config());
