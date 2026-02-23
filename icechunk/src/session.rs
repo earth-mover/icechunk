@@ -4389,6 +4389,45 @@ mod tests {
         Ok(())
     }
 
+    #[tokio_test]
+    async fn test_session_amending_with_move() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session
+            .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session.commit("setup", None).await?;
+
+        // Rearrange session, only has a move: should be fine
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/source".try_into().unwrap(), "/dest".try_into().unwrap())
+            .await?;
+        session.commit("move commit", None).await?;
+
+        // Amend on top of a move commit: should fail
+        let mut session = repo.writable_session("main").await?;
+        session
+            .add_group("/fail".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        let result = session.amend("amend after move", None, false).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err.kind, SessionErrorKind::RearrangeSessionOnly));
+
+        // Rearrange session, amend on top of a move commit: should fail?
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/dest".try_into().unwrap(), "/another_dest".try_into().unwrap())
+            .await?;
+        let result = session.amend("amend after move, only new moves", None, false).await;
+        assert!(result.is_ok());
+
+        Ok(())
+    }
+
     /// Integration test that fetch_snapshot_info correctly identifies initial vs non-initial.
     #[tokio_test]
     async fn test_fetch_snapshot_info_is_initial() -> Result<(), Box<dyn Error>> {
