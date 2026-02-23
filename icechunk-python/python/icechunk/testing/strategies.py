@@ -60,7 +60,7 @@ def splitting_configs(
 def repository_configs(
     draw: st.DrawFn,
     num_updates_per_repo_info_file: st.SearchStrategy[int] = st.integers(  # noqa: B008
-        min_value=1, max_value=50
+        min_value=1, max_value=5
     ),
     inline_chunk_threshold_bytes: st.SearchStrategy[int] | None = None,
     splitting: st.SearchStrategy[ic.ManifestSplittingConfig] | None = None,
