@@ -376,8 +376,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
         self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata))
 
-    def _make_storage(self):
-        return self.ic.in_memory_storage()
+    def _make_storage(self) -> Storage:
+        return self.ic.in_memory_storage()  # type: ignore[no-any-return]
 
     @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
     def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:

@@ -66,8 +66,8 @@ class CrossVersionVersionControlStateMachine(
     def upgrade_spec_version(self) -> None:
         pass
 
-    def _make_storage(self):
-        return self.ic.local_filesystem_storage(self._storage_path)
+    def _make_storage(self) -> ic.Storage:
+        return self.ic.local_filesystem_storage(self._storage_path)  # type: ignore[no-any-return]
 
     @initialize(
         data=st.data(),
@@ -78,7 +78,7 @@ class CrossVersionVersionControlStateMachine(
         note(f"initializing with actor {choice!r}")
         self.actor = self.actors[choice]
         self.ic = self.actor_modules[choice]
-        return super().initialize(data, spec_version=1)
+        return super().initialize(data, spec_version=1)  # type: ignore[return-value]
 
     @rule(data=st.data())
     def switch_actor(self, data: st.DataObject) -> None:
