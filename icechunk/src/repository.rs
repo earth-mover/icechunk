@@ -26,7 +26,7 @@ use itertools::Itertools;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{sync::AcquireError, task::JoinError, try_join};
+use tokio::{join, sync::AcquireError, task::JoinError, try_join};
 use tracing::{Instrument, debug, error, instrument, trace};
 
 use crate::{
@@ -327,26 +327,37 @@ impl Repository {
     ) -> RepositoryResult<Self> {
         debug!("Opening Repository");
 
-        let spec_version = match Self::fetch_spec_version(Arc::clone(&storage)).await {
-            Ok(Some(v)) => Ok(v),
-            Ok(None) => {
+        // Launch spec version detection and an optimistic config.yaml fetch concurrently.
+        // For IC1 repos this avoids a sequential round-trip; for V2+ repos the config.yaml
+        // result is ignored (config lives in the repo info object instead).
+        let temp_settings = storage.default_settings().await?;
+        let temp_am = AssetManager::new_no_cache(
+            Arc::clone(&storage),
+            temp_settings,
+            SpecVersionBin::current(),
+            1,
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+        );
+
+        let fetch_version = Self::fetch_spec_version(Arc::clone(&storage));
+        let fetch_config_yaml = temp_am.fetch_config();
+
+        // Use join! (not try_join!) so that a config.yaml error doesn't fail the
+        // open for V2+ repos that never had a config.yaml file.
+        let (spec_version_result, config_yaml_result) =
+            join!(fetch_version, fetch_config_yaml);
+
+        let spec_version = match spec_version_result? {
+            Some(v) => Ok(v),
+            None => {
                 Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
             }
-            Err(err) => Err(err),
         }?;
         trace!(%spec_version, "Repository version found");
 
         let (default_config, config_version) = if spec_version >= SpecVersionBin::V2dot0 {
             // For V2+ repos, read config from the repo info object.
             // Only fall back to config.yaml for old V2 repos that predate embedded config.
-            let temp_settings = storage.default_settings().await?;
-            let temp_am = AssetManager::new_no_cache(
-                Arc::clone(&storage),
-                temp_settings,
-                spec_version,
-                1,
-                DEFAULT_MAX_CONCURRENT_REQUESTS,
-            );
             let (repo_info, _) = temp_am.fetch_repo_info().await?;
             match repo_info.config()? {
                 Some(embedded_config) => {
@@ -357,15 +368,16 @@ impl Repository {
                     trace!(
                         "No embedded config in repo info, attempting to fall back to config.yaml"
                     );
-                    match Self::fetch_config(Arc::clone(&storage)).await? {
+                    // Surface config.yaml errors only when we actually need the result
+                    match config_yaml_result? {
                         Some((c, v)) => (Some(c), v),
                         None => (None, storage::VersionInfo::for_creation()),
                     }
                 }
             }
         } else {
-            // V1 repos: read from config.yaml
-            match Self::fetch_config(Arc::clone(&storage)).await? {
+            // V1 repos: use the config.yaml result we already fetched
+            match config_yaml_result? {
                 Some((c, v)) => (Some(c), v),
                 None => (None, storage::VersionInfo::for_creation()),
             }
