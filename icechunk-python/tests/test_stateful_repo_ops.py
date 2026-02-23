@@ -24,7 +24,7 @@ import copy
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import pytest
-from hypothesis import assume, note, settings
+from hypothesis import assume, event, note, settings
 from hypothesis.stateful import (
     Bundle,
     RuleBasedStateMachine,
@@ -468,7 +468,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         array_meta=v3_array_metadata,
         config=repository_configs(),
         target=branches,
-        spec_version=st.sampled_from([2]),
+        spec_version=st.sampled_from([1, 2]),
     )
     def initialize(
         self, array_meta: Buffer, config: RepositoryConfig, spec_version: Literal[1, 2]
@@ -860,21 +860,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # even after expiration, written_at is unmodified
         assert actual.written_at == expected.written_at
 
-    def check_ops_log(self) -> None:
-        if self.model.spec_version == 1:
-            return
-        actual_ops = list(self.repo.ops_log())
-        assert all(
-            first.updated_at > second.updated_at
-            for (first, second) in itertools.pairwise(actual_ops)
-        )
-        assert all(
-            first.backup_path != second.backup_path
-            for (first, second) in itertools.pairwise(actual_ops)
-        )
-        assert self.model.ops_log[::-1] == actual_ops
-        assert isinstance(actual_ops[-1], ic.RepoInitializedUpdate)
-
     @invariant()
     def checks(self) -> None:
         # this method only exists to reduce verbosity of hypothesis output
@@ -886,6 +871,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.check_ancestry()
         self.check_ops_log()
         self.check_repo_info()
+        self.check_file_invariants()
 
     def check_list_prefix_from_root(self) -> None:
         model_list = self.model.list_prefix("")
@@ -949,10 +935,47 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         # the remaining fields (snapshots, branches, tags, ops_log) are checked by the other invariants
 
+    def check_file_invariants(self) -> None:
+        paths = set(path_and_bytes[0] for path_and_bytes in self.storage.list_objects())
+
+        nsnapshots = len([p for p in paths if p.startswith("snapshots/")])
+        ntransactions = len([p for p in paths if p.startswith("transactions/")])
+        if self.model.spec_version == 1:
+            assert nsnapshots - 1 == ntransactions
+        else:
+            assert nsnapshots == ntransactions
+
+        if self.model.spec_version > 1:
+            ops = list(self.repo.ops_log())
+            backups = set(
+                f"overwritten/{update.backup_path}"
+                for update in ops
+                if update.backup_path is not None
+            )
+            n = len(backups)
+            bucket = f"{n // 10 * 10}-{n // 10 * 10 + 9}"
+            event(f"backups exist: {bucket}")
+            assert backups.issubset(paths)
+
+    def check_ops_log(self) -> None:
+        if self.model.spec_version == 1:
+            return
+        actual_ops = list(self.repo.ops_log())
+        assert all(
+            first.updated_at > second.updated_at
+            for (first, second) in itertools.pairwise(actual_ops)
+        )
+        assert all(
+            first.backup_path != second.backup_path
+            for (first, second) in itertools.pairwise(actual_ops)
+        )
+        assert self.model.ops_log[::-1] == actual_ops
+        assert isinstance(actual_ops[-1], ic.RepoInitializedUpdate)
+
 
 VersionControlStateMachine.TestCase.settings = settings(
     deadline=None,
-    # stateful_step_count=100,
+    stateful_step_count=100,
     # report_multiple_bugs=False,
 )
 VersionControlTest = VersionControlStateMachine.TestCase
