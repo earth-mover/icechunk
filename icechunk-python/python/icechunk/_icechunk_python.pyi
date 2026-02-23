@@ -1925,20 +1925,6 @@ class SessionMode(Enum):
     WRITABLE = 1
     REARRANGE = 2
 
-class ShiftMode(Enum):
-    """The mode for shifting array chunks, determining how out-of-bounds chunks are handled.
-
-    Attributes
-    ----------
-    WRAP: int
-        Circular buffer - chunks wrap around to the other side, shape unchanged
-    DISCARD: int
-        Out-of-bounds chunks are discarded, vacated positions return fill_value
-    """
-
-    WRAP = 0
-    DISCARD = 1
-
 class PySession:
     @classmethod
     def from_bytes(cls, bytes: bytes) -> PySession: ...
@@ -1961,11 +1947,8 @@ class PySession:
         self,
         array_path: str,
         shift_chunk: Callable[[Iterable[int]], Iterable[int] | None],
-        delete_vacated: bool,
     ) -> None: ...
-    def shift_array(
-        self, array_path: str, chunk_offset: Iterable[int], mode: ShiftMode
-    ) -> list[int]: ...
+    def shift_array(self, array_path: str, chunk_offset: Iterable[int]) -> list[int]: ...
     async def move_node_async(self, from_path: str, to_path: str) -> None: ...
     def all_virtual_chunk_locations(self) -> list[str]: ...
     async def all_virtual_chunk_locations_async(self) -> list[str]: ...

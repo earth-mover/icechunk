@@ -1,7 +1,7 @@
 import json
 import pickle
 from collections.abc import Callable
-from typing import Any, Literal, TypeVar
+from typing import Any, TypeVar
 
 import hypothesis.strategies as st
 import numpy as np
@@ -38,17 +38,11 @@ class ModelStore(MemoryStore):
         array_path: str,
         offset: tuple[int, ...],
         num_chunks: tuple[int, ...],
-        mode: str,
     ) -> None:
         """Shift chunk indices for an array.
 
         This simulates what shift_array does to the chunk store keys.
-
-        Parameters
-        ----------
-        mode : str
-            "wrap" - circular buffer, chunks wrap around
-            "discard" - out-of-bounds chunks dropped, vacated positions deleted
+        Out-of-bounds chunks are dropped, vacated positions retain stale data.
         """
         prefix = f"{array_path}/c/"
 
@@ -62,40 +56,16 @@ class ModelStore(MemoryStore):
             if data:
                 chunk_data[indices] = data
 
-        if mode == "wrap":
-            # WRAP mode: circular buffer, chunks wrap around
-            for old_idx, data in chunk_data.items():
-                new_idx = tuple(
-                    (idx + off) % nchunks
-                    for idx, off, nchunks in zip(old_idx, offset, num_chunks, strict=True)
-                )
-                new_key = f"{prefix}{'/'.join(str(idx) for idx in new_idx)}"
-                await self.set(new_key, data)
-        else:
-            # DISCARD mode: out-of-bounds dropped, vacated positions deleted
-            # Compute source and destination positions
-            source_positions = set(chunk_data.keys())
-            dest_positions: set[tuple[int, ...]] = set()
-
-            # Write chunks at new positions (skip out-of-bounds)
-            for old_idx, data in chunk_data.items():
-                new_idx = tuple(
-                    idx + off for idx, off in zip(old_idx, offset, strict=True)
-                )
-                if any(
-                    idx < 0 or idx >= nchunks
-                    for idx, nchunks in zip(new_idx, num_chunks, strict=True)
-                ):
-                    continue  # Out of bounds - discard
-                dest_positions.add(new_idx)
-                new_key = f"{prefix}{'/'.join(str(idx) for idx in new_idx)}"
-                await self.set(new_key, data)
-
-            # Vacated = source positions that don't receive new data
-            vacated_positions = source_positions - dest_positions
-            for idx in vacated_positions:
-                key = f"{prefix}{'/'.join(str(dim_idx) for dim_idx in idx)}"
-                await self.delete(key)
+        # Write chunks at new positions (skip out-of-bounds)
+        for old_idx, data in chunk_data.items():
+            new_idx = tuple(idx + off for idx, off in zip(old_idx, offset, strict=True))
+            if any(
+                idx < 0 or idx >= nchunks
+                for idx, nchunks in zip(new_idx, num_chunks, strict=True)
+            ):
+                continue  # Out of bounds - discard
+            new_key = f"{prefix}{'/'.join(str(idx) for idx in new_idx)}"
+            await self.set(new_key, data)
 
     async def move(self, source: str, dest: str) -> None:
         """Move all keys from source to dest.
@@ -348,9 +318,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @precondition(lambda self: self.repo.spec_version >= 2)
     @precondition(lambda self: bool(self.all_arrays))
     def shift_array(self, data: st.DataObject) -> None:
-        """Shift an array's chunks by a random offset using WRAP or DISCARD mode."""
+        """Shift an array's chunks by a random offset."""
         array_path = data.draw(st.sampled_from(sorted(self.all_arrays)))
-        mode: Literal["wrap", "discard"] = data.draw(st.sampled_from(["wrap", "discard"]))
 
         arr_model = zarr.open_array(self.model, path=array_path)
         arr_store = zarr.open_array(self.store, path=array_path)
@@ -364,7 +333,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         # Optionally resize before shift to make room (mimics real user behavior)
         # - With resize: preserves data that would otherwise go out of bounds
-        # - Without resize: data shifting beyond bounds is lost (DISCARD) or wraps (WRAP)
+        # - Without resize: data shifting beyond bounds is lost
         should_resize = data.draw(st.booleans())
         if should_resize and any(o > 0 for o in offset):
             new_shape = tuple(
@@ -378,9 +347,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                 (new_shape[i] + chunks[i] - 1) // chunks[i] for i in range(len(chunks))
             )
 
-        note(f"shifting array '{array_path}' by {offset} with mode={mode}")
-        element_shift = self.store.session.shift_array(f"/{array_path}", offset, mode)
-        self._sync(self.model.shift_array(array_path, offset, num_chunks, mode))
+        note(f"shifting array '{array_path}' by {offset}")
+        element_shift = self.store.session.shift_array(f"/{array_path}", offset)
+        self._sync(self.model.shift_array(array_path, offset, num_chunks))
 
         # Verify element_shift return value: chunk_offset * chunk_size per dimension
         expected_element_shift = tuple(o * c for o, c in zip(offset, chunks, strict=True))

@@ -5,7 +5,7 @@ use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Store,
     format::{ChunkIndices, Path, manifest::ChunkPayload},
-    session::{Session, SessionErrorKind, SessionMode, ShiftMode},
+    session::{Session, SessionErrorKind, SessionMode},
     store::{StoreError, StoreErrorKind},
 };
 use pyo3::{
@@ -51,25 +51,6 @@ impl From<SessionMode> for PySessionMode {
             SessionMode::Readonly => PySessionMode::Readonly,
             SessionMode::Writable => PySessionMode::Writable,
             SessionMode::Rearrange => PySessionMode::Rearrange,
-        }
-    }
-}
-
-/// The mode for shifting array chunks, determining how out-of-bounds chunks are handled.
-#[pyclass(name = "ShiftMode", module = "icechunk", eq, rename_all = "UPPERCASE")]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PyShiftMode {
-    /// Circular buffer - chunks wrap around to the other side, shape unchanged.
-    Wrap,
-    /// Out-of-bounds chunks are discarded, vacated positions return fill_value.
-    Discard,
-}
-
-impl From<PyShiftMode> for ShiftMode {
-    fn from(mode: PyShiftMode) -> Self {
-        match mode {
-            PyShiftMode::Wrap => ShiftMode::Wrap,
-            PyShiftMode::Discard => ShiftMode::Discard,
         }
     }
 }
@@ -211,7 +192,6 @@ impl PySession {
         py: Python<'py>,
         array_path: String,
         shift_chunk: Bound<'py, PyFunction>,
-        delete_vacated: bool,
     ) -> PyResult<()> {
         let array_path = Path::new(array_path.as_str())
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
@@ -239,7 +219,7 @@ impl PySession {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let mut session = self.0.write().await;
             session
-                .reindex_array(&array_path, shift_chunk, delete_vacated)
+                .reindex_array(&array_path, shift_chunk)
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(())
@@ -250,7 +230,6 @@ impl PySession {
         &mut self,
         array_path: String,
         chunk_offset: Vec<i64>,
-        mode: PyShiftMode,
     ) -> PyResult<Vec<i64>> {
         let array_path = Path::new(array_path.as_str())
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
@@ -260,7 +239,7 @@ impl PySession {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let mut session = self.0.write().await;
             let element_shift = session
-                .shift_array(&array_path, chunk_offset.as_slice(), mode.into())
+                .shift_array(&array_path, chunk_offset.as_slice())
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(element_shift)
