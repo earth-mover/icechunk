@@ -8,7 +8,7 @@ use std::{
     collections::{BTreeSet, HashMap},
 };
 
-use crate::{format::snapshot::SnapshotProperties, refs::Ref};
+use crate::{config::RepositoryConfig, format::snapshot::SnapshotProperties, refs::Ref};
 
 use super::{
     IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
@@ -130,6 +130,7 @@ impl RepoInfo {
         backup_path: Option<&'a str>,
         num_updates_per_file: u16,
         previous_info: Option<&'a str>,
+        config_bytes: Option<&[u8]>,
     ) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = snapshots.into_iter().collect();
         snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
@@ -148,6 +149,7 @@ impl RepoInfo {
             backup_path,
             num_updates_per_file,
             previous_info,
+            config_bytes,
         )
     }
 
@@ -166,6 +168,7 @@ impl RepoInfo {
         backup_path: Option<&'a str>,
         num_updates_per_file: u16,
         previous_info: Option<&'a str>,
+        config_bytes: Option<&[u8]>,
     ) -> IcechunkResult<Self> {
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
         let tags = sorted_tags
@@ -302,6 +305,8 @@ impl RepoInfo {
             previous_info,
         )?;
 
+        let config = config_bytes.map(|bytes| builder.create_vector(bytes));
+
         // TODO: provide accessors for last_updated_at, status, metadata, etc.
         let repo_args = generated::RepoArgs {
             tags: Some(tags),
@@ -313,6 +318,7 @@ impl RepoInfo {
             metadata: Some(metadata),
             latest_updates: Some(latest_updates),
             repo_before_updates,
+            config,
         };
         let repo = generated::Repo::create(&mut builder, &repo_args);
         builder.finish(repo, Some("Ichk"));
@@ -427,10 +433,14 @@ impl RepoInfo {
         spec_version: SpecVersionBin,
         snapshot: SnapshotInfo,
         num_updates_per_file: u16,
+        config: Option<&RepositoryConfig>,
     ) -> Self {
         let last_updated_at = snapshot.flushed_at;
         #[allow(clippy::expect_used)]
+        let config_bytes =
+            config.map(|c| flexbuffers::to_vec(c).expect("Cannot serialize config"));
         // This method is basically constant, so it's OK to unwrap in it
+        #[allow(clippy::expect_used)]
         Self::from_parts(
             spec_version,
             [],
@@ -446,8 +456,28 @@ impl RepoInfo {
             None,
             num_updates_per_file,
             None,
+            config_bytes.as_deref(),
         )
         .expect("Cannot generate initial snapshot")
+    }
+
+    /// Read the raw config bytes from the FlatBuffer (for pass-through in mutations).
+    pub(crate) fn config_bytes_raw(&self) -> IcechunkResult<Option<Vec<u8>>> {
+        Ok(self.root()?.config().map(|v| v.bytes().to_vec()))
+    }
+
+    /// Read the repository configuration from the repo info.
+    /// Returns `None` for repos created before config was embedded,
+    /// or for repos using the default configuration.
+    pub fn config(&self) -> IcechunkResult<Option<RepositoryConfig>> {
+        match self.root()?.config() {
+            None => Ok(None),
+            Some(config_fb) => {
+                let config: RepositoryConfig =
+                    flexbuffers::from_slice(config_fb.bytes()).map_err(Box::new)?;
+                Ok(Some(config))
+            }
+        }
     }
 
     pub fn metadata(&self) -> IcechunkResult<SnapshotProperties> {
@@ -533,6 +563,7 @@ impl RepoInfo {
             Some(previous_file),
             num_updates_per_file,
             self.repo_before_updates()?,
+            self.config_bytes_raw()?.as_deref(),
         )?;
         Ok(res)
     }
@@ -576,6 +607,7 @@ impl RepoInfo {
                     Some(previous_file),
                     num_updates_per_file,
                     self.repo_before_updates()?,
+                    self.config_bytes_raw()?.as_deref(),
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -616,6 +648,7 @@ impl RepoInfo {
                     Some(previous_file),
                     num_updates_per_file,
                     self.repo_before_updates()?,
+                    self.config_bytes_raw()?.as_deref(),
                 )
             }
             Err(IcechunkFormatError {
@@ -662,6 +695,7 @@ impl RepoInfo {
                     Some(previous_file),
                     num_updates_per_file,
                     self.repo_before_updates()?,
+                    self.config_bytes_raw()?.as_deref(),
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -710,6 +744,7 @@ impl RepoInfo {
                     Some(previous_file),
                     num_updates_per_file,
                     self.repo_before_updates()?,
+                    self.config_bytes_raw()?.as_deref(),
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -754,6 +789,7 @@ impl RepoInfo {
                     Some(previous_file),
                     num_updates_per_file,
                     self.repo_before_updates()?,
+                    self.config_bytes_raw()?.as_deref(),
                 )
             }
             Err(IcechunkFormatError {
@@ -789,15 +825,19 @@ impl RepoInfo {
             Some(previous_file),
             num_updates_per_file,
             self.repo_before_updates()?,
+            self.config_bytes_raw()?.as_deref(),
         )
     }
 
-    pub fn record_config_changed(
+    /// Update the embedded configuration and record a ConfigChangedUpdate in the op log.
+    pub fn set_config(
         &self,
         spec_version: SpecVersionBin,
+        config: &RepositoryConfig,
         previous_file: &str,
         num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
+        let config_bytes = flexbuffers::to_vec(config).map_err(Box::new)?;
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
         Self::from_parts(
             spec_version,
@@ -814,6 +854,7 @@ impl RepoInfo {
             Some(previous_file),
             num_updates_per_file,
             self.repo_before_updates()?,
+            Some(config_bytes.as_slice()),
         )
     }
 
@@ -1318,7 +1359,7 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100);
+        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None);
         assert_eq!(repo.all_snapshots()?.next().unwrap().unwrap(), snap1);
 
         let id2 = SnapshotId::random();
@@ -1402,7 +1443,7 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100);
+        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None);
         let repo = repo.add_branch(SpecVersionBin::current(), "foo", &id1, "foo", 100)?;
         let repo = repo.add_branch(SpecVersionBin::current(), "bar", &id1, "bar", 100)?;
         assert!(matches!(
@@ -1535,8 +1576,12 @@ mod tests {
         let n = num_updates_per_file as usize;
 
         // check updates for a new repo
-        let mut repo =
-            RepoInfo::initial(SpecVersionBin::current(), snap1, num_updates_per_file);
+        let mut repo = RepoInfo::initial(
+            SpecVersionBin::current(),
+            snap1,
+            num_updates_per_file,
+            None,
+        );
         assert_eq!(repo.latest_updates()?.count(), 1);
         let (last_update, _, file) = repo.latest_updates()?.next().unwrap()?;
         assert!(file.is_none());
@@ -1627,7 +1672,7 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1, 100);
+        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1, 100, None);
 
         // Attempting add_snapshot with a timestamp equal to the top of the ops log
         // should fail

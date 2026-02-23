@@ -3303,19 +3303,23 @@ mod tests {
             &storage::VersionInfo::for_creation(),
         )
         .await?;
-        let repo_info =
-            RepoInfo::initial(SpecVersionBin::current(), (&initial).try_into()?, 100)
-                .add_snapshot(
-                    SpecVersionBin::current(),
-                    snapshot.as_ref().try_into()?,
-                    Some("main"),
-                    UpdateType::NewCommitUpdate {
-                        branch: "main".to_string(),
-                        new_snap_id: snapshot.id().clone(),
-                    },
-                    "backup_path",
-                    100,
-                )?;
+        let repo_info = RepoInfo::initial(
+            SpecVersionBin::current(),
+            (&initial).try_into()?,
+            100,
+            None,
+        )
+        .add_snapshot(
+            SpecVersionBin::current(),
+            snapshot.as_ref().try_into()?,
+            Some("main"),
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: snapshot.id().clone(),
+            },
+            "backup_path",
+            100,
+        )?;
         asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 
         let repo = Repository::open(None, storage, HashMap::new()).await?;
@@ -3819,10 +3823,10 @@ mod tests {
         // 6 commits + 1 config change recorded in ops log
         assert_eq!(overwritten.iter().filter(|s| s.starts_with("repo")).count(), 7);
 
-        // 1 config save
+        // V2 repos don't write config.yaml — config is in repo info
         assert_eq!(
             overwritten.iter().filter(|s| s.starts_with("config.yaml")).count(),
-            1
+            0
         );
         Ok(())
     }
