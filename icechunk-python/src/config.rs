@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, TimeDelta, Timelike, Utc};
+use futures::TryStreamExt;
 use icechunk::storage::RetriesSettings;
 use itertools::Itertools;
 use pyo3::exceptions::PyValueError;
@@ -1956,5 +1957,36 @@ impl PyStorage {
                 .map_err(|e| PyValueError::new_err(e.to_string()))
         })?;
         Ok(res.into())
+    }
+
+    #[pyo3(signature = (settings=None, prefix=None))]
+    pub(crate) fn list_objects(
+        &self,
+        settings: Option<&PyStorageSettings>,
+        prefix: Option<String>,
+    ) -> PyResult<Vec<(String, u64)>> {
+        let prefix = prefix.unwrap_or_default();
+        let settings: Option<storage::Settings> = settings.map(|s| s.into());
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async {
+            let settings = match settings {
+                Some(s) => s,
+                None => self
+                    .0
+                    .default_settings()
+                    .await
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            };
+            let stream = self
+                .0
+                .list_objects(&settings, &prefix)
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
+            let results: Vec<(String, u64)> = stream
+                .map_ok(|info| (info.id, info.size_bytes))
+                .try_collect()
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
+            Ok(results)
+        })
     }
 }
