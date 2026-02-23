@@ -87,3 +87,17 @@ async def test_fetch_spec_version_async_v2() -> None:
 async def test_fetch_spec_version_async_no_repo() -> None:
     storage = ic.in_memory_storage()
     assert await ic.Repository.fetch_spec_version_async(storage) is None
+
+
+def test_exists_and_fetch_spec_version_with_storage_settings() -> None:
+    settings = ic.StorageSettings()
+
+    storage1 = ic.in_memory_storage()
+    ic.Repository.create(storage1, spec_version=1)
+    assert ic.Repository.exists(storage1, storage_settings=settings)
+    assert ic.Repository.fetch_spec_version(storage1, storage_settings=settings) == 1
+
+    storage2 = ic.in_memory_storage()
+    ic.Repository.create(storage2, spec_version=2)
+    assert ic.Repository.exists(storage2, storage_settings=settings)
+    assert ic.Repository.fetch_spec_version(storage2, storage_settings=settings) == 2
