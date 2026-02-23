@@ -11,21 +11,22 @@ Requires:
 Skipped entirely if icechunk_v1 is not installed.
 """
 
-import os
 import tempfile
-
-# Set log filter before importing icechunk packages so both v1 and v2
-# pick it up during tracing initialization.
-os.environ.setdefault("ICECHUNK_LOG", "warn,icechunk::storage::object_store=error")
 
 import pytest
 from packaging.version import Version
 
 import icechunk as ic
 
-ic_v1 = pytest.importorskip("icechunk_v1")
 pytest.importorskip("hypothesis")
 pytest.importorskip("xarray")
+ic_v1 = pytest.importorskip("icechunk_v1")
+
+# Suppress LocalFileSystem warnings for these tests (which use filesystem storage).
+log_filter = "warn,icechunk::storage::object_store=error"
+ic.set_logs_filter(log_filter)
+ic_v1.set_logs_filter(log_filter)
+
 
 # Monkey-patch so parent class `pytest.raises(IcechunkError)` catches both versions
 import tests.test_stateful_repo_ops as repo_ops_mod
