@@ -685,7 +685,22 @@ impl Session {
             .map(|(&offset, &chunk_size)| offset * chunk_size as i64)
             .collect();
 
-        self.reindex_array(array_path, shift_by(chunk_offset, &num_chunks)).await?;
+        let chunk_offset = chunk_offset.to_vec();
+        let num_chunks = num_chunks.to_vec();
+        self.reindex_array(array_path, move |index: &ChunkIndices| {
+            let new_indices: Option<Vec<u32>> = index
+                .0
+                .iter()
+                .enumerate()
+                .map(|(dim, &idx)| {
+                    let n = num_chunks[dim] as i64;
+                    let new_idx = idx as i64 + chunk_offset[dim];
+                    if new_idx < 0 || new_idx >= n { None } else { Some(new_idx as u32) }
+                })
+                .collect();
+            Ok(new_indices.map(ChunkIndices))
+        })
+        .await?;
 
         Ok(element_shift)
     }
@@ -2042,29 +2057,6 @@ pub fn construct_valid_byte_range(
     }
 }
 
-/// Creates a chunk index transformation function for shifting chunks by a fixed offset.
-///
-/// Out-of-bounds chunks return `None` (will be discarded).
-pub fn shift_by(
-    offset: &[i64],
-    num_chunks: &[u32],
-) -> impl Fn(&ChunkIndices) -> ReindexOperationResult {
-    let offset = offset.to_vec();
-    let num_chunks = num_chunks.to_vec();
-    move |index: &ChunkIndices| {
-        let new_indices: Option<Vec<u32>> = index
-            .0
-            .iter()
-            .enumerate()
-            .map(|(dim, &idx)| {
-                let n = num_chunks[dim] as i64;
-                let new_idx = idx as i64 + offset[dim];
-                if new_idx < 0 || new_idx >= n { None } else { Some(new_idx as u32) }
-            })
-            .collect();
-        Ok(new_indices.map(ChunkIndices))
-    }
-}
 struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
@@ -4771,7 +4763,7 @@ mod tests {
         session.commit("first commit", None).await?;
 
         let mut session = repo.writable_session("main").await?;
-        session.reindex_array(&apath, shift_by(&[-1], &[10])).await?;
+        session.shift_array(&apath, &[-1]).await?;
         assert_eq!(
             session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?,
             Some(ChunkPayload::Inline("1".into()))
