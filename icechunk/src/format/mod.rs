@@ -301,6 +301,8 @@ pub enum IcechunkFormatErrorKind {
     BranchNotFound { branch: String },
     #[error("tag already exists `{tag}`")]
     TagAlreadyExists { tag: String },
+    #[error("icechunk does not allow tag reuse and tag was already deleted `{tag}`")]
+    TagPreviouslyDeleted { tag: String },
     #[error("tag not found `{tag}`")]
     TagNotFound { tag: String },
     #[error("snapshot id is already present in the repository: `{snapshot_id}`")]
