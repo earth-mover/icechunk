@@ -32,6 +32,7 @@ use tracing::{Instrument, debug, error, instrument, trace};
 use crate::{
     Storage, StorageError,
     asset_manager::AssetManager,
+    change_set::ChangeSet,
     config::{
         Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestPreloadCondition,
         RepositoryConfig,
@@ -46,7 +47,7 @@ use crate::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
         },
-        transaction_log::{Diff, DiffBuilder},
+        transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
     refs::{self, Ref, RefError, RefErrorKind},
     session::{Session, SessionErrorKind, SessionResult},
@@ -240,7 +241,7 @@ impl Repository {
             config.max_concurrent_requests(),
         ));
 
-        if !storage.root_is_clean().await? {
+        if !storage.root_is_clean(&storage_settings).await? {
             return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
         }
 
@@ -251,14 +252,31 @@ impl Repository {
         let create_repo_info = async move {
             // On create we need to create the default branch
             let new_snapshot = Arc::new(Snapshot::initial(spec_version)?);
-            asset_manager_c.write_snapshot(Arc::clone(&new_snapshot)).await?;
+            let write_snap = asset_manager_c.write_snapshot(Arc::clone(&new_snapshot));
 
             if spec_version >= SpecVersionBin::V2dot0 {
+                let empty_tx_log = TransactionLog::new(
+                    &Snapshot::INITIAL_SNAPSHOT_ID,
+                    &ChangeSet::for_edits(),
+                );
                 let snap_info = new_snapshot.as_ref().try_into()?;
                 let repo_info =
                     Arc::new(RepoInfo::initial(spec_version, snap_info, num_updates));
-                let _ = asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
+
+                // Write snapshot and transaction log concurrently first
+                let write_tx = asset_manager_c.write_transaction_log(
+                    Snapshot::INITIAL_SNAPSHOT_ID,
+                    Arc::new(empty_tx_log),
+                );
+                try_join!(write_snap, write_tx)?;
+
+                // Only write the repo info after both succeed, since the repo
+                // object is the entry point that makes the repository valid.
+                // Writing it last ensures we never create a repo pointing to
+                // missing snapshot/tx data.
+                asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
             } else {
+                write_snap.await?;
                 refs::update_branch(
                     storage_c.as_ref(),
                     settings_ref,
@@ -266,7 +284,8 @@ impl Repository {
                     new_snapshot.id().clone(),
                     None,
                 )
-                .await?;
+                .await
+                .map_err(RepositoryError::from)?;
             }
 
             Ok::<_, RepositoryError>(())
@@ -292,7 +311,7 @@ impl Repository {
 
         let (_, config_version) = try_join!(create_repo_info, update_config)?;
 
-        debug_assert!(Self::exists(Arc::clone(&storage)).await.unwrap_or(false));
+        debug_assert!(Self::exists(Arc::clone(&storage), None).await.unwrap_or(false));
         Self::new(
             spec_version,
             config,
@@ -317,7 +336,9 @@ impl Repository {
         );
 
         let storage_c = Arc::clone(&storage);
-        let find_spec_version = tokio::spawn(Self::fetch_spec_version(storage_c));
+        let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
+        let find_spec_version =
+            tokio::spawn(Self::fetch_spec_version(storage_c, user_settings));
 
         let (config_res, spec_version_res) = try_join!(fetch_config, find_spec_version)?;
 
@@ -394,7 +415,9 @@ impl Repository {
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
         create_version: Option<SpecVersionBin>,
     ) -> RepositoryResult<Self> {
-        if Self::exists(Arc::clone(&storage)).await? {
+        let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
+        if Self::fetch_spec_version(Arc::clone(&storage), user_settings).await?.is_some()
+        {
             Self::open(config, storage, authorize_virtual_chunk_access).await
         } else {
             Self::create(config, storage, authorize_virtual_chunk_access, create_version)
@@ -434,19 +457,27 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn exists(
         storage: Arc<dyn Storage + Send + Sync>,
+        settings: Option<storage::Settings>,
     ) -> RepositoryResult<bool> {
-        Ok(Self::fetch_spec_version(storage).await?.is_some())
+        Ok(Self::fetch_spec_version(storage, settings).await?.is_some())
     }
 
     #[instrument(skip_all)]
     pub async fn fetch_spec_version(
         storage: Arc<dyn Storage + Send + Sync>,
+        settings: Option<storage::Settings>,
     ) -> RepositoryResult<Option<SpecVersionBin>> {
+        let settings = match settings {
+            Some(s) => s,
+            None => storage.default_settings().await?,
+        };
+
         let storage_c = Arc::clone(&storage);
+        let settings_c = settings.clone();
         let is_v1 = async move {
             match refs::fetch_branch_tip(
                 storage_c.as_ref(),
-                &storage_c.default_settings().await?,
+                &settings_c,
                 Ref::DEFAULT_BRANCH,
             )
             .await
@@ -461,7 +492,7 @@ impl Repository {
         let after_v1 = async move {
             let temp_asset_manager = Arc::new(AssetManager::new_no_cache(
                 Arc::clone(&storage),
-                storage.default_settings().await?,
+                settings,
                 SpecVersionBin::current(),
                 1, // we are only reading, compression doesn't matter
                 DEFAULT_MAX_CONCURRENT_REQUESTS,
@@ -1483,7 +1514,8 @@ impl Repository {
         let fut: FuturesOrdered<_> = all_snaps
             .iter()
             .filter_map(|snap_info| {
-                if snap_info.is_initial() {
+                // v1 repos don't have transaction logs for initial snapshots
+                if self.spec_version == SpecVersionBin::V1dot0 && snap_info.is_initial() {
                     None
                 } else {
                     Some(
