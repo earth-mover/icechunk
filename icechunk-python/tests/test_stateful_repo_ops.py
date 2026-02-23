@@ -419,7 +419,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 self.sync_store.set(path, value)
 
     @rule()
-    @precondition(lambda self: getattr(self.repo, "spec_version", 1) == 1)
+    @precondition(lambda self: self.model.spec_version == 1)
     def upgrade_spec_version(self) -> None:
         # don't test simple cases of catching error upgradging a v2 spec
         # that should be covered in unit tests
@@ -440,9 +440,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         """
         assert self.storage is not None, "storage must be initialized"
         self.repo = self.actor.open(self.storage, config=config)
-        note(
-            f"Reopened repository (spec_version={getattr(self.repo, 'spec_version', 1)})"
-        )
+        note(f"Reopened repository (spec_version={self.model.spec_version})")
 
         # Reopening discards uncommitted changes - reset model to last committed state
         branch = (
@@ -471,7 +469,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # https://github.com/earth-mover/icechunk/issues/1532
     @precondition(
         lambda self: (self.model.changes_made)
-        and (getattr(self.repo, "spec_version", 1) >= 2)
+        and (self.model.spec_version >= 2)
         and len(self.model.commits) > 1
     )
     def amend(self, message: str) -> str:
@@ -635,10 +633,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # TODO: v1 has bugs in expire_snapshots, only test for v2
     # https://github.com/earth-mover/icechunk/issues/1520
     # https://github.com/earth-mover/icechunk/issues/1534
-    @precondition(
-        lambda self: bool(self.model.commits)
-        and getattr(self.repo, "spec_version", 1) == 2
-    )
+    @precondition(lambda self: bool(self.model.commits) and self.model.spec_version == 2)
     @rule(
         data=st.data(),
         delta=st.timedeltas(

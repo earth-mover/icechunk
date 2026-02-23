@@ -35,6 +35,8 @@ PROTOTYPE = default_buffer_prototype()
 class ModelStore(MemoryStore):
     """MemoryStore with move and copy methods for testing."""
 
+    spec_version: int
+
     async def move(self, source: str, dest: str) -> None:
         """Move all keys from source to dest.
 
@@ -92,6 +94,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         super().__init__(temp_store)
         # Replace parent's MemoryStore with our ModelStore that has move()
         self.model = ModelStore()
+        self.model.spec_version = 1
         zarr.group(store=self.model)
 
     @initialize(spec_version=st.sampled_from([1, 2]))
@@ -107,6 +110,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         else:
             self.repo = self.actor.create(self.storage)
         self.store = self.repo.writable_session("main").store
+        self.model.spec_version = spec_version
 
         super().init_store()
 
@@ -208,7 +212,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             )
 
     @rule()
-    @precondition(lambda self: getattr(self.repo, "spec_version", 1) == 1)
+    @precondition(lambda self: self.model.spec_version == 1)
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     def upgrade_spec_version(self) -> None:
         """Upgrade repository from spec version 1 to version 2."""
@@ -217,9 +221,10 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # Reopen to pick up the upgraded spec version
         self.repo = self.actor.open(self.storage)
         self.store = self.repo.writable_session("main").store
+        self.model.spec_version = 2
 
     @rule(data=st.data(), num_moves=st.integers(min_value=0, max_value=5))
-    @precondition(lambda self: getattr(self.repo, "spec_version", 1) >= 2)
+    @precondition(lambda self: self.model.spec_version >= 2)
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
     def move_operations(self, data: st.DataObject, num_moves: int) -> None:

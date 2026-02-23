@@ -35,7 +35,7 @@ repo_ops_mod.IcechunkError = (ic.IcechunkError, ic_v1.IcechunkError)  # type: ig
 
 
 import hypothesis.strategies as st
-from hypothesis import note, settings
+from hypothesis import note
 from hypothesis.stateful import initialize, precondition, rule, run_state_machine_as_test
 
 from tests.test_stateful_repo_ops import (
@@ -46,9 +46,7 @@ from tests.test_zarr.test_stateful import (
 )
 
 
-class CrossVersionVersionControlStateMachine(
-    VersionControlStateMachine
-):
+class CrossVersionVersionControlStateMachine(VersionControlStateMachine):
     """Two-actor version control test: one actor is v2, the other is v1.
 
     Uses filesystem storage since v1 and v2 packages can't share storage objects.
@@ -97,9 +95,7 @@ def test_two_actors_cross_version() -> None:
     )
 
 
-class CrossVersionTwoActorZarrHierarchyStateMachine(
-    ModifiedZarrHierarchyStateMachine
-):
+class CrossVersionTwoActorZarrHierarchyStateMachine(ModifiedZarrHierarchyStateMachine):
     """Two-actor Zarr hierarchy test: one actor is v2, the other is v1.
 
     Uses filesystem storage since v1 and v2 packages can't share storage objects.
