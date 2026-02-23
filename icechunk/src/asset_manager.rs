@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
+use std::sync::RwLock;
 use std::{
     io::{BufReader, Read},
     ops::Range,
@@ -26,6 +27,7 @@ use tokio::{
 use tokio_util::io::SyncIoBridge;
 use tracing::{Span, debug, instrument, trace, warn};
 
+use crate::storage::GetModifiedResult;
 use crate::{
     RepositoryConfig, Storage, StorageError,
     config::CachingConfig,
@@ -68,6 +70,9 @@ pub struct AssetManager {
 
     max_concurrent_requests: u16,
 
+    #[serde(default = "_default_true")]
+    use_repo_info_cache: bool,
+
     #[serde(skip)]
     manifest_cache_size_warned: AtomicBool,
     #[serde(skip)]
@@ -84,6 +89,13 @@ pub struct AssetManager {
 
     #[serde(skip)]
     request_semaphore: Semaphore,
+
+    #[serde(skip)]
+    repo_cache: RwLock<Option<(Arc<RepoInfo>, VersionInfo)>>,
+}
+
+const fn _default_true() -> bool {
+    true
 }
 
 impl private::Sealed for AssetManager {}
@@ -100,6 +112,7 @@ struct AssetManagerSerializer {
     num_bytes_chunks: u64,
     compression_level: u8,
     max_concurrent_requests: u16,
+    use_repo_info_cache: bool,
 }
 
 impl From<AssetManagerSerializer> for AssetManager {
@@ -115,6 +128,7 @@ impl From<AssetManagerSerializer> for AssetManager {
             value.num_bytes_chunks,
             value.compression_level,
             value.max_concurrent_requests,
+            value.use_repo_info_cache,
         )
     }
 }
@@ -132,6 +146,7 @@ impl AssetManager {
         num_bytes_chunks: u64,
         compression_level: u8,
         max_concurrent_requests: u16,
+        use_repo_info_cache: bool,
     ) -> Self {
         Self {
             num_snapshot_nodes,
@@ -155,6 +170,8 @@ impl AssetManager {
             snapshot_cache_size_warned: AtomicBool::new(false),
             manifest_cache_size_warned: AtomicBool::new(false),
             request_semaphore: Semaphore::new(max_concurrent_requests as usize),
+            repo_cache: RwLock::new(None),
+            use_repo_info_cache,
         }
     }
 
@@ -176,6 +193,7 @@ impl AssetManager {
             0,
             compression_level,
             max_concurrent_requests,
+            false,
         )
     }
 
@@ -198,6 +216,7 @@ impl AssetManager {
             config.num_bytes_chunks(),
             compression_level,
             max_concurrent_requests,
+            true,
         )
     }
 
@@ -213,6 +232,7 @@ impl AssetManager {
             self.num_bytes_chunks,
             self.compression_level,
             self.max_concurrent_requests,
+            true,
         )
     }
 
@@ -465,7 +485,52 @@ impl AssetManager {
         &self,
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
         self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
-        fetch_repo_info(self.storage.as_ref(), &self.storage_settings).await
+
+        let repo_cache = if self.use_repo_info_cache {
+            // Cloning here so lock is immediately released
+            self.repo_cache.read().map_err(|_| RepositoryErrorKind::PoisonLock)?.clone()
+        } else {
+            None
+        };
+
+        match fetch_repo_info_from_path(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            REPO_INFO_FILE_PATH,
+            repo_cache.as_ref().map(|(_, info)| info),
+        )
+        .await
+        {
+            Ok(Some((repo_info, version_info))) => {
+                if self.use_repo_info_cache {
+                    let mut repo_cache = self
+                        .repo_cache
+                        .write()
+                        .map_err(|_| RepositoryErrorKind::PoisonLock)?;
+                    *repo_cache = Some((repo_info.clone(), version_info.clone()));
+                }
+
+                return Ok((repo_info, version_info));
+            }
+            Ok(None) => {
+                if self.use_repo_info_cache {
+                    #[allow(clippy::expect_used)]
+                    return Ok(repo_cache.expect(
+                        "Logic bug in fetch_repo_info, repo_cache should exist here",
+                    ));
+                } else {
+                    // It is very surprising to get to this branch:
+                    // - repo info cache is not being used
+                    // - but when conditionally retrieving the repo info
+                    //   without a version, which should fetch and return
+                    //   the repo info, we got back a result saying it
+                    //   didn't change!
+                    // This is very much panic or unreachable territory...
+                    unreachable!()
+                }
+            }
+            Err(e) => return Err(e),
+        }
     }
 
     pub fn fail_unless_spec_at_least(
@@ -488,22 +553,43 @@ impl AssetManager {
             .await
     }
 
+    pub async fn write_repo_info(
+        &self,
+        info: Arc<RepoInfo>,
+        version: &VersionInfo,
+        backup_path: Option<&str>,
+    ) -> RepositoryResult<VersionInfo> {
+        let new_version = write_repo_info(
+            info.clone(),
+            self.spec_version(),
+            version,
+            self.compression_level,
+            backup_path,
+            self.storage.as_ref(),
+            &self.storage_settings,
+            None,
+        )
+        .await?;
+
+        if self.use_repo_info_cache {
+            {
+                *self
+                    .repo_cache
+                    .write()
+                    .map_err(|_| RepositoryErrorKind::PoisonLock)? =
+                    Some((info, new_version.clone()));
+            }
+        }
+
+        Ok(new_version)
+    }
+
     #[instrument(skip(self, info))]
     pub async fn create_repo_info(
         &self,
         info: Arc<RepoInfo>,
     ) -> RepositoryResult<VersionInfo> {
-        write_repo_info(
-            info,
-            self.spec_version(),
-            &storage::VersionInfo::for_creation(),
-            self.compression_level,
-            None,
-            self.storage.as_ref(),
-            &self.storage_settings,
-            None,
-        )
-        .await
+        self.write_repo_info(info, &storage::VersionInfo::for_creation(), None).await
     }
 
     #[instrument(skip(self, retry_settings, update))]
@@ -1284,7 +1370,13 @@ pub async fn fetch_repo_info(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
 ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
-    fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH).await
+    fetch_repo_info_from_path(storage, storage_settings, REPO_INFO_FILE_PATH, None)
+        .await
+        .map(|repo| {
+            // Since we didn't give a previous version, there must be a result here
+            #[allow(clippy::expect_used)]
+            repo.expect("Logic bug, must have a repo_info here")
+        })
 }
 
 async fn fetch_repo_info_backup(
@@ -1296,29 +1388,37 @@ async fn fetch_repo_info_backup(
         storage,
         storage_settings,
         format!("{OVERWRITTEN_FILES_PATH}/{file_name}").as_str(),
+        None,
     )
     .await
+    .map(|repo| {
+        // Since we didn't give a previous version, there must be a result here
+        #[allow(clippy::expect_used)]
+        repo.expect("Logic bug, must have a repo_info here")
+    })
 }
 
 pub async fn fetch_repo_info_from_path(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     path: &str,
-) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
+    previous_version: Option<&VersionInfo>,
+) -> RepositoryResult<Option<(Arc<RepoInfo>, VersionInfo)>> {
     debug!("Downloading repo info");
-    match storage.get_object(storage_settings, path, None).await {
-        Ok((result, version)) => {
+    match storage.get_object_conditional(storage_settings, path, previous_version).await {
+        Ok(GetModifiedResult::Modified { data, new_version }) => {
             let span = Span::current();
             tokio::task::spawn_blocking(move || {
                 let _entered = span.entered();
                 let (spec_version, decompressor) =
-                    check_and_get_decompressor(result, FileTypeBin::RepoInfo)?;
+                    check_and_get_decompressor(data, FileTypeBin::RepoInfo)?;
                 deserialize_repo_info(spec_version, decompressor)
-                    .map(|ri| (Arc::new(ri), version))
+                    .map(|ri| Some((Arc::new(ri), new_version)))
                     .map_err(RepositoryError::from)
             })
             .await?
         }
+        Ok(GetModifiedResult::OnLatestVersion) => Ok(None),
         Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
             Err(RepositoryError::from(RepositoryErrorKind::RepositoryDoesntExist))
         }
@@ -1651,6 +1751,75 @@ mod test {
         assert!(res1.await?.is_ok());
         assert!(res2.await?.is_ok());
         assert_eq!(logging.fetch_operations().len(), 1);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_repo_info_caching_no_cache() -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let settings = storage::Settings::default();
+        let manager = AssetManager::new_no_cache(
+            backend.clone(),
+            settings.clone(),
+            SpecVersionBin::default(),
+            1,
+            100,
+        );
+        let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
+        let repo_info = Arc::new(RepoInfo::initial(
+            SpecVersionBin::current(),
+            (&initial).try_into()?,
+            100,
+        ));
+        manager.create_repo_info(repo_info.clone()).await?;
+
+        assert_eq!(manager.use_repo_info_cache, false);
+        assert_eq!(*manager.repo_cache.read().unwrap(), None);
+
+        let (fetched_repo_info, _) = manager.fetch_repo_info().await?;
+
+        assert_eq!(manager.use_repo_info_cache, false);
+        assert_eq!(*manager.repo_cache.read().unwrap(), None);
+
+        assert_eq!(repo_info.clone(), fetched_repo_info);
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_repo_info_caching_with_cache() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let settings = storage::Settings::default();
+        let manager = AssetManager::new_with_config(
+            backend.clone(),
+            settings.clone(),
+            SpecVersionBin::default(),
+            &CachingConfig::default(),
+            1,
+            100,
+        );
+        let initial = Snapshot::initial(SpecVersionBin::current()).unwrap();
+        let repo_info = Arc::new(RepoInfo::initial(
+            SpecVersionBin::current(),
+            (&initial).try_into()?,
+            100,
+        ));
+        let new_version = manager.create_repo_info(repo_info.clone()).await?;
+
+        let cached = Some((repo_info.clone(), new_version.clone()));
+
+        assert_eq!(manager.use_repo_info_cache, true);
+        assert_eq!(*manager.repo_cache.read().unwrap(), cached);
+
+        let (fetched_repo_info, version) = manager.fetch_repo_info().await?;
+
+        assert_eq!(manager.use_repo_info_cache, true);
+        assert_eq!(*manager.repo_cache.read().unwrap(), cached);
+
+        assert_eq!(repo_info.clone(), fetched_repo_info);
+        assert_eq!(new_version, version);
+
         Ok(())
     }
 }
