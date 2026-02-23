@@ -2492,6 +2492,12 @@ async fn do_flush(
     } else {
         let previous_log =
             flush_data.asset_manager.fetch_transaction_log(&old_snapshot.id()).await?;
+        if previous_log.has_moves() && commit_method == CommitMethod::Amend {
+            // need to check if new_tx_log has moves / this is a rearrange session
+            if !this_tx_log.has_moves() {
+                return Err(SessionErrorKind::RearrangeSessionOnly.into());
+            }
+        }
         // FIXME: this should execute in a non-blocking context
         TransactionLog::merge(&new_snapshot_id, [previous_log.as_ref(), &this_tx_log])
     };
