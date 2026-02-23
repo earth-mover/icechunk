@@ -4447,13 +4447,78 @@ mod tests {
         let err = result.unwrap_err();
         assert!(matches!(err.kind, SessionErrorKind::RearrangeSessionOnly));
 
-        // Rearrange session, amend on top of a move commit: should fail?
+        // Rearrange session, amend on top of a move commit: should be fine
         let mut session = repo.rearrange_session("main").await?;
         session
             .move_node("/dest".try_into().unwrap(), "/another_dest".try_into().unwrap())
             .await?;
         let result = session.amend("amend after move, only new moves", None, false).await;
         assert!(result.is_ok());
+        let snapshot_id = result.unwrap();
+
+        // Check if moved group still shows up properly after amending two rearrange sessions
+        let session =
+            repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
+        assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_ok());
+
+        // Add nested groups, try to move them
+        let mut session = repo.writable_session("main").await?;
+        session
+            .add_group("/another_dest/1".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session
+            .add_group(
+                "/another_dest/1/2".try_into().unwrap(),
+                Bytes::copy_from_slice(b""),
+            )
+            .await?;
+        session
+            .add_group(
+                "/another_dest/1/2/3".try_into().unwrap(),
+                Bytes::copy_from_slice(b""),
+            )
+            .await?;
+        session.commit("add nested groups", None).await?;
+
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node(
+                "/another_dest/1/2".try_into().unwrap(),
+                "/nested_move".try_into().unwrap(),
+            )
+            .await?;
+        session
+            .move_node(
+                "/another_dest".try_into().unwrap(),
+                "/new_dest".try_into().unwrap(),
+            )
+            .await?;
+        let snapshot_id = session.commit("move nested groups", None).await?;
+
+        // Check if moved nested groups still shows up properly after commit
+        let session =
+            repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
+        assert!(session.get_group(&"/new_dest".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/new_dest/1".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/nested_move".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/nested_move/3".try_into().unwrap()).await.is_ok());
+
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node(
+                "/nested_move".try_into().unwrap(),
+                "/moved_again".try_into().unwrap(),
+            )
+            .await?;
+        let snapshot_id = session.amend("amend nested groups move ", None, false).await?;
+
+        // Check if moved nested groups still shows up properly after amend
+        let session =
+            repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
+        assert!(session.get_group(&"/new_dest".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/new_dest/1".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/moved_again".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/moved_again/3".try_into().unwrap()).await.is_ok());
 
         Ok(())
     }
