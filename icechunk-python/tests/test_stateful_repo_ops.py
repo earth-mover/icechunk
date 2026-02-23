@@ -962,6 +962,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # the remaining fields (snapshots, branches, tags, ops_log) are checked by the other invariants
 
     def check_file_invariants(self) -> None:
+        assert self.storage is not None
         paths = set(path_and_bytes[0] for path_and_bytes in self.storage.list_objects())
 
         nsnapshots = len([p for p in paths if p.startswith("snapshots/")])
