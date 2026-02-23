@@ -256,11 +256,13 @@ impl Repository {
 
             if spec_version >= SpecVersionBin::V2dot0 {
                 let snap_info = new_snapshot.as_ref().try_into()?;
+                let config_to_store =
+                    if has_overriden_config { Some(config_ref) } else { None };
                 let repo_info = Arc::new(RepoInfo::initial(
                     spec_version,
                     snap_info,
                     num_updates,
-                    Some(config_ref),
+                    config_to_store,
                 ));
                 let _ = asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
             } else {
@@ -1845,14 +1847,11 @@ mod tests {
         let repo =
             Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
 
-        // config is embedded in repo info from creation
+        // default config is not stored in repo info
         assert_eq!(repo.config(), &RepositoryConfig::default());
-        assert_eq!(
-            Repository::fetch_config(Arc::clone(&storage)).await?.unwrap().0,
-            RepositoryConfig::default()
-        );
+        assert!(Repository::fetch_config(Arc::clone(&storage)).await?.is_none());
 
-        // reopening reads config from repo info
+        // reopening with default config still works
         let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
         assert_eq!(repo.config(), &RepositoryConfig::default());
 

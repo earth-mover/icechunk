@@ -462,7 +462,8 @@ impl RepoInfo {
     }
 
     /// Read the repository configuration from the repo info.
-    /// Returns `None` for repos created before config was embedded.
+    /// Returns `None` for repos created before config was embedded,
+    /// or for repos using the default configuration.
     pub fn config(&self) -> IcechunkResult<Option<RepositoryConfig>> {
         match self.root()?.config() {
             None => Ok(None),
