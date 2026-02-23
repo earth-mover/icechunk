@@ -92,14 +92,15 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
         )
         == 21
     )
-    # 22 commits total
+    # V2 repos have a transaction log for the initial snapshot
+    expected_tx_logs = 23 if any_spec_version != 1 else 22
     assert (
         len(
             client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/transactions")[
                 "Contents"
             ]
         )
-        == 22
+        == expected_tx_logs
     )
 
     if use_async:
@@ -194,13 +195,15 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
         )
         == 1
     )
+    # V2 repos keep the initial snapshot's transaction log
+    expected_remaining_tx_logs = 2 if any_spec_version != 1 else 1
     assert (
         len(
             client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/transactions")[
                 "Contents"
             ]
         )
-        == 1
+        == expected_remaining_tx_logs
     )
 
     # we can still read the array
