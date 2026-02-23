@@ -744,29 +744,40 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.repo.delete_tag(tag)
             self.model.delete_tag(tag)
 
+    def _draw_older_than(self, data: st.DataObject) -> datetime.datetime:
+        """Draw an `older_than` timestamp biased toward actually expiring commits.
+
+        We draw from three buckets:
+        - future: max(commit_times) + 1 s  → all commits are eligible
+        - boundary: an exact commit time   → tests the strict-< boundary
+        - past: year-2000 sentinel         → nothing should be expired
+        """
+        return data.draw(
+            st.one_of(
+                st.just(max(self.model.commit_times) + datetime.timedelta(seconds=1)),
+                st.sampled_from(self.model.commit_times),
+                st.just(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
+            )
+        )
+
     # TODO: v1 has bugs in expire_snapshots, only test for v2
     # https://github.com/earth-mover/icechunk/issues/1520
     # https://github.com/earth-mover/icechunk/issues/1534
-    @precondition(lambda self: bool(self.model.commits) and self.repo.spec_version == 2)
+    @precondition(lambda self: bool(self.model.commits) and self.repo.spec_version >= 2)
     @rule(
         data=st.data(),
-        delta=st.timedeltas(
-            min_value=datetime.timedelta(days=-1), max_value=datetime.timedelta(days=1)
-        ),
-        delete_expired_branches=st.booleans(),
-        delete_expired_tags=st.booleans(),
+        delete_expired_branches=st.sampled_from([True, True, True, False]),
+        delete_expired_tags=st.sampled_from([True, True, True, False]),
     )
     def expire_snapshots(
         self,
         data: st.DataObject,
-        delta: datetime.timedelta,
         delete_expired_branches: bool,
         delete_expired_tags: bool,
     ) -> None:
-        commit_time = data.draw(st.sampled_from(self.model.commit_times))
-        older_than = commit_time + delta
+        older_than = self._draw_older_than(data)
         note(
-            f"Expiring snapshots {older_than=!r}, ({commit_time=!r}, {delta=!r}), {delete_expired_branches=!r}, {delete_expired_tags=!r}"
+            f"Expiring snapshots {older_than=!r}, {delete_expired_branches=!r}, {delete_expired_tags=!r}"
         )
 
         # Track branches and tags before expiration
@@ -799,6 +810,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert self.initial_snapshot.id not in actual
         assert actual == expected.expired_snapshots, (actual, expected)
 
+        event(f"commits expired: {len(actual)}")
+        event(f"tags expired: {len(actual_deleted_tags)}")
+        event(f"branches expired: {len(actual_deleted_branches)}")
+
         # Check that expired snapshots are actually removed from ancestry
         remaining_snapshot_ids = set()
         for branch in branches_after:
@@ -821,19 +836,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.maybe_checkout_branch(branch)
 
     @precondition(lambda self: bool(self.model.commit_times))
-    @rule(
-        data=st.data(),
-        # we delete based on snapshot created_at time, not flushed_at time
-        # so for delta we just past an integer number of seconds to handle the
-        # (small) difference in tests
-        delta=st.integers(min_value=-86400, max_value=86400).filter(lambda x: x != 0),
-    )
-    def garbage_collect(self, data: st.DataObject, delta: int) -> None:
-        commit_time = data.draw(st.sampled_from(self.model.commit_times))
-        older_than = commit_time + datetime.timedelta(seconds=delta)
-        note(
-            f"running garbage_collect for {older_than=!r}, ({commit_time=!r}, {delta=!r})"
-        )
+    @rule(data=st.data())
+    def garbage_collect(self, data: st.DataObject) -> None:
+        older_than = self._draw_older_than(data)
+        note(f"running garbage_collect for {older_than=!r}")
         summary = self.repo.garbage_collect(older_than)
         note(f"actual GC result {summary=!r}")
         expected = self.model.garbage_collect(older_than)
@@ -841,6 +847,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             summary.snapshots_deleted,
             expected,
         )
+
+        event(f"snapshots garbage collected: {len(expected)}")
 
         # deleted a checked out snapshot :?
         for snapshot in expected:
