@@ -224,7 +224,9 @@ impl Repository {
             Some(ref config) => config != &RepositoryConfig::default(),
             None => false,
         };
-        // Merge the given config with the defaults, including backend storage defaults
+        // Merge two layers of config (In order of preference):
+        //   - User-provided config (passed to open())
+        //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
         let default_config =
             RepositoryConfig::default_with_storage(storage.default_settings().await?);
         let config = config.map(|c| default_config.merge(c)).unwrap_or(default_config);
@@ -380,7 +382,8 @@ impl Repository {
         }?;
         trace!(%spec_version, "Repository version found");
 
-        let (default_config, config_version) = if spec_version >= SpecVersionBin::V2dot0 {
+        let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2dot0
+        {
             // For V2+ repos, read config from the repo info object.
             // Only fall back to config.yaml for old V2 repos that predate embedded config.
             let (repo_info, _) = temp_am.fetch_repo_info().await?;
@@ -408,14 +411,19 @@ impl Repository {
             }
         };
 
-        // Build the final config by merging three layers (highest precedence last):
-        //   1. Backend storage defaults (e.g. S3 retry/concurrency settings)
-        //   2. Persisted repo config (saved alongside the data, if any)
-        //   3. User-provided config (passed to open())
-        let base =
-            RepositoryConfig::default_with_storage(storage.default_settings().await?)
-                .merge(default_config.unwrap_or_default());
-        let final_config = config.map(|c| base.merge(c)).unwrap_or(base);
+        // Merge three layers of config (In order of preference):
+        //   - User-provided config (passed to open())
+        //   - Persisted repo config (saved alongside the data, if any)
+        //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
+        let default_config =
+            RepositoryConfig::default_with_storage(storage.default_settings().await?);
+        let repo_config_with_defaults = match persisted_config {
+            Some(c) => default_config.merge(c),
+            None => default_config,
+        };
+        let final_config = config
+            .map(|c| repo_config_with_defaults.merge(c))
+            .unwrap_or(repo_config_with_defaults);
 
         let storage_settings = final_config
             .storage()
@@ -562,19 +570,17 @@ impl Repository {
         config: Option<RepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<Credentials>>>,
     ) -> RepositoryResult<Self> {
-        // Build the final config by merging three layers (highest precedence last):
-        //   1. Backend storage defaults (e.g. S3 retry/concurrency settings)
-        //   2. Current repo config
-        //   3. User-provided config
-
-        // merge 1 and 2
-        let base = RepositoryConfig::default_with_storage(
+        // Merge three layers of config (In order of preference):
+        //   - User-provided config (passed to open())
+        //   - Persisted repo config (saved alongside the data, if any)
+        //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
+        let repo_config_with_defaults = RepositoryConfig::default_with_storage(
             self.storage.default_settings().await?,
         )
         .merge(self.config().clone());
-
-        // merge (1+2) with 3
-        let config = config.map(|c| base.merge(c)).unwrap_or(base);
+        let config = config
+            .map(|c| repo_config_with_defaults.merge(c))
+            .unwrap_or(repo_config_with_defaults);
         let storage_settings = config
             .storage()
             .cloned()
