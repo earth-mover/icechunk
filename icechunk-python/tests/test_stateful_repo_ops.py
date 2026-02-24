@@ -792,13 +792,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.model.delete_tag(tag)
 
     def _draw_older_than(self, data: st.DataObject) -> datetime.datetime:
-        """Draw an `older_than` timestamp biased toward actually expiring commits.
-
-        We draw from three buckets:
-        - future: max(commit_times) + 1 s  → all commits are eligible
-        - boundary: an exact commit time   → tests the strict-< boundary
-        - past: year-2000 sentinel         → nothing should be expired
-        """
         return data.draw(
             st.one_of(
                 st.just(max(self.model.commit_times) + datetime.timedelta(seconds=1)),
