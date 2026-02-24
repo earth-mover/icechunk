@@ -353,6 +353,10 @@ impl TransactionLog {
         self.len() == 0
     }
 
+    pub fn has_moves(&self) -> bool {
+        self.root().moved_nodes().map(|v| !v.is_empty()).unwrap_or(false)
+    }
+
     pub fn merge<'a, T: IntoIterator<Item = &'a TransactionLog>>(
         id: &SnapshotId,
         iter: T,
