@@ -1003,7 +1003,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         nsnapshots = len([p for p in paths if p.startswith("snapshots/")])
         ntransactions = len([p for p in paths if p.startswith("transactions/")])
-        if Version(self.ic.__version__).major >= 2:
+        if Version(self.ic.__version__).major >= 2 and self.model.spec_version >= 2:
             assert nsnapshots == ntransactions
         else:
             assert nsnapshots - 1 == ntransactions
