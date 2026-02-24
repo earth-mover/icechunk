@@ -51,8 +51,8 @@ async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + S
         "testbucket".to_string(),
         Some(prefix.to_string()),
         Some(S3Credentials::Static(S3StaticCredentials {
-            access_key_id: "minio123".into(),
-            secret_access_key: "minio123".into(),
+            access_key_id: "basic".into(),
+            secret_access_key: "basicuser".into(),
             session_token: None,
             expires_after: None,
         })),
@@ -71,8 +71,8 @@ async fn mk_s3_object_store_storage(
             "testbucket".to_string(),
             Some(prefix.to_string()),
             Some(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: "minio123".into(),
-                secret_access_key: "minio123".into(),
+                access_key_id: "basic".into(),
+                secret_access_key: "basicuser".into(),
                 session_token: None,
                 expires_after: None,
             })),

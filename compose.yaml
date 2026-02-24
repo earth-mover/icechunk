@@ -6,6 +6,12 @@ services:
   rustfs:
     container_name: icechunk_rustfs
     image: rustfs/rustfs:1.0.0-alpha.83
+    hostname: rustfs
+    healthcheck:
+      #test: nc 127.0.0.1 9000 -z
+      test: curl 127.0.0.1:9000/health
+      interval: 1s
+      retries: 30
     entrypoint: |
         /bin/sh -c '
         for bucket in testbucket
@@ -21,6 +27,54 @@ services:
     ports:
       - '9000:9000'
       - '9001:9001'
+
+  rustfs_init:
+    container_name: icechunk_rustfs_init
+    image: rustfs/rc:v0.1.3
+    restart: "no"
+    depends_on:
+      rustfs:
+        condition: service_healthy
+        restart: true
+    entrypoint:
+      - /bin/sh
+      - '-c'
+      - |
+        set -ex
+
+        rc alias set local http://rustfs:9000 minio123 minio123
+        rc admin user add local basic basicuser
+
+        apk add --no-cache aws-cli
+        export AWS_ACCESS_KEY_ID=minio123
+        export AWS_SECRET_ACCESS_KEY=minio123
+        echo '{
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowGetObjectOnly",
+              "Effect": "Allow",
+              "Principal": { "AWS": ["basic"] },
+              "Action": [
+                "s3:DeleteObject",
+                "s3:GetObject",
+                "s3:PutObject"
+              ],
+              "Resource": [
+                "arn:aws:s3:::testbucket",
+                "arn:aws:s3:::testbucket/*"
+              ]
+            }
+          ]
+        }' >> policy.json
+        cat policy.json
+
+        aws --endpoint-url http://rustfs:9000 s3api put-bucket-policy \
+          --bucket testbucket \
+          --policy file://policy.json
+
+        aws --endpoint-url http://rustfs:9000 s3api get-bucket-policy \
+          --bucket testbucket
 
   toxiproxy:
     container_name: icechunk_toxiproxy
