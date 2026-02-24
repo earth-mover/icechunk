@@ -343,9 +343,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             note(f"resizing array '{array_path}' from {arr_model.shape} to {new_shape}")
             arr_model.resize(new_shape)
             arr_store.resize(new_shape)
-            num_chunks = tuple(
-                (new_shape[i] + chunks[i] - 1) // chunks[i] for i in range(len(chunks))
-            )
+            num_chunks = arr_model.cdata_shape
 
         note(f"shifting array '{array_path}' by {offset}")
         element_shift = self.store.session.shift_array(f"/{array_path}", offset)
