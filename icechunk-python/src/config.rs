@@ -1968,13 +1968,14 @@ impl PyStorage {
         let prefix = prefix.unwrap_or_default();
         let settings: Option<storage::Settings> = settings.map(|s| s.into());
         pyo3_async_runtimes::tokio::get_runtime().block_on(async {
+            let defaults = self
+                .0
+                .default_settings()
+                .await
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
             let settings = match settings {
-                Some(s) => s,
-                None => self
-                    .0
-                    .default_settings()
-                    .await
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                Some(s) => s.merge(defaults),
+                None => defaults,
             };
             let stream = self
                 .0

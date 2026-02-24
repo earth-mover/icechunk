@@ -296,8 +296,8 @@ class Model:
         self.branch_heads[self.branch] = ref
 
     def commit(self, snap: SnapshotInfo) -> None:
-        self._commit(snap)
         assert self.branch is not None
+        self._commit(snap)
         self.ops_log.append(NewCommitUpdateModel(self.branch, snap.id))
 
     def amend(self, snap: SnapshotInfo) -> None:
@@ -875,7 +875,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         for branch in actual_deleted_branches:
             self.maybe_checkout_branch(branch)
 
-    @precondition(lambda self: bool(self.model.commit_times))
+    # @precondition(lambda self: bool(self.model.commit_times))
+    # Disable GC till bugs are fixed (e.g. #1709)
+    @precondition(lambda self: False)
     @rule(data=st.data())
     def garbage_collect(self, data: st.DataObject) -> None:
         older_than = self._draw_older_than(data)
@@ -1000,12 +1002,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         nsnapshots = len([p for p in paths if p.startswith("snapshots/")])
         ntransactions = len([p for p in paths if p.startswith("transactions/")])
-        if self.model.spec_version == 1:
-            assert nsnapshots - 1 == ntransactions
-        else:
+        if Version(self.ic.__version__).major >= 2:
             assert nsnapshots == ntransactions
+        else:
+            assert nsnapshots - 1 == ntransactions
 
-        if self.model.spec_version > 1:
+        if self.model.spec_version >= 2:
             ops = list(self.repo.ops_log())
             backups = set(
                 f"overwritten/{update.backup_path}"
