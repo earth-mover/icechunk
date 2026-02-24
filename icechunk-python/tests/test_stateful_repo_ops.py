@@ -933,22 +933,27 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         repo_branches = {k: self.repo.lookup_branch(k) for k in self.repo.list_branches()}
         assert self.model.branch_heads == repo_branches
 
+    def _assert_ancestry_invariants(self, ancestry) -> None:
+        ancestry_set = set([snap.id for snap in ancestry])
+        # snapshot timestamps are monotonically decreasing in ancestry
+        assert all(a.written_at > b.written_at for a, b in itertools.pairwise(ancestry))
+        # ancestry must be unique
+        assert len(ancestry_set) == len(ancestry)
+        # the initial snapshot is in every possible branch
+        # this is a python-only invariant
+        assert ancestry[-1] == self.initial_snapshot
+        n = len(ancestry)
+        bucket = f"{n // 10 * 10}-{n // 10 * 10 + 9}"
+        event(f"ancestry length: {bucket}")
+
     def check_ancestry(self) -> None:
         for branch in self.model.branch_heads:
             ancestry = list(self.repo.ancestry(branch=branch))
-            ancestry_set = set([snap.id for snap in ancestry])
-            # snapshot timestamps are monotonically decreasing in ancestry
-            assert all(
-                a.written_at > b.written_at for a, b in itertools.pairwise(ancestry)
-            )
-            # ancestry must be unique
-            assert len(ancestry_set) == len(ancestry)
-            # the initial snapshot is in every possible branch
-            # this is a python-only invariant
-            assert ancestry[-1] == self.initial_snapshot
-            n = len(ancestry)
-            bucket = f"{n // 10 * 10}-{n // 10 * 10 + 9}"
-            event(f"ancestry length: {bucket}")
+            self._assert_ancestry_invariants(ancestry)
+
+        for tag in self.model.tags:
+            ancestry = list(self.repo.ancestry(tag=tag))
+            self._assert_ancestry_invariants(ancestry)
 
     def check_repo_info(self) -> None:
         ver = self.model.spec_version
