@@ -408,17 +408,14 @@ impl Repository {
             }
         };
 
-        let storage_defaults =
-            RepositoryConfig::default_with_storage(storage.default_settings().await?);
-        let final_config = match default_config {
-            Some(default_config) => {
-                let base = storage_defaults.merge(default_config);
-                config.map(|c| base.merge(c)).unwrap_or(base)
-            }
-            None => {
-                config.map(|c| storage_defaults.merge(c)).unwrap_or(storage_defaults)
-            }
-        };
+        // Build the final config by merging three layers (highest precedence last):
+        //   1. Backend storage defaults (e.g. S3 retry/concurrency settings)
+        //   2. Persisted repo config (saved alongside the data, if any)
+        //   3. User-provided config (passed to open())
+        let base =
+            RepositoryConfig::default_with_storage(storage.default_settings().await?)
+                .merge(default_config.unwrap_or_default());
+        let final_config = config.map(|c| base.merge(c)).unwrap_or(base);
 
         let storage_settings = final_config
             .storage()
@@ -565,11 +562,19 @@ impl Repository {
         config: Option<RepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<Credentials>>>,
     ) -> RepositoryResult<Self> {
-        // Merge the given config with the current config, including backend storage defaults
-        let storage_defaults =
-            RepositoryConfig::default_with_storage(self.storage.default_settings().await?);
-        let current_config = storage_defaults.merge(self.config().clone());
-        let config = config.map(|c| current_config.merge(c)).unwrap_or(current_config);
+        // Build the final config by merging three layers (highest precedence last):
+        //   1. Backend storage defaults (e.g. S3 retry/concurrency settings)
+        //   2. Current repo config
+        //   3. User-provided config
+
+        // merge 1 and 2
+        let base = RepositoryConfig::default_with_storage(
+            self.storage.default_settings().await?,
+        )
+        .merge(self.config().clone());
+
+        // merge (1+2) with 3
+        let config = config.map(|c| base.merge(c)).unwrap_or(base);
         let storage_settings = config
             .storage()
             .cloned()
