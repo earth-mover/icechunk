@@ -2340,6 +2340,28 @@ async fn do_flush(
     let old_snapshot =
         flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await?;
 
+    let previous_tx_log = if commit_method == CommitMethod::NewCommit {
+        // We won't be merging with a previous tx log, so no need to retrieve it
+        None
+    } else {
+        let previous_log =
+            flush_data.asset_manager.fetch_transaction_log(&old_snapshot.id()).await?;
+
+        // need to check if previous tx log has moves / this is a rearrange session
+        if previous_log.has_moves() && commit_method == CommitMethod::Amend {
+            match flush_data.change_set {
+                ChangeSet::Edit(_) => {
+                    return Err(SessionErrorKind::RearrangeSessionOnly.into());
+                }
+                ChangeSet::Rearrange(_) => {
+                    // Fine for now
+                }
+            }
+        }
+
+        Some(previous_log)
+    };
+
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
     for node in old_snapshot.iter().filter_ok(|node| node.node_type() == NodeType::Array)
@@ -2490,10 +2512,18 @@ async fn do_flush(
     let new_tx_log = if commit_method == CommitMethod::NewCommit {
         this_tx_log
     } else {
-        let previous_log =
-            flush_data.asset_manager.fetch_transaction_log(&old_snapshot.id()).await?;
-        // FIXME: this should execute in a non-blocking context
-        TransactionLog::merge(&new_snapshot_id, [previous_log.as_ref(), &this_tx_log])
+        // Previous tx log was fetched in the beginning of do_flush,
+        // so it will be available here. Just to be sure, still use
+        // .map and .unwrap_or_else to avoid unwrapping.
+        previous_tx_log
+            .map(|previous_log| {
+                // FIXME: this should execute in a non-blocking context
+                TransactionLog::merge(
+                    &new_snapshot_id,
+                    [previous_log.as_ref(), &this_tx_log],
+                )
+            })
+            .unwrap_or_else(|| this_tx_log)
     };
 
     flush_data
@@ -4385,6 +4415,110 @@ mod tests {
                 RepoInitializedUpdate,
             ]
         );
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_session_amending_with_move() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session
+            .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session.commit("setup", None).await?;
+
+        // Rearrange session, only has a move: should be fine
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/source".try_into().unwrap(), "/dest".try_into().unwrap())
+            .await?;
+        session.commit("move commit", None).await?;
+
+        // Amend on top of a move commit: should fail
+        let mut session = repo.writable_session("main").await?;
+        session
+            .add_group("/fail".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        let result = session.amend("amend after move", None, false).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err.kind, SessionErrorKind::RearrangeSessionOnly));
+
+        // Rearrange session, amend on top of a move commit: should be fine
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/dest".try_into().unwrap(), "/another_dest".try_into().unwrap())
+            .await?;
+        let result = session.amend("amend after move, only new moves", None, false).await;
+        assert!(result.is_ok());
+        let snapshot_id = result.unwrap();
+
+        // Check if moved group still shows up properly after amending two rearrange sessions
+        let session =
+            repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
+        assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_ok());
+
+        // Add nested groups, try to move them
+        let mut session = repo.writable_session("main").await?;
+        session
+            .add_group("/another_dest/1".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session
+            .add_group(
+                "/another_dest/1/2".try_into().unwrap(),
+                Bytes::copy_from_slice(b""),
+            )
+            .await?;
+        session
+            .add_group(
+                "/another_dest/1/2/3".try_into().unwrap(),
+                Bytes::copy_from_slice(b""),
+            )
+            .await?;
+        session.commit("add nested groups", None).await?;
+
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node(
+                "/another_dest/1/2".try_into().unwrap(),
+                "/nested_move".try_into().unwrap(),
+            )
+            .await?;
+        session
+            .move_node(
+                "/another_dest".try_into().unwrap(),
+                "/new_dest".try_into().unwrap(),
+            )
+            .await?;
+        let snapshot_id = session.commit("move nested groups", None).await?;
+
+        // Check if moved nested groups still shows up properly after commit
+        let session =
+            repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
+        assert!(session.get_group(&"/new_dest".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/new_dest/1".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/nested_move".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/nested_move/3".try_into().unwrap()).await.is_ok());
+
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node(
+                "/nested_move".try_into().unwrap(),
+                "/moved_again".try_into().unwrap(),
+            )
+            .await?;
+        let snapshot_id = session.amend("amend nested groups move ", None, false).await?;
+
+        // Check if moved nested groups still shows up properly after amend
+        let session =
+            repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
+        assert!(session.get_group(&"/new_dest".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/new_dest/1".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/moved_again".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/moved_again/3".try_into().unwrap()).await.is_ok());
 
         Ok(())
     }

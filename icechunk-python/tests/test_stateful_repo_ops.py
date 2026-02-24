@@ -4,6 +4,7 @@ import datetime
 import itertools
 import json
 import operator
+import sys
 import textwrap
 from collections.abc import Iterator
 from dataclasses import dataclass, fields
@@ -12,7 +13,9 @@ from typing import Any, Literal, Self, cast
 
 import numpy as np
 import pytest
+from packaging.version import Version
 
+import icechunk
 import icechunk as ic
 from zarr.core.buffer import Buffer, default_buffer_prototype
 
@@ -43,7 +46,6 @@ from icechunk import (
     RepositoryConfig,
     SnapshotInfo,
     Storage,
-    in_memory_storage,
 )
 from icechunk.testing.strategies import repository_configs
 from zarr.testing.stateful import SyncStoreWrapper
@@ -55,6 +57,10 @@ simple_attrs = st.dictionaries(
     st.integers(min_value=-10_000, max_value=10_000),
     max_size=5,
 )
+
+# Branches/tags are stored as files at ``refs/<name>``.  On case-insensitive
+# file systems (macOS APFS default), 'T' and 't' collide.
+ref_name_text = simple_text.map(lambda x: x.lower() if sys.platform == "darwin" else x)
 
 DEFAULT_BRANCH = "main"
 INITIAL_SNAPSHOT = "1CECHNKREP0F1RSTCMT0"
@@ -465,30 +471,17 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     tags = Bundle("tags")
     branches = Bundle("branches")
 
-    def __init__(self) -> None:
+    def __init__(self, actor: Any = None, ic_module: Any = None) -> None:
         super().__init__()
 
         note("----------")
         self.model = Model()
         self.storage: Storage | None = None
+        self.actor = actor or Repository
+        self.ic = ic_module or icechunk
 
-    @initialize(
-        array_meta=v3_array_metadata,
-        config=repository_configs(),
-        target=branches,
-        spec_version=st.sampled_from([1, 2]),
-    )
-    def initialize(
-        self, array_meta: Buffer, config: RepositoryConfig, spec_version: Literal[1, 2]
-    ) -> str:
-        self.storage = in_memory_storage()
-        self.model.spec_version = spec_version
-
-        self.repo = Repository.create(
-            self.storage,
-            spec_version=spec_version,
-            config=config,
-        )
+    def _initialize_model_and_data(self, data: st.DataObject) -> None:
+        """Set up model state and initial data after repo is created/opened."""
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         snap = next(iter(self.repo.ancestry(branch=DEFAULT_BRANCH)))
@@ -501,8 +494,30 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # TODO: always setting array metadata, since we cannot overwrite an existing group's zarr.json
         #       with an array's zarr.json
         # TODO: consider adding a deeper understanding of the zarr model rather than just setting docs?
-        self.set_doc(path="zarr.json", value=array_meta)
+        self.set_doc(path="zarr.json", value=data.draw(v3_array_metadata))
 
+    def _make_storage(self) -> Storage:
+        return self.ic.in_memory_storage()  # type: ignore[no-any-return]
+
+    @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
+    def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
+        self.storage = self._make_storage()
+        config = data.draw(repository_configs(ic_module=self.ic))
+        self.model.spec_version = spec_version
+
+        if Version(self.ic.__version__).major >= 2:
+            self.repo = self.actor.create(
+                self.storage,
+                spec_version=spec_version,
+                config=config,
+            )
+        else:
+            self.repo = self.actor.create(
+                self.storage,
+                config=config,
+            )
+
+        self._initialize_model_and_data(data)
         return DEFAULT_BRANCH
 
     def new_store(self) -> None:
@@ -548,7 +563,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model.set_metadata(meta)
 
     @rule()
-    @precondition(lambda self: self.repo.spec_version == 1)
+    @precondition(lambda self: self.model.spec_version == 1)
     def upgrade_spec_version(self) -> None:
         # don't test simple cases of catching error upgradging a v2 spec
         # that should be covered in unit tests
@@ -559,7 +574,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     @rule(data=st.data())
     def reopen_repository(self, data: st.DataObject) -> None:
-        config = data.draw(repository_configs())
+        config = data.draw(repository_configs(ic_module=self.ic))
         self._reopen_repository(config)
 
     def _reopen_repository(self, config: RepositoryConfig | None = None) -> None:
@@ -568,8 +583,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         This discards any uncommitted changes.
         """
         assert self.storage is not None, "storage must be initialized"
-        self.repo = Repository.open(self.storage, config=config)
-        note(f"Reopened repository (spec_version={self.repo.spec_version})")
+        self.repo = self.actor.open(self.storage, config=config)
+        note(f"Reopened repository (spec_version={self.model.spec_version})")
 
         # Reopening discards uncommitted changes - reset model to last committed state
         branch = (
@@ -598,7 +613,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # https://github.com/earth-mover/icechunk/issues/1532
     @precondition(
         lambda self: (self.model.changes_made)
-        and (self.repo.spec_version >= 2)
+        and (self.model.spec_version >= 2)
         and len(self.model.commits) > 1
     )
     def amend(self, message: str) -> str:
@@ -661,7 +676,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 note(f"Expecting error when checking out branch {ref!r}")
                 self.repo.writable_session(ref)
 
-    @rule(name=simple_text, commit=commits, target=branches)
+    @rule(name=ref_name_text, commit=commits, target=branches)
     def create_branch(self, name: str, commit: str) -> str:
         note(f"Creating branch {name!r} for commit {commit!r}")
 
@@ -678,7 +693,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         return name
 
     @precondition(lambda self: self.model.has_commits)
-    @rule(name=simple_text, commit_id=commits, target=tags)
+    @rule(name=ref_name_text, commit_id=commits, target=tags)
     def create_tag(self, name: str, commit_id: str) -> str:
         note(f"Creating tag {name!r} for commit {commit_id!r}")
         # TODO(#1709): remove once GC orphan reparenting bug is fixed.
@@ -795,7 +810,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # TODO: v1 has bugs in expire_snapshots, only test for v2
     # https://github.com/earth-mover/icechunk/issues/1520
     # https://github.com/earth-mover/icechunk/issues/1534
-    @precondition(lambda self: bool(self.model.commits) and self.repo.spec_version >= 2)
+    @precondition(lambda self: bool(self.model.commits) and self.model.spec_version >= 2)
     @rule(
         data=st.data(),
         delete_expired_branches=st.sampled_from([True, True, True, False]),
@@ -952,7 +967,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert len(ancestry_set) == len(ancestry)
         # the initial snapshot is in every possible branch
         # this is a python-only invariant
-        assert ancestry[-1] == self.initial_snapshot
+        # Compare by ID: cross-version tests may have ancestry populated
+        # by SnapshotInfos from different icechunk versions,
+        # so full object equality can fail.
+        assert ancestry[-1].id == self.initial_snapshot.id
         n = len(ancestry)
         bucket = f"{n // 10 * 10}-{n // 10 * 10 + 9}"
         event(f"ancestry length: {bucket}")
