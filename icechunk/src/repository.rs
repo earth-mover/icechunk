@@ -1855,7 +1855,10 @@ fn raise_if_invalid_snapshot_id_v2(
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use futures::TryStreamExt;
-    use std::{collections::HashMap, error::Error, iter::zip, path::PathBuf, sync::Arc};
+    use std::{
+        collections::HashMap, error::Error, iter::zip, num::NonZeroU16, path::PathBuf,
+        sync::Arc,
+    };
 
     use bytes::Bytes;
     use icechunk_macros::tokio_test;
@@ -1913,12 +1916,14 @@ mod tests {
             Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
 
         // default config is not stored in repo info
-        assert_eq!(repo.config(), &RepositoryConfig::default());
+        let expected_default =
+            RepositoryConfig::default_with_storage(storage.default_settings().await?);
+        assert_eq!(repo.config(), &expected_default);
         assert!(Repository::fetch_config(Arc::clone(&storage)).await?.is_none());
 
         // reopening with default config still works
         let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
-        assert_eq!(repo.config(), &RepositoryConfig::default());
+        assert_eq!(repo.config(), &expected_default);
 
         // reload the repo changing config via client override
         let repo = Repository::open(
@@ -2531,7 +2536,13 @@ mod tests {
         let storage2: Arc<dyn Storage + Send + Sync> = logging2.clone();
         let config = RepositoryConfig {
             manifest: Some(ManifestConfig::empty()),
-            storage: Some(Default::default()),
+            storage: Some(storage::Settings {
+                concurrency: Some(storage::ConcurrencySettings {
+                    max_concurrent_requests_for_object: NonZeroU16::new(1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             ..RepositoryConfig::default()
         };
         let read_repo = Repository::open(Some(config), storage2, HashMap::new()).await?;
@@ -3386,7 +3397,13 @@ mod tests {
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
-            storage: Some(Default::default()),
+            storage: Some(storage::Settings {
+                concurrency: Some(storage::ConcurrencySettings {
+                    max_concurrent_requests_for_object: NonZeroU16::new(1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             ..RepositoryConfig::default()
         };
         let repository = Repository::open(Some(config), storage, HashMap::new()).await?;
