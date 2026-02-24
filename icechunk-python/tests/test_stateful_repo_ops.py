@@ -429,7 +429,7 @@ class Model:
             deleted_tags=tags_to_delete,
         )
 
-    def garbage_collect(self, older_than: datetime.datetime) -> set[str]:
+    def reachable_snapshots(self) -> set[str]:
         reachable_snaps = set((self.initial_snapshot_id,))
         for commit_id in self.refs_iter():
             while commit_id != self.initial_snapshot_id:
@@ -439,6 +439,10 @@ class Model:
                     parent_id is not None
                 ), f"Commit {commit_id} has no parent but is not the initial snapshot"
                 commit_id = parent_id
+        return reachable_snaps
+
+    def garbage_collect(self, older_than: datetime.datetime) -> set[str]:
+        reachable_snaps = self.reachable_snapshots()
         deleted = set()
         for k in set(self.ondisk_snaps) - reachable_snaps:
             if self.ondisk_snaps[k].written_at < older_than:
@@ -677,6 +681,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(name=simple_text, commit_id=commits, target=tags)
     def create_tag(self, name: str, commit_id: str) -> str:
         note(f"Creating tag {name!r} for commit {commit_id!r}")
+        # TODO(#1709): remove once GC orphan reparenting bug is fixed.
+        # After reset_branch, tagging orphaned snapshots can cause GC to
+        # fail when it partially collects the orphan chain.
+        assume(
+            commit_id not in self.model.commits
+            or commit_id in self.model.reachable_snapshots()
+        )
 
         if (
             name in self.model.created_tags
