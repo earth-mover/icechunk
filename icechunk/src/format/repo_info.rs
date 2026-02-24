@@ -7,6 +7,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeSet, HashMap},
 };
+use tracing::trace;
 
 use crate::{config::RepositoryConfig, format::snapshot::SnapshotProperties, refs::Ref};
 
@@ -170,6 +171,7 @@ impl RepoInfo {
         previous_info: Option<&'a str>,
         config_bytes: Option<&[u8]>,
     ) -> IcechunkResult<Self> {
+        trace!("Creating new repo info from parts");
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
         let tags = sorted_tags
             .into_iter()
