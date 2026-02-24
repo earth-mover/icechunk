@@ -13,7 +13,7 @@ doctest *args='':
 
 # run all tests with logs enabled
 test-logs level *args='':
-  RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --all-targets {{args}} -- --nocapture
+  RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --all-targets --nocapture {{args}}
 
 # compile but don't run all tests
 compile-tests *args='':

@@ -36,8 +36,22 @@ use zstd::zstd_safe::WriteBuf;
 
 mod common;
 
+enum Permission {
+    ReadOnly, // GetObject
+    Modify,   // {Get,Put,Delete}Object
+    List,     // ListBucket
+}
+
 #[allow(clippy::expect_used)]
-async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+async fn mk_s3_storage(
+    prefix: &str,
+    permission: &Permission,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let (access_key_id, secret_access_key) = match permission {
+        Permission::Modify => ("minio123".into(), "minio123".into()), // TODO: make a more restricted one
+        Permission::ReadOnly => ("basic".into(), "basicuser".into()),
+        Permission::List => todo!(),
+    };
     let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
         S3Options {
             region: Some("us-east-1".to_string()),
@@ -51,8 +65,8 @@ async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + S
         "testbucket".to_string(),
         Some(prefix.to_string()),
         Some(S3Credentials::Static(S3StaticCredentials {
-            access_key_id: "basic".into(),
-            secret_access_key: "basicuser".into(),
+            access_key_id,
+            secret_access_key,
             session_token: None,
             expires_after: None,
         })),
@@ -65,14 +79,20 @@ async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + S
 #[allow(clippy::expect_used)]
 async fn mk_s3_object_store_storage(
     prefix: &str,
+    permission: &Permission,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let (access_key_id, secret_access_key) = match permission {
+        Permission::Modify => ("minio123".into(), "minio123".into()), // TODO: make a more restricted one
+        Permission::ReadOnly => ("basic".into(), "basicuser".into()),
+        Permission::List => todo!(),
+    };
     let storage = Arc::new(
         ObjectStorage::new_s3(
             "testbucket".to_string(),
             Some(prefix.to_string()),
             Some(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: "basic".into(),
-                secret_access_key: "basicuser".into(),
+                access_key_id,
+                secret_access_key,
                 session_token: None,
                 expires_after: None,
             })),
@@ -110,23 +130,33 @@ async fn mk_azure_blob_storage(
 }
 
 #[allow(clippy::expect_used)]
-async fn with_storage<F, Fut>(f: F) -> Result<(), Box<dyn std::error::Error>>
+async fn with_storage<F, Fut>(
+    permission: Permission,
+    f: F,
+) -> Result<(), Box<dyn std::error::Error>>
 where
     F: Fn(&'static str, Arc<dyn Storage + Send + Sync>) -> Fut,
     Fut: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
-    let s1 = mk_s3_storage(common::get_random_prefix("with_storage").as_str()).await?;
-    let s1slash =
-        mk_s3_storage(format!("{}/", common::get_random_prefix("with_storage")).as_str())
+    let s1 =
+        mk_s3_storage(common::get_random_prefix("with_storage").as_str(), &permission)
             .await?;
+    let s1slash = mk_s3_storage(
+        format!("{}/", common::get_random_prefix("with_storage")).as_str(),
+        &permission,
+    )
+    .await?;
+
     #[allow(clippy::unwrap_used)]
     let s2 = new_in_memory_storage().await.unwrap();
     let s3 = mk_s3_object_store_storage(
         format!("{}_object_store", common::get_random_prefix("with_storage")).as_str(),
+        &permission,
     )
     .await?;
     let s3slash = mk_s3_object_store_storage(
         format!("{}_object_store/", common::get_random_prefix("with_storage")).as_str(),
+        &permission,
     )
     .await?;
     let s4 =
@@ -204,7 +234,7 @@ async fn async_read_to_bytes(
 
 #[tokio_test]
 pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::ReadOnly, |_, storage| async move {
         let storage_settings = storage.default_settings().await?;
         let id = SnapshotId::random();
         let mut bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
@@ -259,7 +289,7 @@ pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> 
 
 #[tokio_test]
 pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::ReadOnly, |_, storage| async move {
         let repo = Repository::create(None, storage, Default::default(), None).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("mytag").await?;
@@ -272,7 +302,7 @@ pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio_test]
 pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::ReadOnly, |_, storage| async move {
         let repo = Repository::create(None, storage, Default::default(), None).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("non-existing-tag").await;
@@ -291,7 +321,7 @@ pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Err
 
 #[tokio_test]
 pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::ReadOnly, |_, storage| async move {
         let repo = Repository::create(None, storage, Default::default(), None).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let res  = repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await;
@@ -309,7 +339,7 @@ pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>
 
 #[tokio_test]
 pub async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::Modify, |_, storage| async move {
         let settings = storage.default_settings().await?;
         storage
             .put_object(
@@ -409,7 +439,7 @@ pub async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio_test]
 pub async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::Modify, |_, storage| async move {
         let settings = storage.default_settings().await?;
         storage
             .put_object(
@@ -510,7 +540,7 @@ pub async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio_test]
 pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::ReadOnly, |_, storage| async move {
         let repo = Repository::create(None, storage, Default::default(), None).await?;
         let back = repo.lookup_branch("non-existing-branch").await;
         assert!(
@@ -528,7 +558,7 @@ pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::
 #[tokio_test]
 #[allow(clippy::panic)]
 pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::ReadOnly, |_, storage| async move {
         let storage_settings = storage.default_settings().await?;
 
         let am = Arc::new(AssetManager::new_no_cache(
@@ -564,7 +594,7 @@ pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Erro
 #[tokio_test]
 #[allow(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::ReadOnly, |_, storage| async move {
         let am = Arc::new(AssetManager::new_no_cache(
             Arc::clone(&storage),
             storage.default_settings().await?,
@@ -635,7 +665,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing()
 #[allow(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_fails_on_bad_version_when_existing()
 -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage_type, storage| async move {
+    with_storage(Permission::ReadOnly, |storage_type, storage| async move {
         let storage_settings = storage.default_settings().await?;
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
@@ -690,7 +720,7 @@ pub async fn test_write_config_fails_on_bad_version_when_existing()
 #[allow(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_can_overwrite_with_unsafe_config()
 -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::ReadOnly, |_, storage| async move {
         let storage_settings = storage::Settings {
             unsafe_use_conditional_update: Some(false),
             unsafe_use_conditional_create: Some(false),
@@ -808,7 +838,7 @@ pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::test]
 pub async fn test_write_object_larger_than_multipart_threshold()
 -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::ReadOnly, |_, storage| async move {
         let custom_settings = storage::Settings {
             minimum_size_for_multipart_upload: Some(100),
             ..storage.default_settings().await?
@@ -846,7 +876,7 @@ pub async fn test_write_object_larger_than_multipart_threshold()
 
 #[tokio_test]
 pub async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::ReadOnly, |_, storage| async move {
         let storage_settings = storage.default_settings().await?;
         let id = SnapshotId::random();
         let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
