@@ -144,7 +144,6 @@ async def test_shift_2d() -> None:
 
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=False)
-    # Shift by (1, 0) - shift down by one chunk, keep horizontal
     session.shift_array("/array", (1, 0))
     array = cast("zarr.Array[Any]", root["array"])
 
@@ -174,7 +173,6 @@ async def test_shift_3d_mixed_offset() -> None:
 
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=False)
-    # Shift by (-1, 0, -1) - shift in first and third dimensions only
     element_shift = session.shift_array("/array", (-1, 0, -1))
     array = cast("zarr.Array[Any]", root["array"])
 
