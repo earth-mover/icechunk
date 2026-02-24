@@ -403,7 +403,7 @@ class Model:
 
         for c in self.commits.values():
             if c.parent_id in expired_snaps:
-                c.parent_id = INITIAL_SNAPSHOT
+                c.parent_id = None
 
         if delete_expired_tags:
             tags_to_delete = {
@@ -439,13 +439,9 @@ class Model:
         assert self.initial_snapshot_id is not None
         reachable_snaps: set[str] = set((self.initial_snapshot_id,))
         for commit_id in self.refs_iter():
-            while commit_id != self.initial_snapshot_id:
+            while commit_id is not None:
                 reachable_snaps.add(commit_id)
-                parent_id = self.commits[commit_id].parent_id
-                assert (
-                    parent_id is not None
-                ), f"Commit {commit_id} has no parent but is not the initial snapshot"
-                commit_id = parent_id
+                commit_id = self.commits[commit_id].parent_id
         return reachable_snaps
 
     def garbage_collect(self, older_than: datetime.datetime) -> set[str]:
@@ -876,9 +872,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         for branch in actual_deleted_branches:
             self.maybe_checkout_branch(branch)
 
-    # @precondition(lambda self: bool(self.model.commit_times))
-    # Disable GC till bugs are fixed (e.g. #1709)
-    @precondition(lambda self: False)
+    @precondition(
+        lambda self: bool(self.model.commit_times) and self.model.spec_version >= 2
+    )
     @rule(data=st.data())
     def garbage_collect(self, data: st.DataObject) -> None:
         older_than = self._draw_older_than(data)
@@ -961,12 +957,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert all(a.written_at > b.written_at for a, b in itertools.pairwise(ancestry))
         # ancestry must be unique
         assert len(ancestry_set) == len(ancestry)
-        # the initial snapshot is in every possible branch
-        # this is a python-only invariant
-        # Compare by ID: cross-version tests may have ancestry populated
-        # by SnapshotInfos from different icechunk versions,
-        # so full object equality can fail.
-        assert ancestry[-1].id == self.initial_snapshot.id
         n = len(ancestry)
         bucket = f"{n // 10 * 10}-{n // 10 * 10 + 9}"
         event(f"ancestry length: {bucket}")
@@ -975,6 +965,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         for branch in self.model.branch_heads:
             ancestry = list(self.repo.ancestry(branch=branch))
             self._assert_ancestry_invariants(ancestry)
+            assert ancestry[-1].parent_id is None
 
         for tag in self.model.tags:
             ancestry = list(self.repo.ancestry(tag=tag))
