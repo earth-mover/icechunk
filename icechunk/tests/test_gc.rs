@@ -20,7 +20,7 @@ use icechunk::{
         ByteRange, ChunkIndices, Path, format_constants::SpecVersionBin,
         manifest::ChunkPayload, snapshot::ArrayShape,
     },
-    initialize_tracing, new_in_memory_storage,
+    new_in_memory_storage,
     ops::gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
     repository::VersionInfo,
     session::get_chunk,
@@ -524,7 +524,6 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
     //    Any attempt to trace ancestry from (5) or (4) back will fail.
     // 6. Next GC attempt will en up tracing that ancestry (in pointed_snapshots)
 
-    initialize_tracing(None);
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
     let asset_manager = Arc::new(AssetManager::new_no_cache(
@@ -566,24 +565,9 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
         snaps.push(snap);
     }
 
-    let anc = repo
-        .ancestry(&VersionInfo::BranchTipRef("main".into()))
-        .await?
-        .try_collect::<Vec<_>>()
-        .await?;
-    dbg!(&anc);
-
     repo.reset_branch("main", &snaps[1], None).await?;
 
-    let anc = repo
-        .ancestry(&VersionInfo::BranchTipRef("main".into()))
-        .await?
-        .try_collect::<Vec<_>>()
-        .await?;
-    dbg!(&anc);
-
     let before = repo.lookup_snapshot(&snaps[3]).await?.flushed_at;
-    dbg!("should expire", &snaps[2]);
     let gc_config = GCConfig::clean_all(
         before,
         before,
@@ -593,7 +577,6 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
         NonZeroU16::new(500).unwrap(),
         false,
     );
-    eprintln!("about to GC");
     let summary = garbage_collect(asset_manager, &gc_config, None, 100).await?;
     assert_eq!(summary.snapshots_deleted, 1);
 

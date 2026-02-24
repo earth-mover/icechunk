@@ -335,11 +335,11 @@ pub async fn garbage_collect(
 
     // TODO: this function could have much more parallelism
     if !config.action_needed() {
-        tracing::info!("No action requested");
+        info!("No action requested");
         return Ok(GCSummary::default());
     }
 
-    tracing::info!("Finding GC roots");
+    info!("Finding GC roots");
     let (keep_chunks, keep_manifests, mut keep_snapshots) =
         find_retained(Arc::clone(&asset_manager), config).await?;
 
@@ -368,7 +368,7 @@ pub async fn garbage_collect(
 
     keep_snapshots.extend(non_pointed_but_new);
 
-    tracing::info!(
+    info!(
         snapshots = keep_snapshots.len(),
         manifests = keep_manifests.len(),
         chunks = keep_chunks.len(),
@@ -377,7 +377,7 @@ pub async fn garbage_collect(
 
     let mut summary = GCSummary::default();
 
-    tracing::info!("Starting deletes");
+    info!("Starting deletes");
 
     // TODO: this could use more parallelization.
     // The trivial approach of parallelizing the deletes of the different types of objects doesn't
@@ -395,6 +395,7 @@ pub async fn garbage_collect(
             )
             .await?;
         }
+        debug!("Garbage collecting snapshots");
         let res = gc_snapshots(asset_manager.as_ref(), config, &keep_snapshots).await?;
         summary.snapshots_deleted = res.deleted_objects;
         summary.bytes_deleted += res.deleted_bytes;
@@ -433,7 +434,20 @@ async fn delete_snapshots_from_repo_info(
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
         let kept_snaps: Vec<_> = repo_info
             .all_snapshots()?
-            .filter_ok(|si| keep_snapshots.contains(&si.id))
+            .filter_map_ok(|si| {
+                if keep_snapshots.contains(&si.id) {
+                    match &si.parent_id {
+                        Some(parent) if keep_snapshots.contains(parent) => Some(si),
+                        // break the parent if it is going to be GC-ed
+                        // this is necessary for the case where history was edited with reset_branch
+                        // See test_gc.rs::test_gc_reset_branch for an example
+                        Some(_) => Some(SnapshotInfo { parent_id: None, ..si }),
+                        &None => Some(si),
+                    }
+                } else {
+                    None
+                }
+            })
             .try_collect()?;
 
         let config_bytes = repo_info.config_bytes_raw()?;
@@ -481,7 +495,7 @@ pub async fn gc_chunks(
     config: &GCConfig,
     keep_ids: &HashSet<ChunkId>,
 ) -> GCResult<DeleteObjectsResult> {
-    tracing::info!("Deleting chunks");
+    info!("Deleting chunks");
     let to_delete = asset_manager
         .list_chunks()
         .await?
@@ -509,7 +523,7 @@ pub async fn gc_manifests(
     config: &GCConfig,
     keep_ids: &HashSet<ManifestId>,
 ) -> GCResult<DeleteObjectsResult> {
-    tracing::info!("Deleting manifests");
+    info!("Deleting manifests");
     let to_delete = asset_manager
         .list_manifests()
         .await?
@@ -540,7 +554,7 @@ pub async fn gc_snapshots(
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
 ) -> GCResult<DeleteObjectsResult> {
-    tracing::info!("Deleting snapshots");
+    info!("Deleting snapshots");
     let to_delete = asset_manager
         .list_snapshots()
         .await?
@@ -571,7 +585,7 @@ pub async fn gc_transaction_logs(
     config: &GCConfig,
     keep_ids: &HashSet<SnapshotId>,
 ) -> GCResult<DeleteObjectsResult> {
-    tracing::info!("Deleting transaction logs");
+    info!("Deleting transaction logs");
     let to_delete = asset_manager
         .list_transaction_logs()
         .await?
