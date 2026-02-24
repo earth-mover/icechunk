@@ -507,7 +507,7 @@ fn lookup_ref<'a>(
     })
 }
 
-struct PayloadIterator {
+pub struct PayloadIterator {
     manifest: Arc<Manifest>,
     node_id: NodeId,
     last_ref_index: usize,

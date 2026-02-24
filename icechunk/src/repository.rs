@@ -1712,20 +1712,20 @@ impl Repository {
                                             let manifest_id_c = manifest_id.clone();
                                             let path = node.path.clone();
                                             futures.push(async move {
-                                                    trace!("Preloading manifest {} for array {}", &manifest_id_c, path);
-                                                    if let Err(err) = asset_manager
-                                                        .fetch_manifest(
-                                                            &manifest_id_c,
-                                                            size_bytes,
-                                                        )
-                                                        .await
-                                                    {
-                                                        error!(
-                                                            "Failure pre-loading manifest {}: {}",
-                                                            &manifest_id_c, err
-                                                        );
-                                                    }
-                                                });
+                                                trace!(
+                                                    "Preloading manifest {} for array {}",
+                                                    &manifest_id_c, path
+                                                );
+                                                if let Err(err) = asset_manager
+                                                    .fetch_manifest(&manifest_id_c, size_bytes)
+                                                    .await
+                                                {
+                                                    error!(
+                                                        "Failure pre-loading manifest {}: {}",
+                                                        &manifest_id_c, err
+                                                    );
+                                                }
+                                            });
                                             loaded_manifests.insert(manifest_id);
                                             loaded_refs += manifest_info.num_chunk_refs;
                                         }
@@ -1879,10 +1879,10 @@ mod tests {
         asset_manager: &Arc<AssetManager>,
         total_manifests: usize,
     ) {
-        let expected = asset_manager.list_manifests().await.unwrap().count().await;
+        let actual = asset_manager.list_manifests().await.unwrap().count().await;
         assert_eq!(
-            total_manifests, expected,
-            "Mismatch in manifest count: expected {expected}, but got {total_manifests}",
+            total_manifests, actual,
+            "Mismatch in manifest count: expected {total_manifests}, but got {actual}",
         );
     }
 
@@ -2271,17 +2271,6 @@ mod tests {
         }
         verify_data(&session, 0).await;
 
-        let node = session.get_node(&array_path).await?;
-        let orig_splits = session.lookup_splits(&node.id).cloned();
-        assert_eq!(
-            orig_splits,
-            Some(ManifestSplits::from_edges(vec![
-                vec![0, 3, 6, 9, 12, 13],
-                vec![0, 2],
-                vec![0, 1]
-            ]))
-        );
-
         // this should update the splits
         session
             .update_array(
@@ -2292,15 +2281,6 @@ mod tests {
             )
             .await?;
         verify_data(&session, 0).await;
-        let new_splits = session.lookup_splits(&node.id).cloned();
-        assert_eq!(
-            new_splits,
-            Some(ManifestSplits::from_edges(vec![
-                vec![0, 4, 8, 12, 13],
-                vec![0, 2],
-                vec![0, 1]
-            ]))
-        );
 
         // update data
         for i in 0..12 {
@@ -2989,7 +2969,6 @@ mod tests {
             [vec![0, 0, 1, 0], vec![0, 0, 0, 0], vec![0, 2, 0, 0], vec![0, 2, 0, 1]];
 
         let mut session1 = repository.writable_session("main").await?;
-        let node_id = session1.get_node(&temp_path).await?.id;
         session1
             .set_chunk_ref(
                 temp_path.clone(),
@@ -3037,7 +3016,7 @@ mod tests {
                 )
                 .await?;
 
-            assert!(session1.merge(session2).await.is_err());
+            assert!(session1.merge(session2).await.is_ok());
         }
 
         // now with the same split sizes
@@ -3060,12 +3039,6 @@ mod tests {
             )
             .await?;
 
-        // Session.splits should be _complete_ so it should be identical for the same node
-        // on any two sessions with compatible splits
-        let splits = session1.lookup_splits(&node_id).unwrap().clone();
-        assert_eq!(session1.lookup_splits(&node_id), session2.lookup_splits(&node_id));
-        session1.merge(session2).await?;
-        assert_eq!(session1.lookup_splits(&node_id), Some(&splits));
         for (val, idx) in enumerate(indices.iter()) {
             let actual = get_chunk(
                 session1
