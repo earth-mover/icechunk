@@ -248,6 +248,14 @@ Or using other package managers:
 
 Ensure you have navigated to the root directory of the cloned repo (i.e. not the `icechunk-python` subdirectory).
 
+For running the tests we also leverage [cargo-nextest](https://nexte.st/),
+for building it from source run
+```bash
+cargo install cargo-nextest
+```
+or check the [installation instructions](https://nexte.st/docs/installation/)
+for pre-built binaries or using package managers.
+
 #### WASM Compiler Setup (macOS)
 
 To compile `icechunk` for `wasm32-wasip1-threads`, you need the Rust target and a C toolchain with WebAssembly support (needed by `zstd-sys`).
@@ -414,6 +422,21 @@ We provide a docker compose `compose.yaml` file, which you can run with `docker 
 `docker ps` should show the `azurite` and `icechunk_minio` containers as running (you can also navigate to the GUI e.g. for the minIO container at `localhost:9001` and log in with the username and password from the `compose.yaml` file to navigate the buckets).
 
 After testing you can clean up with `docker compose down`. To verify that all containers are down use `docker ps` again.
+
+#### Faster linking for incremental builds with mold
+
+On Linux you can use the mold linker for
+significantly faster linking (~5-10x improvement on incremental builds).
+It can be installed with `apt install mold` or `dnf install mold`
+
+Then edit your `~/.cargo/config.toml` to include these configs:
+```toml
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+```
 
 ## Roadmap
 

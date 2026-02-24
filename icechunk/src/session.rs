@@ -2340,6 +2340,28 @@ async fn do_flush(
     let old_snapshot =
         flush_data.asset_manager.fetch_snapshot(flush_data.parent_id).await?;
 
+    let previous_tx_log = if commit_method == CommitMethod::NewCommit {
+        // We won't be merging with a previous tx log, so no need to retrieve it
+        None
+    } else {
+        let previous_log =
+            flush_data.asset_manager.fetch_transaction_log(&old_snapshot.id()).await?;
+
+        // need to check if previous tx log has moves / this is a rearrange session
+        if previous_log.has_moves() && commit_method == CommitMethod::Amend {
+            match flush_data.change_set {
+                ChangeSet::Edit(_) => {
+                    return Err(SessionErrorKind::RearrangeSessionOnly.into());
+                }
+                ChangeSet::Rearrange(_) => {
+                    // Fine for now
+                }
+            }
+        }
+
+        Some(previous_log)
+    };
+
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
     for node in old_snapshot.iter().filter_ok(|node| node.node_type() == NodeType::Array)
@@ -2490,10 +2512,18 @@ async fn do_flush(
     let new_tx_log = if commit_method == CommitMethod::NewCommit {
         this_tx_log
     } else {
-        let previous_log =
-            flush_data.asset_manager.fetch_transaction_log(&old_snapshot.id()).await?;
-        // FIXME: this should execute in a non-blocking context
-        TransactionLog::merge(&new_snapshot_id, [previous_log.as_ref(), &this_tx_log])
+        // Previous tx log was fetched in the beginning of do_flush,
+        // so it will be available here. Just to be sure, still use
+        // .map and .unwrap_or_else to avoid unwrapping.
+        previous_tx_log
+            .map(|previous_log| {
+                // FIXME: this should execute in a non-blocking context
+                TransactionLog::merge(
+                    &new_snapshot_id,
+                    [previous_log.as_ref(), &this_tx_log],
+                )
+            })
+            .unwrap_or_else(|| this_tx_log)
     };
 
     flush_data
@@ -2543,6 +2573,11 @@ async fn do_commit(
 
     if !allow_empty && change_set.is_empty() {
         return Err(SessionErrorKind::NoChangesToCommit.into());
+    }
+
+    // Cannot amend the initial commit
+    if commit_method == CommitMethod::Amend && snapshot_id.is_initial() {
+        return Err(SessionErrorKind::NoAmendForInitialCommit.into());
     }
 
     let properties = properties.unwrap_or_default();
@@ -2661,7 +2696,7 @@ async fn do_commit_v2(
             (CommitMethod::NewCommit, _) => parent_snapshot_id.clone(),
             (CommitMethod::Amend, Some(parent_id)) => parent_id,
             (CommitMethod::Amend, None) => {
-                return Err(RepositoryErrorKind::NoAmendForInitialCommit.into());
+                unreachable!("do_commit() disallows amend on initial commit")
             }
         };
 
@@ -3298,19 +3333,23 @@ mod tests {
             &storage::VersionInfo::for_creation(),
         )
         .await?;
-        let repo_info =
-            RepoInfo::initial(SpecVersionBin::current(), (&initial).try_into()?, 100)
-                .add_snapshot(
-                    SpecVersionBin::current(),
-                    snapshot.as_ref().try_into()?,
-                    Some("main"),
-                    UpdateType::NewCommitUpdate {
-                        branch: "main".to_string(),
-                        new_snap_id: snapshot.id().clone(),
-                    },
-                    "backup_path",
-                    100,
-                )?;
+        let repo_info = RepoInfo::initial(
+            SpecVersionBin::current(),
+            (&initial).try_into()?,
+            100,
+            None,
+        )
+        .add_snapshot(
+            SpecVersionBin::current(),
+            snapshot.as_ref().try_into()?,
+            Some("main"),
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: snapshot.id().clone(),
+            },
+            "backup_path",
+            100,
+        )?;
         asset_manager.create_repo_info(Arc::new(repo_info)).await?;
 
         let repo = Repository::open(None, storage, HashMap::new()).await?;
@@ -3814,10 +3853,10 @@ mod tests {
         // 6 commits + 1 config change recorded in ops log
         assert_eq!(overwritten.iter().filter(|s| s.starts_with("repo")).count(), 7);
 
-        // 1 config save
+        // V2 repos don't write config.yaml — config is in repo info
         assert_eq!(
             overwritten.iter().filter(|s| s.starts_with("config.yaml")).count(),
-            1
+            0
         );
         Ok(())
     }
@@ -4271,6 +4310,20 @@ mod tests {
     #[tokio_test]
     async fn test_amend() -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository().await;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let amend_result =
+            session.amend("cannot amend initial commit", None, false).await;
+        assert!(amend_result.is_err());
+        assert!(amend_result.unwrap_err().to_string().contains("first commit"));
+
+        let mut session = repo.writable_session("main").await?;
+        let amend_result = session.amend("cannot amend initial commit", None, true).await;
+        assert!(amend_result.is_err());
+        assert!(amend_result.unwrap_err().to_string().contains("first commit"));
+
+        // Now make a proper first commit
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         let snap1 = session.commit("make root", None).await?;
@@ -4366,6 +4419,110 @@ mod tests {
         Ok(())
     }
 
+    #[tokio_test]
+    async fn test_session_amending_with_move() -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session
+            .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session.commit("setup", None).await?;
+
+        // Rearrange session, only has a move: should be fine
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/source".try_into().unwrap(), "/dest".try_into().unwrap())
+            .await?;
+        session.commit("move commit", None).await?;
+
+        // Amend on top of a move commit: should fail
+        let mut session = repo.writable_session("main").await?;
+        session
+            .add_group("/fail".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        let result = session.amend("amend after move", None, false).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err.kind, SessionErrorKind::RearrangeSessionOnly));
+
+        // Rearrange session, amend on top of a move commit: should be fine
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/dest".try_into().unwrap(), "/another_dest".try_into().unwrap())
+            .await?;
+        let result = session.amend("amend after move, only new moves", None, false).await;
+        assert!(result.is_ok());
+        let snapshot_id = result.unwrap();
+
+        // Check if moved group still shows up properly after amending two rearrange sessions
+        let session =
+            repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
+        assert!(session.get_group(&"/another_dest".try_into().unwrap()).await.is_ok());
+
+        // Add nested groups, try to move them
+        let mut session = repo.writable_session("main").await?;
+        session
+            .add_group("/another_dest/1".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session
+            .add_group(
+                "/another_dest/1/2".try_into().unwrap(),
+                Bytes::copy_from_slice(b""),
+            )
+            .await?;
+        session
+            .add_group(
+                "/another_dest/1/2/3".try_into().unwrap(),
+                Bytes::copy_from_slice(b""),
+            )
+            .await?;
+        session.commit("add nested groups", None).await?;
+
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node(
+                "/another_dest/1/2".try_into().unwrap(),
+                "/nested_move".try_into().unwrap(),
+            )
+            .await?;
+        session
+            .move_node(
+                "/another_dest".try_into().unwrap(),
+                "/new_dest".try_into().unwrap(),
+            )
+            .await?;
+        let snapshot_id = session.commit("move nested groups", None).await?;
+
+        // Check if moved nested groups still shows up properly after commit
+        let session =
+            repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
+        assert!(session.get_group(&"/new_dest".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/new_dest/1".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/nested_move".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/nested_move/3".try_into().unwrap()).await.is_ok());
+
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node(
+                "/nested_move".try_into().unwrap(),
+                "/moved_again".try_into().unwrap(),
+            )
+            .await?;
+        let snapshot_id = session.amend("amend nested groups move ", None, false).await?;
+
+        // Check if moved nested groups still shows up properly after amend
+        let session =
+            repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
+        assert!(session.get_group(&"/new_dest".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/new_dest/1".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/moved_again".try_into().unwrap()).await.is_ok());
+        assert!(session.get_group(&"/moved_again/3".try_into().unwrap()).await.is_ok());
+
+        Ok(())
+    }
+
     /// Integration test that fetch_snapshot_info correctly identifies initial vs non-initial.
     #[tokio_test]
     async fn test_fetch_snapshot_info_is_initial() -> Result<(), Box<dyn Error>> {
@@ -4384,6 +4541,49 @@ mod tests {
 
         let snap1_info = asset_manager.fetch_snapshot_info(&snap1).await?;
         assert!(!snap1_info.is_initial());
+
+        Ok(())
+    }
+
+    /// Test that the initial snapshot has an empty transaction log that can be fetched.
+    #[tokio_test]
+    async fn test_initial_snapshot_has_empty_transaction_log()
+    -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository().await;
+        let asset_manager = repo.asset_manager();
+
+        let initial_snap_id = repo.lookup_branch("main").await?;
+        let tx_log = asset_manager.fetch_transaction_log(&initial_snap_id).await?;
+
+        // The transaction log should exist and be empty (no changes)
+        assert_eq!(tx_log.new_groups().count(), 0);
+        assert_eq!(tx_log.new_arrays().count(), 0);
+        assert_eq!(tx_log.deleted_groups().count(), 0);
+        assert_eq!(tx_log.deleted_arrays().count(), 0);
+        assert_eq!(tx_log.updated_groups().count(), 0);
+        assert_eq!(tx_log.updated_arrays().count(), 0);
+        assert_eq!(tx_log.updated_chunks().count(), 0);
+        assert_eq!(tx_log.moves().count(), 0);
+
+        // Diff from initial snapshot to first real commit should show the new group
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let snap1 = session.commit("first commit", None).await?;
+
+        let diff = repo
+            .diff(
+                &VersionInfo::SnapshotId(initial_snap_id),
+                &VersionInfo::SnapshotId(snap1),
+            )
+            .await?;
+        assert!(!diff.is_empty());
+        assert_eq!(&diff.new_groups, &[Path::root()].into());
+        assert!(diff.new_arrays.is_empty());
+        assert!(diff.deleted_groups.is_empty());
+        assert!(diff.deleted_arrays.is_empty());
+        assert!(diff.updated_groups.is_empty());
+        assert!(diff.updated_arrays.is_empty());
+        assert!(diff.updated_chunks.is_empty());
 
         Ok(())
     }

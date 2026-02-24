@@ -52,11 +52,11 @@ jobs:
 
       - name: Run clippy linting
         run: |
-          just lint --workspace
+          just profile=ci lint --workspace
 
       - name: Run doc tests
         run: |
-          just doctest
+          just profile=ci doctest
 
       - name: Python mypy type checking
         run: |
