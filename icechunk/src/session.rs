@@ -2010,7 +2010,7 @@ impl<'a> FlushProcess<'a> {
     }
 
     /// Creates a new manifest for the node, by obtaining all previous chunks coming from
-    /// `previous_manifests`, filtering those thar are in the `extent`, and overriding them
+    /// `previous_manifests`, filtering those that are in the `extent`, and overriding them
     /// with any changes in `modified_chunks`
     async fn write_manifest_with_changes(
         &mut self,
@@ -2023,7 +2023,7 @@ impl<'a> FlushProcess<'a> {
         // Collect unmodified chunks from all intersecting manifests
         let mut all_chunks_vec: Vec<Result<ChunkInfo, SessionError>> = Vec::new();
 
-        // add chunks from previous manifests thar are not modified
+        // add chunks from previous manifests that are not modified
         for mref in previous_manifests {
             let manifest =
                 fetch_manifest(&mref.object_id, old_snapshot, &self.asset_manager)
@@ -2074,8 +2074,8 @@ impl<'a> FlushProcess<'a> {
         // Some points to take into account to understand this algorithm:
         // * The `splits` could have changed, so the `existing_manifests` not necessarily were
         // created with the same splits, they could be widely different
-        // * In general we don't want to rewrite past manifests to the new splits, we just try to
-        // reuse them, but if you ser says `rewrite_manifests=true` we'll rewrite everything
+        // * In general we don't want to rewrite past manifests if we don't have to, we just
+        // try to reuse them, but if user says `rewrite_manifests=true` we'll rewrite everything
         // * This function needs to work in the scenario where there are multiple past manifests
         // for the node, and there are also session changes to chunks. These changes can be
         // modifying, adding or deleting existing chunks.
