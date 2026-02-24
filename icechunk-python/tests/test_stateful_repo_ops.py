@@ -436,7 +436,8 @@ class Model:
         )
 
     def reachable_snapshots(self) -> set[str]:
-        reachable_snaps = set((self.initial_snapshot_id,))
+        assert self.initial_snapshot_id is not None
+        reachable_snaps: set[str] = set((self.initial_snapshot_id,))
         for commit_id in self.refs_iter():
             while commit_id != self.initial_snapshot_id:
                 reachable_snaps.add(commit_id)
@@ -954,7 +955,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         repo_branches = {k: self.repo.lookup_branch(k) for k in self.repo.list_branches()}
         assert self.model.branch_heads == repo_branches
 
-    def _assert_ancestry_invariants(self, ancestry) -> None:
+    def _assert_ancestry_invariants(self, ancestry: list[SnapshotInfo]) -> None:
         ancestry_set = set([snap.id for snap in ancestry])
         # snapshot timestamps are monotonically decreasing in ancestry
         assert all(a.written_at > b.written_at for a, b in itertools.pairwise(ancestry))
