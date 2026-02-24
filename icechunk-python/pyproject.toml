@@ -205,8 +205,9 @@ uv = ">=0.10.4,<0.11"
 openssl = ">=3.6.1,<4"
 pkgconfig = ">=1.5.5,<2"
 cargo-deny = ">=0.19.0,<0.20"
-pre-commit = ">=4.5.1,<5"
+prek = ">=0.3.3,<0.4"
 netcdf4 = ">=1.7.4,<2"
+cargo-nextest = ">=0.9.106,<0.10"
 
 [tool.pixi.environments]
 default = { features = ["build", "dev", "docs", "test"], solve-group = "default" }

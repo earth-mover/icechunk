@@ -87,7 +87,7 @@ mypy *args:
   cd icechunk-python && mypy python tests {{args}}
 
 py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *args:
-  pre-commit run --all-files
+  prek run --all-files
 
 pytest *args:
   cd icechunk-python && pytest {{args}}
