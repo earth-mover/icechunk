@@ -2387,7 +2387,6 @@ async fn do_flush(
     // Now we need to go through all the new arrays, and generate manifests for them
 
     for (node_path, node_id, array_data) in flush_data.change_set.new_arrays() {
-        // FIXME: do we need to cache this?
         let splits = split_config.get_split_sizes(
             node_path,
             &array_data.shape,
