@@ -35,7 +35,7 @@ use tracing::{Instrument, debug, info, instrument, trace, warn};
 use crate::{
     RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
-    change_set::{ArrayData, ChangeSet},
+    change_set::{ArrayData, ChangeSet, ChunkTable},
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
@@ -1950,17 +1950,6 @@ impl<'a> FlushProcess<'a> {
         }
     }
 
-    async fn write_manifest_for_updated_chunks(
-        &mut self,
-        updated_chunks: &[ChunkInfo],
-    ) -> SessionResult<Option<ManifestRef>> {
-        // FIXME: very inefficient having to clone
-        self.write_manifest_from_iterator(stream::iter(
-            updated_chunks.iter().cloned().map(Ok),
-        ))
-        .await
-    }
-
     async fn write_manifest_from_iterator(
         &mut self,
         chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
@@ -2020,110 +2009,178 @@ impl<'a> FlushProcess<'a> {
         Ok(())
     }
 
+    /// Creates a new manifest for the node, by obtaining all previous chunks coming from
+    /// `previous_manifests`, filtering those thar are in the `extent`, and overriding them
+    /// with any changes in `modified_chunks`
+    async fn write_manifest_with_changes(
+        &mut self,
+        previous_manifests: impl Iterator<Item = &ManifestRef>,
+        modified_chunks: &ChunkTable,
+        extent: &ManifestExtents,
+        node_id: &NodeId,
+        old_snapshot: &SnapshotId,
+    ) -> SessionResult<Option<ManifestRef>> {
+        // Collect unmodified chunks from all intersecting manifests
+        let mut all_chunks_vec: Vec<Result<ChunkInfo, SessionError>> = Vec::new();
+
+        // add chunks from previous manifests thar are not modified
+        for mref in previous_manifests {
+            let manifest =
+                fetch_manifest(&mref.object_id, old_snapshot, &self.asset_manager)
+                    .await?;
+
+            for item in manifest.iter(node_id.clone()) {
+                match item {
+                    Ok((idx, payload)) => {
+                        if !modified_chunks.contains_key(&idx) && extent.contains(&idx.0)
+                        {
+                            all_chunks_vec.push(Ok(ChunkInfo {
+                                node: node_id.clone(),
+                                coord: idx.clone(),
+                                payload: payload.clone(),
+                            }));
+                        }
+                    }
+                    Err(e) => all_chunks_vec.push(Err(e.into())),
+                }
+            }
+        }
+
+        // add modified chunks
+        for (idx, maybe_payload) in modified_chunks.iter() {
+            if let Some(payload) = maybe_payload.as_ref() {
+                all_chunks_vec.push(Ok(ChunkInfo {
+                    node: node_id.clone(),
+                    coord: idx.clone(),
+                    payload: payload.clone(),
+                }));
+            }
+        }
+
+        self.write_manifest_from_iterator(stream::iter(all_chunks_vec).err_into()).await
+    }
+
     /// Write a manifest for a node that was modified in this session
     /// It needs to update the chunks according to the change set
     /// and record the new manifest
     async fn write_manifest_for_existing_node(
         &mut self,
         node: &NodeSnapshot,
-        existing_manifests: Vec<ManifestRef>,
+        existing_manifests: &[ManifestRef],
         old_snapshot: &Snapshot,
         rewrite_manifests: bool,
         splits: &ManifestSplits,
     ) -> SessionResult<()> {
-        let init: HashMap<ManifestExtents, Vec<ChunkInfo>> = Default::default();
-        // FIXME: this duplicates chunk storage for the array
-        let classified_chunks = updated_node_chunks_iterator(
-            &self.asset_manager,
-            self.change_set,
-            self.parent_id,
-            node.clone(),
-        )
-        .await
-        .try_fold(init, |mut res, (_, chunk)| {
-            if let Some(extents) = splits.find(&chunk.coord) {
-                res.entry(extents.clone()).or_default().push(chunk);
-            }
-
-            ready(Ok(res))
-        })
-        .await?;
-
-        let mut refs =
-            HashMap::<ManifestExtents, Vec<ManifestRef>>::with_capacity(splits.len());
-
-        let on_disk_extents =
-            existing_manifests.iter().map(|m| m.extents.clone()).collect::<Vec<_>>();
-
-        //let modified_splits = classified_chunks.keys().collect::<HashSet<_>>();
-        // FIXME: this is another pass through all chunks
-        let modified_splits: HashSet<_> = self
+        // Some points to take into account to understand this algorithm:
+        // * The `splits` could have changed, so the `existing_manifests` not necessarily were
+        // created with the same splits, they could be widely different
+        // * In general we don't want to rewrite past manifests to the new splits, we just try to
+        // reuse them, but if you ser says `rewrite_manifests=true` we'll rewrite everything
+        // * This function needs to work in the scenario where there are multiple past manifests
+        // for the node, and there are also session changes to chunks. These changes can be
+        // modifying, adding or deleting existing chunks.
+        // * We want this function to take time and space proportional to the size of the split,
+        // and not to the total size of the array.
+        //
+        // The algorithm:
+        //
+        // * Analyze all chunks in the changeset to understand what splits have been changed, this
+        // is a full pass through the changeset. Results are put in `update_chunks_by_extent`.
+        // new snapshot
+        // * For each (current) extent `extent` in the array splits:
+        //     * find intersecting_manifests, all manifests in existing_manifests that have non-empty
+        //       intersection with `extent`
+        //     * if there are changes in this session to `extent` or we wants to rewrite manifests:
+        //         * create a new manifest with all chunks in `extent` from all
+        //           `intersecting_manifests`, overriding chunks with those coming from the change
+        //           set, add the new manifest to the list of refs
+        //     * else (no changes in this session to `extent`)
+        //         * for each intersecting manifest:
+        //             * if it's fully contained in the extent, we can reuse it, just add it to th
+        //             elist of refs
+        //             * else create a new manifest filtering out the chunks that are outside of
+        //             the extent
+        let updated_chunks_by_extent: HashMap<ManifestExtents, ChunkTable> = self
             .change_set
-            .changed_node_chunks(&node.id)
-            .filter_map(|idx| splits.find(idx))
-            .collect();
+            .array_chunks_iterator(&node.id, &node.path)
+            .fold(HashMap::new(), |mut res, (idx, payload)| {
+                if let Some(extents) = splits.find(idx) {
+                    let entry = res.entry(extents.clone()).or_default();
+                    entry.insert(idx.clone(), payload.clone());
+                }
+                res
+            });
+        let snapshot_id = &old_snapshot.id();
 
-        // ``modified_splits`` (i.e. splits used in this session)
-        // must be a subset of ``splits`` (the splits set in the config)
-        debug_assert!(modified_splits.is_subset(&splits.iter().collect::<HashSet<_>>()));
-
-        let no_chunks = Vec::new();
         for extent in splits.iter() {
-            if rewrite_manifests || modified_splits.contains(extent) {
-                // this split was modified in this session, rewrite it completely
-                let chunks = classified_chunks.get(extent).unwrap_or(&no_chunks);
-                self.write_manifest_for_updated_chunks(chunks)
-                    .await?
-                    .map(|new_ref| refs.insert(extent.clone(), vec![new_ref]));
-            } else {
-                // intersection of the current split with extents on disk
-                let on_disk_bbox = on_disk_extents
-                    .iter()
-                    .filter_map(|e| e.intersection(extent))
-                    .reduce(|a, b| a.union(&b));
+            let intersecting_manifests: Vec<(&ManifestRef, Overlap)> = existing_manifests
+                .iter()
+                .filter_map(|mr| {
+                    // order is critical here, `overlap_with` is not symmetric
+                    match mr.extents.overlap_with(extent) {
+                        Overlap::None => None,
+                        ov => Some((mr, ov)),
+                    }
+                })
+                .collect();
 
-                // split was unmodified in this session. Let's look at the current manifests
-                // and see what we need to do with them
-                for old_ref in existing_manifests.iter() {
-                    // Remember that the extents written to disk are the `from`:`to` ranges
-                    // of populated chunks
-                    match old_ref.extents.overlap_with(extent) {
-                        Overlap::Complete => {
-                            debug_assert!(on_disk_bbox.is_some());
-                            // Just propagate this ref again, no rewriting necessary
-                            refs.entry(extent.clone()).or_default().push(old_ref.clone());
-                            // OK to unwrap here since this manifest file must exist in the old snapshot
-                            #[allow(clippy::expect_used)]
+            let no_changes = Default::default();
+            let modified_chunks =
+                updated_chunks_by_extent.get(extent).unwrap_or(&no_changes);
+
+            if !modified_chunks.is_empty() || rewrite_manifests {
+                // if we were ask to rewrite manifests, or there are modified chunks in this split
+                // we need to create a new manifest for the split, previous manifests are of no use
+                if let Some(new_ref) = self
+                    .write_manifest_with_changes(
+                        intersecting_manifests.iter().map(|(mr, _)| *mr),
+                        modified_chunks,
+                        extent,
+                        &node.id,
+                        snapshot_id,
+                    )
+                    .await?
+                {
+                    self.manifest_refs.entry(node.id.clone()).or_default().push(new_ref);
+                }
+            } else {
+                // the session made no changes to this split, so we may have opportunity to reuse
+                // the previous manifests
+                for (mref, overlap) in intersecting_manifests {
+                    if overlap == Overlap::Complete {
+                        // only if the full manifest overlaps with the current split we can reuse
+                        // it, otherwise it could have "extra stuff" we don't want. Remember splits
+                        // can be different now than when the manifest was first written
+                        self.manifest_refs
+                            .entry(node.id.clone())
+                            .or_default()
+                            .push(mref.clone());
+                        // OK to unwrap here since this manifest file must exist in the old snapshot
+                        #[allow(clippy::expect_used)]
                             self.manifest_files.insert(
-                                old_snapshot.manifest_info(&old_ref.object_id).expect("logic bug. creating manifest file info for an existing manifest failed."),
+                                old_snapshot.manifest_info(&mref.object_id).expect("logic bug. creating manifest file info for an existing manifest failed."),
                             );
-                        }
-                        Overlap::Partial => {
-                            // the splits have changed, but no refs in this split have been written in this session
-                            // same as `if` block above
-                            debug_assert!(on_disk_bbox.is_some());
-                            let chunks =
-                                classified_chunks.get(extent).unwrap_or(&no_chunks);
-                            if let Some(new_ref) =
-                                self.write_manifest_for_updated_chunks(chunks).await?
-                            {
-                                refs.entry(extent.clone()).or_default().push(new_ref);
-                            }
-                        }
-                        Overlap::None => {
-                            // Nothing to do
-                        }
-                    };
+                    } else if let Some(new_ref) = self
+                        // if the existing manifest only partially overlaps, we need to write a new
+                        // one that contains only the chunks we want
+                        .write_manifest_with_changes(
+                            std::iter::once(mref),
+                            &no_changes,
+                            extent,
+                            &node.id,
+                            snapshot_id,
+                        )
+                        .await?
+                    {
+                        self.manifest_refs
+                            .entry(node.id.clone())
+                            .or_default()
+                            .push(new_ref);
+                    }
                 }
             }
         }
 
-        // FIXME: Assert that bboxes in refs don't overlap
-
-        self.manifest_refs
-            .entry(node.id.clone())
-            .or_default()
-            .extend(refs.into_values().flatten());
         Ok(())
     }
 
@@ -2291,7 +2348,7 @@ async fn do_flush(
                 flush_data
                     .write_manifest_for_existing_node(
                         &node,
-                        manifests,
+                        manifests.as_slice(),
                         old_snapshot.as_ref(),
                         rewrite_manifests,
                         &splits,
@@ -4437,6 +4494,7 @@ mod tests {
         let barrier = Arc::new(Barrier::new(2));
         let barrier_c = Arc::clone(&barrier);
         let barrier_cc = Arc::clone(&barrier);
+
         let handle1 = tokio::spawn(async move {
             let _ = barrier_c.wait().await;
             ds1.commit("from 1", None).await
@@ -5371,7 +5429,7 @@ mod tests {
     //    parent chunks by extent, dropping chunk [10] because it's outside [0..5)
     // 8. Result: chunk [10] is lost
     //
-    // The fix requires updating Session.splits during rebase to match the new
+    // With IC1, doing this correctly requires updating Session.splits during rebase to match the new
     // parent snapshot's array shapes.
     async fn test_rebase_over_resize() -> Result<(), Box<dyn Error>> {
         struct YoloSolver;

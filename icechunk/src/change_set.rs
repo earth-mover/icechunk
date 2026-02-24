@@ -39,7 +39,7 @@ pub struct ArrayData {
     pub user_data: Bytes,
 }
 
-type ChunkTable = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
+pub(crate) type ChunkTable = BTreeMap<ChunkIndices, Option<ChunkPayload>>;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EditChanges {

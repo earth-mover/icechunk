@@ -1242,15 +1242,35 @@ pub mod generated {
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>("index", Self::VT_INDEX, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("inline", Self::VT_INLINE, false)?
-     .visit_field::<u64>("offset", Self::VT_OFFSET, false)?
-     .visit_field::<u64>("length", Self::VT_LENGTH, false)?
-     .visit_field::<ObjectId12>("chunk_id", Self::VT_CHUNK_ID, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("location", Self::VT_LOCATION, false)?
-     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("checksum_etag", Self::VT_CHECKSUM_ETAG, false)?
-     .visit_field::<u32>("checksum_last_modified", Self::VT_CHECKSUM_LAST_MODIFIED, false)?
-     .finish();
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>(
+                    "index",
+                    Self::VT_INDEX,
+                    true,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "inline",
+                    Self::VT_INLINE,
+                    false,
+                )?
+                .visit_field::<u64>("offset", Self::VT_OFFSET, false)?
+                .visit_field::<u64>("length", Self::VT_LENGTH, false)?
+                .visit_field::<ObjectId12>("chunk_id", Self::VT_CHUNK_ID, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "location",
+                    Self::VT_LOCATION,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
+                    "checksum_etag",
+                    Self::VT_CHECKSUM_ETAG,
+                    false,
+                )?
+                .visit_field::<u32>(
+                    "checksum_last_modified",
+                    Self::VT_CHECKSUM_LAST_MODIFIED,
+                    false,
+                )?
+                .finish();
             Ok(())
         }
     }
@@ -1725,7 +1745,12 @@ pub mod generated {
             // Created from valid Table for this object
             // which contains a valid value in this slot
             unsafe {
-                self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ChunkIndexRange>>>(ManifestRef::VT_EXTENTS, None).unwrap()
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ChunkIndexRange>>>(
+                        ManifestRef::VT_EXTENTS,
+                        None,
+                    )
+                    .unwrap()
             }
         }
     }
@@ -2048,7 +2073,12 @@ pub mod generated {
             // Created from valid Table for this object
             // which contains a valid value in this slot
             unsafe {
-                self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, DimensionShape>>>(ArrayNodeData::VT_SHAPE, None).unwrap()
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, DimensionShape>>>(
+                        ArrayNodeData::VT_SHAPE,
+                        None,
+                    )
+                    .unwrap()
             }
         }
         #[inline]
@@ -2344,17 +2374,34 @@ pub mod generated {
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
-     .visit_field::<ObjectId8>("id", Self::VT_ID, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("path", Self::VT_PATH, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("user_data", Self::VT_USER_DATA, true)?
-     .visit_union::<NodeData, _>("node_data_type", Self::VT_NODE_DATA_TYPE, "node_data", Self::VT_NODE_DATA, true, |key, v, pos| {
-        match key {
-          NodeData::Array => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ArrayNodeData>>("NodeData::Array", pos),
-          NodeData::Group => v.verify_union_variant::<flatbuffers::ForwardsUOffset<GroupNodeData>>("NodeData::Group", pos),
-          _ => Ok(()),
-        }
-     })?
-     .finish();
+                .visit_field::<ObjectId8>("id", Self::VT_ID, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<&str>>("path", Self::VT_PATH, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "user_data",
+                    Self::VT_USER_DATA,
+                    true,
+                )?
+                .visit_union::<NodeData, _>(
+                    "node_data_type",
+                    Self::VT_NODE_DATA_TYPE,
+                    "node_data",
+                    Self::VT_NODE_DATA,
+                    true,
+                    |key, v, pos| match key {
+                        NodeData::Array => v
+                            .verify_union_variant::<flatbuffers::ForwardsUOffset<ArrayNodeData>>(
+                                "NodeData::Array",
+                                pos,
+                            ),
+                        NodeData::Group => v
+                            .verify_union_variant::<flatbuffers::ForwardsUOffset<GroupNodeData>>(
+                                "NodeData::Group",
+                                pos,
+                            ),
+                        _ => Ok(()),
+                    },
+                )?
+                .finish();
             Ok(())
         }
     }
@@ -2452,14 +2499,20 @@ pub mod generated {
                     if let Some(x) = self.node_data_as_array() {
                         ds.field("node_data", &x)
                     } else {
-                        ds.field("node_data", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "node_data",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 NodeData::Group => {
                     if let Some(x) = self.node_data_as_group() {
                         ds.field("node_data", &x)
                     } else {
-                        ds.field("node_data", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "node_data",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 _ => {
@@ -2821,8 +2874,12 @@ pub mod generated {
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>("coords", Self::VT_COORDS, true)?
-     .finish();
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u32>>>(
+                    "coords",
+                    Self::VT_COORDS,
+                    true,
+                )?
+                .finish();
             Ok(())
         }
     }
@@ -3259,7 +3316,12 @@ pub mod generated {
             // Created from valid Table for this object
             // which contains a valid value in this slot
             unsafe {
-                self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_NEW_GROUPS, None).unwrap()
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(
+                        TransactionLog::VT_NEW_GROUPS,
+                        None,
+                    )
+                    .unwrap()
             }
         }
         #[inline]
@@ -3268,7 +3330,12 @@ pub mod generated {
             // Created from valid Table for this object
             // which contains a valid value in this slot
             unsafe {
-                self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_NEW_ARRAYS, None).unwrap()
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(
+                        TransactionLog::VT_NEW_ARRAYS,
+                        None,
+                    )
+                    .unwrap()
             }
         }
         #[inline]
@@ -3277,7 +3344,12 @@ pub mod generated {
             // Created from valid Table for this object
             // which contains a valid value in this slot
             unsafe {
-                self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_DELETED_GROUPS, None).unwrap()
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(
+                        TransactionLog::VT_DELETED_GROUPS,
+                        None,
+                    )
+                    .unwrap()
             }
         }
         #[inline]
@@ -3286,7 +3358,12 @@ pub mod generated {
             // Created from valid Table for this object
             // which contains a valid value in this slot
             unsafe {
-                self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_DELETED_ARRAYS, None).unwrap()
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(
+                        TransactionLog::VT_DELETED_ARRAYS,
+                        None,
+                    )
+                    .unwrap()
             }
         }
         #[inline]
@@ -3295,7 +3372,12 @@ pub mod generated {
             // Created from valid Table for this object
             // which contains a valid value in this slot
             unsafe {
-                self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_UPDATED_ARRAYS, None).unwrap()
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(
+                        TransactionLog::VT_UPDATED_ARRAYS,
+                        None,
+                    )
+                    .unwrap()
             }
         }
         #[inline]
@@ -3304,7 +3386,12 @@ pub mod generated {
             // Created from valid Table for this object
             // which contains a valid value in this slot
             unsafe {
-                self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(TransactionLog::VT_UPDATED_GROUPS, None).unwrap()
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, ObjectId8>>>(
+                        TransactionLog::VT_UPDATED_GROUPS,
+                        None,
+                    )
+                    .unwrap()
             }
         }
         #[inline]
@@ -3351,16 +3438,44 @@ pub mod generated {
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
-     .visit_field::<ObjectId12>("id", Self::VT_ID, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("new_groups", Self::VT_NEW_GROUPS, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("new_arrays", Self::VT_NEW_ARRAYS, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("deleted_groups", Self::VT_DELETED_GROUPS, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("deleted_arrays", Self::VT_DELETED_ARRAYS, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("updated_arrays", Self::VT_UPDATED_ARRAYS, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("updated_groups", Self::VT_UPDATED_GROUPS, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ArrayUpdatedChunks>>>>("updated_chunks", Self::VT_UPDATED_CHUNKS, true)?
-     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MoveOperation>>>>("moved_nodes", Self::VT_MOVED_NODES, false)?
-     .finish();
+                .visit_field::<ObjectId12>("id", Self::VT_ID, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>(
+                    "new_groups",
+                    Self::VT_NEW_GROUPS,
+                    true,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>(
+                    "new_arrays",
+                    Self::VT_NEW_ARRAYS,
+                    true,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>(
+                    "deleted_groups",
+                    Self::VT_DELETED_GROUPS,
+                    true,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>(
+                    "deleted_arrays",
+                    Self::VT_DELETED_ARRAYS,
+                    true,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>(
+                    "updated_arrays",
+                    Self::VT_UPDATED_ARRAYS,
+                    true,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>(
+                    "updated_groups",
+                    Self::VT_UPDATED_GROUPS,
+                    true,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ArrayUpdatedChunks>>,
+                >>("updated_chunks", Self::VT_UPDATED_CHUNKS, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MoveOperation>>,
+                >>("moved_nodes", Self::VT_MOVED_NODES, false)?
+                .finish();
             Ok(())
         }
     }
@@ -6131,98 +6246,140 @@ pub mod generated {
                     if let Some(x) = self.update_type_as_repo_initialized_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::RepoMigratedUpdate => {
                     if let Some(x) = self.update_type_as_repo_migrated_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::ConfigChangedUpdate => {
                     if let Some(x) = self.update_type_as_config_changed_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::MetadataChangedUpdate => {
                     if let Some(x) = self.update_type_as_metadata_changed_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::TagCreatedUpdate => {
                     if let Some(x) = self.update_type_as_tag_created_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::TagDeletedUpdate => {
                     if let Some(x) = self.update_type_as_tag_deleted_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::BranchCreatedUpdate => {
                     if let Some(x) = self.update_type_as_branch_created_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::BranchDeletedUpdate => {
                     if let Some(x) = self.update_type_as_branch_deleted_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::BranchResetUpdate => {
                     if let Some(x) = self.update_type_as_branch_reset_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::NewCommitUpdate => {
                     if let Some(x) = self.update_type_as_new_commit_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::CommitAmendedUpdate => {
                     if let Some(x) = self.update_type_as_commit_amended_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::NewDetachedSnapshotUpdate => {
                     if let Some(x) = self.update_type_as_new_detached_snapshot_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::GCRanUpdate => {
                     if let Some(x) = self.update_type_as_gcran_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 UpdateType::ExpirationRanUpdate => {
                     if let Some(x) = self.update_type_as_expiration_ran_update() {
                         ds.field("update_type", &x)
                     } else {
-                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                        ds.field(
+                            "update_type",
+                            &"InvalidFlatbuffer: Union discriminant does not match value.",
+                        )
                     }
                 }
                 _ => {

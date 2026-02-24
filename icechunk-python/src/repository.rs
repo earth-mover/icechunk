@@ -2118,6 +2118,7 @@ impl PyRepository {
         let message = message.to_owned();
         let branch = branch.to_owned();
         let metadata = metadata.map(|m| m.into());
+
         pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
             let repository = repository.read().await;
             // TODO: make commit method selectable

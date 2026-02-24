@@ -656,18 +656,12 @@ mod tests {
             delete_tag(storage.as_ref(), &storage_settings, "tag1").await?;
 
             // cannot delete twice
-            assert!(delete_tag(storage.as_ref(), &storage_settings, "tag1")
-                .await
-                .is_err());
+            assert!(delete_tag(storage.as_ref(), &storage_settings, "tag1").await.is_err());
 
             // we cannot delete non-existent tag
-            assert!(delete_tag(
-                storage.as_ref(),
-                &storage_settings,
-                "doesnt_exist",
-            )
-            .await
-            .is_err());
+            assert!(
+                delete_tag(storage.as_ref(), &storage_settings, "doesnt_exist",).await.is_err()
+            );
 
             // cannot recreate same tag
             matches!(create_tag(

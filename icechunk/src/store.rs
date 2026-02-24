@@ -1486,11 +1486,11 @@ mod tests {
 
         store.set("a/b/zarr.json", Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"group","attributes":{"spam":"ham","eggs":42}}"#)).await?;
         assert_eq!(
-               store.get("a/b/zarr.json", &ByteRange::ALL).await.unwrap(),
-               Bytes::copy_from_slice(
-                   br#"{"zarr_format":3,"node_type":"group","attributes":{"spam":"ham","eggs":42}}"#
-               )
-           );
+            store.get("a/b/zarr.json", &ByteRange::ALL).await.unwrap(),
+            Bytes::copy_from_slice(
+                br#"{"zarr_format":3,"node_type":"group","attributes":{"spam":"ham","eggs":42}}"#
+            )
+        );
 
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
         store.set("a/b/array/zarr.json", zarr_meta.clone()).await?;
@@ -1507,7 +1507,8 @@ mod tests {
         let repo = create_memory_store_repository().await;
         let ds = repo.writable_session("main").await?;
         let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
-        let group_data = br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
+        let group_data =
+            br#"{"zarr_format":3, "node_type":"group", "attributes": {"spam":"ham", "eggs":42}}"#;
 
         store
             .set(

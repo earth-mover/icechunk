@@ -1666,20 +1666,20 @@ impl Repository {
                                             let manifest_id_c = manifest_id.clone();
                                             let path = node.path.clone();
                                             futures.push(async move {
-                                                    trace!("Preloading manifest {} for array {}", &manifest_id_c, path);
-                                                    if let Err(err) = asset_manager
-                                                        .fetch_manifest(
-                                                            &manifest_id_c,
-                                                            size_bytes,
-                                                        )
-                                                        .await
-                                                    {
-                                                        error!(
-                                                            "Failure pre-loading manifest {}: {}",
-                                                            &manifest_id_c, err
-                                                        );
-                                                    }
-                                                });
+                                                trace!(
+                                                    "Preloading manifest {} for array {}",
+                                                    &manifest_id_c, path
+                                                );
+                                                if let Err(err) = asset_manager
+                                                    .fetch_manifest(&manifest_id_c, size_bytes)
+                                                    .await
+                                                {
+                                                    error!(
+                                                        "Failure pre-loading manifest {}: {}",
+                                                        &manifest_id_c, err
+                                                    );
+                                                }
+                                            });
                                             loaded_manifests.insert(manifest_id);
                                             loaded_refs += manifest_info.num_chunk_refs;
                                         }
@@ -1833,10 +1833,10 @@ mod tests {
         asset_manager: &Arc<AssetManager>,
         total_manifests: usize,
     ) {
-        let expected = asset_manager.list_manifests().await.unwrap().count().await;
+        let actual = asset_manager.list_manifests().await.unwrap().count().await;
         assert_eq!(
-            total_manifests, expected,
-            "Mismatch in manifest count: expected {expected}, but got {total_manifests}",
+            total_manifests, actual,
+            "Mismatch in manifest count: expected {total_manifests}, but got {actual}",
         );
     }
 
