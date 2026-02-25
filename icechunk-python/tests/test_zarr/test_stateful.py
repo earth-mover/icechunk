@@ -54,6 +54,7 @@ class ModelStore(MemoryStore):
     async def copy(self) -> "ModelStore":
         """Create a copy of this store."""
         new_store = ModelStore()
+        new_store.spec_version = self.spec_version
         async for key in self.list_prefix(""):
             data = await self.get(key, prototype=PROTOTYPE)
             if data is not None:
