@@ -42,11 +42,8 @@ async fn mk_s3_storage(
     prefix: &str,
     permission: &Permission,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let (access_key_id, secret_access_key) = match permission {
-        Permission::Modify => ("minio123".into(), "minio123".into()), // TODO: make a more restricted one
-        Permission::ReadOnly => ("basic".into(), "basicuser".into()),
-        Permission::List => todo!(),
-    };
+    let (access_key_id, secret_access_key) = permission.keys();
+
     let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
         S3Options {
             region: Some("us-east-1".to_string()),
@@ -60,8 +57,8 @@ async fn mk_s3_storage(
         "testbucket".to_string(),
         Some(prefix.to_string()),
         Some(S3Credentials::Static(S3StaticCredentials {
-            access_key_id,
-            secret_access_key,
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
             session_token: None,
             expires_after: None,
         })),
@@ -76,18 +73,15 @@ async fn mk_s3_object_store_storage(
     prefix: &str,
     permission: &Permission,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let (access_key_id, secret_access_key) = match permission {
-        Permission::Modify => ("minio123".into(), "minio123".into()), // TODO: make a more restricted one
-        Permission::ReadOnly => ("basic".into(), "basicuser".into()),
-        Permission::List => todo!(),
-    };
+    let (access_key_id, secret_access_key) = permission.keys();
+
     let storage = Arc::new(
         ObjectStorage::new_s3(
             "testbucket".to_string(),
             Some(prefix.to_string()),
             Some(S3Credentials::Static(S3StaticCredentials {
-                access_key_id,
-                secret_access_key,
+                access_key_id: access_key_id.into(),
+                secret_access_key: secret_access_key.into(),
                 session_token: None,
                 expires_after: None,
             })),
