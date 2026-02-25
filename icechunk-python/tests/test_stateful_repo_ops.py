@@ -385,6 +385,7 @@ class Model:
         for snap in self.commits.values():
             if (
                 snap.written_at < older_than
+                # all roots are preserved
                 and snap.parent_id is not None
                 and (delete_expired_tags or snap.id not in tag_pointees)
                 and (
@@ -403,7 +404,7 @@ class Model:
 
         for c in self.commits.values():
             if c.parent_id in expired_snaps:
-                c.parent_id = None
+                c.parent_id = INITIAL_SNAPSHOT
 
         if delete_expired_tags:
             tags_to_delete = {
@@ -792,7 +793,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         return data.draw(
             st.one_of(
                 st.just(max(self.model.commit_times) + datetime.timedelta(seconds=1)),
-                st.sampled_from(self.model.commit_times),
+                # In the model, we delete based on snapshot created_at time, not flushed_at time (as in Rust)
+                # so we offset the commit_time by a small amount to account for the difference
+                st.sampled_from(self.model.commit_times).map(
+                    lambda time: time + datetime.timedelta(milliseconds=200)
+                ),
                 st.just(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
             )
         )
