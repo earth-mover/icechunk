@@ -214,6 +214,7 @@ class Model:
         self.store: dict[str, Any] = {}
 
         self.spec_version = 1  # will be overwritten on `@initialize`
+        self.initial_spec_version = 1  # will be overwritten on `@initialize`
 
         self.metadata: dict[str, Any] = {}
 
@@ -411,7 +412,7 @@ class Model:
 
         for c in self.commits.values():
             if c.parent_id in expired_snaps:
-                c.parent_id = INITIAL_SNAPSHOT
+                c.parent_id = self.initial_snapshot_id
 
         if delete_expired_tags:
             tags_to_delete = {
@@ -506,6 +507,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
         self.storage = self._make_storage()
         config = data.draw(repository_configs(ic_module=self.ic))
+        self.model.initial_spec_version = spec_version
         self.model.spec_version = spec_version
 
         if Version(self.ic.__version__).major >= 2:
@@ -1012,12 +1014,20 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         assert self.storage is not None
         paths = set(path_and_bytes[0] for path_and_bytes in self.storage.list_objects())
 
-        nsnapshots = len([p for p in paths if p.startswith("snapshots/")])
-        ntransactions = len([p for p in paths if p.startswith("transactions/")])
-        if Version(self.ic.__version__).major >= 2 and self.model.spec_version >= 2:
-            assert nsnapshots == ntransactions
+        # This is complicated with repo upgrades
+        snapshots = [
+            p.removeprefix("snapshots/") for p in paths if p.startswith("snapshots/")
+        ]
+        transactions = [
+            p.removeprefix("transactions/")
+            for p in paths
+            if p.startswith("transactions/")
+        ]
+        if self.model.initial_spec_version == 1:
+            assert set(snapshots) - set({INITIAL_SNAPSHOT}) == set(transactions)
         else:
-            assert nsnapshots - 1 == ntransactions
+            assert set(snapshots) == set(transactions)
+            assert len(snapshots) == len(transactions)
 
         if self.model.spec_version >= 2:
             ops = list(self.repo.ops_log())
@@ -1034,14 +1044,17 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         if self.model.spec_version == 1:
             return
         actual_ops = list(self.repo.ops_log())
+
+        # ops should be ordered
         assert all(
             first.updated_at > second.updated_at
             for (first, second) in itertools.pairwise(actual_ops)
         )
-        assert all(
-            first.backup_path != second.backup_path
-            for (first, second) in itertools.pairwise(actual_ops)
-        )
+
+        # backup paths must be unique
+        all_backups = [op.backup_path for op in actual_ops]
+        assert len(all_backups) == len(set(all_backups))
+
         assert self.model.ops_log[::-1] == actual_ops
         assert isinstance(
             actual_ops[-1], ic.RepoInitializedUpdate | ic.RepoMigratedUpdate
