@@ -6,18 +6,18 @@ alias pre := pre-commit
 
 # run all tests
 test *args='':
-  cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --all-targets {{args}}
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --all-targets {{args}}
 
 doctest *args='':
   cargo test --workspace --profile {{profile}} --doc {{args}}
 
 # run all tests with logs enabled
 test-logs level *args='':
-  RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --all-targets {{args}} -- --nocapture
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --all-targets {{args}} -- --nocapture
 
 # compile but don't run all tests
 compile-tests *args='':
-  cargo nextest run --no-run --cargo-profile {{profile}} --workspace --all-targets {{args}}
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-run --cargo-profile {{profile}} --workspace --all-targets {{args}}
 
 # build debug version
 build *args='':
