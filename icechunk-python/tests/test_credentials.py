@@ -144,7 +144,7 @@ class ExpirableCredentials:
         # The return an expired credential for 3 times, then we return credentials with no expiration
         expires = None if len(s) >= self.expired_times else datetime.now(UTC)
         return S3StaticCredentials(
-            access_key_id="basic", secret_access_key="basicuser", expires_after=expires
+            access_key_id="minio123", secret_access_key="minio123", expires_after=expires
         )
 
 
