@@ -53,6 +53,7 @@ use crate::{
         snapshot::{
             ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
             NodeType, Snapshot, SnapshotInfo, SnapshotProperties,
+            inject_icechunk_metadata,
         },
         transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
@@ -1224,7 +1225,11 @@ impl Session {
         let splitting_config_serialized =
             serde_json::to_value(self.config.manifest().splitting())?;
         let mut properties = properties.unwrap_or_default();
-        properties.insert("splitting_config".to_string(), splitting_config_serialized);
+        inject_icechunk_metadata(
+            &mut properties,
+            "splitting_config",
+            splitting_config_serialized,
+        );
 
         self._commit(message, Some(properties), true, commit_method, true).await
     }
@@ -1316,7 +1321,13 @@ impl Session {
         Fut2: Future<Output = ()>,
     {
         for attempt in 0..rebase_attempts {
-            match self.commit(message, properties.clone()).await {
+            let mut props = properties.clone().unwrap_or_default();
+            inject_icechunk_metadata(
+                &mut props,
+                "rebase_attempts",
+                serde_json::Value::from(attempt),
+            );
+            match self.commit(message, Some(props)).await {
                 Ok(snap) => return Ok(snap),
                 Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) => {
                     before_rebase(attempt + 1).await;
@@ -1326,7 +1337,13 @@ impl Session {
                 Err(other_err) => return Err(other_err),
             }
         }
-        self.commit(message, properties).await
+        let mut props = properties.unwrap_or_default();
+        inject_icechunk_metadata(
+            &mut props,
+            "rebase_attempts",
+            serde_json::Value::from(rebase_attempts),
+        );
+        self.commit(message, Some(props)).await
     }
 
     /// Detect and optionally fix conflicts between the current [`ChangeSet`] (or session) and
@@ -5758,7 +5775,13 @@ mod tests {
             .await;
 
         // The commit has to work after 3 rebase attempts
-        assert!(res.is_ok());
+        let snap_id = res.unwrap();
+        let v = VersionInfo::SnapshotId(snap_id);
+        let infos = repo.ancestry(&v).await?.try_collect::<Vec<_>>().await?;
+        assert_eq!(
+            infos[0].metadata.get("__icechunk"),
+            Some(&serde_json::json!({ "rebase_attempts": 3 }))
+        );
         assert_eq!(attempts.into_inner(), 3);
         Ok(())
     }

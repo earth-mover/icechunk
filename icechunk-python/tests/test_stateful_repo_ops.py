@@ -271,8 +271,11 @@ class Model:
     def get(self, key: str) -> Buffer | None:
         return self.store.get(key)
 
-    def upgrade(self) -> None:
-        self.ops_log.append(RepoMigratedUpdateModel(self.spec_version, 2))
+    def upgrade(self, dry_run: bool) -> None:
+        if not dry_run:
+            # The ops log starts fresh after migration from v1,
+            self.ops_log = [RepoMigratedUpdateModel(self.spec_version, 2)]
+            self.spec_version = 2
 
     @property
     def has_commits(self) -> bool:
@@ -560,15 +563,21 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.repo.set_metadata(meta)
         self.model.set_metadata(meta)
 
-    @rule()
+    @rule(dry_run=st.booleans(), delete_unused_v1_files=st.booleans())
     @precondition(lambda self: self.model.spec_version == 1)
-    def upgrade_spec_version(self) -> None:
+    def upgrade_spec_version(self, dry_run: bool, delete_unused_v1_files: bool) -> None:
         # don't test simple cases of catching error upgradging a v2 spec
         # that should be covered in unit tests
-        ic.upgrade_icechunk_repository(self.repo)
-        self.model.upgrade()
+        icechunk.upgrade_icechunk_repository(
+            self.repo, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
+        )
+
         # TODO: remove the reopen after https://github.com/earth-mover/icechunk/issues/1521
         self._reopen_repository()
+
+        self.model.upgrade(dry_run)
+        if not dry_run:
+            assert self.repo.spec_version == 2
 
     @rule(data=st.data())
     def reopen_repository(self, data: st.DataObject) -> None:
@@ -1031,12 +1040,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             for (first, second) in itertools.pairwise(actual_ops)
         )
         assert self.model.ops_log[::-1] == actual_ops
-        assert isinstance(actual_ops[-1], ic.RepoInitializedUpdate)
+        assert isinstance(
+            actual_ops[-1], ic.RepoInitializedUpdate | ic.RepoMigratedUpdate
+        )
 
 
 VersionControlStateMachine.TestCase.settings = settings(
     deadline=None,
     stateful_step_count=100,
-    # report_multiple_bugs=False,
+    report_multiple_bugs=False,
 )
 VersionControlTest = VersionControlStateMachine.TestCase
