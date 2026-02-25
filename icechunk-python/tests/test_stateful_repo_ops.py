@@ -273,6 +273,10 @@ class Model:
 
     def upgrade(self, dry_run: bool) -> None:
         if not dry_run:
+            # only reachable snapshots are migrated over
+            self.commits = {
+                k: v for k, v in self.commits.items() if k in self.reachable_snapshots()
+            }
             # The ops log starts fresh after migration from v1,
             self.ops_log = [RepoMigratedUpdateModel(self.spec_version, 2)]
             self.spec_version = 2
