@@ -1657,6 +1657,7 @@ class PyRepository:
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         spec_version: int | None = None,
+        check_clean_root: bool = False,
     ) -> PyRepository: ...
     @classmethod
     async def create_async(
@@ -1666,6 +1667,7 @@ class PyRepository:
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         spec_version: int | None = None,
+        check_clean_root: bool = False,
     ) -> PyRepository: ...
     @classmethod
     def open(
