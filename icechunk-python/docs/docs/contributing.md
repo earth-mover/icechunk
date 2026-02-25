@@ -144,12 +144,6 @@ We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rus
     just py-pre-commit
     ```
 
-=== "uv"
-    TBW
-
-=== "Venv/Conda"
-    TBW
-
 
 #### Testing with Upstream Dependencies
 
@@ -233,7 +227,12 @@ uv run scripts/check_xarray_docs_sync.py --update-known-diffs
 
 #### Prerequisites
 
-You need to have already created and activated a virtual environment ([see above](#python-development-workflow)), because the full rust build will also compile the python bindings.
+Make sure you have activated your [development environment](#setting-up-your-development-environment) before proceeding, because the full rust build will also compile the python bindings.
+
+##### just, cargo-nextest, cargo-deny 
+
+!!! 
+    If you use pixi and have activated the shell per instructions [above](#setting-up-your-development-environment) you can skip to the next section!
 
 Install the `just` command runner (used for build tasks and pre-commit hooks):
 
@@ -256,7 +255,13 @@ cargo install cargo-nextest
 or check the [installation instructions](https://nexte.st/docs/installation/)
 for pre-built binaries or using package managers.
 
-#### WASM Compiler Setup (macOS)
+To run all code quality checks you will also need `cargo-deny`:
+
+```bash
+cargo install cargo-deny
+```
+
+##### WASM Compiler Setup (macOS)
 
 To compile `icechunk` for `wasm32-wasip1-threads`, you need the Rust target and a C toolchain with WebAssembly support (needed by `zstd-sys`).
 
@@ -319,15 +324,9 @@ cargo test test_name
 
 !!! important
 
-    The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions.
+    The full Rust test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions.
 
 #### Code Quality
-
-To run all code quality checks you will also need `cargo-deny`:
-
-```bash
-cargo install cargo-deny
-```
 
 We use a tiered pre-commit system for fast development:
 
@@ -413,7 +412,7 @@ This builds the site to `docs/.site` directory.
 
 - Use `just docs-serve --dirty` to only rebuild changed files (faster for iterative development)
 - You may need to restart if you make changes to `mkdocs.yml`
-- For debugging the doc build logs, check out [docs-output-filter](https://github.com/ianhi/docs-output-filter) (you can run `docs-output-filter -- just docs-serve` once installed). *`docs-output-filter` also works to debug remote builds like RTD with the `--url` flag* 😍
+- For debugging the doc build logs, check out [docs-output-filter](https://github.com/ianhi/docs-output-filter) (you can run `docs-output-filter -- just docs-serve` once installed). *`docs-output-filter` also works to debug remote builds like RTD with the `--url` flag*
 
 ### Docker setup for local storage testing
 
