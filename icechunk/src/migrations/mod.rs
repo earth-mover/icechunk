@@ -223,6 +223,9 @@ pub async fn migrate_1_to_2(
         branches.len(),
         deleted_tags.len()
     );
+    let deleted_tag_names = deleted_tags.iter().filter_map(|s| {
+        s.as_str().strip_prefix("tag.").and_then(|s| s.strip_suffix("/ref.json.deleted"))
+    });
 
     info!("Collecting non-dangling snapshots, this make take a few minutes");
     let snap_ids = refs.iter().map(|(_, id)| id);
@@ -241,7 +244,7 @@ pub async fn migrate_1_to_2(
         SpecVersionBin::V2dot0,
         tags,
         branches,
-        deleted_tags.iter().map(|s| s.as_str()),
+        deleted_tag_names,
         all_snapshots,
         &Default::default(),
         UpdateInfo {
@@ -448,6 +451,12 @@ mod tests {
 
         assert_eq!(tag_ancestries_before, tag_ancestries_after);
         assert_eq!(branch_ancestries_before, branch_ancestries_after);
+
+        // Verify deleted tag name is preserved (not the full V1 path)
+        let (info, _) = repo.asset_manager().fetch_repo_info().await?;
+        let deleted_tags: Vec<_> = info.deleted_tags()?.collect();
+        assert_eq!(deleted_tags, vec!["deleted"]);
+
         Ok(())
     }
 
