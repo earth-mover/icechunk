@@ -9,6 +9,7 @@ import pytest
 from hypothesis import assume, note, settings
 from hypothesis.stateful import (
     initialize,
+    invariant,
     precondition,
     rule,
     run_state_machine_as_test,
@@ -384,18 +385,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                     f"list_dir mismatch for {path=}: {model_ls=} != {store_ls=}"
                 )
 
-    @precondition(lambda self: bool(self.all_groups))
-    @rule(data=st.data())
-    def check_list_dir(self, data: st.DataObject) -> None:
-        """Override parent to tolerate Icechunk always returning 'c' directory.
-
-        Icechunk always includes 'c' in list_dir for arrays, even when no chunks
-        exist. MemoryStore only returns 'c' if chunks are present. We ignore
-        this specific difference.
-        """
-        path = self.draw_directory(data)
-        note(f"list_dir for {path=!r}")
-        self._compare_list_dir(self.model, self.store, {path})
+    @invariant()
+    def check_list_dir(self) -> None:
+        self._compare_list_dir(self.model, self.store, self.all_groups | self.all_arrays)
 
     # Override upstream delete_group_using_del to fix precondition bug:
     # upstream checks `len(self.all_groups) >= 2` but filters to only groups
