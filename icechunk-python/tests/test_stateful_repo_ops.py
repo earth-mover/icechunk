@@ -431,7 +431,6 @@ class Model:
             }
             note(f"deleting branches {branches_to_delete=!r}")
             for branch in branches_to_delete:
-                note(f"deleting {branch=!r}, {self.branch_heads[branch]=!r}")
                 self._delete_branch(branch)
         else:
             branches_to_delete = set()
@@ -490,7 +489,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.session = self.repo.writable_session(DEFAULT_BRANCH)
 
         snap = next(iter(self.repo.ancestry(branch=DEFAULT_BRANCH)))
-        note(f"Initial commit is {snap!r}")
         self.initial_snapshot = snap
 
         self.model.initialize(snap=snap)
@@ -647,7 +645,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         commit_id = self.session.amend(message)
         snapinfo = next(iter(self.repo.ancestry(branch=branch)))
         assert snapinfo.id == commit_id
-        note(f"Amended commit: {snapinfo!r}")
         self.session = self.repo.writable_session(branch)
 
         # Update model
@@ -928,7 +925,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def check_commit(self, commit: str) -> None:
         # utility function, not an invariant
         assume(commit in self.model.commits)
-        note(f"Checking {commit=!r}")
         expected = self.model.commits[commit]
         actual = self.repo.lookup_snapshot(commit)
         assert actual.id == expected.id
