@@ -50,11 +50,8 @@ async def test_shift_left() -> None:
 
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=False)
-    element_shift = session.shift_array("/array", (-4,))
+    session.shift_array("/array", (-4,))
     array = cast("zarr.Array[Any]", root["array"])
-
-    # Verify return value: chunk_offset * chunk_size = -4 * 2 = -8
-    assert element_shift == (-8,)
 
     # First 42 elements should be shifted (8 array elements shifted left)
     np.testing.assert_equal(array[0:42], np.arange(8, 50))
@@ -154,7 +151,7 @@ async def test_shift_2d() -> None:
 
 
 async def test_shift_3d_mixed_offset() -> None:
-    """Test 3D shift with mixed offsets (-1, 0, -1) and verify element_shift return."""
+    """Test 3D shift with mixed offsets (-1, 0, -1)."""
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
     )
@@ -173,11 +170,8 @@ async def test_shift_3d_mixed_offset() -> None:
 
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=False)
-    element_shift = session.shift_array("/array", (-1, 0, -1))
+    session.shift_array("/array", (-1, 0, -1))
     array = cast("zarr.Array[Any]", root["array"])
-
-    # Verify element_shift: (-1 * 2, 0 * 2, -1 * 4) = (-2, 0, -4)
-    assert element_shift == (-2, 0, -4)
 
     # Verify data shifted correctly:
     # - Dim 0: shifted left by 1 chunk (2 elements), last 2 rows have stale data

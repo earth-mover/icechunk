@@ -30,11 +30,9 @@ shift_array("/arr", (-2,)) # → shifts by 2 chunks = 4 elements
 
 Why chunks instead of elements? Because these are **metadata-only operations**. Shifting by partial chunks would require splitting and rewriting chunk data.
 
-For convenience, `shift_array` returns the shift converted to element space—so you don't need to manually track chunk sizes when determining where to write new data.
-
 ## shift_array { #shift_array }
 
-The [`shift_array`][icechunk.Session.shift_array] method moves all chunks by a fixed offset per dimension (negative to shift toward index 0, positive toward higher indices). Out-of-bounds chunks are discarded, and vacated positions retain stale data. For convenience, it returns the **index shift** (`chunk_offset × chunk_size` for each dimension).
+The [`shift_array`][icechunk.Session.shift_array] method moves all chunks by a fixed offset per dimension (negative to shift toward index 0, positive toward higher indices). Out-of-bounds chunks are discarded, and vacated positions retain stale data.
 
 ```python exec="on" session="chunks" source="material-block" result="code"
 import numpy as np
@@ -114,9 +112,15 @@ print(arr[:])
 Imagine a sensor array storing the last 7 days of hourly readings—shape `(168,)` with one chunk per day `(24,)`. Each day, you want to discard the oldest day and make room for new data:
 
 ```python
-# Each day: shift left by 1 chunk, discarding the oldest
-element_shift = session.shift_array("/sensors/temperature", (-1,))
+arr = zarr.open_array(store=session.store, path="sensors/temperature")
+chunk_offset = (-1,)
+
+# Compute the element-space shift from the chunk offset and chunk shape
+element_shift = tuple(o * c for o, c in zip(chunk_offset, arr.chunks))
 # element_shift = (-24,) — the shift in element space
+
+# Shift left by 1 chunk, discarding the oldest
+session.shift_array("/sensors/temperature", chunk_offset)
 
 # Write new day's data to the vacated region
 arr[element_shift[0]:] = todays_readings
@@ -124,7 +128,7 @@ arr[element_shift[0]:] = todays_readings
 session.commit(f"Updated sensor data for {today}")
 ```
 
-The return value tells you exactly where to write new data—no need to manually track chunk sizes.
+Computing the index shift in element space is straightforward: multiply each chunk offset by the corresponding chunk size. This tells you exactly where to write new data.
 
 This pattern works identically whether your array is 1 KB or 1 PB, and whether it's on local disk or cloud object storage—the shift is always instant with zero data transfer.
 
