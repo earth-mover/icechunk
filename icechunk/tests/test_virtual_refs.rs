@@ -82,6 +82,7 @@ async fn create_repository(
         storage,
         credentials,
         None,
+        false,
     )
     .await
     .expect("Failed to initialize repository")
@@ -885,7 +886,8 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         config.set_virtual_chunk_container(container);
     }
 
-    let repo = Repository::create(Some(config), storage, virtual_creds, None).await?;
+    let repo =
+        Repository::create(Some(config), storage, virtual_creds, None, false).await?;
 
     let old_timestamp = SecondsSinceEpoch(chrono::Utc::now().timestamp() as u32 - 5);
 

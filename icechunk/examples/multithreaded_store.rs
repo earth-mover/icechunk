@@ -15,7 +15,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         inline_chunk_threshold_bytes: Some(128),
         ..Default::default()
     };
-    let repo = Repository::create(Some(config), storage, HashMap::new(), None).await?;
+    let repo =
+        Repository::create(Some(config), storage, HashMap::new(), None, false).await?;
     let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
     let store = Store::from_session(Arc::clone(&ds)).await;
 

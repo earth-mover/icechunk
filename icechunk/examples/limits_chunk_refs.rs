@@ -81,6 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         storage,
         creds,
         None,
+        false,
     )
     .await
     .expect("Failed to initialize repository");

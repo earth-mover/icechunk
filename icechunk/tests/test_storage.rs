@@ -290,7 +290,8 @@ pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> 
 #[tokio_test]
 pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::ReadOnly, |_, storage| async move {
-        let repo = Repository::create(None, storage, Default::default(), None).await?;
+        let repo =
+            Repository::create(None, storage, Default::default(), None, false).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("mytag").await?;
         assert_eq!(Snapshot::INITIAL_SNAPSHOT_ID, back);
@@ -303,7 +304,7 @@ pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio_test]
 pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::ReadOnly, |_, storage| async move {
-        let repo = Repository::create(None, storage, Default::default(), None).await?;
+        let repo = Repository::create(None, storage, Default::default(), None, false).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("non-existing-tag").await;
         assert!(
@@ -322,7 +323,7 @@ pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Err
 #[tokio_test]
 pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::ReadOnly, |_, storage| async move {
-        let repo = Repository::create(None, storage, Default::default(), None).await?;
+        let repo = Repository::create(None, storage, Default::default(), None, false).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let res  = repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await;
         assert!(
@@ -541,7 +542,7 @@ pub async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio_test]
 pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::ReadOnly, |_, storage| async move {
-        let repo = Repository::create(None, storage, Default::default(), None).await?;
+        let repo = Repository::create(None, storage, Default::default(), None, false).await?;
         let back = repo.lookup_branch("non-existing-branch").await;
         assert!(
             matches!(

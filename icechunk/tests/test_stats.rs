@@ -84,6 +84,7 @@ pub async fn do_test_repo_chunks_storage(
         Arc::clone(&storage),
         Default::default(),
         None,
+        false,
     )
     .await?;
 
@@ -241,6 +242,7 @@ pub async fn test_virtual_chunk_deduplication() -> Result<(), Box<dyn std::error
         storage,
         Default::default(),
         None,
+        false,
     )
     .await?;
 

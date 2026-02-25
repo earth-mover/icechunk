@@ -166,8 +166,8 @@ mod tests {
     async fn test_pointed_snapshots_duplicate() -> Result<(), Box<dyn std::error::Error>>
     {
         let storage = new_in_memory_storage().await?;
-        let repo =
-            Repository::create(None, storage.clone(), HashMap::new(), None).await?;
+        let repo = Repository::create(None, storage.clone(), HashMap::new(), None, false)
+            .await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::new()).await?;
         let snap = session.commit("commit", None).await?;
