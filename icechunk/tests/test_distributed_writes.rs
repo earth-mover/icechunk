@@ -14,6 +14,7 @@ use icechunk::{
 use tokio::task::JoinSet;
 
 mod common;
+use common::Permission;
 
 const SIZE: usize = 10;
 
@@ -86,7 +87,7 @@ async fn verify(ds: Session) -> Result<(), Box<dyn std::error::Error>> {
 #[tokio_test]
 async fn test_distributed_writes_in_minio() -> Result<(), Box<dyn std::error::Error>> {
     do_test_distributed_writes(|prefix| async {
-        common::make_minio_integration_storage(prefix)
+        common::make_minio_integration_storage(prefix, &Permission::Modify)
     })
     .await
 }

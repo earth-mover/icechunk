@@ -33,8 +33,8 @@ def mk_repo(
             region="us-east-1",
             bucket="testbucket",
             prefix="python-distributed-writers-test__" + str(time.time()),
-            access_key_id="minio123",
-            secret_access_key="minio123",
+            access_key_id="basic",
+            secret_access_key="basicuser",
         )
     else:
         storage = s3_storage(
@@ -44,8 +44,8 @@ def mk_repo(
             region="us-east-1",
             bucket="testbucket",
             prefix="python-distributed-writers-test__" + str(time.time()),
-            access_key_id="minio123",
-            secret_access_key="minio123",
+            access_key_id="basic",
+            secret_access_key="basicuser",
         )
     repo_config = icechunk.RepositoryConfig.default()
     repo_config.inline_chunk_threshold_bytes = 5

@@ -29,18 +29,19 @@ use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 
 mod common;
+use common::Permission;
 
 #[tokio_test]
 pub async fn test_gc_in_minio_spec_v1() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_v1_{}", Utc::now().timestamp_millis());
-    let storage = common::make_minio_integration_storage(prefix)?;
+    let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_gc(storage, Some(SpecVersionBin::V1dot0)).await
 }
 
 #[tokio_test]
 pub async fn test_gc_in_minio_spec_v2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_v2_{}", Utc::now().timestamp_millis());
-    let storage = common::make_minio_integration_storage(prefix)?;
+    let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_gc(storage, Some(SpecVersionBin::V2dot0)).await
 }
 
@@ -310,7 +311,7 @@ pub async fn test_expire_and_garbage_collect_in_minio()
     let prefix =
         format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
     let storage: Arc<dyn Storage + Send + Sync> =
-        common::make_minio_integration_storage(prefix)?;
+        common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_expire_and_garbage_collect(storage).await
 }
 

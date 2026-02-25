@@ -32,6 +32,7 @@ def repo(
 
 
 minio_client = None
+list_client = None
 
 
 def get_minio_client() -> S3Client:
@@ -41,10 +42,23 @@ def get_minio_client() -> S3Client:
             "s3",
             endpoint_url="http://localhost:9000",
             use_ssl=False,
+            aws_access_key_id="basic",
+            aws_secret_access_key="basicuser",
+        )
+    return minio_client
+
+
+def get_list_client() -> S3Client:
+    global list_client
+    if list_client is None:
+        list_client = boto3.client(
+            "s3",
+            endpoint_url="http://localhost:9000",
+            use_ssl=False,
             aws_access_key_id="minio123",
             aws_secret_access_key="minio123",
         )
-    return minio_client
+    return list_client
 
 
 def write_chunks_to_minio(

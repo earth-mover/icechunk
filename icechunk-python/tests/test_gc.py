@@ -6,7 +6,7 @@ import pytest
 
 import icechunk as ic
 import zarr
-from tests.conftest import get_minio_client
+from tests.conftest import get_list_client
 
 
 def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
@@ -19,7 +19,7 @@ def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
             region="us-east-1",
             bucket="testbucket",
             prefix=prefix,
-            access_key_id="minio123",
+            access_key_id="minio123",  # TODO: restrict here with another user
             secret_access_key="minio123",
         ),
         config=ic.RepositoryConfig(inline_chunk_threshold_bytes=0),
@@ -63,7 +63,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     array[999] = 0
     session.commit("written coord 999")
 
-    client = get_minio_client()
+    client = get_list_client()
 
     # repo initial snap + array creation + 20 old version + 1 new version
     assert (

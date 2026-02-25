@@ -9,9 +9,22 @@ use icechunk::{
     storage::{new_r2_storage, new_tigris_storage},
 };
 
+pub(crate) enum Permission {
+    ReadOnly, // GetObject
+    Modify,   // {Get,Put,Delete}Object
+    List,     // ListBucket
+}
+
 pub(crate) fn make_minio_integration_storage(
     prefix: String,
+    permission: &Permission,
 ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
+    let (access_key_id, secret_access_key) = match permission {
+        Permission::Modify => ("minio123".into(), "minio123".into()), // TODO: make a more restricted one
+        Permission::ReadOnly => ("basic".into(), "basicuser".into()),
+        Permission::List => todo!(),
+    };
+
     let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
         S3Options {
             region: Some("us-east-1".to_string()),
@@ -25,8 +38,8 @@ pub(crate) fn make_minio_integration_storage(
         "testbucket".to_string(),
         Some(prefix),
         Some(S3Credentials::Static(S3StaticCredentials {
-            access_key_id: "minio123".into(),
-            secret_access_key: "minio123".into(),
+            access_key_id,
+            secret_access_key,
             session_token: None,
             expires_after: None,
         })),

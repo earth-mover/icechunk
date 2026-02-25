@@ -126,8 +126,8 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
                 region="us-east-1",
                 bucket="testbucket",
                 prefix="python-xarray-test__" + str(time.time()),
-                access_key_id="minio123",
-                secret_access_key="minio123",
+                access_key_id="basic",
+                secret_access_key="basicuser",
             )
         )
 

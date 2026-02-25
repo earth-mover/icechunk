@@ -73,7 +73,7 @@ def test_pickle_read_only(tmp_repo: Repository) -> None:
 
 
 def get_credentials() -> S3StaticCredentials:
-    return S3StaticCredentials("minio123", "minio123")
+    return S3StaticCredentials("basic", "basicuser")
 
 
 def test_pickle(any_spec_version: int | None) -> None:

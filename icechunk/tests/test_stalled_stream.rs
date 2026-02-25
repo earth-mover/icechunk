@@ -40,8 +40,8 @@ fn create_proxied_storage(
         "testbucket".to_string(),
         Some(format!("stalled-stream-test-{}", uuid::Uuid::new_v4())),
         S3Credentials::Static(S3StaticCredentials {
-            access_key_id: "minio123".into(),
-            secret_access_key: "minio123".into(),
+            access_key_id: "basic".into(),
+            secret_access_key: "basicuser".into(),
             session_token: None,
             expires_after: None,
         }),

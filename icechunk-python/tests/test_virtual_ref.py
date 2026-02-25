@@ -54,7 +54,7 @@ async def test_write_minio_virtual_refs(
     credentials = containers_credentials(
         {
             "s3://testbucket": s3_credentials(
-                access_key_id="minio123", secret_access_key="minio123"
+                access_key_id="basic", secret_access_key="basicuser"
             )
         }
     )

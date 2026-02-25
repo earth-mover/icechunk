@@ -35,12 +35,7 @@ use warp::Filter;
 use zstd::zstd_safe::WriteBuf;
 
 mod common;
-
-enum Permission {
-    ReadOnly, // GetObject
-    Modify,   // {Get,Put,Delete}Object
-    List,     // ListBucket
-}
+use common::Permission;
 
 #[allow(clippy::expect_used)]
 async fn mk_s3_storage(
