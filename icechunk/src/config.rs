@@ -452,14 +452,6 @@ pub const DEFAULT_MAX_CONCURRENT_REQUESTS: u16 = 256;
 pub const DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE: u16 = 100;
 
 impl RepositoryConfig {
-    /// Create a default config with storage settings appropriate for the given backend.
-    ///
-    /// Use this instead of `Default::default()` when you know the storage backend,
-    /// so that storage-specific defaults (retries, concurrency, etc.) are included.
-    pub fn default_with_storage(storage_defaults: storage::Settings) -> Self {
-        Self { storage: Some(storage_defaults), ..Self::default() }
-    }
-
     pub fn inline_chunk_threshold_bytes(&self) -> u16 {
         self.inline_chunk_threshold_bytes.unwrap_or(512)
     }
