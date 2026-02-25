@@ -161,8 +161,10 @@ class Model:
     def __getitem__(self, key: str) -> Buffer:
         return cast(Buffer, self.store[key])
 
-    def upgrade(self) -> None:
-        self.num_updates += 1
+    def upgrade(self, dry_run: bool) -> None:
+        if not dry_run:
+            self.spec_version = 2
+            self.num_updates += 1
 
     @property
     def has_commits(self) -> bool:
@@ -418,15 +420,15 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(IcechunkError, match="read-only store"):
                 self.sync_store.set(path, value)
 
-    @rule(delete_unused_v1_files=st.booleans())
+    @rule(dry_run=st.booleans(), delete_unused_v1_files=st.booleans())
     @precondition(lambda self: self.model.spec_version == 1)
-    def upgrade_spec_version(self, delete_unused_v1_files: bool) -> None:
+    def upgrade_spec_version(self, dry_run: bool, delete_unused_v1_files: bool) -> None:
         # don't test simple cases of catching error upgradging a v2 spec
         # that should be covered in unit tests
         icechunk.upgrade_icechunk_repository(
-            self.repo, dry_run=False, delete_unused_v1_files=delete_unused_v1_files
+            self.repo, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
         )
-        self.model.upgrade()
+        self.model.upgrade(dry_run)
         # TODO: remove the reopen after https://github.com/earth-mover/icechunk/issues/1521
         self._reopen_repository()
 
