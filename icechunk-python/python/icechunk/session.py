@@ -172,7 +172,10 @@ class Session:
     def move(self, from_path: str, to_path: str) -> None:
         """Move or rename a node (array or group) in the hierarchy.
 
-        This is a metadata-only operation—no data is copied. Requires a rearrange session.
+        This is a metadata-only operation—no data is copied. Requires a rearrange session:
+
+            session = repo.rearrange_session("main")
+            session.move("/data/raw", "/data/v1")
 
         Parameters
         ----------
