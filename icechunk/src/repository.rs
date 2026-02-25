@@ -1898,7 +1898,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, false)
                 .await?;
 
         // default config is not stored in repo info
@@ -3432,7 +3432,7 @@ mod tests {
                 .await
                 .expect("Creating local storage failed");
 
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, false)
             .await?;
         assert!(
             Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
