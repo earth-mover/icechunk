@@ -429,6 +429,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.repo, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
         )
         self.model.upgrade(dry_run)
+        if not dry_run:
+            assert self.repo.spec_version == 2
+
         # TODO: remove the reopen after https://github.com/earth-mover/icechunk/issues/1521
         self._reopen_repository()
 

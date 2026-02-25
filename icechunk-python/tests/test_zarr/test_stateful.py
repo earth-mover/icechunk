@@ -224,6 +224,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         self.repo = self.actor.open(self.storage)
         self.store = self.repo.writable_session("main").store
         if not dry_run:
+            assert self.repo.spec_version == 2
             self.model.spec_version = 2
 
     @rule(data=st.data(), num_moves=st.integers(min_value=1, max_value=5))
