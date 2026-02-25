@@ -260,15 +260,13 @@ async fn chunks_retained(
 pub async fn find_retained(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
+    snaps: impl Stream<Item = RepositoryResult<Arc<Snapshot>>>,
 ) -> GCResult<(HashSet<ChunkId>, HashSet<ManifestId>, HashSet<SnapshotId>)> {
-    let all_snaps =
-        pointed_snapshots(Arc::clone(&asset_manager), &config.extra_roots).await?;
-
     let keep_chunks = Arc::new(Mutex::new(HashSet::new()));
     let keep_manifests = Arc::new(Mutex::new(HashSet::new()));
     let keep_snapshots = Arc::new(Mutex::new(HashSet::new()));
 
-    let all_manifest_infos = all_snaps
+    let all_manifest_infos = snaps
         .map(ready)
         .buffer_unordered(config.max_snapshots_in_memory.get() as usize)
         .and_then(|snap| snapshot_retained(Arc::clone(&keep_snapshots), snap))
@@ -340,9 +338,6 @@ pub async fn garbage_collect(
     }
 
     info!("Finding GC roots");
-    let (keep_chunks, keep_manifests, mut keep_snapshots) =
-        find_retained(Arc::clone(&asset_manager), config).await?;
-
     let snap_deadline =
         if let Action::DeleteIfCreatedBefore(date_time) = config.dangling_snapshots {
             date_time
@@ -366,7 +361,21 @@ pub async fn garbage_collect(
         None
     };
 
-    keep_snapshots.extend(non_pointed_but_new);
+    let all_snaps =
+        pointed_snapshots(Arc::clone(&asset_manager), &config.extra_roots).await?;
+    let am = Arc::clone(&asset_manager);
+    let non_pointed_snaps = stream::iter(non_pointed_but_new.into_iter().map(Ok))
+        .and_then(move |id| {
+            let am = Arc::clone(&am);
+            async move { am.fetch_snapshot(&id).await }
+        });
+
+    let (keep_chunks, keep_manifests, keep_snapshots) = find_retained(
+        Arc::clone(&asset_manager),
+        config,
+        all_snaps.chain(non_pointed_snaps),
+    )
+    .await?;
 
     info!(
         snapshots = keep_snapshots.len(),
