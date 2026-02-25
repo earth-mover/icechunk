@@ -715,14 +715,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @rule(name=ref_name_text, commit_id=commits, target=tags)
     def create_tag(self, name: str, commit_id: str) -> str:
         note(f"Creating tag {name!r} for commit {commit_id!r}")
-        # TODO(#1709): remove once GC orphan reparenting bug is fixed.
-        # After reset_branch, tagging orphaned snapshots can cause GC to
-        # fail when it partially collects the orphan chain.
-        assume(
-            commit_id not in self.model.commits
-            or commit_id in self.model.reachable_snapshots()
-        )
-
         if (
             name in self.model.created_tags
             or name in self.model.tags
@@ -1058,7 +1050,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
 VersionControlStateMachine.TestCase.settings = settings(
     deadline=None,
-    stateful_step_count=100,
-    report_multiple_bugs=False,
+    # report_multiple_bugs=False,
 )
 VersionControlTest = VersionControlStateMachine.TestCase
