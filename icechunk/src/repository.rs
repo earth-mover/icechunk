@@ -242,11 +242,9 @@ impl Repository {
             config.max_concurrent_requests(),
         ));
 
-        if check_clean_root {
-            if !storage.root_is_clean(&storage_settings).await? {
-                return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
-            }
-        }
+        if check_clean_root && !storage.root_is_clean(&storage_settings).await? {
+            return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
+        };
 
         let asset_manager_c = Arc::clone(&asset_manager);
         let storage_c = Arc::clone(&storage);
