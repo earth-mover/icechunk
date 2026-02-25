@@ -1959,6 +1959,11 @@ impl PyStorage {
         Ok(res.into())
     }
 
+    /// List objects in the storage backend, optionally filtered by a key prefix.
+    ///
+    /// Returns a list of ``(key, size_in_bytes)`` tuples for each object found.
+    /// When ``prefix`` is ``None`` or empty, all objects under the repository root are listed.
+    /// Custom ``settings`` can be provided to override the storage's default settings.
     #[pyo3(signature = (settings=None, prefix=None))]
     pub(crate) fn list_objects(
         &self,

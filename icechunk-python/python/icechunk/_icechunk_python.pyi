@@ -2485,7 +2485,23 @@ class Storage:
     def default_settings(self) -> StorageSettings: ...
     def list_objects(
         self, settings: StorageSettings | None = None, prefix: str | None = None
-    ) -> list[tuple[str, int]]: ...
+    ) -> list[tuple[str, int]]:
+        """List objects in the storage backend, optionally filtered by a key prefix.
+
+        Parameters
+        ----------
+        settings : StorageSettings | None
+            Optional storage settings to override the defaults (retries, concurrency, etc.).
+        prefix : str | None
+            If provided, only objects whose keys start with this prefix are returned.
+            When ``None`` or empty, all objects under the repository root are listed.
+
+        Returns
+        -------
+        list[tuple[str, int]]
+            A list of ``(key, size_in_bytes)`` tuples for each object found.
+        """
+        ...
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict
