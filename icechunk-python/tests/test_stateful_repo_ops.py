@@ -531,10 +531,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @precondition(lambda self: self.model.branch is not None)
     @rule(data=st.data(), ncommits=st.integers(3, 10), target=commits)
     def set_and_commit(self, data: st.DataObject, ncommits: int) -> Any:
+        amend_or_commit = data.draw(
+            st.lists(st.booleans(), min_size=ncommits, max_size=ncommits)
+        )
         # We have so many rules now it is hard to build up long history
         # instead we explicitly add a rule to make a lot of commits
         commit_ids = []
-        for _ in range(ncommits):
+        for should_amend in amend_or_commit:
             # annoyingly we need to ensure we overwrite with different data, otherwise icechunk doesn't like it.
             path, meta = data.draw(
                 st.tuples(metadata_paths, v3_array_metadata).filter(
@@ -542,7 +545,15 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 )
             )
             self.set_doc(path, meta)
-            commit_ids.append(self.commit(data.draw(st.text(max_size=MAX_TEXT_SIZE))))
+            msg = data.draw(st.text(max_size=MAX_TEXT_SIZE))
+            if (
+                should_amend
+                and len(self.model.commits) > 1
+                and self.model.spec_version >= 2
+            ):
+                self.amend(msg)
+            else:
+                commit_ids.append(self.commit(msg))
         return multiple(*commit_ids)
 
     @rule(path=metadata_paths, value=v3_array_metadata)
