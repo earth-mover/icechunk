@@ -418,12 +418,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(IcechunkError, match="read-only store"):
                 self.sync_store.set(path, value)
 
-    @rule()
+    @rule(delete_unused_v1_files=st.booleans())
     @precondition(lambda self: self.model.spec_version == 1)
-    def upgrade_spec_version(self) -> None:
+    def upgrade_spec_version(self, delete_unused_v1_files: bool) -> None:
         # don't test simple cases of catching error upgradging a v2 spec
         # that should be covered in unit tests
-        icechunk.upgrade_icechunk_repository(self.repo)
+        icechunk.upgrade_icechunk_repository(
+            self.repo, dry_run=False, delete_unused_v1_files=delete_unused_v1_files
+        )
         self.model.upgrade()
         # TODO: remove the reopen after https://github.com/earth-mover/icechunk/issues/1521
         self._reopen_repository()

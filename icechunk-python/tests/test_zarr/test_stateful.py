@@ -212,19 +212,21 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                 f"Expected: {get_expect.to_bytes()!r}"
             )
 
-    @rule()
+    @rule(delete_unused_v1_files=st.booleans())
     @precondition(lambda self: self.model.spec_version == 1)
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
-    def upgrade_spec_version(self) -> None:
+    def upgrade_spec_version(self, delete_unused_v1_files: bool) -> None:
         """Upgrade repository from spec version 1 to version 2."""
-        note("upgrading spec version from 1 to 2")
-        self.ic.upgrade_icechunk_repository(self.repo)
+        note(f"upgrading spec from 1 to 2 with {delete_unused_v1_files=}")
+        self.ic.upgrade_icechunk_repository(
+            self.repo, dry_run=False, delete_unused_v1_files=delete_unused_v1_files
+        )
         # Reopen to pick up the upgraded spec version
         self.repo = self.actor.open(self.storage)
         self.store = self.repo.writable_session("main").store
         self.model.spec_version = 2
 
-    @rule(data=st.data(), num_moves=st.integers(min_value=0, max_value=5))
+    @rule(data=st.data(), num_moves=st.integers(min_value=1, max_value=5))
     @precondition(lambda self: self.model.spec_version >= 2)
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
