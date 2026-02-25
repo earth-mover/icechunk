@@ -972,6 +972,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     def _assert_ancestry_invariants(self, ancestry: list[SnapshotInfo]) -> None:
         ancestry_set = set([snap.id for snap in ancestry])
+        assert ancestry_set.issubset(set(self.model.commits))
         # snapshot timestamps are monotonically decreasing in ancestry
         assert all(a.written_at > b.written_at for a, b in itertools.pairwise(ancestry))
         # ancestry must be unique
