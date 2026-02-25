@@ -442,7 +442,7 @@ class Model:
         for commit_id in self.refs_iter():
             while commit_id is not None:
                 reachable_snaps.add(commit_id)
-                commit_id = self.commits[commit_id].parent_id
+                commit_id = self.commits[commit_id].parent_id  # type: ignore[assignment]
         return reachable_snaps
 
     def garbage_collect(self, older_than: datetime.datetime) -> set[str]:
