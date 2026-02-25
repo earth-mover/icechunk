@@ -224,7 +224,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # Reopen to pick up the upgraded spec version
         self.repo = self.actor.open(self.storage)
         self.store = self.repo.writable_session("main").store
-        if dry_run:
+        if not dry_run:
             self.model.spec_version = 2
 
     @rule(data=st.data(), num_moves=st.integers(min_value=1, max_value=5))
