@@ -1316,7 +1316,8 @@ impl Session {
         Fut2: Future<Output = ()>,
     {
         for attempt in 0..rebase_attempts {
-            match self.commit(message, properties.clone()).await {
+            let props = Self::inject_rebase_metadata(properties.clone(), attempt);
+            match self.commit(message, Some(props)).await {
                 Ok(snap) => return Ok(snap),
                 Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) => {
                     before_rebase(attempt + 1).await;
@@ -1326,7 +1327,29 @@ impl Session {
                 Err(other_err) => return Err(other_err),
             }
         }
-        self.commit(message, properties).await
+        let props = Self::inject_rebase_metadata(properties, rebase_attempts);
+        self.commit(message, Some(props)).await
+    }
+
+    fn inject_rebase_metadata(
+        properties: Option<SnapshotProperties>,
+        rebase_count: u16,
+    ) -> SnapshotProperties {
+        let mut props = properties.unwrap_or_default();
+        let icechunk_obj = match props.remove("icechunk") {
+            Some(serde_json::Value::Object(mut map)) => {
+                map.insert(
+                    "rebase_attempts".to_string(),
+                    serde_json::Value::from(rebase_count),
+                );
+                serde_json::Value::Object(map)
+            }
+            _ => {
+                serde_json::json!({ "rebase_attempts": rebase_count })
+            }
+        };
+        props.insert("icechunk".to_string(), icechunk_obj);
+        props
     }
 
     /// Detect and optionally fix conflicts between the current [`ChangeSet`] (or session) and
@@ -5758,7 +5781,13 @@ mod tests {
             .await;
 
         // The commit has to work after 3 rebase attempts
-        assert!(res.is_ok());
+        let snap_id = res.unwrap();
+        let v = VersionInfo::SnapshotId(snap_id);
+        let infos = repo.ancestry(&v).await?.try_collect::<Vec<_>>().await?;
+        assert_eq!(
+            infos[0].metadata.get("icechunk"),
+            Some(&serde_json::json!({ "rebase_attempts": 3 }))
+        );
         assert_eq!(attempts.into_inner(), 3);
         Ok(())
     }

@@ -93,6 +93,9 @@ def test_rebase_no_conflicts(repo: icechunk.Repository) -> None:
     np.testing.assert_array_equal(array_c[:], 1)
     assert array_c.attrs["repo"] == 2
 
+    info = next(iter(repo.ancestry(branch="main")))
+    assert info.metadata["icechunk"] == {"rebase_attempts": 1}
+
 
 def test_rebase_fails_on_user_atts_double_edit(repo: icechunk.Repository) -> None:
     session_a = repo.writable_session("main")
