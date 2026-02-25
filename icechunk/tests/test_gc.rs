@@ -577,7 +577,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
         NonZeroU16::new(500).unwrap(),
         false,
     );
-    let summary = garbage_collect(asset_manager, &gc_config, None, 100).await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
     assert_eq!(summary.snapshots_deleted, 1);
 
     // make sure ancestry works
@@ -590,6 +590,14 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
         .ancestry(&VersionInfo::BranchTipRef("zoo".into()))
         .await?
         .try_collect::<Vec<_>>();
+
+    // garbage_collect also traces ancestry
+    let summary = garbage_collect(asset_manager, &gc_config, None, 100).await?;
+    assert_eq!(summary.snapshots_deleted, 0);
+
+    repo.readonly_session(&VersionInfo::SnapshotId(snaps[3].clone())).await?;
+    repo.readonly_session(&VersionInfo::SnapshotId(snaps[4].clone())).await?;
+    repo.readonly_session(&VersionInfo::SnapshotId(snaps[5].clone())).await?;
 
     Ok(())
 }
