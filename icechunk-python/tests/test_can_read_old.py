@@ -52,7 +52,7 @@ def mk_repo(
     credentials = ic.containers_credentials(
         {
             "s3://testbucket": ic.s3_credentials(
-                access_key_id="basic", secret_access_key="basicuser"
+                access_key_id="minio123", secret_access_key="minio123"
             )
         }
     )

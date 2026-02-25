@@ -17,7 +17,7 @@ from icechunk import (
 
 
 def get_good_credentials() -> S3StaticCredentials:
-    return S3StaticCredentials(access_key_id="basic", secret_access_key="basicuser")
+    return S3StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
 
 
 def get_bad_credentials() -> S3StaticCredentials:
