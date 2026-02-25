@@ -219,7 +219,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         """Upgrade repository from spec version 1 to version 2."""
         note(f"upgrading spec from 1 to 2 with {delete_unused_v1_files=}")
         self.ic.upgrade_icechunk_repository(
-            self.repo, dry_run=False, delete_unused_v1_files=delete_unused_v1_files
+            self.repo, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
         )
         # Reopen to pick up the upgraded spec version
         self.repo = self.actor.open(self.storage)
