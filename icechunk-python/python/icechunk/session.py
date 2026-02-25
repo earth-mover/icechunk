@@ -225,7 +225,8 @@ class Session:
     ) -> None:
         """Shift all chunks in an array by the given chunk offset.
 
-        Out-of-bounds chunks are discarded. Vacated source positions retain stale references.
+        Out-of-bounds chunks are discarded. To preserve them, resize the array first
+        to make room. Vacated source positions retain stale references.
 
         Parameters
         ----------
