@@ -538,7 +538,8 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
     let repo =
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, false)
+            .await?;
 
     let mut session = repo.writable_session("main").await?;
     let array_path: Path = "/array".to_string().try_into().unwrap();
