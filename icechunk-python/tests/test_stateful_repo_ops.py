@@ -161,8 +161,12 @@ class Model:
     def __getitem__(self, key: str) -> Buffer:
         return cast(Buffer, self.store[key])
 
-    def upgrade(self) -> None:
-        self.num_updates += 1
+    def upgrade(self, dry_run: bool) -> None:
+        if not dry_run:
+            self.spec_version = 2
+            # The ops log starts fresh after migration from v1,
+            # so reset to 1 (just the RepoMigratedUpdate entry).
+            self.num_updates = 1
 
     @property
     def has_commits(self) -> bool:
@@ -418,15 +422,21 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             with pytest.raises(IcechunkError, match="read-only store"):
                 self.sync_store.set(path, value)
 
-    @rule()
+    @rule(dry_run=st.booleans(), delete_unused_v1_files=st.booleans())
     @precondition(lambda self: self.model.spec_version == 1)
-    def upgrade_spec_version(self) -> None:
+    def upgrade_spec_version(self, dry_run: bool, delete_unused_v1_files: bool) -> None:
         # don't test simple cases of catching error upgradging a v2 spec
         # that should be covered in unit tests
-        icechunk.upgrade_icechunk_repository(self.repo)
-        self.model.upgrade()
+        icechunk.upgrade_icechunk_repository(
+            self.repo, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
+        )
+
         # TODO: remove the reopen after https://github.com/earth-mover/icechunk/issues/1521
         self._reopen_repository()
+
+        self.model.upgrade(dry_run)
+        if not dry_run:
+            assert self.repo.spec_version == 2
 
     @rule(data=st.data())
     def reopen_repository(self, data: st.DataObject) -> None:
@@ -755,7 +765,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.model.num_updates,
             actual_ops,
         )
-        assert isinstance(actual_ops[-1], icechunk.RepoInitializedUpdate)
+        assert isinstance(
+            actual_ops[-1],
+            icechunk.RepoInitializedUpdate | icechunk.RepoMigratedUpdate,
+        )
 
     @invariant()
     def checks(self) -> None:
