@@ -48,7 +48,7 @@ async def test_issue_418(any_spec_version: int | None) -> None:
     credentials = containers_credentials(
         {
             "s3://testbucket": s3_credentials(
-                access_key_id="basic", secret_access_key="basicuser"
+                access_key_id="minio123", secret_access_key="minio123"
             )
         }
     )

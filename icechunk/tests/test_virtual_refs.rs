@@ -56,8 +56,8 @@ fn minio_s3_config() -> (S3Options, S3Credentials) {
         requester_pays: false,
     };
     let credentials = S3Credentials::Static(S3StaticCredentials {
-        access_key_id: "basic".into(),
-        secret_access_key: "basicuser".into(),
+        access_key_id: "minio123".into(),
+        secret_access_key: "minio123".into(),
         session_token: None,
         expires_after: None,
     });
@@ -247,8 +247,8 @@ async fn create_minio_repository() -> Repository {
         (
             "s3://testbucket/".to_string(),
             Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: "basic".to_string(),
-                secret_access_key: "basicuser".to_string(),
+                access_key_id: "minio123".to_string(),
+                secret_access_key: "minio123".to_string(),
                 session_token: None,
                 expires_after: None,
             }))),
@@ -256,8 +256,8 @@ async fn create_minio_repository() -> Repository {
         (
             "s3://testbucket/path with spaces/".to_string(),
             Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: "basic".to_string(),
-                secret_access_key: "basicuser".to_string(),
+                access_key_id: "minio123".to_string(),
+                secret_access_key: "minio123".to_string(),
                 session_token: None,
                 expires_after: None,
             }))),
@@ -868,8 +868,8 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         (
             "s3://testbucket".to_string(),
             Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: "basic".to_string(),
-                secret_access_key: "basicuser".to_string(),
+                access_key_id: "minio123".to_string(),
+                secret_access_key: "minio123".to_string(),
                 session_token: None,
                 expires_after: None,
             }))),

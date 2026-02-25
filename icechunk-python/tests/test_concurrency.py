@@ -133,7 +133,7 @@ async def test_thread_concurrency(any_spec_version: int | None) -> None:
     credentials = icechunk.containers_credentials(
         {
             "s3://testbucket": icechunk.s3_credentials(
-                access_key_id="basic", secret_access_key="basicuser"
+                access_key_id="minio123", secret_access_key="minio123"
             )
         }
     )
@@ -145,8 +145,8 @@ async def test_thread_concurrency(any_spec_version: int | None) -> None:
         force_path_style=True,
         bucket="testbucket",
         prefix="multithreaded-test__" + str(time.time()),
-        access_key_id="basic",
-        secret_access_key="basicuser",
+        access_key_id="minio123",
+        secret_access_key="minio123",
     )
 
     # Open the store

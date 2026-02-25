@@ -43,8 +43,8 @@ def get_minio_client() -> S3Client:
             "s3",
             endpoint_url="http://localhost:9000",
             use_ssl=False,
-            aws_access_key_id="basic",
-            aws_secret_access_key="basicuser",
+            aws_access_key_id="minio123",
+            aws_secret_access_key="minio123",
         )
     return minio_client
 
