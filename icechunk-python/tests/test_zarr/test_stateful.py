@@ -346,14 +346,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             num_chunks = arr_model.cdata_shape
 
         note(f"shifting array '{array_path}' by {offset}")
-        element_shift = self.store.session.shift_array(f"/{array_path}", offset)
+        self.store.session.shift_array(f"/{array_path}", offset)
         self._sync(self.model.shift_array(array_path, offset, num_chunks))
-
-        # Verify element_shift return value: chunk_offset * chunk_size per dimension
-        expected_element_shift = tuple(o * c for o, c in zip(offset, chunks, strict=True))
-        assert (
-            element_shift == expected_element_shift
-        ), f"element_shift mismatch: {element_shift} != {expected_element_shift}"
 
     @rule(
         data=st.data(),

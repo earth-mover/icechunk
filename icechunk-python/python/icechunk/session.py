@@ -219,7 +219,7 @@ class Session:
         self,
         array_path: str,
         chunk_offset: Iterable[int],
-    ) -> tuple[int, ...]:
+    ) -> None:
         """Shift all chunks in an array by the given chunk offset.
 
         Out-of-bounds chunks are discarded. Vacated source positions retain stale references.
@@ -232,18 +232,12 @@ class Session:
             The number of chunks to shift by in each dimension. Positive values
             shift right/down, negative values shift left/up.
 
-        Returns
-        -------
-        tuple[int, ...]
-            The index shift in element space (chunk_offset * chunk_size for each dimension).
-            Useful for knowing where to write new data after a shift.
-
         Notes
         -----
         To shift right while preserving all data, first resize the array using zarr's
         array.resize(), then shift.
         """
-        return tuple(self._session.shift_array(array_path, list(chunk_offset)))
+        self._session.shift_array(array_path, list(chunk_offset))
 
     async def all_virtual_chunk_locations_async(self) -> list[str]:
         """

@@ -660,30 +660,17 @@ impl Session {
     /// Shift all chunks in an array by the given chunk offset.
     ///
     /// Out-of-bounds chunks are discarded. Vacated source positions retain stale references.
-    ///
-    /// Returns the index shift in element space (chunk_offset * chunk_size for each dimension).
-    /// This tells you how many elements the data moved, useful for knowing where to write new data.
     #[instrument(skip(self))]
     pub async fn shift_array(
         &mut self,
         array_path: &Path,
         chunk_offset: &[i64], // FIXME: overflow
-    ) -> SessionResult<Vec<i64>> {
+    ) -> SessionResult<()> {
         let node = self.get_array(array_path).await?;
-        let (num_chunks, chunk_sizes): (Vec<u32>, Vec<u64>) = match &node.node_data {
-            NodeData::Array { shape, .. } => (
-                shape.num_chunks().collect(),
-                shape.iter().map(|dim| dim.chunk_length()).collect(),
-            ),
+        let num_chunks: Vec<u32> = match &node.node_data {
+            NodeData::Array { shape, .. } => shape.num_chunks().collect(),
             _ => unreachable!("get_array returned non-array"),
         };
-
-        // Calculate element_shift = chunk_offset * chunk_size for each dimension
-        let element_shift: Vec<i64> = chunk_offset
-            .iter()
-            .zip(chunk_sizes.iter())
-            .map(|(&offset, &chunk_size)| offset * chunk_size as i64)
-            .collect();
 
         let chunk_offset = chunk_offset.to_vec();
         let num_chunks = num_chunks.to_vec();
@@ -700,9 +687,7 @@ impl Session {
                 .collect();
             Ok(new_indices.map(ChunkIndices))
         })
-        .await?;
-
-        Ok(element_shift)
+        .await
     }
 
     #[instrument(skip(self, coords))]

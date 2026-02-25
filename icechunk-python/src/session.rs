@@ -230,7 +230,7 @@ impl PySession {
         &mut self,
         array_path: String,
         chunk_offset: Vec<i64>,
-    ) -> PyResult<Vec<i64>> {
+    ) -> PyResult<()> {
         let array_path = Path::new(array_path.as_str())
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
@@ -238,11 +238,11 @@ impl PySession {
         // TODO: detach
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let mut session = self.0.write().await;
-            let element_shift = session
+            session
                 .shift_array(&array_path, chunk_offset.as_slice())
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
-            Ok(element_shift)
+            Ok(())
         })
     }
 
