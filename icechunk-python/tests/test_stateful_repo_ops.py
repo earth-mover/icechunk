@@ -164,7 +164,9 @@ class Model:
     def upgrade(self, dry_run: bool) -> None:
         if not dry_run:
             self.spec_version = 2
-            self.num_updates += 1
+            # The ops log starts fresh after migration from v1,
+            # so reset to 1 (just the RepoMigratedUpdate entry).
+            self.num_updates = 1
 
     @property
     def has_commits(self) -> bool:
@@ -763,7 +765,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.model.num_updates,
             actual_ops,
         )
-        assert isinstance(actual_ops[-1], icechunk.RepoInitializedUpdate)
+        assert isinstance(
+            actual_ops[-1],
+            icechunk.RepoInitializedUpdate | icechunk.RepoMigratedUpdate,
+        )
 
     @invariant()
     def checks(self) -> None:
