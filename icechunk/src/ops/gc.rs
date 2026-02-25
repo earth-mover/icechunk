@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt, TryStream, TryStreamExt, stream};
 use itertools::Itertools;
 use tokio::task::{self};
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, trace};
 
 use crate::{
     StorageError,
@@ -431,6 +431,7 @@ async fn delete_snapshots_from_repo_info(
     // Notice this loses any new snapshots that may have been created while GC was running
     // Other problem is new branches / tags may be pointing to no longer existing snaps
     // should we lock the repo for writes?
+    trace!("deleting snapshots from repo info");
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
         let kept_snaps: Vec<_> = repo_info
             .all_snapshots()?
@@ -438,10 +439,17 @@ async fn delete_snapshots_from_repo_info(
                 if keep_snapshots.contains(&si.id) {
                     match &si.parent_id {
                         Some(parent) if keep_snapshots.contains(parent) => Some(si),
-                        // break the parent if it is going to be GC-ed
+                        // rewrite the parent if it is going to be GC-ed
                         // this is necessary for the case where history was edited with reset_branch
                         // See test_gc.rs::test_gc_reset_branch for an example
-                        Some(_) => Some(SnapshotInfo { parent_id: None, ..si }),
+                        // Note if a commit was left dnagling by expire it's parent will already have been rewritten
+                        // So here, we can either set None or INITIAL_SNAPSHOT_ID
+                        // We choose to set INITIAL_SNAPSHOT_ID until we consistently support
+                        // anonymous snapshots throughout the codebase.
+                        Some(_) => Some(SnapshotInfo {
+                            parent_id: Some(Snapshot::INITIAL_SNAPSHOT_ID),
+                            ..si
+                        }),
                         &None => Some(si),
                     }
                 } else {
