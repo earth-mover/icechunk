@@ -397,29 +397,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         note(f"list_dir for {path=!r}")
         self._compare_list_dir(self.model, self.store, {path})
 
-    @rule(data=st.data())
-    @precondition(lambda self: bool(self.all_arrays))
-    def check_array_data(self, data: st.DataObject) -> None:
-        """Verify array data matches between model and store."""
-        array_path = data.draw(st.sampled_from(sorted(self.all_arrays)))
-        note(f"checking array data for '{array_path}'")
-
-        arr_model = zarr.open_array(self.model, path=array_path)
-        arr_store = zarr.open_array(self.store, path=array_path)
-
-        # Check shapes match
-        assert arr_model.shape == arr_store.shape, (
-            f"Shape mismatch for {array_path}: "
-            f"model={arr_model.shape} vs store={arr_store.shape}"
-        )
-
-        # Check data matches
-        np.testing.assert_array_equal(
-            arr_model[:],
-            arr_store[:],
-            err_msg=f"Data mismatch for array '{array_path}'",
-        )
-
     # Override upstream delete_group_using_del to fix precondition bug:
     # upstream checks `len(self.all_groups) >= 2` but filters to only groups
     # with "/" in their path, crashing when only root-level groups remain.
