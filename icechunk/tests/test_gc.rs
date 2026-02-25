@@ -552,7 +552,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
     session.commit("initialized", None).await?;
 
     let mut snaps = vec![];
-    for i in 0..5 {
+    for i in 0..6 {
         let mut session = repo.writable_session("main").await?;
         session
             .set_chunk_ref(
@@ -579,6 +579,17 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
     );
     let summary = garbage_collect(asset_manager, &gc_config, None, 100).await?;
     assert_eq!(summary.snapshots_deleted, 1);
+
+    // make sure ancestry works
+    repo.create_tag("foo", &snaps[3]).await?;
+    let _anc =
+        repo.ancestry(&VersionInfo::TagRef("foo".into())).await?.try_collect::<Vec<_>>();
+
+    repo.create_branch("zoo", &snaps[5]).await?;
+    let _anc = repo
+        .ancestry(&VersionInfo::BranchTipRef("zoo".into()))
+        .await?
+        .try_collect::<Vec<_>>();
 
     Ok(())
 }
