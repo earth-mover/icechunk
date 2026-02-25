@@ -2389,7 +2389,9 @@ mod tests {
                 .lookup_snapshot(&snap)
                 .await?
                 .metadata
-                .contains_key("splitting_config")
+                .get("__icechunk")
+                .and_then(|v| v.get("splitting_config"))
+                .is_some()
         );
 
         // split manifests to smaller sizes
@@ -2420,7 +2422,9 @@ mod tests {
                 .lookup_snapshot(&snap)
                 .await?
                 .metadata
-                .contains_key("splitting_config")
+                .get("__icechunk")
+                .and_then(|v| v.get("splitting_config"))
+                .is_some()
         );
 
         Ok(())
