@@ -5,7 +5,7 @@ no_includes = true
 sys_includes = ["stdint.h", "stddef.h", "stdbool.h"]
 
 [export]
-prefix = "Icechunk"
+prefix = ""
 
 [enum]
 rename_variants = "ScreamingSnakeCase"
