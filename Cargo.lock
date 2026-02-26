@@ -2048,6 +2048,7 @@ dependencies = [
  "cbindgen",
  "icechunk",
  "libc",
+ "tempfile",
  "tokio",
 ]
 

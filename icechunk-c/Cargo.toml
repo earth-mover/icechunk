@@ -16,5 +16,8 @@ libc = "0.2"
 [build-dependencies]
 cbindgen = "0.28"
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true
