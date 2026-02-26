@@ -6,7 +6,7 @@ import pytest
 
 import icechunk as ic
 import zarr
-from tests.conftest import get_list_client
+from tests.conftest import get_minio_client
 
 
 def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
@@ -63,7 +63,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
     array[999] = 0
     session.commit("written coord 999")
 
-    client = get_list_client()
+    client = get_minio_client()
 
     # repo initial snap + array creation + 20 old version + 1 new version
     assert (

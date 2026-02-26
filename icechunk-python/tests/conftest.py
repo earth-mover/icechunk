@@ -32,8 +32,6 @@ def repo(
 
 
 minio_client = None
-modify_client = None
-list_client = None
 
 
 def get_minio_client() -> S3Client:
@@ -49,37 +47,11 @@ def get_minio_client() -> S3Client:
     return minio_client
 
 
-def get_list_client() -> S3Client:
-    global list_client
-    if list_client is None:
-        list_client = boto3.client(
-            "s3",
-            endpoint_url="http://localhost:9000",
-            use_ssl=False,
-            aws_access_key_id="minio123",
-            aws_secret_access_key="minio123",
-        )
-    return list_client
-
-
-def get_modify_client() -> S3Client:
-    global modify_client
-    if modify_client is None:
-        modify_client = boto3.client(
-            "s3",
-            endpoint_url="http://localhost:9000",
-            use_ssl=False,
-            aws_access_key_id="minio123",
-            aws_secret_access_key="minio123",
-        )
-    return modify_client
-
-
 def write_chunks_to_minio(
     chunks: list[tuple[str, bytes]], bucket: str = "testbucket"
 ) -> list[str]:
     """Write chunks to local minio returning their etags"""
-    s3 = get_modify_client()
+    s3 = get_minio_client()
     etags = []
     for key, data in chunks:
         etag = s3.put_object(Bucket=bucket, Key=key, Body=data)["ETag"]
