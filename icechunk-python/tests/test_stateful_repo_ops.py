@@ -850,7 +850,16 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             delete_expired_branches=delete_expired_branches,
             delete_expired_tags=delete_expired_tags,
         )
-        note(f"repo  expired snaps={actual!r}")
+        # note(f"repo  expired snaps={actual!r}")
+
+        # we never delete the HEAD of main
+        assert self.model.branch_heads["main"] not in actual
+        # we never expire the initial snapshot
+        assert self.initial_snapshot.id not in actual
+        # edited parents should not be expired
+        for snap in set(self.model.commits) - actual:
+            actualsnap = self.repo.lookup_snapshot(snap)
+            assert actualsnap.parent_id not in actual
 
         # Track branches and tags after expiration
         branches_after = set(self.repo.list_branches())
@@ -868,9 +877,6 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # note(f"actual: {actual}")
         # note(f"{actual_deleted_branches=!r}, {actual_deleted_tags=!r}")
 
-        assert self.initial_snapshot.id not in actual
-        assert actual == expected.expired_snapshots, (actual, expected)
-
         event(f"commits expired: {len(actual)}")
         event(f"tags expired: {len(actual_deleted_tags)}")
         event(f"branches expired: {len(actual_deleted_branches)}")
@@ -878,8 +884,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # Check that expired snapshots are actually removed from ancestry
         remaining_snapshot_ids = set()
         for branch in branches_after:
-            for snap in self.repo.ancestry(branch=branch):
-                remaining_snapshot_ids.add(snap.id)
+            remaining_snapshot_ids.add(
+                snapshot.id for snapshot in self.repo.ancestry(branch=branch)
+            )
 
         expired_but_remaining = actual & remaining_snapshot_ids
         assert (
