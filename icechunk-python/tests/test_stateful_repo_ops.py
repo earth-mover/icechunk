@@ -859,7 +859,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # edited parents should not be expired
         for snap in set(self.model.commits) - actual:
             actualsnap = self.repo.lookup_snapshot(snap)
-            assert actualsnap.parent_id not in actual 
+            assert actualsnap.parent_id not in actual
 
         # Track branches and tags after expiration
         branches_after = set(self.repo.list_branches())
@@ -884,8 +884,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # Check that expired snapshots are actually removed from ancestry
         remaining_snapshot_ids = set()
         for branch in branches_after:
-            for snap in self.repo.ancestry(branch=branch):
-                remaining_snapshot_ids.add(snap.id)
+            remaining_snapshot_ids.add(
+                snapshot.id for snapshot in self.repo.ancestry(branch=branch)
+            )
 
         expired_but_remaining = actual & remaining_snapshot_ids
         assert (
