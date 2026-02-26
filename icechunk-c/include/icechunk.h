@@ -69,7 +69,7 @@ void icechunk_storage_free(struct IcechunkStorage *storage);
  * Open a new store by creating a new repository and a writable session on
  * the given branch.
  *
- * `storage` is consumed (freed) by this call — do NOT call
+ * `storage` is consumed (freed) by this call -- do NOT call
  * `icechunk_storage_free` on it afterwards.
  *
  * `branch` must be a valid null-terminated UTF-8 string (e.g. "main").
@@ -85,19 +85,22 @@ struct IcechunkStore *icechunk_store_open(struct IcechunkStorage *storage, const
 void icechunk_store_free(struct IcechunkStore *store);
 
 /**
- * Returns 1 if the store is read-only, 0 if writable, or a negative error
- * code on failure.
+ * Returns 1 if the store is read-only, 0 if writable, or a negative
+ * error code on failure.
  */
 int32_t icechunk_store_is_read_only(const struct IcechunkStore *store);
 
 /**
  * Get the value for a Zarr key.
  *
- * On success, returns `ICECHUNK_SUCCESS`, sets `*out_data` to a `malloc`-allocated
- * buffer and `*out_len` to its length. Caller must `free()` the buffer.
+ * On success, returns `ICECHUNK_SUCCESS`, sets `*out_data` to a
+ * `malloc`-allocated buffer and `*out_len` to its length.  Caller
+ * must `free()` the buffer.
  *
- * On not-found, returns `ICECHUNK_ERROR_NOT_FOUND` and sets `*out_data` to null.
- * On other failures, returns `ICECHUNK_ERROR` and sets `*out_data` to null.
+ * On not-found, returns `ICECHUNK_ERROR_NOT_FOUND` and sets
+ * `*out_data` to null.
+ * On other failures, returns `ICECHUNK_ERROR` and sets `*out_data`
+ * to null.
  */
 int32_t icechunk_store_get(const struct IcechunkStore *store,
                            const char *key,
@@ -110,7 +113,8 @@ int32_t icechunk_store_get(const struct IcechunkStore *store,
  * `data` is a pointer to `len` bytes. The data is copied; the caller
  * retains ownership of the buffer.
  *
- * Returns `ICECHUNK_SUCCESS` on success, or a negative error code on failure.
+ * Returns `ICECHUNK_SUCCESS` on success, or a negative error code on
+ * failure.
  */
 int32_t icechunk_store_set(const struct IcechunkStore *store,
                            const char *key,
@@ -120,15 +124,16 @@ int32_t icechunk_store_set(const struct IcechunkStore *store,
 /**
  * Check if a key exists in the store.
  *
- * Returns 1 if the key exists, 0 if not, or a negative error code on failure.
+ * Returns 1 if the key exists, 0 if not, or a negative error code on
+ * failure.
  */
 int32_t icechunk_store_exists(const struct IcechunkStore *store, const char *key);
 
 /**
  * Delete a key from the store.
  *
- * Returns `ICECHUNK_SUCCESS` on success (including if the key didn't exist).
- * Returns a negative error code on failure.
+ * Returns `ICECHUNK_SUCCESS` on success (including if the key didn't
+ * exist).  Returns a negative error code on failure.
  */
 int32_t icechunk_store_delete(const struct IcechunkStore *store, const char *key);
 
@@ -161,10 +166,10 @@ struct IcechunkStoreListIter *icechunk_store_list_dir(const struct IcechunkStore
  * Get the next key from a list iterator.
  *
  * On success, returns `ICECHUNK_SUCCESS` and sets `*out_key` to a
- * `malloc`-allocated null-terminated string. Caller must `free()` it.
+ * `malloc`-allocated null-terminated string.  Caller must `free()` it.
  *
- * When iteration is exhausted, returns `ICECHUNK_SUCCESS` and
- * sets `*out_key` to null.
+ * When iteration is exhausted, returns `ICECHUNK_SUCCESS` and sets
+ * `*out_key` to null.
  *
  * On error, returns a negative error code.
  */

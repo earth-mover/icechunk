@@ -8,9 +8,7 @@ static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 /// Get or lazily create the global tokio runtime.
 #[allow(clippy::expect_used)]
 pub(crate) fn get_runtime() -> &'static Runtime {
-    RUNTIME.get_or_init(|| {
-        Runtime::new().expect("failed to create tokio runtime")
-    })
+    RUNTIME.get_or_init(|| Runtime::new().expect("failed to create tokio runtime"))
 }
 
 /// Run an async future on the global runtime, blocking the current thread.
