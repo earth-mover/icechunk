@@ -4,9 +4,9 @@ import time
 from typing import Any, cast
 
 import pytest
+
 import zarr
 import zarr.core.array
-
 from icechunk import (
     ChunkType,
     ForkSession,
