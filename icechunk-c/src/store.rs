@@ -386,7 +386,10 @@ pub unsafe extern "C" fn icechunk_store_list_next(
     }
 
     let iter_ref = unsafe { &*iter };
-    let mut stream = iter_ref.stream.lock().unwrap();
+    let Ok(mut stream) = iter_ref.stream.lock() else {
+        set_last_error("mutex poisoned".to_string());
+        return ICECHUNK_ERROR;
+    };
 
     match crate::runtime::block_on(stream.next()) {
         None => {
