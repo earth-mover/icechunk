@@ -1,0 +1,20 @@
+[package]
+name = "icechunk-c"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+icechunk = { path = "../icechunk", version = "0.3.14" }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+bytes = "1"
+libc = "0.2"
+
+[build-dependencies]
+cbindgen = "0.28"
+
+[lints]
+workspace = true
