@@ -21,12 +21,8 @@ This repository uses [uv](https://docs.astral.sh/uv/) to manage dependencies.
 From the `icechunk-python` directory:
 
 ```bash
-# Install icechunk with docs dependencies
-uv sync --group docs
 
-# Start the MkDocs development server
-cd ../docs
-uv run mkdocs serve
+pixi run docs-serve
 ```
 
 > [!TIP]
@@ -34,10 +30,8 @@ uv run mkdocs serve
 
 ### Building
 
-From the `docs` directory:
-
 ```bash
-uv run mkdocs build
+pixi run docs-build
 ```
 
 Builds output to: `docs/.site` directory.
