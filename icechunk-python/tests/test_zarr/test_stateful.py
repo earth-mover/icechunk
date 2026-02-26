@@ -33,7 +33,41 @@ PROTOTYPE = default_buffer_prototype()
 
 
 class ModelStore(MemoryStore):
-    """MemoryStore with move and copy methods for testing."""
+    """MemoryStore with move, copy, and shift_array methods for testing."""
+
+    async def shift_array(
+        self,
+        array_path: str,
+        offset: tuple[int, ...],
+        num_chunks: tuple[int, ...],
+    ) -> None:
+        """Shift chunk indices for an array.
+
+        This simulates what shift_array does to the chunk store keys.
+        Out-of-bounds chunks are dropped, vacated positions retain stale data.
+        """
+        prefix = f"{array_path}/c/"
+
+        # Read all chunks keyed by indices
+        chunk_data: dict[tuple[int, ...], Any] = {}
+        async for key in self.list_prefix(prefix):
+            parts = key.split("/")
+            idx_start = parts.index("c") + 1
+            indices = tuple(int(p) for p in parts[idx_start:])
+            data = await self.get(key, prototype=PROTOTYPE)
+            if data:
+                chunk_data[indices] = data
+
+        # Write chunks at new positions (skip out-of-bounds)
+        for old_idx, data in chunk_data.items():
+            new_idx = tuple(idx + off for idx, off in zip(old_idx, offset, strict=True))
+            if any(
+                idx < 0 or idx >= nchunks
+                for idx, nchunks in zip(new_idx, num_chunks, strict=True)
+            ):
+                continue  # Out of bounds - discard
+            new_key = f"{prefix}{'/'.join(str(idx) for idx in new_idx)}"
+            await self.set(new_key, data)
 
     spec_version: int
 
@@ -294,8 +328,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             #     pending_model, session.store, pending_arrays | pending_groups
             # )
 
-        # Prefer commit (75%) over discard (25%)
-        if data.draw(st.sampled_from([True, True, True, False])):
+        # Prefer commit (75%) over discard (25%) to exercise more code paths
+        if data.draw(st.sampled_from([True, True, True, False])):  # 3:1 odds
             note(f"committing {num_moves} moves")
             self.model = pending_model
             self.all_arrays = pending_arrays
@@ -305,6 +339,41 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         else:
             note("discarding moves")
             self.store = self.repo.writable_session("main").store
+
+    @rule(data=st.data())
+    @precondition(lambda self: self.repo.spec_version >= 2)
+    @precondition(lambda self: bool(self.all_arrays))
+    def shift_array(self, data: st.DataObject) -> None:
+        """Shift an array's chunks by a random offset."""
+        array_path = data.draw(st.sampled_from(sorted(self.all_arrays)))
+
+        arr_model = zarr.open_array(self.model, path=array_path)
+        arr_store = zarr.open_array(self.store, path=array_path)
+        num_chunks = arr_model.cdata_shape
+        chunks = arr_model.chunks
+
+        # Draw offset: negative shifts left, positive shifts right
+        offset = data.draw(
+            st.tuples(*[st.integers(min_value=-n, max_value=n) for n in num_chunks])
+        )
+
+        # Optionally resize before shift to make room (mimics real user behavior)
+        # - With resize: preserves data that would otherwise go out of bounds
+        # - Without resize: data shifting beyond bounds is lost
+        should_resize = data.draw(st.booleans())
+        if should_resize and any(o > 0 for o in offset):
+            new_shape = tuple(
+                arr_model.shape[i] + max(0, offset[i]) * chunks[i]
+                for i in range(len(chunks))
+            )
+            note(f"resizing array '{array_path}' from {arr_model.shape} to {new_shape}")
+            arr_model.resize(new_shape)
+            arr_store.resize(new_shape)
+            num_chunks = arr_model.cdata_shape
+
+        note(f"shifting array '{array_path}' by {offset}")
+        self.store.session.shift_array(f"/{array_path}", offset)
+        self._sync(self.model.shift_array(array_path, offset, num_chunks))
 
     @rule(
         data=st.data(),

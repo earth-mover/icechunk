@@ -580,6 +580,14 @@ impl Session {
     }
 
     #[instrument(skip(self, calculate_new_index))]
+    /// Reindex chunks in an array by applying a transformation function to each chunk's coordinates.
+    ///
+    /// The `calculate_new_index` function receives each chunk's current coordinates and returns:
+    /// - `Ok(Some(new_coords))` to move the chunk to new coordinates
+    /// - `Ok(None)` to discard the chunk
+    /// - `Err(...)` to abort the operation
+    ///
+    /// Source positions that are not also destinations retain their existing chunk refs.
     pub async fn reindex_array<F>(
         &mut self,
         array_path: &Path,
@@ -599,6 +607,7 @@ impl Session {
 
         let mut original_chunks = self.chunk_coordinates(array_path).await?.boxed();
         let mut change_set = ChangeSet::for_edits();
+
         // TODO: concurrency
         while let Some(old_chunk_index) = original_chunks.try_next().await? {
             if let Some(new_chunk_index) = calculate_new_index(&old_chunk_index)? {
@@ -607,7 +616,7 @@ impl Session {
                 if shape.valid_chunk_coord(&new_chunk_index) {
                     change_set.set_chunk_ref(
                         node.id.clone(),
-                        new_chunk_index,
+                        new_chunk_index.clone(),
                         new_payload,
                     )?;
                 } else {
@@ -625,13 +634,38 @@ impl Session {
         Ok(())
     }
 
+    /// Shift all chunks in an array by the given chunk offset.
+    ///
+    /// Out-of-bounds chunks are discarded. To preserve them, resize the array first
+    /// to make room. Vacated source positions retain stale references.
     #[instrument(skip(self))]
     pub async fn shift_array(
         &mut self,
         array_path: &Path,
-        offset: &[i64], // FIXME: overflow
+        chunk_offset: &[i64], // FIXME: overflow
     ) -> SessionResult<()> {
-        self.reindex_array(array_path, shift_by(offset)).await
+        let node = self.get_array(array_path).await?;
+        let num_chunks: Vec<u32> = match &node.node_data {
+            NodeData::Array { shape, .. } => shape.num_chunks().collect(),
+            _ => unreachable!("get_array returned non-array"),
+        };
+
+        let chunk_offset = chunk_offset.to_vec();
+        let num_chunks = num_chunks.to_vec();
+        self.reindex_array(array_path, move |index: &ChunkIndices| {
+            let new_indices: Option<Vec<u32>> = index
+                .0
+                .iter()
+                .enumerate()
+                .map(|(dim, &idx)| {
+                    let n = num_chunks[dim] as i64;
+                    let new_idx = idx as i64 + chunk_offset[dim];
+                    if new_idx < 0 || new_idx >= n { None } else { Some(new_idx as u32) }
+                })
+                .collect();
+            Ok(new_indices.map(ChunkIndices))
+        })
+        .await
     }
 
     #[instrument(skip(self, coords))]
@@ -1920,27 +1954,6 @@ pub fn construct_valid_byte_range(
             let new_start = new_end - n;
             new_start..new_end
         }
-    }
-}
-
-pub fn shift_by(offset: &[i64]) -> impl Fn(&ChunkIndices) -> ReindexOperationResult {
-    |index: &ChunkIndices| {
-        let res: Option<Vec<u32>> = index
-            .0
-            .iter()
-            .zip(offset.iter())
-            .map(|(index, offset)| {
-                let new_index = *index as i64 + offset;
-                if new_index < 0 {
-                    return Ok(None);
-                }
-                let new_index: u32 = new_index
-                    .try_into()
-                    .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
-                Ok::<_, SessionError>(Some(new_index))
-            })
-            .try_collect()?;
-        Ok(res.map(ChunkIndices))
     }
 }
 
@@ -4878,7 +4891,7 @@ mod tests {
         session.commit("first commit", None).await?;
 
         let mut session = repo.writable_session("main").await?;
-        session.reindex_array(&apath, shift_by(&[-1])).await?;
+        session.shift_array(&apath, &[-1]).await?;
         assert_eq!(
             session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?,
             Some(ChunkPayload::Inline("1".into()))
