@@ -184,6 +184,55 @@ pub unsafe extern "C" fn icechunk_store_get(
     }
 }
 
+/// Set the value for a Zarr key.
+///
+/// `data` is a pointer to `len` bytes. The data is copied; the caller
+/// retains ownership of the buffer.
+///
+/// Returns `ICECHUNK_SUCCESS` on success, or a negative error code on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn icechunk_store_set(
+    store: *const IcechunkStore,
+    key: *const libc::c_char,
+    data: *const u8,
+    len: libc::size_t,
+) -> i32 {
+    clear_last_error();
+
+    if store.is_null() || key.is_null() {
+        set_last_error("null argument".to_string());
+        return ICECHUNK_ERROR_NULL_ARGUMENT;
+    }
+    if data.is_null() && len > 0 {
+        set_last_error("data is null but len > 0".to_string());
+        return ICECHUNK_ERROR_NULL_ARGUMENT;
+    }
+
+    let store_ref = unsafe { &*store };
+    let key_str = match unsafe { CStr::from_ptr(key) }.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("invalid UTF-8 in key: {e}"));
+            return ICECHUNK_ERROR;
+        }
+    };
+
+    let bytes = if len == 0 {
+        bytes::Bytes::new()
+    } else {
+        let slice = unsafe { std::slice::from_raw_parts(data, len) };
+        bytes::Bytes::copy_from_slice(slice)
+    };
+
+    match crate::runtime::block_on(store_ref.inner.set(key_str, bytes)) {
+        Ok(()) => ICECHUNK_SUCCESS,
+        Err(e) => {
+            set_last_error(format!("{e}"));
+            ICECHUNK_ERROR
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +296,49 @@ mod tests {
         assert_eq!(rc, ICECHUNK_ERROR_NOT_FOUND);
         assert!(data.is_null());
 
+        unsafe { icechunk_store_free(store) };
+    }
+
+    #[test]
+    fn test_store_set_and_get_roundtrip() {
+        let store = make_test_store();
+        assert!(!store.is_null());
+
+        // First set zarr.json metadata so the array exists.
+        let meta_key = std::ffi::CString::new("array/zarr.json").unwrap();
+        let meta = br#"{"zarr_format":3,"node_type":"array","shape":[4],"data_type":"float32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[4]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0.0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}]}"#;
+        let rc = unsafe {
+            icechunk_store_set(store, meta_key.as_ptr(), meta.as_ptr(), meta.len())
+        };
+        assert_eq!(rc, ICECHUNK_SUCCESS);
+
+        // Now set a chunk (4 x f32 little-endian = [1.0, 2.0, 3.0, 4.0]).
+        let key = std::ffi::CString::new("array/c/0").unwrap();
+        let payload: [u8; 16] = [
+            0, 0, 128, 63, // 1.0f32
+            0, 0, 0, 64, // 2.0f32
+            0, 0, 64, 64, // 3.0f32
+            0, 0, 128, 64, // 4.0f32
+        ];
+        let rc = unsafe {
+            icechunk_store_set(store, key.as_ptr(), payload.as_ptr(), payload.len())
+        };
+        assert_eq!(rc, ICECHUNK_SUCCESS);
+
+        // Read it back.
+        let mut data: *mut u8 = std::ptr::null_mut();
+        let mut len: libc::size_t = 0;
+        let rc = unsafe {
+            icechunk_store_get(store, key.as_ptr(), &mut data, &mut len)
+        };
+        assert_eq!(rc, ICECHUNK_SUCCESS);
+        assert_eq!(len, 16);
+        assert!(!data.is_null());
+
+        let result = unsafe { std::slice::from_raw_parts(data, len) };
+        assert_eq!(result, &payload);
+
+        unsafe { libc::free(data as *mut libc::c_void) };
         unsafe { icechunk_store_free(store) };
     }
 }
