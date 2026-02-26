@@ -229,9 +229,9 @@ uv run scripts/check_xarray_docs_sync.py --update-known-diffs
 
 Make sure you have activated your [development environment](#setting-up-your-development-environment) before proceeding, because the full rust build will also compile the python bindings.
 
-##### just, cargo-nextest, cargo-deny 
+##### just, cargo-nextest, cargo-deny
 
-!!! 
+!!!
     If you use pixi and have activated the shell per instructions [above](#setting-up-your-development-environment) you can skip to the next section!
 
 Install the `just` command runner (used for build tasks and pre-commit hooks):
