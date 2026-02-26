@@ -11,6 +11,7 @@ from dask.array.utils import assert_eq
 from dask.distributed import Client
 from icechunk.dask import store_dask
 from icechunk.storage import s3_object_store_storage, s3_storage
+from tests.conftest import Permission
 
 # We create a 2-d array with this many chunks along each direction
 CHUNKS_PER_DIM = 10
@@ -25,6 +26,7 @@ CHUNKS_PER_TASK = 2
 def mk_repo(
     spec_version: int | None, use_object_store: bool = False
 ) -> icechunk.Repository:
+    access_key_id, secret_access_key = Permission.MODIFY.keys()
     if use_object_store:
         storage = s3_object_store_storage(
             endpoint_url="http://localhost:9000",
@@ -33,8 +35,8 @@ def mk_repo(
             region="us-east-1",
             bucket="testbucket",
             prefix="python-distributed-writers-test__" + str(time.time()),
-            access_key_id="minio123",
-            secret_access_key="minio123",
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
         )
     else:
         storage = s3_storage(
@@ -44,8 +46,8 @@ def mk_repo(
             region="us-east-1",
             bucket="testbucket",
             prefix="python-distributed-writers-test__" + str(time.time()),
-            access_key_id="minio123",
-            secret_access_key="minio123",
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
         )
     repo_config = icechunk.RepositoryConfig.default()
     repo_config.inline_chunk_threshold_bytes = 5

@@ -6,11 +6,12 @@ import pytest
 
 import icechunk as ic
 import zarr
-from tests.conftest import get_minio_client
+from tests.conftest import Permission, get_minio_client
 
 
 def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
     prefix = "test-repo__" + str(time.time())
+    access_key_id, secret_access_key = Permission.MODIFY.keys()
     repo = ic.Repository.create(
         storage=ic.s3_storage(
             endpoint_url="http://localhost:9000",
@@ -19,8 +20,8 @@ def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
             region="us-east-1",
             bucket="testbucket",
             prefix=prefix,
-            access_key_id="minio123",
-            secret_access_key="minio123",
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
         ),
         config=ic.RepositoryConfig(inline_chunk_threshold_bytes=0),
         spec_version=spec_version,

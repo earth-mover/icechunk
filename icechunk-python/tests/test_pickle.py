@@ -17,6 +17,7 @@ from icechunk import (
     local_filesystem_storage,
     s3_storage,
 )
+from tests.conftest import Permission
 
 
 def create_local_repo(path: str, spec_version: int | None) -> Repository:
@@ -73,7 +74,7 @@ def test_pickle_read_only(tmp_repo: Repository) -> None:
 
 
 def get_credentials() -> S3StaticCredentials:
-    return S3StaticCredentials("minio123", "minio123")
+    return S3StaticCredentials(*Permission.MODIFY.keys())
 
 
 def test_pickle(any_spec_version: int | None) -> None:
