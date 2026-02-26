@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v6
       - name: Stand up RustFS
         run: |
-          docker compose up -d rustfs
+          docker compose up -d rustfs_init
       - name: Wait for RustFS to be ready
         run: |
           for _ in {1..10}; do

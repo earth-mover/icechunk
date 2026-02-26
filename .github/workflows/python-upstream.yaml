@@ -42,7 +42,7 @@ jobs:
         run: sudo snap install --edge --classic just
       - name: Stand up RustFS
         run: |
-          docker compose up -d rustfs
+          docker compose up -d rustfs_init
 
       - name: Wait for RustFS to be ready
         run: |
@@ -290,7 +290,7 @@ jobs:
       - name: Stand up RustFS
         working-directory: icechunk
         run: |
-          docker compose up -d rustfs
+          docker compose up -d rustfs_init
 
       - name: Wait for RustFS to be ready
         working-directory: icechunk
