@@ -209,15 +209,6 @@ prek = ">=0.3.3,<0.4"
 netcdf4 = ">=1.7.4,<2"
 cargo-nextest = ">=0.9.106,<0.10"
 
-[tool.pixi.target.osx-arm64.activation.env]
-DYLD_LIBRARY_PATH = "$CONDA_PREFIX/lib"
-
-[tool.pixi.target.linux-64.activation.env]
-LD_LIBRARY_PATH = "$CONDA_PREFIX/lib"
-
-[tool.pixi.target.linux-aarch64.activation.env]
-LD_LIBRARY_PATH = "$CONDA_PREFIX/lib"
-
 [tool.pixi.environments]
 default = { features = ["build", "dev", "docs", "test"], solve-group = "default" }
 benchmark = { features = ["benchmark"], solve-group = "default" }
