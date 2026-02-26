@@ -233,6 +233,72 @@ pub unsafe extern "C" fn icechunk_store_set(
     }
 }
 
+/// Check if a key exists in the store.
+///
+/// Returns 1 if the key exists, 0 if not, or a negative error code on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn icechunk_store_exists(
+    store: *const IcechunkStore,
+    key: *const libc::c_char,
+) -> i32 {
+    clear_last_error();
+    if store.is_null() || key.is_null() {
+        set_last_error("null argument".to_string());
+        return ICECHUNK_ERROR_NULL_ARGUMENT;
+    }
+
+    let store_ref = unsafe { &*store };
+    let key_str = match unsafe { CStr::from_ptr(key) }.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("invalid UTF-8 in key: {e}"));
+            return ICECHUNK_ERROR;
+        }
+    };
+
+    match crate::runtime::block_on(store_ref.inner.exists(key_str)) {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(e) => {
+            set_last_error(format!("{e}"));
+            ICECHUNK_ERROR
+        }
+    }
+}
+
+/// Delete a key from the store.
+///
+/// Returns `ICECHUNK_SUCCESS` on success (including if the key didn't exist).
+/// Returns a negative error code on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn icechunk_store_delete(
+    store: *const IcechunkStore,
+    key: *const libc::c_char,
+) -> i32 {
+    clear_last_error();
+    if store.is_null() || key.is_null() {
+        set_last_error("null argument".to_string());
+        return ICECHUNK_ERROR_NULL_ARGUMENT;
+    }
+
+    let store_ref = unsafe { &*store };
+    let key_str = match unsafe { CStr::from_ptr(key) }.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("invalid UTF-8 in key: {e}"));
+            return ICECHUNK_ERROR;
+        }
+    };
+
+    match crate::runtime::block_on(store_ref.inner.delete(key_str)) {
+        Ok(()) => ICECHUNK_SUCCESS,
+        Err(e) => {
+            set_last_error(format!("{e}"));
+            ICECHUNK_ERROR
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,6 +405,48 @@ mod tests {
         assert_eq!(result, &payload);
 
         unsafe { libc::free(data as *mut libc::c_void) };
+        unsafe { icechunk_store_free(store) };
+    }
+
+    #[test]
+    fn test_exists_and_delete() {
+        let store = make_test_store();
+        assert!(!store.is_null());
+
+        // Set up an array with metadata.
+        let meta_key = std::ffi::CString::new("arr/zarr.json").unwrap();
+        let meta = br#"{"zarr_format":3,"node_type":"array","shape":[1],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}]}"#;
+        let rc = unsafe {
+            icechunk_store_set(store, meta_key.as_ptr(), meta.as_ptr(), meta.len())
+        };
+        assert_eq!(rc, ICECHUNK_SUCCESS);
+
+        // Set a chunk.
+        let key = std::ffi::CString::new("arr/c/0").unwrap();
+        let data = [1u8, 2, 3, 4];
+        let rc = unsafe {
+            icechunk_store_set(store, key.as_ptr(), data.as_ptr(), data.len())
+        };
+        assert_eq!(rc, ICECHUNK_SUCCESS);
+
+        // Verify the metadata and chunk exist.
+        assert_eq!(unsafe { icechunk_store_exists(store, meta_key.as_ptr()) }, 1);
+        assert_eq!(unsafe { icechunk_store_exists(store, key.as_ptr()) }, 1);
+
+        // Delete the chunk.
+        let rc = unsafe { icechunk_store_delete(store, key.as_ptr()) };
+        assert_eq!(rc, ICECHUNK_SUCCESS);
+
+        // Verify the chunk no longer exists but metadata still does.
+        assert_eq!(unsafe { icechunk_store_exists(store, key.as_ptr()) }, 0);
+        assert_eq!(unsafe { icechunk_store_exists(store, meta_key.as_ptr()) }, 1);
+
+        // Deleting a non-existent metadata node should succeed (the
+        // underlying Store::delete treats missing nodes as no-ops).
+        let missing_meta = std::ffi::CString::new("nonexistent/zarr.json").unwrap();
+        let rc = unsafe { icechunk_store_delete(store, missing_meta.as_ptr()) };
+        assert_eq!(rc, ICECHUNK_SUCCESS);
+
         unsafe { icechunk_store_free(store) };
     }
 }
