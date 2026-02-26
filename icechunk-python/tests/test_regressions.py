@@ -14,7 +14,7 @@ from icechunk import (
     s3_store,
 )
 from icechunk.repository import Repository
-from tests.conftest import write_chunks_to_minio
+from tests.conftest import Permission, write_chunks_to_minio
 from zarr.core.buffer import default_buffer_prototype
 from zarr.core.buffer.cpu import Buffer
 
@@ -45,10 +45,12 @@ async def test_issue_418(any_spec_version: int | None) -> None:
     )
     container = VirtualChunkContainer("s3://testbucket/", store_config)
     config.set_virtual_chunk_container(container)
+    access_key_id, secret_access_key = Permission.READONLY.keys()
     credentials = containers_credentials(
         {
             "s3://testbucket": s3_credentials(
-                access_key_id="minio123", secret_access_key="minio123"
+                access_key_id=access_key_id,
+                secret_access_key=secret_access_key,
             )
         }
     )
