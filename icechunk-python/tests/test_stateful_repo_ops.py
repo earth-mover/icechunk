@@ -460,6 +460,13 @@ class Model:
                 self.commits.pop(k, None)
                 self.ondisk_snaps.pop(k, None)
                 deleted.add(k)
+
+        # Match Rust's delete_snapshots_from_repo_info: rewrite parent_id for
+        # kept snapshots whose parent was GC'd to INITIAL_SNAPSHOT_ID.
+        for c in self.commits.values():
+            if c.parent_id is not None and c.parent_id in deleted:
+                c.parent_id = self.initial_snapshot_id
+
         note(f"Deleted snapshots in model: {deleted!r}")
         self.ops_log.append(GCRanUpdateModel())
         return deleted
