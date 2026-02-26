@@ -11,7 +11,7 @@ use icechunk::{
 
 pub(crate) enum Permission {
     ReadOnly, // GetObject
-    Modify,   // {Get,Put,Delete}Object
+    Modify,   // {Get,Put,Delete}Object, ListBucket
 }
 
 impl Permission {

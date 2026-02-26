@@ -8,7 +8,6 @@ services:
     image: rustfs/rustfs:1.0.0-alpha.83
     hostname: rustfs
     healthcheck:
-      #test: nc 127.0.0.1 9000 -z
       test: curl 127.0.0.1:9000/health
       interval: 1s
       retries: 30

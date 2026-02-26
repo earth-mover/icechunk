@@ -19,7 +19,7 @@ def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
             region="us-east-1",
             bucket="testbucket",
             prefix=prefix,
-            access_key_id="minio123",  # TODO: restrict here with another user
+            access_key_id="minio123",
             secret_access_key="minio123",
         ),
         config=ic.RepositoryConfig(inline_chunk_threshold_bytes=0),

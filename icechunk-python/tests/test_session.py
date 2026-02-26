@@ -216,7 +216,7 @@ def test_repository_open_no_list_bucket() -> None:
         region="us-east-1",
         bucket="testbucket",
         prefix=prefix,
-        access_key_id="basic",
+        access_key_id="readonly",
         secret_access_key="basicuser",
     )
 
