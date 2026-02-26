@@ -405,6 +405,33 @@ class Model:
 
         note(f"model {expired_snaps=!r}")
 
+        # Build root_to_snaps BEFORE removing expired snapshots, so we can
+        # traverse through them (matching Rust's expire_v2 which uses
+        # repo_info.ancestry() on the pre-expiration state).
+        root_to_snaps: dict[str | None, set[str]] = {}
+        for ref_id in self.refs_iter():
+            branch_snaps: set[str] = set()
+            root = None
+            current: str | None = ref_id
+            while current is not None:
+                snap = self.commits.get(current)
+                if snap is None:
+                    break
+                if snap.parent_id is None:
+                    root = current
+                    break
+                branch_snaps.add(current)
+                current = snap.parent_id
+            if root is None:
+                root = self.initial_snapshot_id
+            root_to_snaps.setdefault(root, set()).update(branch_snaps)
+
+        def find_new_parent(snap_id: str) -> str | None:
+            for root, snaps in root_to_snaps.items():
+                if snap_id in snaps:
+                    return root
+            return None
+
         for id in expired_snaps:
             # notice we don't delete from self.ondisk_snaps, those can still be deleted by GC
             # however we do pop from `commits` since that is a list of unexpired snaps
@@ -412,7 +439,7 @@ class Model:
 
         for c in self.commits.values():
             if c.parent_id in expired_snaps:
-                c.parent_id = self.initial_snapshot_id
+                c.parent_id = find_new_parent(c.id)
 
         if delete_expired_tags:
             tags_to_delete = {
