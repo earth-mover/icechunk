@@ -199,8 +199,13 @@ impl RepoInfo {
                 generated::Ref::create(&mut builder, &args)
             })
             .collect::<Vec<_>>();
-        // FIXME: shouldn't be assert
-        assert!(main_found);
+        if !main_found {
+            return Err(IcechunkFormatErrorKind::BranchNotFound {
+                branch: Ref::DEFAULT_BRANCH.to_string(),
+            }
+            .into());
+        }
+
         let branches = builder.create_vector(&branches);
 
         let deleted_tags = sorted_deleted_tags
@@ -710,9 +715,14 @@ impl RepoInfo {
         previous_file: &str,
         num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
-        if self.resolve_tag(name).is_ok() || self.tag_was_deleted(name)? {
-            // TODO: better error on tag already deleted
+        if self.resolve_tag(name).is_ok() {
             return Err(IcechunkFormatErrorKind::TagAlreadyExists {
+                tag: name.to_string(),
+            }
+            .into());
+        }
+        if self.tag_was_deleted(name)? {
+            return Err(IcechunkFormatErrorKind::TagPreviouslyDeleted {
                 tag: name.to_string(),
             }
             .into());
@@ -765,6 +775,7 @@ impl RepoInfo {
                 tags.retain(|(n, _)| n != &name);
 
                 let mut deleted_tags: BTreeSet<_> = self.deleted_tags()?.collect();
+                debug_assert!(!deleted_tags.contains(name));
                 deleted_tags.insert(name);
 
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;

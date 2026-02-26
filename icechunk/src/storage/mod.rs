@@ -485,6 +485,10 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult>;
 
+    /// List objects in storage whose keys start with the given prefix.
+    ///
+    /// Returns a stream of [`ListInfo`] entries, each containing the object's key and size in bytes.
+    /// Pass an empty prefix to list all objects in the repository's storage root.
     async fn list_objects<'a>(
         &'a self,
         settings: &Settings,
