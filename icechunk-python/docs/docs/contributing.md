@@ -232,7 +232,7 @@ Make sure you have activated your [development environment](#setting-up-your-dev
 
 ##### just, cargo-nextest, cargo-deny
 
-!!!
+!!! note
     If you use pixi and have activated the shell per instructions [above](#setting-up-your-development-environment) you can skip to the next section!
 
 Install the `just` command runner (used for build tasks and pre-commit hooks):
