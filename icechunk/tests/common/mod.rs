@@ -12,15 +12,13 @@ use icechunk::{
 pub(crate) enum Permission {
     ReadOnly, // GetObject
     Modify,   // {Get,Put,Delete}Object
-    List,     // ListBucket
 }
 
 impl Permission {
     pub(crate) fn keys(&self) -> (&str, &str) {
         match self {
-            Permission::Modify => ("minio123", "minio123"), // TODO: make a more restricted one
-            Permission::ReadOnly => ("basic", "basicuser"),
-            Permission::List => todo!(),
+            Permission::Modify => ("modify", "modifydata"),
+            Permission::ReadOnly => ("readonly", "basicuser"),
         }
     }
 }

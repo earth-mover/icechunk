@@ -43,22 +43,37 @@ services:
         set -ex
 
         rc alias set local http://rustfs:9000 minio123 minio123
-        rc admin user add local basic basicuser
+        rc admin user add local readonly basicuser
+        rc admin user add local modify modifydata
 
         apk add --no-cache aws-cli
         export AWS_ACCESS_KEY_ID=minio123
         export AWS_SECRET_ACCESS_KEY=minio123
+
         echo '{
           "Version": "2012-10-17",
           "Statement": [
             {
               "Sid": "AllowGetObjectOnly",
               "Effect": "Allow",
-              "Principal": { "AWS": ["basic"] },
+              "Principal": { "AWS": ["readonly"] },
               "Action": [
-                "s3:DeleteObject",
+                "s3:GetObject"
+              ],
+              "Resource": [
+                "arn:aws:s3:::testbucket",
+                "arn:aws:s3:::testbucket/*"
+              ]
+            },
+            {
+              "Sid": "AllowToModify",
+              "Effect": "Allow",
+              "Principal": { "AWS": ["modify"] },
+              "Action": [
                 "s3:GetObject",
-                "s3:PutObject"
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket"
               ],
               "Resource": [
                 "arn:aws:s3:::testbucket",

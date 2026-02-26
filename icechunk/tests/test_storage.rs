@@ -223,7 +223,7 @@ async fn async_read_to_bytes(
 
 #[tokio_test]
 pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::ReadOnly, |_, storage| async move {
+    with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = storage.default_settings().await?;
         let id = SnapshotId::random();
         let mut bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
@@ -548,7 +548,7 @@ pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::
 #[tokio_test]
 #[allow(clippy::panic)]
 pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::ReadOnly, |_, storage| async move {
+    with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = storage.default_settings().await?;
 
         let am = Arc::new(AssetManager::new_no_cache(
@@ -584,7 +584,7 @@ pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Erro
 #[tokio_test]
 #[allow(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::ReadOnly, |_, storage| async move {
+    with_storage(Permission::Modify, |_, storage| async move {
         let am = Arc::new(AssetManager::new_no_cache(
             Arc::clone(&storage),
             storage.default_settings().await?,
@@ -655,7 +655,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing()
 #[allow(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_fails_on_bad_version_when_existing()
 -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::ReadOnly, |storage_type, storage| async move {
+    with_storage(Permission::Modify, |storage_type, storage| async move {
         let storage_settings = storage.default_settings().await?;
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
@@ -710,7 +710,7 @@ pub async fn test_write_config_fails_on_bad_version_when_existing()
 #[allow(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_can_overwrite_with_unsafe_config()
 -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::ReadOnly, |_, storage| async move {
+    with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = storage::Settings {
             unsafe_use_conditional_update: Some(false),
             unsafe_use_conditional_create: Some(false),
@@ -828,7 +828,7 @@ pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::test]
 pub async fn test_write_object_larger_than_multipart_threshold()
 -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::ReadOnly, |_, storage| async move {
+    with_storage(Permission::Modify, |_, storage| async move {
         let custom_settings = storage::Settings {
             minimum_size_for_multipart_upload: Some(100),
             ..storage.default_settings().await?
@@ -866,7 +866,7 @@ pub async fn test_write_object_larger_than_multipart_threshold()
 
 #[tokio_test]
 pub async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(Permission::ReadOnly, |_, storage| async move {
+    with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = storage.default_settings().await?;
         let id = SnapshotId::random();
         let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
