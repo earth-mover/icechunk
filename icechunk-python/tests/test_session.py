@@ -1,11 +1,12 @@
 import pickle
 import tempfile
 import time
-from typing import cast
+from typing import Any, cast
 
 import pytest
-
 import zarr
+import zarr.core.array
+
 from icechunk import (
     ChunkType,
     ForkSession,
@@ -233,5 +234,6 @@ def test_repository_open_no_list_bucket() -> None:
     # Opening the repo with a storage without ListBucket permissions
     repo = Repository.open(storage=readonly_storage, config=config)
     readonly = repo.readonly_session(branch="main")
-    air_temp = zarr.open_group(readonly.store, mode="r").get("air_temp")
+    group = zarr.open_group(store=readonly.store, mode="r")
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     assert air_temp[0, 2] == 42
