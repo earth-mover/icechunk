@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::ffi::CStr;
 use std::sync::Arc;
 
+use icechunk::format::ByteRange;
 use icechunk::{Repository, Store};
 use tokio::sync::RwLock;
 
@@ -113,6 +114,76 @@ pub unsafe extern "C" fn icechunk_store_is_read_only(
     })
 }
 
+/// Get the value for a Zarr key.
+///
+/// On success, returns `ICECHUNK_SUCCESS`, sets `*out_data` to a `malloc`-allocated
+/// buffer and `*out_len` to its length. Caller must `free()` the buffer.
+///
+/// On not-found, returns `ICECHUNK_ERROR_NOT_FOUND` and sets `*out_data` to null.
+/// On other failures, returns `ICECHUNK_ERROR` and sets `*out_data` to null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn icechunk_store_get(
+    store: *const IcechunkStore,
+    key: *const libc::c_char,
+    out_data: *mut *mut u8,
+    out_len: *mut libc::size_t,
+) -> i32 {
+    clear_last_error();
+
+    if store.is_null() || key.is_null() || out_data.is_null() || out_len.is_null() {
+        set_last_error("null argument".to_string());
+        if !out_data.is_null() {
+            unsafe { *out_data = std::ptr::null_mut() };
+        }
+        return ICECHUNK_ERROR_NULL_ARGUMENT;
+    }
+
+    let store_ref = unsafe { &*store };
+    let key_str = match unsafe { CStr::from_ptr(key) }.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("invalid UTF-8 in key: {e}"));
+            unsafe { *out_data = std::ptr::null_mut() };
+            return ICECHUNK_ERROR;
+        }
+    };
+
+    match crate::runtime::block_on(store_ref.inner.get(key_str, &ByteRange::ALL)) {
+        Ok(bytes) => {
+            let len = bytes.len();
+            if len == 0 {
+                unsafe {
+                    *out_data = std::ptr::null_mut();
+                    *out_len = 0;
+                };
+                return ICECHUNK_SUCCESS;
+            }
+            let buf = unsafe { libc::malloc(len) as *mut u8 };
+            if buf.is_null() {
+                set_last_error("malloc failed".to_string());
+                return ICECHUNK_ERROR;
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
+                *out_data = buf;
+                *out_len = len;
+            };
+            ICECHUNK_SUCCESS
+        }
+        Err(e) => {
+            unsafe { *out_data = std::ptr::null_mut() };
+            let code =
+                if matches!(e.kind, icechunk::store::StoreErrorKind::NotFound(_)) {
+                    ICECHUNK_ERROR_NOT_FOUND
+                } else {
+                    ICECHUNK_ERROR
+                };
+            set_last_error(format!("{e}"));
+            code
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,5 +230,23 @@ mod tests {
     fn test_store_is_read_only_null_returns_error() {
         let rc = unsafe { icechunk_store_is_read_only(std::ptr::null()) };
         assert_eq!(rc, ICECHUNK_ERROR_NULL_ARGUMENT);
+    }
+
+    #[test]
+    fn test_store_get_not_found() {
+        let store = make_test_store();
+        assert!(!store.is_null());
+
+        let key = std::ffi::CString::new("nonexistent/zarr.json").unwrap();
+        let mut data: *mut u8 = std::ptr::null_mut();
+        let mut len: libc::size_t = 0;
+
+        let rc = unsafe {
+            icechunk_store_get(store, key.as_ptr(), &mut data, &mut len)
+        };
+        assert_eq!(rc, ICECHUNK_ERROR_NOT_FOUND);
+        assert!(data.is_null());
+
+        unsafe { icechunk_store_free(store) };
     }
 }
