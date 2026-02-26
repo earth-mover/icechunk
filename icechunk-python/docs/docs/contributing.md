@@ -85,6 +85,7 @@ We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rus
     maturin develop
     ```
 
+All build, test, and code quality tasks are managed with [`just`](https://github.com/casey/just). Run `just --list` to see all available recipes with descriptions.
 
 ### Python Development Workflow
 
