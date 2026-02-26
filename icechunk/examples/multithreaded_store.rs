@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
     let repo =
-        Repository::create(Some(config), storage, HashMap::new(), None, false).await?;
+        Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
     let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
     let store = Store::from_session(Arc::clone(&ds)).await;
 

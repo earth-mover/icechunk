@@ -1898,7 +1898,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, false)
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
                 .await?;
 
         // default config is not stored in repo info
@@ -1955,7 +1955,7 @@ mod tests {
             Arc::clone(&storage),
             HashMap::new(),
             None,
-            false,
+            true,
         )
         .await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 20);
@@ -1986,7 +1986,7 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, false)
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
                 .await?;
 
         let initial_branches = repo.list_branches().await?;
@@ -2120,8 +2120,7 @@ mod tests {
             ..RepositoryConfig::default()
         };
         let repository =
-            Repository::create(Some(config), storage, HashMap::new(), None, false)
-                .await?;
+            Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
 
         let mut session = repository.writable_session("main").await?;
 
@@ -2146,7 +2145,7 @@ mod tests {
             Arc::clone(&storage),
             HashMap::new(),
             None,
-            false,
+            true,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -3252,7 +3251,7 @@ mod tests {
         let storage = Arc::clone(&backend);
 
         let repository =
-            Repository::create(None, storage, HashMap::new(), None, false).await?;
+            Repository::create(None, storage, HashMap::new(), None, true).await?;
 
         let mut session = repository.writable_session("main").await?;
 
@@ -3432,7 +3431,7 @@ mod tests {
                 .await
                 .expect("Creating local storage failed");
 
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, false)
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
             .await?;
         assert!(
             Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
@@ -3466,7 +3465,7 @@ mod tests {
             Arc::clone(&storage),
             HashMap::new(),
             Some(SpecVersionBin::V2dot0),
-            false,
+            true,
         )
         .await?;
         let repo = Repository::open(None, storage, Default::default()).await?;
@@ -3482,7 +3481,7 @@ mod tests {
             Arc::clone(&storage),
             HashMap::new(),
             Some(SpecVersionBin::V1dot0),
-            false,
+            true,
         )
         .await?;
         let repo = Repository::open(None, storage, Default::default()).await?;
@@ -3494,7 +3493,7 @@ mod tests {
     async fn set_metadata() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, false)
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
                 .await?;
         assert_eq!(repo.get_metadata().await?, Default::default());
 
@@ -3509,7 +3508,7 @@ mod tests {
     async fn update_metadata() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, false)
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
                 .await?;
 
         let meta =
@@ -3553,7 +3552,7 @@ mod tests {
             Arc::clone(&storage),
             HashMap::new(),
             None,
-            false,
+            true,
         )
         .await?;
 

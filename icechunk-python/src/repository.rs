@@ -832,7 +832,7 @@ impl PyRepository {
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = false))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = true))]
     fn create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -871,7 +871,7 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = false))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = true))]
     fn create_async<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,

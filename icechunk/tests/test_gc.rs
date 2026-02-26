@@ -100,7 +100,7 @@ pub async fn do_test_gc(
         Arc::clone(&storage),
         HashMap::new(),
         spec_version,
-        false,
+        true,
     )
     .await?;
 
@@ -357,7 +357,7 @@ pub async fn do_test_expire_and_garbage_collect(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings().await?;
     let mut repo =
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, false)
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
             .await?;
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
@@ -470,7 +470,7 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
     let mut repo =
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, false)
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
             .await?;
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
@@ -537,9 +537,8 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
-    let repo =
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, false)
-            .await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
 
     let mut session = repo.writable_session("main").await?;
     let array_path: Path = "/array".to_string().try_into().unwrap();
