@@ -73,13 +73,20 @@ def rdms() -> str:
 
 
 def repo_config_with(
-    *, inline_chunk_threshold_bytes: int | None = None, preload=None, splitting=None
+    *,
+    inline_chunk_threshold_bytes: int | None = None,
+    preload=None,
+    splitting=None,
+    virtual_chunk_containers: list | None = None,
 ) -> ic.RepositoryConfig:
     config = ic.RepositoryConfig.default()
     if inline_chunk_threshold_bytes is not None:
         config.inline_chunk_threshold_bytes = inline_chunk_threshold_bytes
     if splitting is not None:
         config.manifest = ic.ManifestConfig(preload=preload, splitting=splitting)
+    if virtual_chunk_containers is not None:
+        for cont in virtual_chunk_containers:
+            config.set_virtual_chunk_container(cont)
     return config
 
 

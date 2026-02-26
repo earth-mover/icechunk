@@ -3,6 +3,28 @@
 This is a benchmark suite based on `pytest-benchmark`.
 It is best to think of these benchmarks as benchmarking "integration" workflows that exercise the ecosystem from the Xarray/Zarr level down to Icechunk.
 
+## Quick Start (uv)
+
+From the repo root:
+
+``` sh
+# Install benchmark deps and build icechunk (release mode)
+just bench-build
+
+# Create benchmark datasets (once, ~3 min)
+just bench-setup
+
+# Run all benchmarks
+just bench
+
+# Run specific benchmarks
+just bench "-k getsize"
+just bench "-k write"
+
+# Compare saved runs
+just bench-compare 0020 0021
+```
+
 ## Setup
 
 Install the necessary dependencies with the `[benchmarks]` extra.
@@ -18,7 +40,7 @@ pytest -nauto -m setup_benchmarks benchmarks/
 ```
 As of Jan 20, 2025 this command takes about 3 minutes to run.
 
-Use the `--force-setup` flag to avoid re-creating datasets if possible.
+Use `--force-setup=False` to avoid re-creating datasets if possible.
 
 ``` sh
 pytest -nauto -m setup_benchmarks --force-setup=False benchmarks/
@@ -115,7 +137,13 @@ Downsides:
 ### `runner.py`
 
 `runner.py` abstracts the painful task of setting up envs with different versions (with potential format changes), and recreating datasets where needed.
-Datasets are written to `s3://icechunk-test/benchmarks/REFNAME_SHORTCOMMIT`.
+Datasets are written to `{bucket}/benchmarks/{REF}_{SHORTCOMMIT}/` where the bucket depends on `--where`:
+| Store   | Bucket                |
+|---------|-----------------------|
+| s3      | `icechunk-ci`         |
+| gcs     | `icechunk-test-gcp`   |
+| tigris  | `icechunk-test`       |
+| r2      | `icechunk-test-r2`    |
 
 Usage:
 ``` sh
@@ -124,18 +152,21 @@ python benchmarks/runner.py icechunk-v0.1.0-alpha.12 main
 This will
 1. setup a virtual env with the icechunk version
 2. compile it,
-3. run `setup_benchmarks` with `force-setup=False`. This will recreate datasets if the version in the bucket cannot be opened by this icechunk version.
+3. run `setup_benchmarks`. This will recreate datasets if the version in the bucket cannot be opened by this icechunk version. Pass `--setup=force` to always recreate, or `--setup=skip` to skip setup entirely.
 4. Runs the benchmarks.
 5. Compares the benchmarks.
 
-### Just aliases
+### Just recipes
 
-> [!WARNING]
-> This doesn't work yet
+Some useful `just` recipes:
 
-Some useful `just` aliases:
-
-| Compare these benchmark runs | `just bench-compare 0020 0021 0022` |
+| Task                      | Command                             |
+|---------------------------|-------------------------------------|
+| Install deps + build      | `just bench-build`                  |
+| Create benchmark datasets | `just bench-setup`                  |
+| Run benchmarks            | `just bench`                        |
+| Run specific benchmarks   | `just bench "-k getsize"`           |
+| Compare benchmark runs    | `just bench-compare 0020 0021 0022` |
 
 ### Run the read benchmarks:
 ``` sh
@@ -200,7 +231,7 @@ To easily run benchmarks for some named refs use `benchmarks/run_refs.py`
 ### Comparing across multiple stores
 
 ```sh
-python benchmarks/runner.py --skip-setup --pytest '-k test_write_simple' --where 's3|s3_ob|gcs' main
+python benchmarks/runner.py --setup=skip --pytest '-k test_write_simple' --where 's3|s3_ob|gcs' main
 ```
 
 ``` sh
