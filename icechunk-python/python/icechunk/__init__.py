@@ -106,6 +106,11 @@ from icechunk.storage import (
     tigris_storage,
 )
 from icechunk.store import IcechunkStore
+from icechunk.zarr_adapter import (
+    IcechunkPathSpec,
+    create_readonly_session_from_path,
+    parse_icechunk_path_spec,
+)
 
 __all__ = [
     "AnyAzureCredential",
@@ -142,6 +147,7 @@ __all__ = [
     "GcsCredentials",
     "GcsStaticCredentials",
     "IcechunkError",
+    "IcechunkPathSpec",
     "IcechunkStore",
     "ManifestConfig",
     "ManifestFileInfo",
@@ -183,6 +189,7 @@ __all__ = [
     "azure_static_credentials",
     "azure_storage",
     "containers_credentials",
+    "create_readonly_session_from_path",
     "gcs_credentials",
     "gcs_from_env_credentials",
     "gcs_refreshable_credentials",
@@ -195,6 +202,7 @@ __all__ = [
     "initialize_logs",
     "local_filesystem_storage",
     "local_filesystem_store",
+    "parse_icechunk_path_spec",
     "print_debug_info",
     "r2_storage",
     "redirect_storage",
