@@ -8,11 +8,7 @@ fn main() {
 
     let output_path = std::path::Path::new(&crate_dir).join("include").join("icechunk.h");
 
-    match cbindgen::Builder::new()
-        .with_crate(&crate_dir)
-        .with_config(config)
-        .generate()
-    {
+    match cbindgen::Builder::new().with_crate(&crate_dir).with_config(config).generate() {
         Ok(bindings) => {
             bindings.write_to_file(&output_path);
         }
