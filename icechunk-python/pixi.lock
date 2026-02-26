@@ -5864,7 +5864,7 @@ packages:
 - pypi: ./
   name: icechunk
   version: 2.0.0a0
-  sha256: c8eed05da65e48bdae3ef2746e541d88147b7cf0866d274445dab60f8df8fb61
+  sha256: efa6a75b6350fa2fc66f0cd1c3d6928908e3101caab6c1c6cd987e47ecb2924b
   requires_dist:
   - zarr>=3.1.0
   requires_python: '>=3.11'
