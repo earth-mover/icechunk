@@ -290,4 +290,4 @@ def test_repository_open_no_list_bucket_v1() -> None:
     # from repo_info like in a v2 repo
     with pytest.raises(IcechunkError) as e:
         assert repo.list_branches() == set(["main"])
-        assert "error listing objects" in e.value()
+        assert "error listing objects" in e.value.message
