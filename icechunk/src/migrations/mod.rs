@@ -166,7 +166,10 @@ fn generate_migration_ops_log(
     let root = &main_ancestry[main_ancestry.len() - 1];
     let root_time = root.flushed_at;
 
-    let main_snap_ids: HashSet<_> = main_ancestry.iter().map(|s| s.id.clone()).collect();
+    // Track which snapshots already have a NewCommitUpdate to avoid duplicates
+    // when branches share non-main ancestry (e.g. branch-b forked from branch-a).
+    let mut emitted_snap_ids: HashSet<_> =
+        main_ancestry.iter().map(|s| s.id.clone()).collect();
 
     let mut entries: Vec<(UpdateType, DateTime<Utc>)> = Vec::new();
 
@@ -187,6 +190,7 @@ fn generate_migration_ops_log(
     // Followed by a BranchCreatedUpdate + NewCommitUpdate for each unique snapshot
     // in the ancestry of each branch. BranchCreatedUpdate is timestamped to the
     // root snapshot in the branch's ancestry (the first snapshot).
+    // Snapshots shared across branches are attributed to the first branch processed.
     for (name, ancestry) in branches {
         let branch_root_time = ancestry.last().map(|s| s.flushed_at).unwrap_or(root_time);
         entries.push((
@@ -195,7 +199,7 @@ fn generate_migration_ops_log(
         ));
 
         for snap in ancestry.iter().rev() {
-            if !main_snap_ids.contains(&snap.id) {
+            if emitted_snap_ids.insert(snap.id.clone()) {
                 entries.push((
                     UpdateType::NewCommitUpdate {
                         branch: name.to_string(),
