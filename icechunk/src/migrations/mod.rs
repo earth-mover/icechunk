@@ -688,14 +688,6 @@ mod tests {
             );
         }
 
-        // Should contain TagDeletedUpdate for "deleted"
-        assert!(
-            ops_log
-                .iter()
-                .any(|(_, ut, _)| matches!(ut, UpdateType::TagDeletedUpdate { name, .. } if name == "deleted")),
-            "ops log should contain TagDeletedUpdate for 'deleted'"
-        );
-
         // Verify ordering for the "deleted" tag:
         // TagDeletedUpdate must come after (newer = lower index) TagCreatedUpdate,
         // and the NewCommitUpdate for the pointed snapshot must come before (older = higher index) both.
