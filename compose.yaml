@@ -90,6 +90,8 @@ services:
         aws --endpoint-url http://rustfs:9000 s3api get-bucket-policy \
           --bucket testbucket
 
+        exit 0
+
   toxiproxy:
     container_name: icechunk_toxiproxy
     image: ghcr.io/shopify/toxiproxy
