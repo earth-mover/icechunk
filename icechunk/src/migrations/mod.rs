@@ -3,9 +3,10 @@
 use std::{collections::HashSet, sync::Arc, time::Instant};
 
 use async_stream::try_stream;
-use chrono::Utc;
+use chrono::{DateTime, TimeDelta, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use thiserror::Error;
+use tokio::io::AsyncReadExt as _;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -18,7 +19,9 @@ use crate::{
         repo_info::{RepoInfo, UpdateInfo, UpdateType},
         snapshot::SnapshotInfo,
     },
-    refs::{Ref, RefError, RefErrorKind, RefResult, list_deleted_tags, list_refs},
+    refs::{
+        Ref, RefData, RefError, RefErrorKind, RefResult, list_deleted_tags, list_refs,
+    },
     repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
     storage::StorageErrorKind,
 };
@@ -111,6 +114,119 @@ async fn validate_start(repo: &Repository) -> MigrationResult<()> {
         return Err(MigrationErrorKind::ReadonlyRepo.into());
     }
     Ok(())
+}
+
+/// Read a deleted tag's snapshot ID directly from V1 storage,
+/// bypassing the delete marker check in `fetch_tag`.
+async fn fetch_deleted_tag_snapshot_id(
+    repo: &Repository,
+    tag_name: &str,
+) -> Option<SnapshotId> {
+    let ref_path = format!("{V1_REFS_FILE_PATH}/tag.{tag_name}/ref.json");
+    match repo.storage().get_object(repo.storage_settings(), &ref_path, None).await {
+        Ok((mut reader, ..)) => {
+            let mut data = Vec::with_capacity(1_024);
+            if reader.read_to_end(&mut data).await.is_err() {
+                return None;
+            }
+            let ref_data: RefData = serde_json::from_slice(&data).ok()?;
+            Some(ref_data.snapshot)
+        }
+        Err(_) => None,
+    }
+}
+
+/// Generate a synthetic ops log from V1 repository data.
+///
+/// Reconstructs a plausible history of operations from the snapshot graph,
+/// branch/tag state. Uses snapshot `flushed_at` timestamps for commit events
+/// and the root snapshot's timestamp for branch/tag creation events.
+fn generate_migration_ops_log(
+    main_ancestry: &[SnapshotInfo],
+    branches: &[(&str, Vec<SnapshotInfo>)],
+    tags: &[(&str, SnapshotId)],
+    deleted_tags: &[(&str, SnapshotId)],
+) -> Vec<(UpdateType, DateTime<Utc>)> {
+    if main_ancestry.is_empty() {
+        return Vec::new();
+    }
+
+    // main_ancestry is tip-to-root, so last element is the root
+    let root = &main_ancestry[main_ancestry.len() - 1];
+    let root_time = root.flushed_at;
+
+    let main_snap_ids: HashSet<_> = main_ancestry.iter().map(|s| s.id.clone()).collect();
+
+    let mut entries: Vec<(UpdateType, DateTime<Utc>)> = Vec::new();
+
+    // 1. RepoInitializedUpdate at root's flushed_at
+    entries.push((UpdateType::RepoInitializedUpdate, root_time));
+
+    // 2. NewCommitUpdate for each non-root main snapshot (root-to-tip order)
+    for snap in main_ancestry.iter().rev().skip(1) {
+        entries.push((
+            UpdateType::NewCommitUpdate {
+                branch: Ref::DEFAULT_BRANCH.to_string(),
+                new_snap_id: snap.id.clone(),
+            },
+            snap.flushed_at,
+        ));
+    }
+
+    // 3. For each non-main branch: BranchCreatedUpdate + NewCommitUpdate for unique snapshots
+    for (name, ancestry) in branches {
+        entries.push((
+            UpdateType::BranchCreatedUpdate { name: name.to_string() },
+            root_time,
+        ));
+
+        // ancestry is tip-to-root; iterate root-to-tip, skip snapshots on main
+        for snap in ancestry.iter().rev() {
+            if !main_snap_ids.contains(&snap.id) {
+                entries.push((
+                    UpdateType::NewCommitUpdate {
+                        branch: name.to_string(),
+                        new_snap_id: snap.id.clone(),
+                    },
+                    snap.flushed_at,
+                ));
+            }
+        }
+    }
+
+    // 4. TagCreatedUpdate for each tag
+    for (name, _) in tags {
+        entries
+            .push((UpdateType::TagCreatedUpdate { name: name.to_string() }, root_time));
+    }
+
+    // 5. TagCreatedUpdate + TagDeletedUpdate for each deleted tag
+    for (name, snap_id) in deleted_tags {
+        entries
+            .push((UpdateType::TagCreatedUpdate { name: name.to_string() }, root_time));
+        entries.push((
+            UpdateType::TagDeletedUpdate {
+                name: name.to_string(),
+                previous_snap_id: snap_id.clone(),
+            },
+            root_time,
+        ));
+    }
+
+    // Sort chronologically by timestamp, preserving insertion order for ties
+    entries.sort_by_key(|(_, time)| *time);
+
+    // Deduplicate timestamps: ensure strictly increasing
+    let micros = TimeDelta::microseconds(1);
+    for i in 1..entries.len() {
+        if entries[i].1 <= entries[i - 1].1 {
+            entries[i].1 = entries[i - 1].1 + micros;
+        }
+    }
+
+    // Reverse to newest-first (as required by UpdateInfo.previous_updates)
+    entries.reverse();
+    entries
 }
 
 async fn do_migrate(
@@ -223,15 +339,72 @@ pub async fn migrate_1_to_2(
         branches.len(),
         deleted_tags.len()
     );
-    let deleted_tag_names = deleted_tags.iter().filter_map(|s| {
-        s.as_str().strip_prefix("tag.").and_then(|s| s.strip_suffix("/ref.json.deleted"))
-    });
+    let deleted_tag_names: Vec<&str> = deleted_tags
+        .iter()
+        .filter_map(|s| {
+            s.as_str()
+                .strip_prefix("tag.")
+                .and_then(|s| s.strip_suffix("/ref.json.deleted"))
+        })
+        .collect();
 
     info!("Collecting non-dangling snapshots, this make take a few minutes");
     let snap_ids = refs.iter().map(|(_, id)| id);
     let all_snapshots =
         pointed_snapshots(repo, snap_ids).await?.try_collect::<Vec<_>>().await?;
     info!("Found {} non-dangling snapshots", all_snapshots.len());
+
+    info!("Generating migration ops log");
+    // Collect main branch ancestry (tip-to-root)
+    let main_snap_id = branches
+        .iter()
+        .find(|(name, _)| *name == Ref::DEFAULT_BRANCH)
+        .map(|(_, id)| id.clone());
+    let main_ancestry = if let Some(ref snap_id) = main_snap_id {
+        repo.ancestry(&VersionInfo::SnapshotId(snap_id.clone()))
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+    } else {
+        Vec::new()
+    };
+
+    // Collect non-main branch ancestries
+    let mut branch_ancestries: Vec<(&str, Vec<SnapshotInfo>)> = Vec::new();
+    for (name, snap_id) in &branches {
+        if *name != Ref::DEFAULT_BRANCH {
+            let ancestry = repo
+                .ancestry(&VersionInfo::SnapshotId(snap_id.clone()))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            branch_ancestries.push((*name, ancestry));
+        }
+    }
+
+    // Fetch snapshot IDs for deleted tags
+    let mut deleted_tags_with_snap: Vec<(&str, SnapshotId)> = Vec::new();
+    for name in &deleted_tag_names {
+        if let Some(snap_id) = fetch_deleted_tag_snapshot_id(repo, name).await {
+            deleted_tags_with_snap.push((name, snap_id));
+        } else {
+            warn!(
+                "Could not fetch snapshot ID for deleted tag '{name}', skipping ops log entry"
+            );
+        }
+    }
+
+    let ops_log = generate_migration_ops_log(
+        &main_ancestry,
+        &branch_ancestries,
+        &tags,
+        &deleted_tags_with_snap,
+    );
+    info!("Generated {} ops log entries", ops_log.len());
+
+    let previous_updates: Vec<
+        Result<(UpdateType, DateTime<Utc>, Option<&str>), IcechunkFormatError>,
+    > = ops_log.into_iter().map(|(ut, dt)| Ok((ut, dt, None))).collect();
 
     info!("Creating repository info file");
     let config = repo.config().clone();
@@ -244,7 +417,7 @@ pub async fn migrate_1_to_2(
         SpecVersionBin::V2dot0,
         tags,
         branches,
-        deleted_tag_names,
+        deleted_tag_names.iter().copied(),
         all_snapshots,
         &Default::default(),
         UpdateInfo {
@@ -253,7 +426,7 @@ pub async fn migrate_1_to_2(
                 to_version: SpecVersionBin::V2dot0,
             },
             update_time: Utc::now(),
-            previous_updates: [],
+            previous_updates,
         },
         None,
         repo.config().num_updates_per_repo_info_file(),
@@ -456,6 +629,70 @@ mod tests {
         let (info, _) = repo.asset_manager().fetch_repo_info().await?;
         let deleted_tags: Vec<_> = info.deleted_tags()?.collect();
         assert_eq!(deleted_tags, vec!["deleted"]);
+
+        // Verify the generated ops log
+        let (ops_log_stream, _, _) = repo.ops_log().await?;
+        let ops_log: Vec<_> = ops_log_stream.try_collect().await?;
+
+        // Newest entry should be RepoMigratedUpdate
+        let (_, ref first_update, _) = ops_log[0];
+        assert_eq!(
+            *first_update,
+            UpdateType::RepoMigratedUpdate {
+                from_version: SpecVersionBin::V1dot0,
+                to_version: SpecVersionBin::V2dot0,
+            }
+        );
+
+        // Should contain RepoInitializedUpdate
+        assert!(
+            ops_log.iter().any(|(_, ut, _)| *ut == UpdateType::RepoInitializedUpdate),
+            "ops log should contain RepoInitializedUpdate"
+        );
+
+        // Count NewCommitUpdate entries (one per non-root snapshot = 5)
+        let commit_count = ops_log
+            .iter()
+            .filter(|(_, ut, _)| matches!(ut, UpdateType::NewCommitUpdate { .. }))
+            .count();
+        assert_eq!(
+            commit_count, 5,
+            "should have 5 NewCommitUpdate entries (6 snapshots - 1 root)"
+        );
+
+        // Should contain BranchCreatedUpdate for "my-branch"
+        assert!(
+            ops_log.iter().any(|(_, ut, _)| *ut
+                == UpdateType::BranchCreatedUpdate { name: "my-branch".to_string() }),
+            "ops log should contain BranchCreatedUpdate for my-branch"
+        );
+
+        // Should contain TagCreatedUpdate for each tag (including the one that was deleted)
+        for tag_name in ["it works!", "it also works!", "deleted"] {
+            assert!(
+                ops_log.iter().any(|(_, ut, _)| *ut
+                    == UpdateType::TagCreatedUpdate { name: tag_name.to_string() }),
+                "ops log should contain TagCreatedUpdate for '{tag_name}'"
+            );
+        }
+
+        // Should contain TagDeletedUpdate for "deleted"
+        assert!(
+            ops_log
+                .iter()
+                .any(|(_, ut, _)| matches!(ut, UpdateType::TagDeletedUpdate { name, .. } if name == "deleted")),
+            "ops log should contain TagDeletedUpdate for 'deleted'"
+        );
+
+        // Verify timestamps are strictly decreasing
+        for window in ops_log.windows(2) {
+            let (time_a, _, _) = &window[0];
+            let (time_b, _, _) = &window[1];
+            assert!(
+                time_a > time_b,
+                "ops log timestamps must be strictly decreasing: {time_a} should be > {time_b}"
+            );
+        }
 
         Ok(())
     }
