@@ -519,7 +519,7 @@ async fn delete_snapshots_from_repo_info(
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<()> {
     trace!("deleting snapshots from repo info");
-    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
         let mut final_snaps = HashSet::with_capacity(2 * keep_snapshots.len());
         for si in repo_info.all_snapshots()? {
             let si = si?;
@@ -810,6 +810,10 @@ pub async fn expire(
     }
 }
 
+/// Since expire_v2 is a relatively fast operation (repo object only) we retry it if the repo info
+/// object was modified since it started
+/// Since expire_v2 is a relatively fast operation (repo object only) we retry it if the repo info
+/// object was modified since it started
 #[instrument(skip(asset_manager))]
 pub async fn expire_v2(
     asset_manager: Arc<AssetManager>,
@@ -819,13 +823,77 @@ pub async fn expire_v2(
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<ExpireResult> {
+    let default_retry_config = RepoUpdateRetryConfig::default();
+    let retry_config = repo_update_retries.unwrap_or(&default_retry_config).retries();
+
+    let max_attempts = retry_config.max_tries().get() as usize;
+    let mut backoff = ExponentialBuilder::new()
+        .with_min_delay(std::time::Duration::from_millis(
+            retry_config.initial_backoff_ms() as u64,
+        ))
+        .with_max_delay(std::time::Duration::from_millis(
+            retry_config.max_backoff_ms() as u64
+        ))
+        .with_max_times(max_attempts)
+        .with_jitter()
+        .build();
+
+    let mut attempts: u64 = 1;
+    loop {
+        match expire_v2_one_attempt(
+            Arc::clone(&asset_manager),
+            older_than,
+            expired_branches,
+            expired_tags,
+            num_updates_per_repo_info_file,
+        )
+        .await
+        {
+            Ok(res) => {
+                return Ok(res);
+            }
+            Err(GCError::Repository(RepositoryError {
+                kind: RepositoryErrorKind::RepoInfoUpdated,
+                ..
+            })) => match backoff.next() {
+                Some(delay) => {
+                    info!(
+                        attempts,
+                        ?delay,
+                        "Repo info object was updated while expire was running, retrying with backoff..."
+                    );
+                    tokio::time::sleep(delay).await;
+                    attempts += 1;
+                }
+                None => {
+                    return Err(GCError::Repository(
+                        RepositoryErrorKind::RepoUpdateAttemptsLimit(max_attempts as u64)
+                            .into(),
+                    ));
+                }
+            },
+            Err(err) => {
+                return Err(err);
+            }
+        }
+    }
+}
+
+#[instrument(skip(asset_manager))]
+pub async fn expire_v2_one_attempt(
+    asset_manager: Arc<AssetManager>,
+    older_than: DateTime<Utc>,
+    expired_branches: ExpiredRefAction,
+    expired_tags: ExpiredRefAction,
+    num_updates_per_repo_info_file: u16,
+) -> GCResult<ExpireResult> {
     if !asset_manager.can_write_to_storage().await? {
         return Err(GCError::Repository(
             RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into(),
         ));
     }
     info!("Expiration started");
-    let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+    let (repo_info, repo_info_version_at_start) = asset_manager.fetch_repo_info().await?;
     let tags: Vec<(Ref, SnapshotId)> = repo_info
         .tags()?
         .map(|(name, snap)| Ok::<_, GCError>((Ref::Tag(name.to_string()), snap)))
@@ -969,11 +1037,12 @@ pub async fn expire_v2(
         "Releasing objects"
     );
 
-    // FIXME: IMPORTANT
-    // Notice this loses any new snapshots that may have been created while GC was running
-    // Other problem is new branches / tags may be pointing to no longer existing snaps
-    // should we lock the repo for writes?
-    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, version| {
+        // we retry if the repo info object was modified since we started
+        if version != repo_info_version_at_start {
+            return Err(RepositoryErrorKind::RepoInfoUpdated.into());
+        }
+
         let tags = repo_info
             .tags()?
             .filter(|(name, _)| !deleted_tags.contains(&Ref::Tag(name.to_string())));
@@ -1010,9 +1079,11 @@ pub async fn expire_v2(
         Ok(Arc::new(new_repo_info))
     };
 
-    let default_retry_config = RepoUpdateRetryConfig::default();
-    let retry_config = repo_update_retries.unwrap_or(&default_retry_config);
-    let _ = asset_manager.update_repo_info(retry_config.retries(), do_update).await?;
+    let retry_settings = storage::RetriesSettings {
+        max_tries: Some(NonZeroU16::MIN),
+        ..Default::default()
+    };
+    let _ = asset_manager.update_repo_info(&retry_settings, do_update).await?;
 
     deleted_tags.extend(deleted_branches);
 

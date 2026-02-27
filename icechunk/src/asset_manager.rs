@@ -596,7 +596,11 @@ impl AssetManager {
     pub async fn update_repo_info(
         &self,
         retry_settings: &storage::RetriesSettings,
-        mut update: impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>>,
+        mut update: impl FnMut(
+            Arc<RepoInfo>,
+            &str,
+            VersionInfo,
+        ) -> RepositoryResult<Arc<RepoInfo>>,
     ) -> RepositoryResult<VersionInfo> {
         let max_attempts = retry_settings.max_tries().get() as usize;
 
@@ -619,7 +623,7 @@ impl AssetManager {
         loop {
             let (repo_info, repo_version) = self.fetch_repo_info().await?;
             let backup_path = self.backup_path_for_repo_info();
-            let new_repo = update(repo_info, backup_path.as_str())?;
+            let new_repo = update(repo_info, backup_path.as_str(), repo_version.clone())?;
             trace!(attempts, "Attempting to update repo object");
             match write_repo_info(
                 Arc::clone(&new_repo),
