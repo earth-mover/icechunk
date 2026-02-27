@@ -633,7 +633,7 @@ impl Repository {
             let config = self.config().clone();
             let num_updates = self.config.num_updates_per_repo_info_file();
             let spec_version = self.spec_version();
-            let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str| {
+            let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
                 Ok(Arc::new(repo_info.set_config(
                     spec_version,
                     &config,
@@ -689,7 +689,7 @@ impl Repository {
         }
         let mut final_metadata = Default::default();
         let num_updates = self.config().num_updates_per_repo_info_file();
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             final_metadata = repo_info.metadata()?;
             final_metadata.extend(metadata.clone());
             Ok(Arc::new(repo_info.set_metadata(
@@ -720,7 +720,7 @@ impl Repository {
         }
 
         let num_updates = self.config().num_updates_per_repo_info_file();
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             Ok(Arc::new(repo_info.set_metadata(
                 self.spec_version(),
                 metadata,
@@ -955,7 +955,7 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             Ok(Arc::new(repo_info.add_branch(
                 self.spec_version(),
@@ -1146,7 +1146,7 @@ impl Repository {
         to_snapshot_id: &SnapshotId,
         from_snapshot_id: Option<&SnapshotId>,
     ) -> RepositoryResult<()> {
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             if let Some(from_snapshot_id) = from_snapshot_id
                 && &repo_info.resolve_branch(branch)? != from_snapshot_id
             {
@@ -1216,7 +1216,7 @@ impl Repository {
     #[instrument(skip(self))]
     async fn delete_branch_v2(&self, branch: &str) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             let new_repo = repo_info
                 .delete_branch(self.spec_version(), branch, backup_path, num_updates)
                 .map_err(|err| match err {
@@ -1263,7 +1263,7 @@ impl Repository {
     #[instrument(skip(self))]
     async fn delete_tag_v2(&self, tag: &str) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             let new_repo = repo_info
                 .delete_tag(self.spec_version(), tag, backup_path, num_updates)
                 .map_err(|err| match err {
@@ -1329,7 +1329,7 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             let new_repo = repo_info
                 .add_tag(
