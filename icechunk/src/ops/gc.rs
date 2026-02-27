@@ -432,7 +432,7 @@ pub async fn garbage_collect_one_attempt(
             async move { am.fetch_snapshot(&id).await }
         });
 
-    let (keep_chunks, keep_manifests, keep_snapshots) = find_retained(
+    let (keep_chunks, keep_manifests, mut keep_snapshots) = find_retained(
         Arc::clone(&asset_manager),
         config,
         pointed_snaps.chain(non_pointed_snaps),
@@ -453,13 +453,13 @@ pub async fn garbage_collect_one_attempt(
     // TODO: this could use more parallelization.
     // The trivial approach of parallelizing the deletes of the different types of objects doesn't
     // work: we want to dolete snapshots before deleting chunks, etc
-    let drop_snapshots = all_snaps.difference(&keep_snapshots).collect();
+    let drop_snapshots = all_snaps.difference(&keep_snapshots).cloned().collect();
 
     if config.deletes_snapshots() {
         if !config.dry_run && repo_info.is_some() {
             delete_snapshots_from_repo_info(
                 asset_manager.as_ref(),
-                &keep_snapshots,
+                &mut keep_snapshots,
                 &drop_snapshots,
                 num_updates_per_repo_info_file,
             )
@@ -510,10 +510,12 @@ pub async fn garbage_collect_one_attempt(
 ///
 /// How to distinguish 1 from 2b: snapshots in 1. are in retain_snapshots but not in
 /// drop_snapshots; snapshots in 2b are in neither map.
+///
+/// It adds any new snapshots that must be kept to `keep_snapshots`
 async fn delete_snapshots_from_repo_info(
     asset_manager: &AssetManager,
-    keep_snapshots: &HashSet<SnapshotId>,
-    drop_snapshots: &HashSet<&SnapshotId>,
+    keep_snapshots: &mut HashSet<SnapshotId>,
+    drop_snapshots: &HashSet<SnapshotId>,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<()> {
     trace!("deleting snapshots from repo info");
@@ -564,6 +566,7 @@ async fn delete_snapshots_from_repo_info(
                     } else {
                         // a new snapshot with the root as parent,
                         // root is always retained
+                        keep_snapshots.insert(si.id.clone());
                         final_snaps.insert(si);
                     }
                 }
