@@ -1,10 +1,12 @@
 import pickle
 import tempfile
-from typing import cast
+import time
+from typing import Any, cast
 
 import pytest
 
 import zarr
+import zarr.core.array
 from icechunk import (
     ChunkType,
     ForkSession,
@@ -17,6 +19,7 @@ from icechunk import (
     in_memory_storage,
     local_filesystem_storage,
     local_filesystem_store,
+    s3_storage,
 )
 from icechunk.distributed import merge_sessions
 
@@ -192,3 +195,99 @@ def test_session_mode() -> None:
     assert writable.mode == SessionMode.WRITABLE
     writable.commit("test", allow_empty=True)
     assert writable.mode == SessionMode.READONLY  # type: ignore[comparison-overlap]
+
+
+def test_repository_open_no_list_bucket() -> None:
+    prefix = "test-repo__" + str(time.time())
+    write_storage = s3_storage(
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        region="us-east-1",
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id="minio123",  # TODO: restrict here with another user
+        secret_access_key="minio123",
+    )
+    readonly_storage = s3_storage(
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        region="us-east-1",
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id="readonly",
+        secret_access_key="basicuser",
+    )
+
+    config = RepositoryConfig.default()
+
+    # Create a repo with one array, with modify permissions
+    repo = Repository.create(storage=write_storage, config=config)
+    session = repo.writable_session("main")
+    store = session.store
+    group = zarr.group(store=store, overwrite=True)
+    air_temp = group.create_array("air_temp", shape=(1, 4), chunks=(1, 1), dtype="i4")
+    air_temp[0, 2] = 42
+    session.commit("init")
+
+    # Opening the repo with a storage without ListBucket permissions
+    repo = Repository.open(storage=readonly_storage, config=config)
+    readonly = repo.readonly_session(branch="main")
+    group = zarr.open_group(store=readonly.store, mode="r")
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
+    assert air_temp[0, 2] == 42
+
+    assert repo.list_branches() == set(["main"])
+
+
+def test_repository_open_no_list_bucket_v1() -> None:
+    # This should fail, because v1 needs ListBucket permission
+    prefix = "test-repo__" + str(time.time())
+    write_storage = s3_storage(
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        region="us-east-1",
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id="minio123",  # TODO: restrict here with another user
+        secret_access_key="minio123",
+    )
+    readonly_storage = s3_storage(
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        region="us-east-1",
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id="readonly",
+        secret_access_key="basicuser",
+    )
+
+    config = RepositoryConfig.default()
+
+    # Create a repo with one array, with modify permissions
+    repo = Repository.create(storage=write_storage, config=config, spec_version=1)
+    session = repo.writable_session("main")
+    store = session.store
+    group = zarr.group(store=store, overwrite=True)
+    air_temp = group.create_array("air_temp", shape=(1, 4), chunks=(1, 1), dtype="i4")
+    air_temp[0, 2] = 42
+    session.commit("init")
+
+    # Opening the repo with a storage without ListBucket permissions.
+    # Should still work
+    repo = Repository.open(storage=readonly_storage, config=config)
+    assert repo.spec_version == 1
+    readonly = repo.readonly_session(branch="main")
+    group = zarr.open_group(store=readonly.store, mode="r")
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
+    assert air_temp[0, 2] == 42
+
+    # This should fail for v1 spec, since listing branches
+    # try to list from the object store instead of reading
+    # from repo_info like in a v2 repo
+    with pytest.raises(IcechunkError) as e:
+        assert repo.list_branches() == set(["main"])
+        assert "error listing objects" in e.value.message

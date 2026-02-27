@@ -832,7 +832,7 @@ impl PyRepository {
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = true))]
     fn create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -840,6 +840,7 @@ impl PyRepository {
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
         spec_version: Option<u8>,
+        check_clean_root: bool,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -859,6 +860,7 @@ impl PyRepository {
                         storage.0,
                         map_credentials(authorize_virtual_chunk_access),
                         version,
+                        check_clean_root,
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
@@ -869,7 +871,7 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = true))]
     fn create_async<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
@@ -877,6 +879,7 @@ impl PyRepository {
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
         spec_version: Option<u8>,
+        check_clean_root: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
@@ -894,6 +897,7 @@ impl PyRepository {
                 storage.0,
                 authorize_virtual_chunk_access,
                 version,
+                check_clean_root,
             )
             .await
             .map_err(PyIcechunkStoreError::RepositoryError)?;
@@ -954,7 +958,7 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None, check_clean_root = true))]
     fn open_or_create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -962,6 +966,7 @@ impl PyRepository {
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
         create_version: Option<u8>,
+        check_clean_root: bool,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -982,6 +987,7 @@ impl PyRepository {
                             storage.0,
                             map_credentials(authorize_virtual_chunk_access),
                             version,
+                            check_clean_root,
                         )
                         .await
                         .map_err(PyIcechunkStoreError::RepositoryError)?,
@@ -993,7 +999,7 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None, check_clean_root = true))]
     fn open_or_create_async<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
@@ -1001,6 +1007,7 @@ impl PyRepository {
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
         create_version: Option<u8>,
+        check_clean_root: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
@@ -1018,6 +1025,7 @@ impl PyRepository {
                 storage.0,
                 authorize_virtual_chunk_access,
                 version,
+                check_clean_root,
             )
             .await
             .map_err(PyIcechunkStoreError::RepositoryError)?;

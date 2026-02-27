@@ -38,6 +38,7 @@ class Repository:
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
         spec_version: int | None = None,
+        check_clean_root: bool = True,
     ) -> Self:
         """
         Create a new Icechunk repository.
@@ -75,6 +76,7 @@ class Repository:
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
                 spec_version=spec_version,
+                check_clean_root=check_clean_root,
             )
         )
 
@@ -85,6 +87,7 @@ class Repository:
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
         spec_version: int | None = None,
+        check_clean_root: bool = True,
     ) -> Self:
         """
         Create a new Icechunk repository asynchronously.
@@ -122,6 +125,7 @@ class Repository:
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
                 spec_version=spec_version,
+                check_clean_root=check_clean_root,
             )
         )
 
@@ -220,6 +224,7 @@ class Repository:
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
         create_version: int | None = None,
+        check_clean_root: bool = True,
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist.
@@ -262,6 +267,7 @@ class Repository:
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
                 create_version=create_version,
+                check_clean_root=check_clean_root,
             )
         )
 
@@ -272,6 +278,7 @@ class Repository:
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
         create_version: int | None = None,
+        check_clean_root: bool = True,
     ) -> Self:
         """
         Open an existing Icechunk repository or create a new one if it does not exist (async version).
@@ -313,6 +320,7 @@ class Repository:
                 config=config,
                 authorize_virtual_chunk_access=authorize_virtual_chunk_access,
                 create_version=create_version,
+                check_clean_root=check_clean_root,
             )
         )
 

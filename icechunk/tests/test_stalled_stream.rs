@@ -22,11 +22,15 @@ use icechunk::{
 };
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 
+mod common;
+use common::Permission;
+
 /// Create S3 storage pointing to toxiproxy (which proxies to MinIO)
 fn create_proxied_storage(
     proxy_port: u16,
     timeout_seconds: u32,
 ) -> Result<Arc<S3Storage>, Box<dyn std::error::Error>> {
+    let (access_key_id, secret_access_key) = Permission::Modify.keys();
     let storage = S3Storage::new(
         S3Options {
             region: Some("us-east-1".to_string()),
@@ -40,8 +44,8 @@ fn create_proxied_storage(
         "testbucket".to_string(),
         Some(format!("stalled-stream-test-{}", uuid::Uuid::new_v4())),
         S3Credentials::Static(S3StaticCredentials {
-            access_key_id: "minio123".into(),
-            secret_access_key: "minio123".into(),
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
             session_token: None,
             expires_after: None,
         }),

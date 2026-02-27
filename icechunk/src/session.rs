@@ -2860,7 +2860,7 @@ mod tests {
     async fn create_memory_store_repository() -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new(), None).await.unwrap()
+        Repository::create(None, storage, HashMap::new(), None, true).await.unwrap()
     }
 
     #[proptest(async = "tokio")]
@@ -3136,6 +3136,7 @@ mod tests {
             storage,
             HashMap::new(),
             None,
+            true,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -3543,7 +3544,7 @@ mod tests {
             ..Default::default()
         };
         let repository =
-            Repository::create(Some(config), storage, HashMap::new(), None).await?;
+            Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -3970,7 +3971,7 @@ mod tests {
     #[tokio_test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::create(None, storage, HashMap::new(), None).await?;
+        let repo = Repository::create(None, storage, HashMap::new(), None, true).await?;
         let mut ds = repo.writable_session("main").await?;
         let def = Bytes::copy_from_slice(b"");
 
@@ -4041,7 +4042,8 @@ mod tests {
         let in_mem_storage = Arc::new(ObjectStorage::new_in_memory().await?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
 
         // there should be no manifests yet
         assert!(
@@ -4705,7 +4707,8 @@ mod tests {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4765,7 +4768,8 @@ mod tests {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4796,7 +4800,8 @@ mod tests {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
         let mut ds = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4858,7 +4863,8 @@ mod tests {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
         let mut session = repo.writable_session("main").await?;
         let shape = ArrayShape::new(vec![(20, 2)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;

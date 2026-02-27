@@ -53,7 +53,8 @@ async fn mk_repo(
         ..RepositoryConfig::default()
     };
     let repo =
-        Repository::open_or_create(Some(config), storage, HashMap::new(), None).await?;
+        Repository::open_or_create(Some(config), storage, HashMap::new(), None, true)
+            .await?;
     Ok(repo)
 }
 

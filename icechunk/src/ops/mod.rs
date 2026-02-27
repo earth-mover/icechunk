@@ -167,7 +167,7 @@ mod tests {
     {
         let storage = new_in_memory_storage().await?;
         let repo =
-            Repository::create(None, storage.clone(), HashMap::new(), None).await?;
+            Repository::create(None, storage.clone(), HashMap::new(), None, true).await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::new()).await?;
         let snap = session.commit("commit", None).await?;
