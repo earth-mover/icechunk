@@ -402,9 +402,8 @@ pub async fn migrate_1_to_2(
     );
     info!("Generated {} ops log entries", ops_log.len());
 
-    let previous_updates: Vec<
-        Result<(UpdateType, DateTime<Utc>, Option<&str>), IcechunkFormatError>,
-    > = ops_log.into_iter().map(|(ut, dt)| Ok((ut, dt, None))).collect();
+    let previous_updates: Vec<crate::format::IcechunkResult<_>> =
+        ops_log.into_iter().map(|(ut, dt)| Ok((ut, dt, None))).collect();
 
     info!("Creating repository info file");
     let config = repo.config().clone();
