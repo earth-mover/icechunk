@@ -1774,12 +1774,12 @@ mod test {
         ));
         manager.create_repo_info(repo_info.clone()).await?;
 
-        assert_eq!(manager.use_repo_info_cache, false);
+        assert!(!manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), None);
 
         let (fetched_repo_info, _) = manager.fetch_repo_info().await?;
 
-        assert_eq!(manager.use_repo_info_cache, false);
+        assert!(!manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), None);
 
         assert_eq!(repo_info.clone(), fetched_repo_info);
@@ -1811,12 +1811,12 @@ mod test {
 
         let cached = Some((repo_info.clone(), new_version.clone()));
 
-        assert_eq!(manager.use_repo_info_cache, true);
+        assert!(manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), cached);
 
         let (fetched_repo_info, version) = manager.fetch_repo_info().await?;
 
-        assert_eq!(manager.use_repo_info_cache, true);
+        assert!(manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), cached);
 
         assert_eq!(repo_info.clone(), fetched_repo_info);
