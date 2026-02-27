@@ -454,7 +454,7 @@ impl Repository {
                 storage,
                 authorize_virtual_chunk_access,
                 create_version,
-                false,
+                true,
             )
             .await
         }

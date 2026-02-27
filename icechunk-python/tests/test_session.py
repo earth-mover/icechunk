@@ -237,3 +237,48 @@ def test_repository_open_no_list_bucket() -> None:
     group = zarr.open_group(store=readonly.store, mode="r")
     air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     assert air_temp[0, 2] == 42
+
+
+def test_repository_open_no_list_bucket_v1() -> None:
+    # This should fail, because v1 needs ListBucket permission
+    prefix = "test-repo__" + str(time.time())
+    write_storage = s3_storage(
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        region="us-east-1",
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id="minio123",  # TODO: restrict here with another user
+        secret_access_key="minio123",
+    )
+    readonly_storage = s3_storage(
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        region="us-east-1",
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id="readonly",
+        secret_access_key="basicuser",
+    )
+
+    config = RepositoryConfig.default()
+
+    # Create a repo with one array, with modify permissions
+    repo = Repository.create(storage=write_storage, config=config, spec_version=1)
+    session = repo.writable_session("main")
+    store = session.store
+    group = zarr.group(store=store, overwrite=True)
+    air_temp = group.create_array("air_temp", shape=(1, 4), chunks=(1, 1), dtype="i4")
+    air_temp[0, 2] = 42
+    session.commit("init")
+
+    # Opening the repo with a storage without ListBucket permissions.
+    # This should fail for v1 spec
+    repo = Repository.open(storage=readonly_storage, config=config)
+    assert repo.spec_version == 1
+    readonly = repo.readonly_session(branch="main")
+    group = zarr.open_group(store=readonly.store, mode="r")
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
+    assert air_temp[0, 2] == 42
