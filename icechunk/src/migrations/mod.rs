@@ -1,6 +1,10 @@
 //! Upgrade repositories between Icechunk format versions.
 
-use std::{collections::HashSet, sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Instant,
+};
 
 use async_stream::try_stream;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -139,17 +143,24 @@ async fn fetch_deleted_tag_snapshot_id(
 /// Generate a synthetic ops log from V1 repository data.
 ///
 /// Reconstructs a plausible history of operations from the snapshot graph,
-/// branch/tag state. Uses snapshot `flushed_at` timestamps for commit events
-/// and the root snapshot's timestamp for branch/tag creation events.
+/// branch/tag state. Uses snapshot `flushed_at` timestamps for commit events.
+/// Tag/branch creation events use the `flushed_at` of the snapshot they point to.
 fn generate_migration_ops_log(
     main_ancestry: &[SnapshotInfo],
     branches: &[(&str, Vec<SnapshotInfo>)],
     tags: &[(&str, SnapshotId)],
     deleted_tags: &[(&str, SnapshotId)],
+    all_snapshots: &[SnapshotInfo],
 ) -> Vec<(UpdateType, DateTime<Utc>)> {
     if main_ancestry.is_empty() {
         return Vec::new();
     }
+
+    // Build a lookup from snapshot ID to its flushed_at timestamp.
+    // We use all_snapshots because tags can point to orphaned snapshots
+    // not reachable from any branch ancestry.
+    let snap_times: HashMap<&SnapshotId, DateTime<Utc>> =
+        all_snapshots.iter().map(|s| (&s.id, s.flushed_at)).collect();
 
     // main_ancestry is tip-to-root, so last element is the root
     let root = &main_ancestry[main_ancestry.len() - 1];
@@ -159,10 +170,10 @@ fn generate_migration_ops_log(
 
     let mut entries: Vec<(UpdateType, DateTime<Utc>)> = Vec::new();
 
-    // 1. RepoInitializedUpdate at root's flushed_at
+    // Start with the RepoInitializedUpdate at root snapshot's flushed_at
     entries.push((UpdateType::RepoInitializedUpdate, root_time));
 
-    // 2. NewCommitUpdate for each non-root main snapshot (root-to-tip order)
+    // Then we add a NewCommitUpdate for each non-root main snapshot (root-to-tip order)
     for snap in main_ancestry.iter().rev().skip(1) {
         entries.push((
             UpdateType::NewCommitUpdate {
@@ -173,14 +184,16 @@ fn generate_migration_ops_log(
         ));
     }
 
-    // 3. For each non-main branch: BranchCreatedUpdate + NewCommitUpdate for unique snapshots
+    // Followed by a BranchCreatedUpdate + NewCommitUpdate for each unique snapshot
+    // in the ancestry of each branch. BranchCreatedUpdate is timestamped to the
+    // root snapshot in the branch's ancestry (the first snapshot).
     for (name, ancestry) in branches {
+        let branch_root_time = ancestry.last().map(|s| s.flushed_at).unwrap_or(root_time);
         entries.push((
             UpdateType::BranchCreatedUpdate { name: name.to_string() },
-            root_time,
+            branch_root_time,
         ));
 
-        // ancestry is tip-to-root; iterate root-to-tip, skip snapshots on main
         for snap in ancestry.iter().rev() {
             if !main_snap_ids.contains(&snap.id) {
                 entries.push((
@@ -194,29 +207,29 @@ fn generate_migration_ops_log(
         }
     }
 
-    // 4. TagCreatedUpdate for each tag
-    for (name, _) in tags {
-        entries
-            .push((UpdateType::TagCreatedUpdate { name: name.to_string() }, root_time));
+    // Each tag gets a TagCreatedUpdate at the flushed_at of the snapshot it points to
+    for (name, snap_id) in tags {
+        let time = snap_times.get(snap_id).copied().unwrap_or(root_time);
+        entries.push((UpdateType::TagCreatedUpdate { name: name.to_string() }, time));
     }
 
-    // 5. TagCreatedUpdate + TagDeletedUpdate for each deleted tag
+    // Deleted tags: TagCreatedUpdate + TagDeletedUpdate, both at the pointed snapshot's time
     for (name, snap_id) in deleted_tags {
-        entries
-            .push((UpdateType::TagCreatedUpdate { name: name.to_string() }, root_time));
+        let time = snap_times.get(snap_id).copied().unwrap_or(root_time);
+        entries.push((UpdateType::TagCreatedUpdate { name: name.to_string() }, time));
         entries.push((
             UpdateType::TagDeletedUpdate {
                 name: name.to_string(),
                 previous_snap_id: snap_id.clone(),
             },
-            root_time,
+            time,
         ));
     }
 
-    // Sort chronologically by timestamp, preserving insertion order for ties
+    // Sort each update chronologically by timestamp, preserving insertion order for ties
     entries.sort_by_key(|(_, time)| *time);
 
-    // Deduplicate timestamps: ensure strictly increasing
+    // Deduplicate timestamps: ensure strictly increasing, then reverse order as required by UpdateInfo.previous_updates
     let micros = TimeDelta::microseconds(1);
     for i in 1..entries.len() {
         if entries[i].1 <= entries[i - 1].1 {
@@ -224,7 +237,6 @@ fn generate_migration_ops_log(
         }
     }
 
-    // Reverse to newest-first (as required by UpdateInfo.previous_updates)
     entries.reverse();
     entries
 }
@@ -399,6 +411,7 @@ pub async fn migrate_1_to_2(
         &branch_ancestries,
         &tags,
         &deleted_tags_with_snap,
+        &all_snapshots,
     );
     info!("Generated {} ops log entries", ops_log.len());
 
@@ -681,6 +694,50 @@ mod tests {
                 .iter()
                 .any(|(_, ut, _)| matches!(ut, UpdateType::TagDeletedUpdate { name, .. } if name == "deleted")),
             "ops log should contain TagDeletedUpdate for 'deleted'"
+        );
+
+        // Verify ordering for the "deleted" tag:
+        // TagDeletedUpdate must come after (newer = lower index) TagCreatedUpdate,
+        // and the NewCommitUpdate for the pointed snapshot must come before (older = higher index) both.
+        // ops_log is newest-first, so lower index = more recent.
+        let deleted_tag_created_idx = ops_log
+            .iter()
+            .position(|(_, ut, _)| {
+                *ut == UpdateType::TagCreatedUpdate { name: "deleted".to_string() }
+            })
+            .expect("TagCreatedUpdate for 'deleted' not found");
+        let deleted_tag_deleted_idx = ops_log
+            .iter()
+            .position(|(_, ut, _)| {
+                matches!(ut, UpdateType::TagDeletedUpdate { name, .. } if name == "deleted")
+            })
+            .expect("TagDeletedUpdate for 'deleted' not found");
+        // Find the snapshot ID from the TagDeletedUpdate
+        let deleted_tag_snap_id = ops_log
+            .iter()
+            .find_map(|(_, ut, _)| {
+                if let UpdateType::TagDeletedUpdate { name, previous_snap_id } = ut {
+                    if name == "deleted" {
+                        return Some(previous_snap_id.clone());
+                    }
+                }
+                None
+            })
+            .expect("TagDeletedUpdate for 'deleted' not found");
+        let commit_idx = ops_log
+            .iter()
+            .position(|(_, ut, _)| {
+                matches!(ut, UpdateType::NewCommitUpdate { new_snap_id, .. } if *new_snap_id == deleted_tag_snap_id)
+            })
+            .expect("NewCommitUpdate for the deleted tag's snapshot not found");
+
+        assert!(
+            deleted_tag_deleted_idx < deleted_tag_created_idx,
+            "TagDeletedUpdate (idx {deleted_tag_deleted_idx}) should be newer than TagCreatedUpdate (idx {deleted_tag_created_idx})"
+        );
+        assert!(
+            deleted_tag_created_idx < commit_idx,
+            "TagCreatedUpdate (idx {deleted_tag_created_idx}) should be newer than NewCommitUpdate (idx {commit_idx})"
         );
 
         // Verify timestamps are strictly decreasing
