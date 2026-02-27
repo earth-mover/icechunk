@@ -1,7 +1,10 @@
 [workspace]
-members = ["icechunk", "icechunk-python", "icechunk-macros"]
+members = ["icechunk", "icechunk-python", "icechunk-macros", "icechunk-c"]
 default-members = ["icechunk"]
 resolver = "2"
+
+[workspace.package]
+edition = "2024"
 
 [workspace.lints.clippy]
 expect_used = "warn"
