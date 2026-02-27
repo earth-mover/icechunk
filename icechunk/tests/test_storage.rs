@@ -9,6 +9,7 @@ use icechunk::{
     config::{
         DEFAULT_MAX_CONCURRENT_REQUESTS, S3Credentials, S3Options, S3StaticCredentials,
     },
+    error::ICError,
     format::{
         CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, Path, SNAPSHOTS_FILE_PATH,
         SnapshotId, TRANSACTION_LOGS_FILE_PATH, format_constants::SpecVersionBin,
@@ -321,6 +322,40 @@ pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>
                 Err(RepositoryError{kind: RepositoryErrorKind::Ref(RefErrorKind::TagAlreadyExists(r)), ..}) if r == "mytag"
             )
             );
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio_test]
+pub async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let _repo =
+            Repository::create(None, storage.clone(), Default::default(), None, true)
+                .await?;
+
+        // creating repo with check_clean_repo = true
+        // should fail because we wrote data above
+        let res =
+            Repository::create(None, storage.clone(), Default::default(), None, true)
+                .await;
+        assert!(res.is_err());
+        assert!(matches!(
+            res,
+            Err(ICError { kind: RepositoryErrorKind::ParentDirectoryNotClean, .. })
+        ),);
+
+        // creating repo with check_clean_repo = false
+        // fails because it tries to overwrite a repo info that is not up to date
+        let res =
+            Repository::create(None, storage, Default::default(), None, false).await;
+        assert!(res.is_err());
+        assert!(matches!(
+            res,
+            Err(ICError { kind: RepositoryErrorKind::RepoInfoUpdated, .. })
+        ));
+
         Ok(())
     })
     .await?;
