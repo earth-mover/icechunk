@@ -82,7 +82,7 @@ def repo_config_with(
     config = ic.RepositoryConfig.default()
     if inline_chunk_threshold_bytes is not None:
         config.inline_chunk_threshold_bytes = inline_chunk_threshold_bytes
-    if splitting is not None:
+    if splitting is not None or preload is not None:
         config.manifest = ic.ManifestConfig(preload=preload, splitting=splitting)
     if virtual_chunk_containers is not None:
         for cont in virtual_chunk_containers:
