@@ -56,6 +56,8 @@ class CrossVersionVersionControlStateMachine(VersionControlStateMachine):
         self.actors = {"v2": ic.Repository, "v1": ic_v1.Repository}
         self.actor_modules = {"v2": ic, "v1": ic_v1}
         self._storage_path = tempfile.mkdtemp()
+        self.repos: dict[str, object] = {}
+        self.actor_name: str = ""
         super().__init__(actor=None)
 
     # Disabled: v1 actor doesn't support spec version upgrade.
@@ -74,19 +76,29 @@ class CrossVersionVersionControlStateMachine(VersionControlStateMachine):
     def initialize(self, data: st.DataObject) -> str:
         choice = data.draw(st.sampled_from(list(self.actors.keys())))
         note(f"initializing with actor {choice!r}")
+        self.actor_name = choice
         self.actor = self.actors[choice]
         self.ic = self.actor_modules[choice]
-        return super().initialize(data, spec_version=1)  # type: ignore[return-value]
+        result = super().initialize(data, spec_version=1)
+        self.repos[choice] = self.repo
+        return result  # type: ignore[return-value]
 
     @rule(data=st.data())
     def switch_actor(self, data: st.DataObject) -> None:
         """Switch to a randomly chosen actor and reopen the repository."""
         choice = data.draw(st.sampled_from(tuple(self.actors)))
+        if choice == self.actor_name:
+            return
+
         note(f"switching to actor {choice!r}")
+        self.actor_name = choice
         self.actor = self.actors[choice]
         self.ic = self.actor_modules[choice]
         self.storage = self._make_storage()
-        super().reopen_repository(data)
+
+        if choice not in self.repos:
+            self.repos[choice] = self.actor.open(self.storage)
+        self.repo = self.repos[choice]
 
 
 def test_two_actors_cross_version() -> None:
@@ -114,6 +126,8 @@ class CrossVersionTwoActorZarrHierarchyStateMachine(ModifiedZarrHierarchyStateMa
             "v1": ic_v1.local_filesystem_storage(tmpdir),
         }
         self.actor_modules = {"v2": ic, "v1": ic_v1}
+        self.repos: dict[str, object] = {}
+        self.actor_name: str = ""
 
     # Disabled: v1 actor doesn't support spec version upgrade.
     @rule()
@@ -131,19 +145,28 @@ class CrossVersionTwoActorZarrHierarchyStateMachine(ModifiedZarrHierarchyStateMa
         self.ic = self.actor_modules[actor_name]
         self.storage = self.actor_storage_objects[actor_name]
         super().init_store(spec_version=spec_version)
+        self.actor_name = actor_name
+        self.repos[actor_name] = self.repo
 
     @rule(data=st.data())
     def switch_actor(self, data: st.DataObject) -> None:
+        # Draw an actor and use their storage object
+        actor_name = data.draw(st.sampled_from(list(self.actors.keys())))
+        if actor_name == self.actor_name:
+            return
+
+        note(f"switching to actor {actor_name!r}")
         if self.store.session.has_uncommitted_changes:
             self.commit_with_check(data)
 
-        # Draw an actor and use their storage object
-        actor_name = data.draw(st.sampled_from(list(self.actors.keys())))
+        self.actor_name = actor_name
         self.actor = self.actors[actor_name]
         self.ic = self.actor_modules[actor_name]
         self.storage = self.actor_storage_objects[actor_name]
 
-        self.repo = self.actor.open(self.storage)
+        if actor_name not in self.repos:
+            self.repos[actor_name] = self.actor.open(self.storage)
+        self.repo = self.repos[actor_name]
         self.store = self.repo.writable_session("main").store
 
     # v1 doesn't support empty commits, so only allow them when the actor is v2
