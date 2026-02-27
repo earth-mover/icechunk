@@ -443,6 +443,7 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
         create_version: Option<SpecVersionBin>,
+        check_clean_root: bool,
     ) -> RepositoryResult<Self> {
         let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
         if Self::fetch_spec_version(Arc::clone(&storage), user_settings).await?.is_some()
@@ -454,7 +455,7 @@ impl Repository {
                 storage,
                 authorize_virtual_chunk_access,
                 create_version,
-                true,
+                check_clean_root,
             )
             .await
         }
