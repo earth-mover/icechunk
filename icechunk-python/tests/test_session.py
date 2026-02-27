@@ -238,6 +238,8 @@ def test_repository_open_no_list_bucket() -> None:
     air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     assert air_temp[0, 2] == 42
 
+    assert repo.list_branches() == set(["main"])
+
 
 def test_repository_open_no_list_bucket_v1() -> None:
     # This should fail, because v1 needs ListBucket permission
@@ -275,10 +277,17 @@ def test_repository_open_no_list_bucket_v1() -> None:
     session.commit("init")
 
     # Opening the repo with a storage without ListBucket permissions.
-    # This should fail for v1 spec
+    # Should still work
     repo = Repository.open(storage=readonly_storage, config=config)
     assert repo.spec_version == 1
     readonly = repo.readonly_session(branch="main")
     group = zarr.open_group(store=readonly.store, mode="r")
     air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
     assert air_temp[0, 2] == 42
+
+    # This should fail for v1 spec, since listing branches
+    # try to list from the object store instead of reading
+    # from repo_info like in a v2 repo
+    with pytest.raises(IcechunkError) as e:
+        assert repo.list_branches() == set(["main"])
+        assert "error listing objects" in e.value()
