@@ -272,6 +272,11 @@ class Model:
     def get(self, key: str) -> Buffer | None:
         return self.store.get(key)
 
+    def delete_doc(self, key: str) -> None:
+        if key in self.store:
+            del self.store[key]
+            self.changes_made = True
+
     def upgrade(self, dry_run: bool) -> None:
         if not dry_run:
             # only reachable snapshots are migrated over
@@ -546,12 +551,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # instead we explicitly add a rule to make a lot of commits
         commit_ids = []
         for should_amend in amend_or_commit:
-            # annoyingly we need to ensure we overwrite with different data, otherwise icechunk doesn't like it.
-            path, meta = data.draw(
-                st.tuples(metadata_paths, v3_array_metadata).filter(
-                    lambda pm: self.model.get(pm[0]) != pm[1]
-                )
-            )
+            # We need to ensure we overwrite with different data, otherwise icechunk doesn't register a change.
+            # Delete first then set, to avoid slow hypothesis filter rejection.
+            path, meta = data.draw(st.tuples(metadata_paths, v3_array_metadata))
+            self.delete_doc(path)
             self.set_doc(path, meta)
             msg = data.draw(st.text(max_size=MAX_TEXT_SIZE))
             if (
@@ -574,6 +577,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             # not at branch head, modifications not possible.
             with pytest.raises(IcechunkError, match="read-only store"):
                 self.sync_store.set(path, value)
+
+    def delete_doc(self, path: str) -> None:
+        note(f"deleting path {path!r}")
+        if self.model.branch is not None:
+            self.sync_store.delete(path)
+            self.model.delete_doc(path)
 
     @precondition(lambda self: self.model.spec_version >= 2)
     @rule(meta=simple_attrs)
