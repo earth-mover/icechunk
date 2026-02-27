@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use backon::{BackoffBuilder as _, ExponentialBuilder};
+use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable};
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt, TryStream, TryStreamExt, stream};
 use itertools::Itertools;
@@ -328,55 +328,44 @@ pub async fn garbage_collect(
     let default_retry_config = RepoUpdateRetryConfig::default();
     let retry_config = repo_update_retries.unwrap_or(&default_retry_config).retries();
 
-    let max_attempts = retry_config.max_tries().get() as usize;
-    let mut backoff = ExponentialBuilder::new()
+    let gc = async || {
+        garbage_collect_one_attempt(
+            Arc::clone(&asset_manager),
+            config,
+            num_updates_per_repo_info_file,
+        )
+        .await
+    };
+
+    let backoff = ExponentialBuilder::new()
         .with_min_delay(std::time::Duration::from_millis(
             retry_config.initial_backoff_ms() as u64,
         ))
         .with_max_delay(std::time::Duration::from_millis(
             retry_config.max_backoff_ms() as u64
         ))
-        .with_max_times(max_attempts)
+        .with_max_times(retry_config.max_tries().get() as usize)
         .with_jitter()
         .build();
 
-    let mut attempts: u64 = 1;
-    loop {
-        match garbage_collect_one_attempt(
-            Arc::clone(&asset_manager),
-            config,
-            num_updates_per_repo_info_file,
+    gc.retry(backoff)
+        .sleep(tokio::time::sleep)
+        .when(|e| {
+            matches!(
+                e,
+                GCError::Repository(RepositoryError {
+                    kind: RepositoryErrorKind::RepoInfoUpdated,
+                    ..
+                })
+            )
+        })
+            .notify(|_, _|  {
+
+                    info!(
+                        "Repo info object was updated while GC was running, retrying with backoff..."
+                    );}
         )
         .await
-        {
-            Ok(res) => {
-                return Ok(res);
-            }
-            Err(GCError::Repository(RepositoryError {
-                kind: RepositoryErrorKind::RepoInfoUpdated,
-                ..
-            })) => match backoff.next() {
-                Some(delay) => {
-                    info!(
-                        attempts,
-                        ?delay,
-                        "Repo info object was updated while GC was running, retrying with backoff..."
-                    );
-                    tokio::time::sleep(delay).await;
-                    attempts += 1;
-                }
-                None => {
-                    return Err(GCError::Repository(
-                        RepositoryErrorKind::RepoUpdateAttemptsLimit(max_attempts as u64)
-                            .into(),
-                    ));
-                }
-            },
-            Err(err) => {
-                return Err(err);
-            }
-        }
-    }
 }
 
 pub async fn garbage_collect_one_attempt(
@@ -494,7 +483,7 @@ pub async fn garbage_collect_one_attempt(
 }
 
 /// Updates the repo object eliminating snapshots
-/// Returns true if the operation was successful, if it returns false, GC should be retried
+/// Returns Ok(()) if the operation was successful, if it returns false, GC should be retried
 ///
 /// There are a few complex cases:
 ///
@@ -561,10 +550,10 @@ async fn delete_snapshots_from_repo_info(
                         && drop_snapshots.contains(parent)
                     {
                         // this is a new snapshot created since we started GC
-                        // but we are traying to drop its parent. Case 2b
+                        // but we are trying to drop its parent. Case 2b
                         return Err(RepositoryErrorKind::RepoInfoUpdated.into());
                     } else {
-                        // a new snapshot with the root as parent,
+                        // a new snapshot with the root as parent or with a parent we don't want to drop
                         // root is always retained
                         keep_snapshots.insert(si.id.clone());
                         final_snaps.insert(si);
@@ -812,8 +801,6 @@ pub async fn expire(
 
 /// Since expire_v2 is a relatively fast operation (repo object only) we retry it if the repo info
 /// object was modified since it started
-/// Since expire_v2 is a relatively fast operation (repo object only) we retry it if the repo info
-/// object was modified since it started
 #[instrument(skip(asset_manager))]
 pub async fn expire_v2(
     asset_manager: Arc<AssetManager>,
@@ -826,21 +813,19 @@ pub async fn expire_v2(
     let default_retry_config = RepoUpdateRetryConfig::default();
     let retry_config = repo_update_retries.unwrap_or(&default_retry_config).retries();
 
-    let max_attempts = retry_config.max_tries().get() as usize;
-    let mut backoff = ExponentialBuilder::new()
+    let backoff = ExponentialBuilder::new()
         .with_min_delay(std::time::Duration::from_millis(
             retry_config.initial_backoff_ms() as u64,
         ))
         .with_max_delay(std::time::Duration::from_millis(
             retry_config.max_backoff_ms() as u64
         ))
-        .with_max_times(max_attempts)
+        .with_max_times(retry_config.max_tries().get() as usize)
         .with_jitter()
         .build();
 
-    let mut attempts: u64 = 1;
-    loop {
-        match expire_v2_one_attempt(
+    let expire = async || {
+        expire_v2_one_attempt(
             Arc::clone(&asset_manager),
             older_than,
             expired_branches,
@@ -848,35 +833,26 @@ pub async fn expire_v2(
             num_updates_per_repo_info_file,
         )
         .await
-        {
-            Ok(res) => {
-                return Ok(res);
-            }
-            Err(GCError::Repository(RepositoryError {
-                kind: RepositoryErrorKind::RepoInfoUpdated,
-                ..
-            })) => match backoff.next() {
-                Some(delay) => {
+    };
+
+    expire.retry(backoff)
+        .sleep(tokio::time::sleep)
+        .when(|e| {
+            matches!(
+                e,
+                GCError::Repository(RepositoryError {
+                    kind: RepositoryErrorKind::RepoInfoUpdated,
+                    ..
+                })
+            )
+        })
+            .notify(|_, _|  {
+
                     info!(
-                        attempts,
-                        ?delay,
                         "Repo info object was updated while expire was running, retrying with backoff..."
-                    );
-                    tokio::time::sleep(delay).await;
-                    attempts += 1;
-                }
-                None => {
-                    return Err(GCError::Repository(
-                        RepositoryErrorKind::RepoUpdateAttemptsLimit(max_attempts as u64)
-                            .into(),
-                    ));
-                }
-            },
-            Err(err) => {
-                return Err(err);
-            }
-        }
-    }
+                    );}
+        )
+        .await
 }
 
 #[instrument(skip(asset_manager))]
