@@ -52,12 +52,12 @@ async def list_store(store: icechunk.IcechunkStore, barrier: asyncio.Barrier) ->
 
 
 async def test_concurrency(any_spec_version: int | None) -> None:
-    repo = icechunk.Repository.open_or_create(
+    repo = await icechunk.Repository.open_or_create_async(
         storage=icechunk.in_memory_storage(),
         create_version=any_spec_version,
     )
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     group = zarr.group(store=store, overwrite=True)
@@ -85,7 +85,7 @@ async def test_concurrency(any_spec_version: int | None) -> None:
     all_coords = {coords async for coords in session.chunk_coordinates("/array")}
     assert all_coords == {(x, y) for x in range(N) for y in range(N - 1)}
 
-    _res = session.commit("commit")
+    _res = await session.commit_async("commit")
 
     assert isinstance(group["array"], zarr.Array)
     array = group["array"]
@@ -150,14 +150,14 @@ async def test_thread_concurrency(any_spec_version: int | None) -> None:
     )
 
     # Open the store
-    repo = icechunk.Repository.create(
+    repo = await icechunk.Repository.create_async(
         storage=storage,
         config=config,
         authorize_virtual_chunk_access=credentials,
         spec_version=any_spec_version,
     )
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     group = zarr.group(store=store, overwrite=True)

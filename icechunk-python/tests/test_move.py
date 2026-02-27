@@ -1,3 +1,5 @@
+import asyncio
+
 import numpy.testing
 import pytest
 
@@ -6,10 +8,10 @@ import zarr
 
 
 async def test_basic_move() -> None:
-    repo = ic.Repository.create(
+    repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
     )
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
     root = zarr.group(store=store, overwrite=True)
     group = root.create_group("my/old/path", overwrite=True)
@@ -24,11 +26,11 @@ async def test_basic_move() -> None:
             "my/old/path/array/zarr.json",
         ]
     )
-    session.commit("create array")
+    await session.commit_async("create array")
 
-    session = repo.rearrange_session("main")
+    session = await repo.rearrange_session_async("main")
     store = session.store
-    session.move("/my/old", "/my/new")
+    await session.move_async("/my/old", "/my/new")
     all_keys = sorted([k async for k in store.list()])
     assert all_keys == sorted(
         [
@@ -39,16 +41,16 @@ async def test_basic_move() -> None:
             "my/new/path/array/zarr.json",
         ]
     )
-    session.commit("directory renamed")
+    await session.commit_async("directory renamed")
 
-    session = repo.readonly_session("main")
+    session = await repo.readonly_session_async("main")
     store = session.store
     group = zarr.open_group(store=store, mode="r")
     array = group["my/new/path/array"]
     numpy.testing.assert_array_equal(array, 42)
 
-    a, b, *_ = repo.ancestry(branch="main")
-    diff = repo.diff(from_snapshot_id=b.id, to_snapshot_id=a.id)
+    a, b, *_ = await asyncio.to_thread(lambda: list(repo.ancestry(branch="main")))
+    diff = await repo.diff_async(from_snapshot_id=b.id, to_snapshot_id=a.id)
     assert diff.moved_nodes == [("/my/old", "/my/new")]
     assert (
         repr(diff)

@@ -1,3 +1,4 @@
+mod asyncio_bridge;
 mod config;
 mod conflicts;
 mod errors;
@@ -7,6 +8,7 @@ mod session;
 mod stats;
 mod store;
 mod streams;
+mod sync;
 
 use std::env;
 

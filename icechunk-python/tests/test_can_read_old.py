@@ -11,6 +11,7 @@ intentionally changed, the repository files must be regenerated. For that, run t
 file as a python script: `python ./tests/test_can_read_old.py`.
 """
 
+import asyncio
 import shutil
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -86,8 +87,10 @@ async def write_a_split_repo(path: str) -> None:
     )
 
     print(f"Writing repository to {store_path}")
-    repo = mk_repo(create=True, store_path=store_path, config=config)
-    session = repo.writable_session("main")
+    repo = await asyncio.to_thread(
+        mk_repo, create=True, store_path=store_path, config=config
+    )
+    session = await repo.writable_session_async("main")
     store = session.store
 
     root = zarr.group(store=store)
@@ -115,47 +118,49 @@ async def write_a_split_repo(path: str) -> None:
         fill_value=8,
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
     )
-    session.commit("empty structure")
+    await session.commit_async("empty structure")
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     big_chunks = zarr.open_array(session.store, path="/group1/split", mode="a")
     small_chunks = zarr.open_array(session.store, path="/group1/small_chunks", mode="a")
     big_chunks[:] = 120
     small_chunks[:] = 0
-    session.commit("write data")
+    await session.commit_async("write data")
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     big_chunks = zarr.open_array(session.store, path="group1/split", mode="a")
     small_chunks = zarr.open_array(session.store, path="group1/small_chunks", mode="a")
     big_chunks[:] = 12
     small_chunks[:] = 1
-    session.commit("write data again")
+    await session.commit_async("write data again")
 
     ### new config
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 12
     config.manifest = ic.ManifestConfig(splitting=UPDATED_SPLITTING_CONFIG)
-    repo = mk_repo(create=False, store_path=store_path, config=config)
-    repo.save_config()
-    session = repo.writable_session("main")
+    repo = await asyncio.to_thread(
+        mk_repo, create=False, store_path=store_path, config=config
+    )
+    await repo.save_config_async()
+    session = await repo.writable_session_async("main")
     big_chunks = zarr.open_array(session.store, path="group1/split", mode="a")
     small_chunks = zarr.open_array(session.store, path="group1/small_chunks", mode="a")
     big_chunks[:] = 14
     small_chunks[:] = 3
-    session.commit("write data again with more splits")
+    await session.commit_async("write data again with more splits")
 
 
 async def do_icechunk_can_read_old_repo_with_manifest_splitting(path: str) -> None:
-    repo = mk_repo(create=False, store_path=path)
-    ancestry = list(repo.ancestry(branch="main"))[::-1]
+    repo = await asyncio.to_thread(mk_repo, create=False, store_path=path)
+    ancestry = (await asyncio.to_thread(lambda: list(repo.ancestry(branch="main"))))[::-1]
 
     init_snapshot = ancestry[1]
     assert init_snapshot.message == "empty structure"
-    assert len(repo.list_manifest_files(init_snapshot.id)) == 0
+    assert len(await repo.list_manifest_files_async(init_snapshot.id)) == 0
 
     snapshot = ancestry[2]
     assert snapshot.message == "write data"
-    assert len(repo.list_manifest_files(snapshot.id)) == 9
+    assert len(await repo.list_manifest_files_async(snapshot.id)) == 9
 
     snapshot = ancestry[3]
     assert snapshot.message == "write data again"
@@ -180,8 +185,8 @@ async def write_a_test_repo(path: str) -> None:
     """
 
     print(f"Writing repository to {path}")
-    repo = mk_repo(create=True, store_path=path)
-    session = repo.writable_session("main")
+    repo = await asyncio.to_thread(mk_repo, create=True, store_path=path)
+    session = await repo.writable_session_async("main")
     store = session.store
 
     root = zarr.group(store=store)
@@ -208,9 +213,9 @@ async def write_a_test_repo(path: str) -> None:
         fill_value=8,
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
     )
-    session.commit("empty structure")
+    await session.commit_async("empty structure")
 
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
     root = zarr.group(store=store)
     big_chunks = cast("zarr.Array[Any]", root["group1/big_chunks"])
@@ -218,8 +223,8 @@ async def write_a_test_repo(path: str) -> None:
 
     big_chunks[:] = 42.0
     small_chunks[:] = 84
-    snapshot = session.commit("fill data")
-    session = repo.writable_session("main")
+    snapshot = await session.commit_async("fill data")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     # We are going to write this chunk to storage as a virtual chunk
@@ -236,22 +241,22 @@ async def write_a_test_repo(path: str) -> None:
         length=virtual_chunk_data_size,
         checksum=datetime(9999, 12, 31, tzinfo=UTC),
     )
-    snapshot = session.commit("set virtual chunk")
-    session = repo.writable_session("main")
+    snapshot = await session.commit_async("set virtual chunk")
+    session = await repo.writable_session_async("main")
     store = session.store
 
-    repo.create_branch("my-branch", snapshot_id=snapshot)
-    session = repo.writable_session("my-branch")
+    await repo.create_branch_async("my-branch", snapshot_id=snapshot)
+    session = await repo.writable_session_async("my-branch")
     store = session.store
 
     await store.delete("group1/small_chunks/c/4")
-    snap4 = session.commit("delete a chunk")
+    snap4 = await session.commit_async("delete a chunk")
 
-    repo.create_tag("it works!", snapshot_id=snap4)
-    repo.create_tag("deleted", snapshot_id=snap4)
-    repo.delete_tag("deleted")
+    await repo.create_tag_async("it works!", snapshot_id=snap4)
+    await repo.create_tag_async("deleted", snapshot_id=snap4)
+    await repo.delete_tag_async("deleted")
 
-    session = repo.writable_session("my-branch")
+    session = await repo.writable_session_async("my-branch")
     store = session.store
     root = zarr.open_group(store=store)
 
@@ -275,9 +280,9 @@ async def write_a_test_repo(path: str) -> None:
         fill_value=float("nan"),
         attributes={"this": "is a nice array", "icechunk": 1, "size": 42.0},
     )
-    snap5 = session.commit("some more structure")
+    snap5 = await session.commit_async("some more structure")
 
-    repo.create_tag("it also works!", snapshot_id=snap5)
+    await repo.create_tag_async("it also works!", snapshot_id=snap5)
 
     store.close()
 
@@ -286,8 +291,8 @@ async def do_icechunk_can_read_old_repo(path: str) -> None:
     # we import here so it works when the script is ran by pytest
     from tests.conftest import write_chunks_to_minio
 
-    repo = mk_repo(create=False, store_path=path)
-    main_snapshot = repo.lookup_branch("main")
+    repo = await asyncio.to_thread(mk_repo, create=False, store_path=path)
+    main_snapshot = await repo.lookup_branch_async("main")
 
     expected_main_history = [
         "set virtual chunk",
@@ -296,7 +301,10 @@ async def do_icechunk_can_read_old_repo(path: str) -> None:
         "Repository initialized",
     ]
     assert [
-        p.message for p in repo.ancestry(snapshot_id=main_snapshot)
+        p.message
+        for p in await asyncio.to_thread(
+            lambda: list(repo.ancestry(snapshot_id=main_snapshot))
+        )
     ] == expected_main_history
 
     expected_branch_history = [
@@ -305,21 +313,26 @@ async def do_icechunk_can_read_old_repo(path: str) -> None:
     ] + expected_main_history
 
     assert [
-        p.message for p in repo.ancestry(branch="my-branch")
+        p.message
+        for p in await asyncio.to_thread(lambda: list(repo.ancestry(branch="my-branch")))
     ] == expected_branch_history
 
     assert [
-        p.message for p in repo.ancestry(tag="it also works!")
+        p.message
+        for p in await asyncio.to_thread(
+            lambda: list(repo.ancestry(tag="it also works!"))
+        )
     ] == expected_branch_history
 
-    assert [p.message for p in repo.ancestry(tag="it works!")] == expected_branch_history[
-        1:
-    ]
+    assert [
+        p.message
+        for p in await asyncio.to_thread(lambda: list(repo.ancestry(tag="it works!")))
+    ] == expected_branch_history[1:]
 
     with pytest.raises(ic.IcechunkError, match="ref not found"):
-        repo.readonly_session(tag="deleted")
+        await repo.readonly_session_async(tag="deleted")
 
-    session = repo.writable_session("my-branch")
+    session = await repo.writable_session_async("my-branch")
     store = session.store
     assert sorted([p async for p in store.list_dir("")]) == [
         "group1",
@@ -374,8 +387,8 @@ async def do_icechunk_can_read_old_repo(path: str) -> None:
     big_chunks = cast("zarr.Array[Any]", root["group1/big_chunks"])
     assert_array_equal(big_chunks[:], 42.0)
 
-    parents = list(repo.ancestry(branch="main"))
-    diff = repo.diff(to_branch="main", from_snapshot_id=parents[-2].id)
+    parents = await asyncio.to_thread(lambda: list(repo.ancestry(branch="main")))
+    diff = await repo.diff_async(to_branch="main", from_snapshot_id=parents[-2].id)
     assert diff.new_groups == set()
     assert diff.new_arrays == set()
     assert set(diff.updated_chunks.keys()) == {

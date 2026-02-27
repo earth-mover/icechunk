@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from icechunk._icechunk_python import (
@@ -125,7 +125,9 @@ def s3_storage(
     expires_after: datetime | None = None,
     anonymous: bool | None = None,
     from_env: bool | None = None,
-    get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    get_credentials: (
+        Callable[[], S3StaticCredentials | Awaitable[S3StaticCredentials]] | None
+    ) = None,
     scatter_initial_credentials: bool = False,
     force_path_style: bool = False,
     network_stream_timeout_seconds: int = 60,
@@ -157,7 +159,7 @@ def s3_storage(
         If set to True requests to the object store will not be signed
     from_env: bool | None
         Fetch credentials from the operative system environment
-    get_credentials: Callable[[], S3StaticCredentials] | None
+    get_credentials: Callable[[], S3StaticCredentials | Awaitable[S3StaticCredentials]] | None
         Use this function to get and refresh object store credentials
     scatter_initial_credentials: bool, optional
         Immediately call and store the value returned by get_credentials. This is useful if the
@@ -254,7 +256,9 @@ def tigris_storage(
     expires_after: datetime | None = None,
     anonymous: bool | None = None,
     from_env: bool | None = None,
-    get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    get_credentials: (
+        Callable[[], S3StaticCredentials | Awaitable[S3StaticCredentials]] | None
+    ) = None,
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
 ) -> Storage:
@@ -288,7 +292,7 @@ def tigris_storage(
         If set to True requests to the object store will not be signed
     from_env: bool | None
         Fetch credentials from the operative system environment
-    get_credentials: Callable[[], S3StaticCredentials] | None
+    get_credentials: Callable[[], S3StaticCredentials | Awaitable[S3StaticCredentials]] | None
         Use this function to get and refresh object store credentials
     scatter_initial_credentials: bool, optional
         Immediately call and store the value returned by get_credentials. This is useful if the
@@ -340,7 +344,9 @@ def r2_storage(
     expires_after: datetime | None = None,
     anonymous: bool | None = None,
     from_env: bool | None = None,
-    get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    get_credentials: (
+        Callable[[], S3StaticCredentials | Awaitable[S3StaticCredentials]] | None
+    ) = None,
     scatter_initial_credentials: bool = False,
     network_stream_timeout_seconds: int = 60,
 ) -> Storage:
@@ -374,7 +380,7 @@ def r2_storage(
         If set to True requests to the object store will not be signed
     from_env: bool | None
         Fetch credentials from the operative system environment
-    get_credentials: Callable[[], S3StaticCredentials] | None
+    get_credentials: Callable[[], S3StaticCredentials | Awaitable[S3StaticCredentials]] | None
         Use this function to get and refresh object store credentials
     scatter_initial_credentials: bool, optional
         Immediately call and store the value returned by get_credentials. This is useful if the
@@ -436,7 +442,9 @@ def gcs_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     config: dict[str, str] | None = None,
-    get_credentials: Callable[[], GcsBearerCredential] | None = None,
+    get_credentials: (
+        Callable[[], GcsBearerCredential | Awaitable[GcsBearerCredential]] | None
+    ) = None,
     scatter_initial_credentials: bool = False,
 ) -> Storage:
     """Create a Storage instance that saves data in Google Cloud Storage object store.
@@ -461,7 +469,7 @@ def gcs_storage(
         Fetch credentials from the operative system environment
     config: dict[str, str] | None
         A dictionary of options for the Google Cloud Storage object store. See https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants for a list of possible configuration keys.
-    get_credentials: Callable[[], GcsBearerCredential] | None
+    get_credentials: Callable[[], GcsBearerCredential | Awaitable[GcsBearerCredential]] | None
         Use this function to get and refresh object store credentials
     scatter_initial_credentials: bool, optional
         Immediately call and store the value returned by get_credentials. This is useful if the
