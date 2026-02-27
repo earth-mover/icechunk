@@ -422,6 +422,12 @@ pub async fn migrate_1_to_2(
     let previous_updates: Vec<crate::format::IcechunkResult<_>> =
         ops_log.into_iter().map(|(ut, dt)| Ok((ut, dt, None))).collect();
 
+    // Use a page size large enough to hold all synthetic entries (+1 for RepoMigratedUpdate)
+    // so nothing is truncated. There are no backup files to chain to, so overflow would
+    // silently drop entries. Subsequent operations will use the configured page size.
+    let migration_page_size = (previous_updates.len() as u16 + 1)
+        .max(repo.config().num_updates_per_repo_info_file());
+
     info!("Creating repository info file");
     let config = repo.config().clone();
     let config_bytes: Vec<u8> = flexbuffers::to_vec(&config).map_err(|e| {
@@ -445,7 +451,7 @@ pub async fn migrate_1_to_2(
             previous_updates,
         },
         None,
-        repo.config().num_updates_per_repo_info_file(),
+        migration_page_size,
         None,
         Some(config_bytes.as_slice()),
     )?);
