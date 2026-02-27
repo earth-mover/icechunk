@@ -222,13 +222,17 @@ impl Repository {
             Some(ref config) => config != &RepositoryConfig::default(),
             None => false,
         };
-        // Merge the given config with the defaults
-        let config =
-            config.map(|c| RepositoryConfig::default().merge(c)).unwrap_or_default();
-        let storage_settings = match config.storage() {
-            Some(s) => s.clone(),
-            None => storage.default_settings().await?,
+        // Merge two layers of config (In order of preference):
+        //   - User-provided config (passed to create())
+        //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
+        let storage_defaults = storage.default_settings().await?;
+        let config = config.unwrap_or_default();
+        let storage_settings = match config.storage.clone() {
+            Some(user_storage) => storage_defaults.merge(user_storage),
+            None => storage_defaults,
         };
+        let config =
+            RepositoryConfig { storage: Some(storage_settings.clone()), ..config };
 
         let spec_version = spec_version.unwrap_or_default();
 
@@ -377,7 +381,8 @@ impl Repository {
         }?;
         trace!(%spec_version, "Repository version found");
 
-        let (default_config, config_version) = if spec_version >= SpecVersionBin::V2dot0 {
+        let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2dot0
+        {
             // For V2+ repos, read config from the repo info object.
             // Only fall back to config.yaml for old V2 repos that predate embedded config.
             let (repo_info, _) = temp_am.fetch_repo_info().await?;
@@ -405,17 +410,27 @@ impl Repository {
             }
         };
 
-        let final_config = match default_config {
-            Some(default_config) => {
-                config.map(|c| default_config.merge(c)).unwrap_or(default_config)
-            }
-            None => config.unwrap_or_default(),
+        // Merge three layers of config (In order of preference):
+        //   - User-provided config (passed to open())
+        //   - Persisted repo config (saved alongside the data, if any)
+        //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
+        let storage_defaults = storage.default_settings().await?;
+        let repo_config = match persisted_config {
+            Some(c) => RepositoryConfig::default().merge(c),
+            None => RepositoryConfig::default(),
         };
+        // merge user config on top of persisted config and library defaults
+        // no storage merging happening yet.
+        let merged_config = config.map(|c| repo_config.merge(c)).unwrap_or(repo_config);
 
-        let storage_settings = match final_config.storage() {
-            Some(s) => s.clone(),
-            None => storage.default_settings().await?,
+        // construct the merged storage settings
+        let storage_settings = match merged_config.storage.clone() {
+            Some(s) => storage_defaults.merge(s),
+            None => storage_defaults,
         };
+        // combine merged config settings + merged storage settings
+        let final_config =
+            RepositoryConfig { storage: Some(storage_settings.clone()), ..merged_config };
 
         let asset_manager = Arc::new(AssetManager::new_with_config(
             Arc::clone(&storage),
@@ -557,15 +572,23 @@ impl Repository {
         config: Option<RepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<Credentials>>>,
     ) -> RepositoryResult<Self> {
-        // Merge the given config with the current config
-        let config = config
-            .map(|c| self.config().merge(c))
-            .unwrap_or_else(|| self.config().clone());
-
-        let storage_settings = match config.storage() {
-            Some(s) => s.clone(),
-            None => self.storage.default_settings().await?,
+        // Merge three layers of config (In order of preference):
+        //   - User-provided config (passed to reopen())
+        //   - Persisted repo config (saved alongside the data, if any)
+        //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
+        let storage_defaults = self.storage.default_settings().await?;
+        // merge user config on top of persisted config and library defaults
+        // no storage merging happening yet
+        let repo_config = self.config().clone();
+        let config = config.map(|c| repo_config.merge(c)).unwrap_or(repo_config);
+        // construct the merged storage settings
+        let storage_settings = match config.storage.clone() {
+            Some(s) => storage_defaults.merge(s),
+            None => storage_defaults,
         };
+        // combine merged config settings + merged storage settings
+        let config =
+            RepositoryConfig { storage: Some(storage_settings.clone()), ..config };
 
         Self::new(
             self.spec_version,
@@ -1836,7 +1859,10 @@ fn raise_if_invalid_snapshot_id_v2(
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use futures::TryStreamExt;
-    use std::{collections::HashMap, error::Error, iter::zip, path::PathBuf, sync::Arc};
+    use std::{
+        collections::HashMap, error::Error, iter::zip, num::NonZeroU16, path::PathBuf,
+        sync::Arc,
+    };
 
     use bytes::Bytes;
     use icechunk_macros::tokio_test;
@@ -1894,12 +1920,16 @@ mod tests {
             Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
 
         // default config is not stored in repo info
-        assert_eq!(repo.config(), &RepositoryConfig::default());
+        let expected_default = RepositoryConfig {
+            storage: Some(storage.default_settings().await?),
+            ..Default::default()
+        };
+        assert_eq!(repo.config(), &expected_default);
         assert!(Repository::fetch_config(Arc::clone(&storage)).await?.is_none());
 
         // reopening with default config still works
         let repo = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
-        assert_eq!(repo.config(), &RepositoryConfig::default());
+        assert_eq!(repo.config(), &expected_default);
 
         // reload the repo changing config via client override
         let repo = Repository::open(
@@ -2496,7 +2526,13 @@ mod tests {
         let storage2: Arc<dyn Storage + Send + Sync> = logging2.clone();
         let config = RepositoryConfig {
             manifest: Some(ManifestConfig::empty()),
-            storage: Some(Default::default()),
+            storage: Some(storage::Settings {
+                concurrency: Some(storage::ConcurrencySettings {
+                    max_concurrent_requests_for_object: NonZeroU16::new(1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             ..RepositoryConfig::default()
         };
         let read_repo = Repository::open(Some(config), storage2, HashMap::new()).await?;
@@ -3344,7 +3380,13 @@ mod tests {
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
-            storage: Some(Default::default()),
+            storage: Some(storage::Settings {
+                concurrency: Some(storage::ConcurrencySettings {
+                    max_concurrent_requests_for_object: NonZeroU16::new(1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             ..RepositoryConfig::default()
         };
         let repository = Repository::open(Some(config), storage, HashMap::new()).await?;
