@@ -1354,7 +1354,15 @@ fn update_type_to_fb<'bldr>(
 mod tests {
 
     use super::*;
+    use crate::roundtrip_serialization_tests;
+    use proptest::prelude::*;
     use std::collections::HashSet;
+
+    fn repo_info() -> impl Strategy<Value = RepoInfo> {
+        any::<Vec<u8>>().prop_map(|buffer| RepoInfo { buffer })
+    }
+
+    roundtrip_serialization_tests!(serialize_and_deserialize_repo_info - repo_info);
 
     #[test]
     fn test_add_snapshot() -> Result<(), Box<dyn std::error::Error>> {

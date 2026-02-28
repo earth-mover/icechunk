@@ -1246,9 +1246,34 @@ mod tests {
     };
 
     use super::*;
+    use crate::roundtrip_serialization_tests;
     use icechunk_macros::tokio_test;
     use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
+    use proptest::{collection::vec, option};
     use tempfile::TempDir;
+
+    prop_compose! {
+        fn array_metadata()
+        (shape in vec(any::<u64>(), 1..4),
+         node_type in Just("array".to_string()),
+            chunk_grid in vec(any::<u64>(), 1..4),
+            dimension_names in option::of(
+            vec(
+                option::of(any::<String>()),
+                2..4))) -> ArrayMetadata {
+            ArrayMetadata {
+                shape,
+                node_type,
+                chunk_grid,
+                dimension_names,
+            }
+        }
+    }
+
+    roundtrip_serialization_tests!(
+        serialize_and_deserialize_array_metadata - array_metadata
+    );
 
     async fn add_group(store: &Store, path: &str) -> StoreResult<()> {
         let bytes = Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#);
