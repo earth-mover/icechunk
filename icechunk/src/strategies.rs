@@ -20,7 +20,7 @@ use crate::format::snapshot::{
     ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
 };
 use crate::format::{
-    ChunkId, ChunkIndices, ManifestId, NodeId, Path, SnapshotId, manifest,
+    AttributesId, ChunkId, ChunkIndices, ManifestId, NodeId, Path, SnapshotId, manifest,
 };
 use crate::session::Session;
 use crate::storage::{
@@ -722,4 +722,8 @@ size_bytes in any::<u64>(),
 num_chunk_refs in any::<u32>()) -> ManifestFileInfo  {
     ManifestFileInfo{id, size_bytes, num_chunk_refs}
 }
+}
+
+pub fn attributes_id() -> impl Strategy<Value = AttributesId> {
+    uniform12(any::<u8>()).prop_map(AttributesId::new)
 }
