@@ -41,3 +41,5 @@ information. Examples are statistics, pre computed quantities, and others.
 
 This could also give us more flexibility as a way to create new features without
 having to change the format.
+
+See [design document](./015-extra-data-in-manifests-and-snapshots.md).

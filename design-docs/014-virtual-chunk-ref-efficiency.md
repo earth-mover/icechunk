@@ -117,3 +117,8 @@ use of relative or absolute urls only.
 locations
 - Review tests and error messages to use the right combination of relative and
 absolute locations.
+
+## Other format changes
+
+See [more format changes](./012-some-more-IC2-format-changes.md) in the
+Icechunk 2.0 library.
