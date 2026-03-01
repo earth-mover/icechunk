@@ -13,11 +13,6 @@ expected, and even documented behavior.
 We list the remaining format changes we need, with brief design summaries and
 links to longer design documents when needed.
 
-## Allow manifest consolidation
-
-We don't want to implement consolidation in version 2, but we would like the
-format to support it.
-
 ## Allow rectilinear chunk grids
 
 We would like to implement this feature in version 2, but even if we don't get
@@ -26,18 +21,17 @@ to it we certainly want the IC2 format to support it.
 ## Feature flags
 
 We want to add to the format the ability to soft-block the repo from executing
-certain operations. Examples:
+certain operations.
 
-* GC
-* Expiration
-* `move_node` (rearrangement sessions)
-* `reset_branch`, `delete_tag`, etc.
+See [design document](./013-feature-flags.md).
 
 ## More efficient virtual chunk references
 
 Currently the manifest stores a full absolute URL per virtual chunk. This is
 inefficient in terms of memory once the manifest is decompressed, and it's
 inflexible under chunks movement.
+
+See [design document](./014-virtual-chunk-ref-efficiency.md).
 
 ## Extra data in manifests and snapshots
 
