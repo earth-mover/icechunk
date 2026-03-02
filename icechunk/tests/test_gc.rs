@@ -29,18 +29,19 @@ use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 
 mod common;
+use common::Permission;
 
 #[tokio_test]
 pub async fn test_gc_in_minio_spec_v1() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_v1_{}", Utc::now().timestamp_millis());
-    let storage = common::make_minio_integration_storage(prefix)?;
+    let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_gc(storage, Some(SpecVersionBin::V1dot0)).await
 }
 
 #[tokio_test]
 pub async fn test_gc_in_minio_spec_v2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_v2_{}", Utc::now().timestamp_millis());
-    let storage = common::make_minio_integration_storage(prefix)?;
+    let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_gc(storage, Some(SpecVersionBin::V2dot0)).await
 }
 
@@ -99,6 +100,7 @@ pub async fn do_test_gc(
         Arc::clone(&storage),
         HashMap::new(),
         spec_version,
+        true,
     )
     .await?;
 
@@ -309,7 +311,7 @@ pub async fn test_expire_and_garbage_collect_in_minio()
     let prefix =
         format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
     let storage: Arc<dyn Storage + Send + Sync> =
-        common::make_minio_integration_storage(prefix)?;
+        common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_expire_and_garbage_collect(storage).await
 }
 
@@ -355,7 +357,8 @@ pub async fn do_test_expire_and_garbage_collect(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings().await?;
     let mut repo =
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+            .await?;
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
@@ -467,7 +470,8 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
     let mut repo =
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+            .await?;
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
@@ -533,8 +537,8 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
-    let repo =
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
 
     let mut session = repo.writable_session("main").await?;
     let array_path: Path = "/array".to_string().try_into().unwrap();

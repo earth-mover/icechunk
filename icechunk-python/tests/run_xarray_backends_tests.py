@@ -20,6 +20,7 @@ from icechunk import (
     s3_storage,
 )
 from icechunk.xarray import to_icechunk
+from tests.conftest import Permission
 from xarray.testing import assert_identical
 
 # needed otherwise not discovered
@@ -118,6 +119,7 @@ class TestIcechunkStoreMemory(IcechunkStoreBase):
 class TestIcechunkStoreMinio(IcechunkStoreBase):
     @contextlib.contextmanager
     def create_repo(self) -> Generator[Repository]:
+        (access_key_id, secret_access_key) = Permission.MODIFY.keys()
         yield Repository.create(
             s3_storage(
                 endpoint_url="http://localhost:9000",
@@ -126,8 +128,8 @@ class TestIcechunkStoreMinio(IcechunkStoreBase):
                 region="us-east-1",
                 bucket="testbucket",
                 prefix="python-xarray-test__" + str(time.time()),
-                access_key_id="minio123",
-                secret_access_key="minio123",
+                access_key_id=access_key_id,
+                secret_access_key=secret_access_key,
             )
         )
 

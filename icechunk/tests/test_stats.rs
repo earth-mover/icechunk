@@ -23,6 +23,7 @@ use icechunk::{
 use icechunk_macros::tokio_test;
 
 mod common;
+use common::Permission;
 
 #[tokio_test]
 pub async fn test_repo_chunks_storage_in_memory() -> Result<(), Box<dyn std::error::Error>>
@@ -35,7 +36,7 @@ pub async fn test_repo_chunks_storage_in_memory() -> Result<(), Box<dyn std::err
 pub async fn test_repo_chunks_storage_in_minio() -> Result<(), Box<dyn std::error::Error>>
 {
     let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
-    let storage = common::make_minio_integration_storage(prefix)?;
+    let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_repo_chunks_storage(storage).await
 }
 
@@ -84,6 +85,7 @@ pub async fn do_test_repo_chunks_storage(
         Arc::clone(&storage),
         Default::default(),
         None,
+        true,
     )
     .await?;
 
@@ -241,6 +243,7 @@ pub async fn test_virtual_chunk_deduplication() -> Result<(), Box<dyn std::error
         storage,
         Default::default(),
         None,
+        true,
     )
     .await?;
 

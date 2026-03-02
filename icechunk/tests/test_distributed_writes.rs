@@ -14,6 +14,7 @@ use icechunk::{
 use tokio::task::JoinSet;
 
 mod common;
+use common::Permission;
 
 const SIZE: usize = 10;
 
@@ -26,7 +27,7 @@ async fn mk_repo(
             inline_chunk_threshold_bytes: Some(0),
             ..RepositoryConfig::default()
         };
-        Ok(Repository::create(Some(config), storage, HashMap::new(), None).await?)
+        Ok(Repository::create(Some(config), storage, HashMap::new(), None, true).await?)
     } else {
         Ok(Repository::open(None, storage, HashMap::new()).await?)
     }
@@ -86,7 +87,7 @@ async fn verify(ds: Session) -> Result<(), Box<dyn std::error::Error>> {
 #[tokio_test]
 async fn test_distributed_writes_in_minio() -> Result<(), Box<dyn std::error::Error>> {
     do_test_distributed_writes(|prefix| async {
-        common::make_minio_integration_storage(prefix)
+        common::make_minio_integration_storage(prefix, &Permission::Modify)
     })
     .await
 }
