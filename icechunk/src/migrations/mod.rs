@@ -376,32 +376,33 @@ pub async fn migrate_1_to_2(
     info!("Found {} non-dangling snapshots", all_snapshots.len());
 
     info!("Generating migration ops log");
-    // Collect main branch ancestry (tip-to-root)
-    let main_snap_id = branches
-        .iter()
-        .find(|(name, _)| *name == Ref::DEFAULT_BRANCH)
-        .map(|(_, id)| id.clone());
-    let main_ancestry = if let Some(ref snap_id) = main_snap_id {
-        repo.ancestry(&VersionInfo::SnapshotId(snap_id.clone()))
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?
-    } else {
-        Vec::new()
+    // Build a lookup so we can reconstruct per-branch ancestry in memory
+    // instead of re-fetching from storage.
+    let snap_by_id: HashMap<&SnapshotId, &SnapshotInfo> =
+        all_snapshots.iter().map(|s| (&s.id, s)).collect();
+
+    // Walk parent pointers from `tip` to root, returning tip-to-root order.
+    let ancestry_from = |tip: &SnapshotId| -> Vec<SnapshotInfo> {
+        let mut result = Vec::new();
+        let mut current = snap_by_id.get(tip);
+        while let Some(snap) = current {
+            result.push((*snap).clone());
+            current = snap.parent_id.as_ref().and_then(|pid| snap_by_id.get(pid));
+        }
+        result
     };
 
+    // Collect main branch ancestry (tip-to-root)
+    let main_snap_id =
+        branches.iter().find(|(name, _)| *name == Ref::DEFAULT_BRANCH).map(|(_, id)| id);
+    let main_ancestry = main_snap_id.map(&ancestry_from).unwrap_or_default();
+
     // Collect non-main branch ancestries
-    let mut branch_ancestries: Vec<(&str, Vec<SnapshotInfo>)> = Vec::new();
-    for (name, snap_id) in &branches {
-        if *name != Ref::DEFAULT_BRANCH {
-            let ancestry = repo
-                .ancestry(&VersionInfo::SnapshotId(snap_id.clone()))
-                .await?
-                .try_collect::<Vec<_>>()
-                .await?;
-            branch_ancestries.push((*name, ancestry));
-        }
-    }
+    let branch_ancestries: Vec<(&str, Vec<SnapshotInfo>)> = branches
+        .iter()
+        .filter(|(name, _)| *name != Ref::DEFAULT_BRANCH)
+        .map(|(name, snap_id)| (*name, ancestry_from(snap_id)))
+        .collect();
 
     // Fetch snapshot IDs for deleted tags
     let mut deleted_tags_with_snap: Vec<(&str, SnapshotId)> = Vec::new();
