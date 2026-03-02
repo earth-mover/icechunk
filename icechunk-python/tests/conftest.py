@@ -13,7 +13,7 @@ class Permission(Enum):
     MODIFY = 2
     SUPERUSER = 3  # temporary, while figuring out right permissions
 
-    def keys(self):
+    def keys(self) -> tuple[str, str]:
         match self:
             case self.READONLY:
                 return ("readonly", "basicuser")
