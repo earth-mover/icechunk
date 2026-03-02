@@ -1118,7 +1118,7 @@ impl Session {
         let update_type =
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
         let num_updates = self.config.num_updates_per_repo_info_file();
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
                 ..new_snap.as_ref().try_into()?
@@ -2686,7 +2686,7 @@ async fn do_commit_v2(
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
-    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
         attempt += 1;
         let actual_parent = repo_info.resolve_branch(branch_name)?;
         if &actual_parent != parent_snapshot_id {
