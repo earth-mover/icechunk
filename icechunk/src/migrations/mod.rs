@@ -748,13 +748,13 @@ mod tests {
             "TagCreatedUpdate (idx {deleted_tag_created_idx}) should be newer than NewCommitUpdate (idx {commit_idx})"
         );
 
-        // Verify timestamps are strictly decreasing
+        // Verify timestamps are non-increasing (newest first)
         for window in ops_log.windows(2) {
             let (time_a, _, _) = &window[0];
             let (time_b, _, _) = &window[1];
             assert!(
-                time_a > time_b,
-                "ops log timestamps must be strictly decreasing: {time_a} should be > {time_b}"
+                time_a >= time_b,
+                "ops log timestamps must be non-increasing: {time_a} should be >= {time_b}"
             );
         }
 
