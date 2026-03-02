@@ -286,9 +286,14 @@ pub async fn test_tag_write_get(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let repo =
-            Repository::create(None, storage, Default::default(), Some(spec_version), true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            storage,
+            Default::default(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("mytag").await?;
         assert_eq!(Snapshot::INITIAL_SNAPSHOT_ID, back);

@@ -46,8 +46,7 @@ pub async fn test_repo_chunks_storage_in_minio(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let prefix =
         format!("test_stats_{:?}_{}", spec_version, Utc::now().timestamp_millis());
-    let storage =
-        common::make_minio_integration_storage(prefix, &Permission::Modify)?;
+    let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_repo_chunks_storage(storage, spec_version).await
 }
 

@@ -32,10 +32,14 @@ async fn mk_repo(
             inline_chunk_threshold_bytes: Some(0),
             ..RepositoryConfig::default()
         };
-        Ok(
-            Repository::create(Some(config), storage, HashMap::new(), Some(spec_version), true)
-                .await?,
+        Ok(Repository::create(
+            Some(config),
+            storage,
+            HashMap::new(),
+            Some(spec_version),
+            true,
         )
+        .await?)
     } else {
         Ok(Repository::open(None, storage, HashMap::new()).await?)
     }

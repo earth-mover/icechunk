@@ -3560,9 +3560,14 @@ mod tests {
             inline_chunk_threshold_bytes: Some(0),
             ..Default::default()
         };
-        let repository =
-            Repository::create(Some(config), storage, HashMap::new(), Some(spec_version), true)
-                .await?;
+        let repository = Repository::create(
+            Some(config),
+            storage,
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
         let mut ds = repository.writable_session("main").await?;
 
