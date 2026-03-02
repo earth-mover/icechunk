@@ -41,7 +41,7 @@ class SpecVersionMixin:
         params=[1, 2, None],
         ids=["spec-v1", "spec-v2", "no-spec-version"],
     )
-    def _spec_version(self, request):
+    def _spec_version(self, request: pytest.FixtureRequest) -> None:
         self._spec_version_value = request.param
 
 
