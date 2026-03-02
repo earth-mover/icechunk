@@ -1083,13 +1083,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             )
 
         if self.model.migrated:
-            # After migration, the ops log contains synthetic entries whose
-            # backup paths all point to the same migration file, so the
-            # uniqueness check doesn't apply. Subsequent operations may also
-            # paginate entries into backup files, and with a small page size
-            # some synthetic entries can be lost. Just verify structural
-            # invariants on whatever entries remain.
-            assert any(isinstance(op, ic.RepoMigratedUpdate) for op in actual_ops)
+            # The model tracks RepoMigratedUpdate + all post-migration ops.
+            # The actual log also has synthetic entries before that, which may
+            # be truncated by pagination. Compare only the entries the model knows about.
+            n = len(self.model.ops_log)
+            assert self.model.ops_log[::-1] == actual_ops[:n]
         else:
             # non-None backup paths must be unique
             all_backups = [
