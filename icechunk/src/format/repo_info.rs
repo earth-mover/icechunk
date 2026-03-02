@@ -1358,11 +1358,14 @@ mod tests {
     use proptest::prelude::*;
     use std::collections::HashSet;
 
-    fn repo_info() -> impl Strategy<Value = RepoInfo> {
+    // Generates an instance of RepoInfo which may not deserialize to a valid repository
+    fn potentially_invalid_repo_info() -> impl Strategy<Value = RepoInfo> {
         any::<Vec<u8>>().prop_map(|buffer| RepoInfo { buffer })
     }
 
-    roundtrip_serialization_tests!(serialize_and_deserialize_repo_info - repo_info);
+    roundtrip_serialization_tests!(
+        serialize_and_deserialize_repo_info - potentially_invalid_repo_info
+    );
 
     #[test]
     fn test_add_snapshot() -> Result<(), Box<dyn std::error::Error>> {
