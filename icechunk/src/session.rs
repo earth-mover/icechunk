@@ -5110,7 +5110,8 @@ mod tests {
         let repository = create_memory_store_repository(SpecVersionBin::current()).await;
         let mut ds = repository.writable_session("main").await?;
 
-        ds.add_group("/foo/bar".try_into().unwrap(), Bytes::new()).await?;
+        ds.add_group("/foo/bar".try_into().unwrap(), Bytes::from("group-metadata"))
+            .await?;
         ds.add_array(
             "/foo/bar/some-array".try_into().unwrap(),
             basic_shape(),
@@ -5170,6 +5171,60 @@ mod tests {
             &Conflict::NewNodeConflictsWithExistingNode(conflict_path),
             ds2.rebase(&ConflictDetector).await,
         );
+        Ok(())
+    }
+
+    #[tokio_test]
+    /// Test that delete-then-recreate exactly the same node
+    /// does NOT conflict
+    ///
+    /// This session: delete group + recreate group at same path with samem metadata
+    /// Previous commit: add a different sibling group
+    async fn test_no_conflict_on_delete_then_recreate() -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar".try_into().unwrap();
+        ds1.add_group("/foo/baz".try_into().unwrap(), user_data()).await?;
+        ds1.commit("add sibling group", None).await?;
+
+        ds2.delete_group(path.clone()).await?;
+        ds2.add_group(path.clone(), Bytes::from("group-metadata")).await?;
+        ds2.commit("delete+re-add group", None).await.unwrap_err();
+
+        ds2.rebase(&ConflictDetector).await?;
+        ds2.commit("delete+re-add group", None).await?;
+
+        // Verify the recreated group has our metadata
+        let node = ds2.get_node(&path).await?;
+        assert_eq!(node.user_data, Bytes::from("group-metadata"));
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    /// Test that delete-then-recreate DOES conflict when the previous commit
+    /// updated the group's metadata.
+    ///
+    /// This session: delete group + recreate group at same path
+    /// Previous commit: updated the group's metadata
+    async fn test_conflict_on_delete_then_recreate_when_group_updated()
+    -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar".try_into().unwrap();
+        ds1.update_group(&path, Bytes::from("updated")).await?;
+        ds1.commit("update group metadata", None).await?;
+
+        let node = ds2.get_node(&path).await.unwrap();
+        ds2.delete_group(path.clone()).await?;
+        ds2.add_group(path.clone(), user_data()).await?;
+        ds2.commit("delete+re-add group", None).await.unwrap_err();
+
+        assert_has_conflict(
+            &Conflict::DeleteOfUpdatedGroup { path, node_id: node.id },
+            ds2.rebase(&ConflictDetector).await,
+        );
+
         Ok(())
     }
 
