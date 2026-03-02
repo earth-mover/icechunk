@@ -171,7 +171,12 @@ fn generate_migration_ops_log(
     let mut emitted_snap_ids: HashSet<_> =
         main_ancestry.iter().map(|s| s.id.clone()).collect();
 
-    let mut entries: Vec<(UpdateType, DateTime<Utc>)> = Vec::new();
+    // Upper bound: 1 RepoInitializedUpdate + at most 1 NewCommitUpdate per snapshot
+    // + 1 BranchCreatedUpdate per branch + 1 TagCreatedUpdate per tag
+    // + 2 per deleted tag (TagCreatedUpdate + TagDeletedUpdate)
+    let capacity =
+        1 + all_snapshots.len() + branches.len() + tags.len() + 2 * deleted_tags.len();
+    let mut entries: Vec<(UpdateType, DateTime<Utc>)> = Vec::with_capacity(capacity);
 
     // Start with the RepoInitializedUpdate at root snapshot's flushed_at
     entries.push((UpdateType::RepoInitializedUpdate, root_time));
