@@ -1849,6 +1849,7 @@ mod tests {
     use bytes::Bytes;
     use icechunk_macros::tokio_test;
     use itertools::enumerate;
+    use rstest::rstest;
     use storage::logging::LoggingStorage;
     use tempfile::TempDir;
 
@@ -1894,13 +1895,23 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
+    #[tokio_test]
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_repository_persistent_config(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
         // default config is not stored in repo info
         assert_eq!(repo.config(), &RepositoryConfig::default());
@@ -1955,7 +1966,7 @@ mod tests {
             Some(config),
             Arc::clone(&storage),
             HashMap::new(),
-            None,
+            Some(spec_version),
             true,
         )
         .await?;
@@ -1982,13 +1993,23 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_manage_refs() -> Result<(), Box<dyn Error>> {
+    #[tokio_test]
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_manage_refs(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
         let initial_branches = repo.list_branches().await?;
         assert_eq!(initial_branches, BTreeSet::from(["main".into()]));
@@ -2103,6 +2124,7 @@ mod tests {
         dimension_names: &Option<Vec<DimensionName>>,
         split_config: &ManifestSplittingConfig,
         storage: Option<Arc<dyn Storage + Send + Sync>>,
+        spec_version: SpecVersionBin,
     ) -> Result<Repository, Box<dyn Error>> {
         let backend: Arc<dyn Storage + Send + Sync> =
             storage.unwrap_or(new_in_memory_storage().await?);
@@ -2120,8 +2142,14 @@ mod tests {
             manifest: Some(man_config),
             ..RepositoryConfig::default()
         };
-        let repository =
-            Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
+        let repository = Repository::create(
+            Some(config),
+            storage,
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
         let mut session = repository.writable_session("main").await?;
 
@@ -2136,7 +2164,12 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_resize_rewrites_manifests() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_resize_rewrites_manifests(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
             Some(RepositoryConfig {
@@ -2145,7 +2178,7 @@ mod tests {
             }),
             Arc::clone(&storage),
             HashMap::new(),
-            None,
+            Some(spec_version),
             true,
         )
         .await?;
@@ -2211,7 +2244,12 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_splits_change_in_session() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_splits_change_in_session(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let shape = ArrayShape::new(vec![(13, 1), (2, 1), (1, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "y".into(), "x".into()]);
         let new_dimension_names = Some(vec!["time".into(), "y".into(), "x".into()]);
@@ -2251,6 +2289,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(Arc::clone(&storage)),
+            spec_version,
         )
         .await?;
 
@@ -2314,7 +2353,12 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn tests_manifest_rewriting_simple() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn tests_manifest_rewriting_simple(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let split_size = 3u32;
         let dim_size = 10u32;
 
@@ -2330,6 +2374,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(Arc::clone(&storage)),
+            spec_version,
         )
         .await?;
 
@@ -2349,6 +2394,11 @@ mod tests {
         session.commit("first split", None).await?;
         total_manifests += 4;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
+
+        let commit_method = match spec_version {
+            SpecVersionBin::V1dot0 => CommitMethod::NewCommit,
+            SpecVersionBin::V2dot0 => CommitMethod::Amend,
+        };
 
         // make sure data is correct
         let validate_data = async || {
@@ -2394,7 +2444,7 @@ mod tests {
             "main",
             "rewrite_manifests with split-size=12",
             None,
-            CommitMethod::Amend,
+            commit_method.clone(),
         )
         .await?;
         total_manifests += 1;
@@ -2427,7 +2477,7 @@ mod tests {
             "main",
             "rewrite_manifests with split-size=4",
             None,
-            CommitMethod::Amend,
+            commit_method.clone(),
         )
         .await?;
         total_manifests += 3;
@@ -2447,7 +2497,12 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn tests_manifest_splitting_simple() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn tests_manifest_splitting_simple(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let dim_size = 25u32;
         let chunk_size = 1u32;
         let split_size = 3u32;
@@ -2468,6 +2523,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(Arc::clone(&storage)),
+            spec_version,
         )
         .await?;
 
@@ -2713,7 +2769,12 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_manifest_splitting_complex_writes() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_manifest_splitting_complex_writes(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let t_split_size = 12u32;
         let other_split_size = 9u32;
         let y_split_size = 2u32;
@@ -2758,6 +2819,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(logging_c),
+            spec_version,
         )
         .await?;
         let repo_clone = repository.reopen(None, None).await?;
@@ -2961,7 +3023,12 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_manifest_splits_merge_sessions() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_manifest_splits_merge_sessions(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
@@ -2982,6 +3049,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(backend),
+            spec_version,
         )
         .await?;
 
@@ -3125,8 +3193,12 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_commits_with_conflicting_manifest_splits() -> Result<(), Box<dyn Error>>
-    {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_commits_with_conflicting_manifest_splits(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
@@ -3147,6 +3219,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(backend),
+            spec_version,
         )
         .await?;
 
@@ -3237,14 +3310,19 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
     /// Writes four arrays to a repo, checks preloading of the manifests
     ///
     /// Three of the arrays have a preload name. But on of them (time) is larger
     /// than what we allow for preload (via config).
     ///
     /// We verify only the correct two arrays are preloaded
-    async fn test_manifest_preload_known_manifests() -> Result<(), Box<dyn Error>> {
+    async fn test_manifest_preload_known_manifests(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         //let backend: Arc<dyn Storage + Send + Sync> =
         //    new_local_filesystem_storage(&(std::path::Path::new("/tmp/testrepo2")))
         //        .await?;
@@ -3252,7 +3330,8 @@ mod tests {
         let storage = Arc::clone(&backend);
 
         let repository =
-            Repository::create(None, storage, HashMap::new(), None, true).await?;
+            Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
+                .await?;
 
         let mut session = repository.writable_session("main").await?;
 

@@ -2840,6 +2840,7 @@ mod tests {
     use async_trait::async_trait;
     use icechunk_macros::tokio_test;
     use itertools::{Itertools, assert_equal};
+    use rstest::rstest;
 
     async fn assert_manifest_count(
         asset_manager: &Arc<AssetManager>,
@@ -2857,10 +2858,12 @@ mod tests {
     use test_strategy::proptest;
     use tokio::sync::Barrier;
 
-    async fn create_memory_store_repository() -> Repository {
+    async fn create_memory_store_repository(spec_version: SpecVersionBin) -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new(), None, true).await.unwrap()
+        Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
+            .await
+            .unwrap()
     }
 
     #[proptest(async = "tokio")]
@@ -3062,9 +3065,13 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_repository_with_default_commit_metadata() -> Result<(), Box<dyn Error>>
-    {
-        let mut repo = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_repository_with_default_commit_metadata(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut repo = create_memory_store_repository(spec_version).await;
         let mut ds = repo.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::new()).await?;
         let snapshot = ds.commit("commit 1", None).await?;
@@ -3111,7 +3118,12 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_repository_with_splits_and_resizes() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_repository_with_splits_and_resizes(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let split_sizes = Some(vec![(
@@ -3135,7 +3147,7 @@ mod tests {
             }),
             storage,
             HashMap::new(),
-            None,
+            Some(spec_version),
             true,
         )
         .await?;
@@ -3532,7 +3544,12 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_repository_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_repository_with_updates_and_writes(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
@@ -3544,7 +3561,8 @@ mod tests {
             ..Default::default()
         };
         let repository =
-            Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
+            Repository::create(Some(config), storage, HashMap::new(), Some(spec_version), true)
+                .await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -3851,27 +3869,34 @@ mod tests {
 
         repository.save_config().await?;
 
-        let overwritten = repository
-            .asset_manager()
-            .list_overwritten_objects()
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?;
+        if spec_version == SpecVersionBin::V2dot0 {
+            let overwritten = repository
+                .asset_manager()
+                .list_overwritten_objects()
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
 
-        // 6 commits + 1 config change recorded in ops log
-        assert_eq!(overwritten.iter().filter(|s| s.starts_with("repo")).count(), 7);
+            // 6 commits + 1 config change recorded in ops log
+            assert_eq!(overwritten.iter().filter(|s| s.starts_with("repo")).count(), 7);
 
-        // V2 repos don't write config.yaml — config is in repo info
-        assert_eq!(
-            overwritten.iter().filter(|s| s.starts_with("config.yaml")).count(),
-            0
-        );
+            // V2 repos don't write config.yaml — config is in repo info
+            assert_eq!(
+                overwritten.iter().filter(|s| s.starts_with("config.yaml")).count(),
+                0
+            );
+        }
         Ok(())
     }
 
     #[tokio_test]
-    async fn test_basic_delete_and_flush() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_basic_delete_and_flush(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         ds.add_group("/1".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
@@ -3889,8 +3914,13 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_basic_delete_after_flush() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_basic_delete_after_flush(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         ds.add_group("/1".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
@@ -3905,8 +3935,13 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_commit_after_deleting_old_node() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_commit_after_deleting_old_node(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         ds.commit("commit", None).await?;
@@ -3923,9 +3958,14 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_delete_children() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_delete_children(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let def = Bytes::copy_from_slice(b"");
-        let repository = create_memory_store_repository().await;
+        let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), def.clone()).await?;
         ds.commit("initialize", None).await?;
@@ -3951,8 +3991,13 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_delete_children_of_old_nodes() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_delete_children_of_old_nodes(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         let def = Bytes::copy_from_slice(b"");
         ds.add_group(Path::root(), def.clone()).await?;
@@ -3969,9 +4014,16 @@ mod tests {
     }
 
     #[tokio_test(flavor = "multi_thread")]
-    async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_all_chunks_iterator(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::create(None, storage, HashMap::new(), None, true).await?;
+        let repo =
+            Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
+                .await?;
         let mut ds = repo.writable_session("main").await?;
         let def = Bytes::copy_from_slice(b"");
 
@@ -4038,12 +4090,22 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_manifests_shrink() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_manifests_shrink(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let in_mem_storage = Arc::new(ObjectStorage::new_in_memory().await?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
         // there should be no manifests yet
         assert!(
@@ -4249,8 +4311,13 @@ mod tests {
     }
 
     #[tokio_test(flavor = "multi_thread")]
-    async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_commit_and_refs(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
         let mut ds = repo.writable_session("main").await?;
 
         let def = Bytes::copy_from_slice(b"");
@@ -4318,7 +4385,7 @@ mod tests {
 
     #[tokio_test]
     async fn test_amend() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+        let repo = create_memory_store_repository(SpecVersionBin::current()).await;
 
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
@@ -4430,7 +4497,7 @@ mod tests {
 
     #[tokio_test]
     async fn test_session_amending_with_move() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+        let repo = create_memory_store_repository(SpecVersionBin::current()).await;
 
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
@@ -4534,8 +4601,13 @@ mod tests {
 
     /// Integration test that fetch_snapshot_info correctly identifies initial vs non-initial.
     #[tokio_test]
-    async fn test_fetch_snapshot_info_is_initial() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_fetch_snapshot_info_is_initial(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
         let asset_manager = repo.asset_manager();
 
         // Look up the initial snapshot via the branch
@@ -4556,9 +4628,23 @@ mod tests {
 
     /// Test that the initial snapshot has an empty transaction log that can be fetched.
     #[tokio_test]
-    async fn test_initial_snapshot_has_empty_transaction_log()
-    -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_initial_snapshot_has_empty_transaction_log(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
+
+        if spec_version == SpecVersionBin::V1dot0 {
+            // Transaction logs for initial commit are a V2-only feature
+            let initial_snap_id = repo.lookup_branch("main").await?;
+            let result =
+                repo.asset_manager().fetch_transaction_log(&initial_snap_id).await;
+            assert!(result.is_err());
+            return Ok(());
+        }
+
         let asset_manager = repo.asset_manager();
 
         let initial_snap_id = repo.lookup_branch("main").await?;
@@ -4598,8 +4684,13 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_empty_commit() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_empty_commit(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         let snap1 = session.commit("make root", None).await?;
@@ -4637,8 +4728,13 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_no_double_commit() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_no_double_commit(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository(spec_version).await;
 
         let mut ds1 = repository.writable_session("main").await?;
         let mut ds2 = repository.writable_session("main").await?;
@@ -4706,9 +4802,14 @@ mod tests {
     async fn test_basic_move() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4767,9 +4868,14 @@ mod tests {
     async fn test_move_errors() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4796,12 +4902,22 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_setting_w_invalid_coords() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_setting_w_invalid_coords(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
         let mut ds = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4859,12 +4975,22 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_array_shift() -> Result<(), Box<dyn Error>> {
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_array_shift(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
         let mut session = repo.writable_session("main").await?;
         let shape = ArrayShape::new(vec![(20, 2)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;
@@ -4906,8 +5032,13 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_flush() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_flush(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository(spec_version).await;
         let mut session = repository.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
 
@@ -4965,7 +5096,7 @@ mod tests {
     /// Group: /foo/bar
     /// Array: /foo/bar/some-array
     async fn get_repo_for_conflict() -> Result<Repository, Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+        let repository = create_memory_store_repository(SpecVersionBin::current()).await;
         let mut ds = repository.writable_session("main").await?;
 
         ds.add_group("/foo/bar".try_into().unwrap(), Bytes::new()).await?;
@@ -5173,8 +5304,13 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_rebase_without_fast_forward() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_rebase_without_fast_forward(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
 
         let mut ds = repo.writable_session("main").await?;
 
@@ -5234,9 +5370,13 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_rebase_fast_forwarding_over_chunk_writes() -> Result<(), Box<dyn Error>>
-    {
-        let repo = create_memory_store_repository().await;
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    async fn test_rebase_fast_forwarding_over_chunk_writes(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
 
         let mut ds = repo.writable_session("main").await?;
 
@@ -5671,9 +5811,14 @@ mod tests {
     }
 
     #[tokio_test]
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
     /// Tests `commit_rebasing` retries the proper number of times when there are conflicts
-    async fn test_commit_rebasing_attempts() -> Result<(), Box<dyn Error>> {
-        let repo = Arc::new(create_memory_store_repository().await);
+    async fn test_commit_rebasing_attempts(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = Arc::new(create_memory_store_repository(spec_version).await);
         let mut session = repo.writable_session("main").await?;
         session
             .add_array("/array".try_into().unwrap(), basic_shape(), None, Bytes::new())
@@ -5815,6 +5960,7 @@ mod tests {
         use super::Session;
         use super::create_memory_store_repository;
         use super::{node_paths, shapes_and_dims};
+        use crate::format::format_constants::SpecVersionBin;
 
         #[derive(Clone, Debug)]
         enum RepositoryTransition {
@@ -6000,7 +6146,8 @@ mod tests {
                 _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
             ) -> Self::SystemUnderTest {
                 let session = tokio::runtime::Runtime::new().unwrap().block_on(async {
-                    let repo = create_memory_store_repository().await;
+                    let repo =
+                        create_memory_store_repository(SpecVersionBin::current()).await;
                     repo.writable_session("main").await.unwrap()
                 });
                 TestRepository { session, runtime: Runtime::new().unwrap() }
