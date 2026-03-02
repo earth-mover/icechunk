@@ -284,8 +284,8 @@ class Model:
             self.commits = {
                 k: v for k, v in self.commits.items() if k in self.reachable_snapshots()
             }
-            # The ops log now contains synthetic entries reconstructed from
-            # the snapshot graph, so we skip exact comparison after migration.
+            # The ops log now contains synthetic entries with synthetic ordering
+            # reconstructed from the snapshot graph, so we skip exact comparison after migration.
             self.ops_log = [RepoMigratedUpdateModel(self.spec_version, 2)]
             self.migrated = True
             self.spec_version = 2
@@ -1084,21 +1084,20 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         if self.model.migrated:
             # The model tracks RepoMigratedUpdate + all post-migration ops.
-            # The actual log also has synthetic entries before that, which may
-            # be truncated by pagination. Compare only the entries the model knows about.
+            # This is because the synthetically reconstructed ops log upon migration
+            # will not match what the model has recorded.
+            # Compare only the post-migration entries the model knows about.
             n = len(self.model.ops_log)
-            assert self.model.ops_log[::-1] == actual_ops[:n]
-        else:
-            # non-None backup paths must be unique
-            all_backups = [
-                op.backup_path for op in actual_ops if op.backup_path is not None
-            ]
-            assert len(all_backups) == len(set(all_backups))
+            actual_ops = actual_ops[:n]
 
-            assert self.model.ops_log[::-1] == actual_ops
-            assert isinstance(
-                actual_ops[-1], ic.RepoInitializedUpdate | ic.RepoMigratedUpdate
-            )
+        # non-None backup paths must be unique
+        all_backups = [op.backup_path for op in actual_ops if op.backup_path is not None]
+        assert len(all_backups) == len(set(all_backups))
+
+        assert self.model.ops_log[::-1] == actual_ops
+        assert isinstance(
+            actual_ops[-1], ic.RepoInitializedUpdate | ic.RepoMigratedUpdate
+        )
 
 
 VersionControlStateMachine.TestCase.settings = settings(
