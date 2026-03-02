@@ -53,7 +53,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         return kwargs
 
     @pytest.fixture(params=[1, 2])
-    async def store(self, request, store_kwargs: dict[str, Any]) -> IcechunkStore:
+    async def store(
+        self, request: pytest.FixtureRequest, store_kwargs: dict[str, Any]
+    ) -> IcechunkStore:  # type: ignore[override]
         read_only = store_kwargs.pop("read_only")
         repo = Repository.open_or_create(**store_kwargs, create_version=request.param)
         if read_only:
@@ -63,8 +65,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         return session.store
 
     @pytest.fixture(params=[1, 2])
-    async def store_not_open(
-        self, request, store_kwargs: dict[str, Any]
+    async def store_not_open(  # type: ignore[override]
+        self, request: pytest.FixtureRequest, store_kwargs: dict[str, Any]
     ) -> IcechunkStore:
         read_only = store_kwargs.pop("read_only")
         repo = Repository.open_or_create(**store_kwargs, create_version=request.param)
