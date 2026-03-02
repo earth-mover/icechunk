@@ -21,58 +21,87 @@ use icechunk::{
     ops::stats::repo_chunks_storage,
 };
 use icechunk_macros::tokio_test;
+use rstest::rstest;
 
 mod common;
 use common::Permission;
 
 #[tokio_test]
-pub async fn test_repo_chunks_storage_in_memory() -> Result<(), Box<dyn std::error::Error>>
-{
+#[rstest]
+#[case::v1(SpecVersionBin::V1dot0)]
+#[case::v2(SpecVersionBin::V2dot0)]
+pub async fn test_repo_chunks_storage_in_memory(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     let storage = new_in_memory_storage().await?;
-    do_test_repo_chunks_storage(storage).await
+    do_test_repo_chunks_storage(storage, spec_version).await
 }
 
 #[tokio_test]
-pub async fn test_repo_chunks_storage_in_minio() -> Result<(), Box<dyn std::error::Error>>
-{
-    let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
-    let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
-    do_test_repo_chunks_storage(storage).await
+#[rstest]
+#[case::v1(SpecVersionBin::V1dot0)]
+#[case::v2(SpecVersionBin::V2dot0)]
+pub async fn test_repo_chunks_storage_in_minio(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let prefix =
+        format!("test_stats_{:?}_{}", spec_version, Utc::now().timestamp_millis());
+    let storage =
+        common::make_minio_integration_storage(prefix, &Permission::Modify)?;
+    do_test_repo_chunks_storage(storage, spec_version).await
 }
 
 #[tokio_test]
+#[rstest]
+#[case::v1(SpecVersionBin::V1dot0)]
+#[case::v2(SpecVersionBin::V2dot0)]
 #[ignore = "needs credentials from env"]
-pub async fn test_repo_chunks_storage_in_aws() -> Result<(), Box<dyn std::error::Error>> {
-    let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
+pub async fn test_repo_chunks_storage_in_aws(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let prefix =
+        format!("test_stats_{:?}_{}", spec_version, Utc::now().timestamp_millis());
     let storage = common::make_aws_integration_storage(prefix)?;
-    do_test_repo_chunks_storage(storage).await
+    do_test_repo_chunks_storage(storage, spec_version).await
 }
 
 #[tokio_test]
+#[rstest]
+#[case::v1(SpecVersionBin::V1dot0)]
+#[case::v2(SpecVersionBin::V2dot0)]
 #[ignore = "needs credentials from env"]
-pub async fn test_repo_chunks_storage_in_tigris() -> Result<(), Box<dyn std::error::Error>>
-{
-    let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
+pub async fn test_repo_chunks_storage_in_tigris(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let prefix =
+        format!("test_stats_{:?}_{}", spec_version, Utc::now().timestamp_millis());
     let storage = common::make_tigris_integration_storage(prefix)?;
-    do_test_repo_chunks_storage(storage).await
+    do_test_repo_chunks_storage(storage, spec_version).await
 }
 
 #[tokio_test]
+#[rstest]
+#[case::v1(SpecVersionBin::V1dot0)]
+#[case::v2(SpecVersionBin::V2dot0)]
 #[ignore = "needs credentials from env"]
-pub async fn test_repo_chunks_storage_in_r2() -> Result<(), Box<dyn std::error::Error>> {
-    let prefix = format!("test_distributed_writes_{}", Utc::now().timestamp_millis());
+pub async fn test_repo_chunks_storage_in_r2(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let prefix =
+        format!("test_stats_{:?}_{}", spec_version, Utc::now().timestamp_millis());
     let storage = common::make_r2_integration_storage(prefix)?;
-    do_test_repo_chunks_storage(storage).await
+    do_test_repo_chunks_storage(storage, spec_version).await
 }
 
 pub async fn do_test_repo_chunks_storage(
     storage: Arc<dyn Storage + Send + Sync>,
+    spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings().await?;
     let asset_manager = Arc::new(AssetManager::new_no_cache(
         storage.clone(),
         storage_settings.clone(),
-        SpecVersionBin::current(),
+        spec_version,
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
@@ -84,7 +113,7 @@ pub async fn do_test_repo_chunks_storage(
         }),
         Arc::clone(&storage),
         Default::default(),
-        None,
+        Some(spec_version),
         true,
     )
     .await?;
@@ -223,14 +252,18 @@ pub async fn do_test_repo_chunks_storage(
 }
 
 #[tokio_test]
-pub async fn test_virtual_chunk_deduplication() -> Result<(), Box<dyn std::error::Error>>
-{
+#[rstest]
+#[case::v1(SpecVersionBin::V1dot0)]
+#[case::v2(SpecVersionBin::V2dot0)]
+pub async fn test_virtual_chunk_deduplication(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     let storage = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
     let asset_manager = Arc::new(AssetManager::new_no_cache(
         storage.clone(),
         storage_settings.clone(),
-        SpecVersionBin::current(),
+        spec_version,
         1,
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
@@ -242,7 +275,7 @@ pub async fn test_virtual_chunk_deduplication() -> Result<(), Box<dyn std::error
         }),
         storage,
         Default::default(),
-        None,
+        Some(spec_version),
         true,
     )
     .await?;
