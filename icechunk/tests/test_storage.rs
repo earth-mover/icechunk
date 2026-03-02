@@ -959,7 +959,7 @@ pub async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
             std::fs::metadata(repo_path.join("snapshots/1CECHNKREP0F1RSTCMT0"))?.len();
         assert_eq!(expected, data.len() as u64);
 
-        let lm = storage.get_object_last_modified("config.yaml", &settings).await?;
+        let lm = storage.get_object_last_modified("repo", &settings).await?;
         assert!(lm < Utc::now());
     }
 
