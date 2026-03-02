@@ -13,6 +13,9 @@ use thiserror::Error;
 use tokio::io::AsyncReadExt as _;
 use tracing::{debug, error, info, warn};
 
+/// Offset added to snapshot timestamps for synthetic branch/tag events.
+const SYNTHETIC_EVENT_OFFSET: TimeDelta = TimeDelta::milliseconds(1);
+
 use crate::{
     Repository, StorageError,
     error::ICError,
@@ -192,15 +195,15 @@ fn generate_migration_ops_log(
         ));
     }
 
-    // Followed by a BranchCreatedUpdate + NewCommitUpdate for each unique snapshot
-    // in the ancestry of each branch. BranchCreatedUpdate is timestamped to the
-    // root snapshot in the branch's ancestry (the first snapshot).
-    // Snapshots shared across branches are attributed to the first branch processed.
+    // BranchCreatedUpdate + NewCommitUpdate for each unique snapshot in the ancestry
+    // of each branch. Snapshots shared across branches are attributed to the first
+    // branch processed.
     for (name, ancestry) in branches {
-        let branch_root_time = ancestry.last().map(|s| s.flushed_at).unwrap_or(root_time);
+        // BranchCreatedUpdate is 1ms after the branch tip snapshot
+        let branch_tip_time = ancestry.first().map(|s| s.flushed_at).unwrap_or(root_time);
         entries.push((
             UpdateType::BranchCreatedUpdate { name: name.to_string() },
-            branch_root_time,
+            branch_tip_time + SYNTHETIC_EVENT_OFFSET,
         ));
 
         for snap in ancestry.iter().rev() {
@@ -216,36 +219,33 @@ fn generate_migration_ops_log(
         }
     }
 
-    // Each tag gets a TagCreatedUpdate at the flushed_at of the snapshot it points to
+    // TagCreatedUpdate is 1ms after the snapshot it points to
     for (name, snap_id) in tags {
         let time = snap_times.get(snap_id).copied().unwrap_or(root_time);
-        entries.push((UpdateType::TagCreatedUpdate { name: name.to_string() }, time));
+        entries.push((
+            UpdateType::TagCreatedUpdate { name: name.to_string() },
+            time + SYNTHETIC_EVENT_OFFSET,
+        ));
     }
 
-    // Deleted tags: TagCreatedUpdate + TagDeletedUpdate, both at the pointed snapshot's time
+    // Deleted tags: TagCreatedUpdate 1ms after snapshot, TagDeletedUpdate 2ms after
     for (name, snap_id) in deleted_tags {
         let time = snap_times.get(snap_id).copied().unwrap_or(root_time);
-        entries.push((UpdateType::TagCreatedUpdate { name: name.to_string() }, time));
+        entries.push((
+            UpdateType::TagCreatedUpdate { name: name.to_string() },
+            time + SYNTHETIC_EVENT_OFFSET,
+        ));
         entries.push((
             UpdateType::TagDeletedUpdate {
                 name: name.to_string(),
                 previous_snap_id: snap_id.clone(),
             },
-            time,
+            time + SYNTHETIC_EVENT_OFFSET + SYNTHETIC_EVENT_OFFSET,
         ));
     }
 
-    // Sort each update chronologically by timestamp, preserving insertion order for ties
+    // Sort chronologically, then reverse for newest-first order
     entries.sort_by_key(|(_, time)| *time);
-
-    // Deduplicate timestamps: ensure strictly increasing, then reverse order as required by UpdateInfo.previous_updates
-    let micros = TimeDelta::microseconds(1);
-    for i in 1..entries.len() {
-        if entries[i].1 <= entries[i - 1].1 {
-            entries[i].1 = entries[i - 1].1 + micros;
-        }
-    }
-
     entries.reverse();
     entries
 }
