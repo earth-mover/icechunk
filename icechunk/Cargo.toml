@@ -23,7 +23,7 @@ rand = "0.10.0"
 thiserror = "2.0.18"
 serde_json = "1.0.149"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
-serde_with = { version = "3.16.1", features = ["hex"] }
+serde_with = { version = "3.17.0", features = ["hex"] }
 quick_cache = "0.6.18"
 base32 = "0.5.1"
 chrono = { version = "0.4.44", features = ["serde"] }
@@ -88,7 +88,7 @@ port_check = "0.3.0"
 pretty_assertions = "1.4.1"
 proptest = "1.10.0"
 proptest-state-machine = "0.7.0"
-tempfile = "3.25.0"
+tempfile = "3.26.0"
 test-log = { version = "0.2.19", default-features = false, features = [
   "trace",
   "color",
