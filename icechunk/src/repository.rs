@@ -668,7 +668,7 @@ impl Repository {
         Ok(repo.metadata()?)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, metadata))]
     pub async fn update_metadata(
         &self,
         metadata: &SnapshotProperties,
@@ -699,7 +699,7 @@ impl Repository {
         Ok(final_metadata)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, metadata))]
     pub async fn set_metadata(
         &self,
         metadata: &SnapshotProperties,
