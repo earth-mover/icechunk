@@ -247,6 +247,8 @@ def test_repository_open_no_list_bucket(any_spec_version: int | None) -> None:
 
     # Opening the repo with a storage without ListBucket permissions
     repo = Repository.open(storage=readonly_storage, config=config)
+    if any_spec_version:
+        assert repo.spec_version == any_spec_version
     readonly = repo.readonly_session(branch="main")
     group = zarr.open_group(store=readonly.store, mode="r")
     air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
