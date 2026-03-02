@@ -430,7 +430,7 @@ impl Session {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, node))]
     pub async fn delete_node(&mut self, node: NodeSnapshot) -> SessionResult<()> {
         match node {
             NodeSnapshot { node_data: NodeData::Group, path: node_path, .. } => {
@@ -650,7 +650,7 @@ impl Session {
     // Record the write, referencing or delete of a chunk
     //
     // Caller has to write the chunk before calling this.
-    #[instrument(skip(self))]
+    #[instrument(skip(self, data))]
     pub async fn set_chunk_ref(
         &mut self,
         path: Path,
@@ -684,7 +684,7 @@ impl Session {
 
     // Helper function that accepts a NodeSnapshot instead of a path,
     // this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
-    #[instrument(skip(self))]
+    #[instrument(skip(self, node, data))]
     async fn set_node_chunk_ref(
         &mut self,
         node: NodeSnapshot,
@@ -1001,7 +1001,7 @@ impl Session {
         all_chunks(&self.asset_manager, self.change_set(), self.snapshot_id()).await
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, node))]
     pub async fn all_node_chunks<'a>(
         &'a self,
         node: &'a NodeSnapshot,
