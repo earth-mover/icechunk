@@ -129,7 +129,7 @@ async fn fetch_deleted_tag_snapshot_id(
     let ref_path = format!("{V1_REFS_FILE_PATH}/tag.{tag_name}/ref.json");
     match repo.storage().get_object(repo.storage_settings(), &ref_path, None).await {
         Ok((mut reader, ..)) => {
-            let mut data = Vec::with_capacity(1_024);
+            let mut data = Vec::with_capacity(40);
             if reader.read_to_end(&mut data).await.is_err() {
                 return None;
             }
