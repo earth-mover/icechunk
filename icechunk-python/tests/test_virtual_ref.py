@@ -60,13 +60,13 @@ async def test_write_minio_virtual_refs(
     )
 
     # Open the store
-    repo = Repository.open_or_create(
+    repo = await Repository.open_or_create_async(
         storage=in_memory_storage(),
         config=config,
         authorize_virtual_chunk_access=credentials,
         create_version=any_spec_version,
     )
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     array = zarr.create_array(
@@ -210,7 +210,7 @@ async def test_write_minio_virtual_refs(
         # TODO: we should include the key and other info in the exception
         await store.get("c/0/0/2", prototype=buffer_prototype)
 
-    all_locations = set(session.all_virtual_chunk_locations())
+    all_locations = set(await session.all_virtual_chunk_locations_async())
     assert f"s3://testbucket/{prefix}/non-existing" in all_locations
     assert f"s3://testbucket/{prefix}/chunk-1" in all_locations
     assert f"s3://testbucket/{prefix}/chunk-2" in all_locations
@@ -226,7 +226,7 @@ async def test_write_minio_virtual_refs(
     with pytest.raises(IcechunkError, match="chunk has changed"):
         await store.get("c/3/0/1", prototype=buffer_prototype)
 
-    _snapshot_id = session.commit("Add virtual refs")
+    _snapshot_id = await session.commit_async("Add virtual refs")
 
 
 @pytest.mark.parametrize(
@@ -257,13 +257,13 @@ async def test_public_virtual_refs(
     container = VirtualChunkContainer(url_prefix, store_config)
     config.set_virtual_chunk_container(container)
 
-    repo = Repository.open_or_create(
+    repo = await Repository.open_or_create_async(
         storage=local_filesystem_storage(f"{tmpdir}/virtual-{container_type}"),
         config=config,
         authorize_virtual_chunk_access={url_prefix: None},
         create_version=any_spec_version,
     )
-    session = repo.writable_session("main")
+    session = await repo.writable_session_async("main")
     store = session.store
 
     root = zarr.Group.from_store(store=store, zarr_format=3)
