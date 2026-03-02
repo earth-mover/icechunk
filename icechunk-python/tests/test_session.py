@@ -1,10 +1,12 @@
 import pickle
 import tempfile
-from typing import cast
+import time
+from typing import Any, cast
 
 import pytest
 
 import zarr
+import zarr.core.array
 from icechunk import (
     ChunkType,
     ForkSession,
@@ -17,8 +19,10 @@ from icechunk import (
     in_memory_storage,
     local_filesystem_storage,
     local_filesystem_store,
+    s3_storage,
 )
 from icechunk.distributed import merge_sessions
+from tests.conftest import Permission
 
 
 @pytest.mark.parametrize("use_async", [True, False])
@@ -192,3 +196,81 @@ def test_session_mode() -> None:
     assert writable.mode == SessionMode.WRITABLE
     writable.commit("test", allow_empty=True)
     assert writable.mode == SessionMode.READONLY  # type: ignore[comparison-overlap]
+
+
+def test_repository_open_no_list_bucket(any_spec_version: int | None) -> None:
+    prefix = "test-repo__" + str(time.time())
+    (access_key_id, secret_access_key) = Permission.MODIFY.keys()
+    write_storage = s3_storage(
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        region="us-east-1",
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+    )
+    (access_key_id, secret_access_key) = Permission.READONLY.keys()
+    readonly_storage = s3_storage(
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        region="us-east-1",
+        bucket="testbucket",
+        prefix=prefix,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+    )
+
+    config = RepositoryConfig.default()
+
+    # Create a repo with one array, with modify permissions
+    repo = Repository.create(
+        storage=write_storage, config=config, spec_version=any_spec_version
+    )
+    session = repo.writable_session("main")
+    store = session.store
+    group = zarr.group(store=store, overwrite=True)
+    air_temp = group.create_array("air_temp", shape=(1, 4), chunks=(1, 1), dtype="i4")
+    air_temp[0, 2] = 42
+    snapshot_id = session.commit("init")
+    repo.create_tag("new_tag", snapshot_id)
+    repo.create_branch("new_branch", snapshot_id)
+
+    session = repo.writable_session("main")
+    store = session.store
+    group = zarr.open_group(store=store, mode="a")
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
+    air_temp[0, 3] = 41
+    session.commit("tag and branch")
+
+    # Opening the repo with a storage without ListBucket permissions
+    repo = Repository.open(storage=readonly_storage, config=config)
+    if any_spec_version:
+        assert repo.spec_version == any_spec_version
+    readonly = repo.readonly_session(branch="main")
+    group = zarr.open_group(store=readonly.store, mode="r")
+    air_temp = cast("zarr.core.array.Array[Any]", group["air_temp"])
+    assert air_temp[0, 2] == 42
+    assert air_temp[0, 3] == 41
+    assert air_temp.chunks == (1, 1)
+    assert air_temp.size == 4
+
+    assert len(list(repo.ancestry(branch="main"))) == 3
+    assert len(list(repo.ancestry(branch="new_branch"))) == 2
+    if repo.spec_version == 1:
+        # This should fail for v1 spec, since listing branches and tags
+        # try to list from the object store instead of reading from
+        # repo_info like in a v2 repo
+        with pytest.raises(IcechunkError) as e:
+            assert repo.list_branches() == set(["main"])
+            assert "error listing objects" in e.value.message
+        with pytest.raises(IcechunkError) as e:
+            assert len(list(repo.list_tags())) == 1
+            assert "error listing objects" in e.value.message
+        # skip ops log check, need repo v2
+    else:
+        assert repo.list_branches() == set(["main", "new_branch"])
+        assert list(repo.list_tags()) == ["new_tag"]
+        assert len(list(repo.ops_log())) == 5

@@ -209,6 +209,7 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
         spec_version: Option<SpecVersionBin>,
+        check_clean_root: bool,
     ) -> RepositoryResult<Self> {
         debug!("Creating Repository");
         if !storage.can_write().await? {
@@ -241,9 +242,9 @@ impl Repository {
             config.max_concurrent_requests(),
         ));
 
-        if !storage.root_is_clean(&storage_settings).await? {
+        if check_clean_root && !storage.root_is_clean(&storage_settings).await? {
             return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
-        }
+        };
 
         let asset_manager_c = Arc::clone(&asset_manager);
         let storage_c = Arc::clone(&storage);
@@ -442,14 +443,21 @@ impl Repository {
         storage: Arc<dyn Storage + Send + Sync>,
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
         create_version: Option<SpecVersionBin>,
+        check_clean_root: bool,
     ) -> RepositoryResult<Self> {
         let user_settings = config.as_ref().and_then(|c| c.storage().cloned());
         if Self::fetch_spec_version(Arc::clone(&storage), user_settings).await?.is_some()
         {
             Self::open(config, storage, authorize_virtual_chunk_access).await
         } else {
-            Self::create(config, storage, authorize_virtual_chunk_access, create_version)
-                .await
+            Self::create(
+                config,
+                storage,
+                authorize_virtual_chunk_access,
+                create_version,
+                check_clean_root,
+            )
+            .await
         }
     }
 
@@ -1891,7 +1899,8 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
 
         // default config is not stored in repo info
         assert_eq!(repo.config(), &RepositoryConfig::default());
@@ -1942,9 +1951,14 @@ mod tests {
             }),
             ..RepositoryConfig::default()
         };
-        let repo =
-            Repository::create(Some(config), Arc::clone(&storage), HashMap::new(), None)
-                .await?;
+        let repo = Repository::create(
+            Some(config),
+            Arc::clone(&storage),
+            HashMap::new(),
+            None,
+            true,
+        )
+        .await?;
         assert_eq!(repo.config().inline_chunk_threshold_bytes(), 20);
         assert_eq!(repo.config().caching().num_chunk_refs(), 21);
 
@@ -1973,7 +1987,8 @@ mod tests {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
 
         let initial_branches = repo.list_branches().await?;
         assert_eq!(initial_branches, BTreeSet::from(["main".into()]));
@@ -2106,7 +2121,7 @@ mod tests {
             ..RepositoryConfig::default()
         };
         let repository =
-            Repository::create(Some(config), storage, HashMap::new(), None).await?;
+            Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
 
         let mut session = repository.writable_session("main").await?;
 
@@ -2131,6 +2146,7 @@ mod tests {
             Arc::clone(&storage),
             HashMap::new(),
             None,
+            true,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -3235,7 +3251,8 @@ mod tests {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage = Arc::clone(&backend);
 
-        let repository = Repository::create(None, storage, HashMap::new(), None).await?;
+        let repository =
+            Repository::create(None, storage, HashMap::new(), None, true).await?;
 
         let mut session = repository.writable_session("main").await?;
 
@@ -3415,9 +3432,10 @@ mod tests {
                 .await
                 .expect("Creating local storage failed");
 
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+            .await?;
         assert!(
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None)
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
                 .await
                 .is_err()
         );
@@ -3432,7 +3450,7 @@ mod tests {
                 .expect("Creating local storage failed");
 
         assert!(
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None)
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
                 .await
                 .is_err()
         );
@@ -3448,6 +3466,7 @@ mod tests {
             Arc::clone(&storage),
             HashMap::new(),
             Some(SpecVersionBin::V2dot0),
+            true,
         )
         .await?;
         let repo = Repository::open(None, storage, Default::default()).await?;
@@ -3463,6 +3482,7 @@ mod tests {
             Arc::clone(&storage),
             HashMap::new(),
             Some(SpecVersionBin::V1dot0),
+            true,
         )
         .await?;
         let repo = Repository::open(None, storage, Default::default()).await?;
@@ -3474,7 +3494,8 @@ mod tests {
     async fn set_metadata() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
         assert_eq!(repo.get_metadata().await?, Default::default());
 
         let meta =
@@ -3488,7 +3509,8 @@ mod tests {
     async fn update_metadata() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
 
         let meta =
             [("foo".to_string(), "bar".into()), ("number".to_string(), 42.into())].into();
@@ -3531,6 +3553,7 @@ mod tests {
             Arc::clone(&storage),
             HashMap::new(),
             None,
+            true,
         )
         .await?;
 

@@ -42,12 +42,12 @@ jobs:
         run: sudo snap install --edge --classic just
       - name: Stand up RustFS
         run: |
-          docker compose up -d rustfs
+          docker compose up -d rustfs_init
 
       - name: Wait for RustFS to be ready
         run: |
           for _ in {1..10}; do
-              if curl --silent --fail http://rustfs:9000/health; then
+              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
               break
               fi
               sleep 3
@@ -290,13 +290,13 @@ jobs:
       - name: Stand up RustFS
         working-directory: icechunk
         run: |
-          docker compose up -d rustfs
+          docker compose up -d rustfs_init
 
       - name: Wait for RustFS to be ready
         working-directory: icechunk
         run: |
           for _ in {1..10}; do
-              if curl --silent --fail http://rustfs:9000/health; then
+              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
               break
               fi
               sleep 3
