@@ -46,7 +46,7 @@ check-deps *args='':
 
 [doc("Run all Rust examples (skips limits_chunk_refs, large_manifests)")]
 run-all-examples:
-  for example in icechunk/examples/*.rs; do if [[ ${example} =~ "limits_chunk_refs|large_manifests" ]]; then continue; fi; cargo run --profile {{profile}} --example "$(basename "${example%.rs}")"; done
+  for example in icechunk/examples/*.rs; do if [[ ${example} =~ limits_chunk_refs|large_manifests ]]; then continue; fi; cargo run --profile {{profile}} --example "$(basename "${example%.rs}")"; done
 
 [doc("Fast Rust pre-commit: format + lint (~3s)")]
 pre-commit-fast:
