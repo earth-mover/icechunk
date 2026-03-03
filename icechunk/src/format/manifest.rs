@@ -650,17 +650,24 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::roundtrip_serialization_tests;
     use crate::strategies::{
-        ShapeDim, limited_width_manifest_extents, manifest_extents, shapes_and_dims,
+        ShapeDim, limited_width_manifest_extents, manifest_extents, manifest_ref,
+        manifest_splits, shapes_and_dims,
     };
     use icechunk_macros;
     use itertools::{all, multizip};
     use proptest::collection::vec;
     use proptest::prelude::*;
     use std::error::Error;
-    use test_strategy::proptest;
+    use test_strategy::proptest as alt_proptest;
 
-    #[proptest]
+    roundtrip_serialization_tests!(
+        serialize_and_deserialize_manifest_ref - manifest_ref,
+        serialize_and_deserialize_manifest_splits - manifest_splits
+    );
+
+    #[alt_proptest]
     fn test_property_extents_set_ops_same(
         #[strategy(manifest_extents(4))] e: ManifestExtents,
     ) {
@@ -669,7 +676,7 @@ mod tests {
         prop_assert_eq!(e.overlap_with(&e), Overlap::Complete);
     }
 
-    #[proptest]
+    #[alt_proptest]
     fn test_property_extents_set_ops(
         #[strategy(manifest_extents(4))] e1: ManifestExtents,
         #[strategy(manifest_extents(4))] e2: ManifestExtents,
@@ -697,7 +704,7 @@ mod tests {
         }
     }
 
-    #[proptest]
+    #[alt_proptest]
     fn test_property_extents_widths(
         #[strategy(limited_width_manifest_extents(4))] extent1: ManifestExtents,
         #[strategy(vec(0..100, 4))] delta_left: Vec<i32>,
@@ -842,7 +849,7 @@ mod tests {
         Ok(())
     }
 
-    #[proptest]
+    #[alt_proptest]
     fn test_manifest_split_from_edges(
         #[strategy(shapes_and_dims(Some(5)))] shape_dim: ShapeDim,
     ) {
