@@ -1092,18 +1092,15 @@ async def test_long_ops_log(spec_version: int | None) -> None:
     updates = [update async for update in repo.ops_log_async()]
     assert len(updates) == NUM_BRANCHES + 1
 
-    t = type(updates[0])
-    assert t == ic.BranchCreatedUpdate
+    assert isinstance(updates[0].kind, ic.UpdateType.BranchCreated)
     assert updates[0].backup_path is None
 
-    t = type(updates[-1])
-    assert t == ic.RepoInitializedUpdate
+    assert isinstance(updates[-1].kind, ic.UpdateType.RepoInitialized)
     assert updates[-1].backup_path is not None
 
     for i in range(1, NUM_BRANCHES):
         assert updates[i].backup_path is not None
-        t = type(updates[i])
-        assert t == ic.BranchCreatedUpdate
+        assert isinstance(updates[i].kind, ic.UpdateType.BranchCreated)
 
     # TODO: add check for next updates page path
 

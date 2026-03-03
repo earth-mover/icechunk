@@ -16,7 +16,7 @@ from icechunk._icechunk_python import (
     SnapshotInfo,
     Storage,
     StorageSettings,
-    UpdateType,
+    Update,
 )
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
@@ -760,19 +760,19 @@ class Repository:
             branch=branch, tag=tag, snapshot_id=snapshot_id
         )
 
-    def ops_log(self) -> Iterator[UpdateType]:
+    def ops_log(self) -> Iterator[Update]:
         """
         Get a summary of changes to the repository
         """
 
         # the returned object is both an Async and Sync iterator
         res = cast(
-            Iterator[UpdateType],
+            Iterator[Update],
             self._repository.async_ops_log(),
         )
         return res
 
-    def ops_log_async(self) -> AsyncIterator[UpdateType]:
+    def ops_log_async(self) -> AsyncIterator[Update]:
         """
         Get a summary of changes to the repository
         """

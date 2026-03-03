@@ -514,8 +514,8 @@ impl PyUpdateType {
     }
 }
 
-#[pyclass(name = "Update", eq)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[pyclass(name = "Update")]
+#[derive(Debug)] //, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PyUpdate {
     #[pyo3(get)]
     kind: PyUpdateType,
@@ -527,7 +527,21 @@ pub(crate) struct PyUpdate {
     backup_path: Option<String>,
 }
 
-fn mk_update_type(
+/*
+impl<'py> IntoPyObject<'py> for PyUpdate {
+    type Target = PyDict;
+
+    type Output = Bound<'py, Self::Target>;
+
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        self.0.into_pyobject(py)
+    }
+}
+*/
+
+fn mk_update(
     update: &UpdateType,
     updated_at: DateTime<Utc>,
     backup_path: Option<String>,
@@ -1323,8 +1337,7 @@ impl PyRepository {
                 .map_err(PyIcechunkStoreError::RepositoryError)?
                 .map_err(PyIcechunkStoreError::RepositoryError)
                 .and_then(|(ts, update, repo_path)| async move {
-                    mk_update_type(&update, ts, repo_path)
-                        .map_err(PyIcechunkStoreError::from)
+                    mk_update(&update, ts, repo_path).map_err(PyIcechunkStoreError::from)
                 });
 
             let prepared_list = Arc::new(Mutex::new(ops.err_into().boxed()));
