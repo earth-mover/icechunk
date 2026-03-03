@@ -9,9 +9,12 @@ use criterion::{
 };
 use futures::{StreamExt, stream};
 use icechunk::config::{ManifestConfig, ManifestPreloadConfig, ManifestSplittingConfig};
+use icechunk::conflicts::detector::ConflictDetector;
 use icechunk::format::manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef};
 use icechunk::format::snapshot::{ArrayShape, DimensionName};
 use icechunk::format::{ByteRange, ChunkIndices, Path};
+#[cfg(feature = "logs")]
+use icechunk::initialize_tracing;
 use icechunk::repository::{Repository, VersionInfo};
 use icechunk::session::{Session, get_chunk};
 use icechunk::storage::new_in_memory_storage;
@@ -307,7 +310,7 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
 }
 
 /// Benchmarks committing a million chunks
-/// split across 1-1000 manifests
+/// by sequential appending such that each commit is a new manifest.
 fn benchmark_append_split_manifests(c: &mut Criterion) {
     let mut group = c.benchmark_group("append_split_manifests");
     group.sample_size(10).sampling_mode(criterion::SamplingMode::Flat);
@@ -316,7 +319,7 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
 
     let path: Path = "/temperature".try_into().unwrap();
     let chunk_size = 1u32;
-    let num_chunks = 1_000_000u32;
+    let num_chunks = 10_000_000u32;
     let num_manifests = 50u32;
 
     let split_size = num_chunks.div_ceil(num_manifests);
@@ -324,7 +327,7 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
 
     for kind in [ChunkKind::Inline, ChunkKind::Virtual] {
         group.bench_with_input(
-            BenchmarkId::new("chunk_type", kind.to_string()),
+            BenchmarkId::new("", kind.to_string()),
             &kind,
             |b, &kind| {
                 // We need to do these shenanigans so we can time the commit and not the set.
@@ -369,10 +372,91 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmarks committing a million chunks with rebasing.
+/// All sessions are opened from the same branch tip, then committed
+/// sequentially — the first is a fast-forward, the rest must rebase.
+fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
+    #[cfg(feature = "logs")]
+    initialize_tracing(None);
+    let mut group = c.benchmark_group("commit_rebase_split_manifests");
+    // group.sample_size(10).sampling_mode(criterion::SamplingMode::Flat);
+
+    let rt = Runtime::new().unwrap();
+
+    let path: Path = "/temperature".try_into().unwrap();
+    let chunk_size = 1u32;
+    let num_chunks = 1_000_000u32;
+    let num_manifests = 50u32;
+
+    let split_size = num_chunks.div_ceil(num_manifests);
+    let split_config = ManifestSplittingConfig::with_size(split_size);
+
+    for kind in [ChunkKind::Inline, ChunkKind::Virtual] {
+        group.bench_with_input(
+            BenchmarkId::new("type", kind.to_string()),
+            &kind,
+            |b, &kind| {
+                b.iter_custom(|_iters| {
+                    // Fresh repo per sample
+                    let shape =
+                        ArrayShape::new(vec![(num_chunks.into(), chunk_size.into())])
+                            .unwrap();
+                    let repo = rt.block_on(async {
+                        setup_repo(path.clone(), shape, None, Some(split_config.clone()))
+                            .await
+                            .unwrap()
+                    });
+
+                    // Create all sessions from the same branch tip
+                    let sessions: Vec<_> = (0..num_manifests)
+                        .map(|batch| {
+                            rt.block_on(async {
+                                let mut session =
+                                    repo.writable_session("main").await.unwrap();
+                                set_chunks(
+                                    path.clone(),
+                                    &mut session,
+                                    batch * split_size..(batch + 1) * split_size,
+                                    kind,
+                                )
+                                .await
+                                .unwrap();
+                                session
+                            })
+                        })
+                        .collect();
+
+                    let mut total = std::time::Duration::ZERO;
+                    let start = std::time::Instant::now();
+                    rt.block_on(async {
+                        for mut session in sessions {
+                            session
+                                .commit_rebasing(
+                                    &ConflictDetector,
+                                    10,
+                                    "foo",
+                                    None,
+                                    |_| async {},
+                                    |_| async {},
+                                )
+                                .await
+                                .unwrap();
+                        }
+                    });
+                    total += start.elapsed();
+                    total
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_append_split_manifests,
     benchmark_commit_split_manifests,
+    benchmark_commit_rebase_split_manifests,
     benchmark_set_chunks,
     benchmark_get_chunks
 );
