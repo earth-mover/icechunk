@@ -118,6 +118,7 @@ const CHUNK_PREFIX: &str = "chunks/";
 const REF_PREFIX: &str = "refs";
 const TRANSACTION_PREFIX: &str = "transactions/";
 const CONFIG_PATH: &str = "config.yaml";
+const V2_REPO_INFO_PATH: &str = "repo";
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash, PartialOrd, Ord)]
 pub struct ETag(pub String);
@@ -571,6 +572,16 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
             Some(Ok(_)) => Ok(false),
             Some(Err(err)) => Err(err),
         }
+    }
+
+    async fn has_v2_repo_info(&self) -> StorageResult<bool> {
+        let mut stream = self.list_objects(&self.default_settings(), "").await?;
+        while let Some(item) = stream.next().await {
+            if item?.id == V2_REPO_INFO_PATH {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     async fn list_chunks(
