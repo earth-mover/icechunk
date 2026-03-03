@@ -5,7 +5,7 @@ The benchmarks are written using `criterion.rs` as harness.
 2. Run the specific `commit_split_manifests` group of benchmarks with `cargo bench --bench manifest -- "commit_split_manifests"`. The name is set by statements like `c.benchmark_group("commit_split_manifests");`
 3. Run those benchmarks only for inline chunks: `cargo bench --bench manifest -- "commit_split_manifests/inline"`
 4. Run those benchmarks only for inline chunks and specifically 1000 manifests: `cargo bench --bench manifest -- "commit_split_manifests/virtual/1000$"`
-5. Examine logs for a particular benchmark: `ICECHUNK_LOG=icechunk=trace cargo bench --features logs --bench manifest -- "commit_rebase_split_manifests/inline" --test --nocapture`. YOu will need to add the `initialize_tracing(None)` line at the beginning of the benchmark function.
+5. Examine logs for a particular benchmark: `ICECHUNK_LOG=icechunk=trace cargo bench --features logs --bench manifest -- "commit_rebase_split_manifests/inline" --test --nocapture`. You will need to add the `initialize_tracing(None)` line at the beginning of the benchmark function.
 
 Settings for the default `bench` profile have been edited to include some, but not all, optimizations for faster compiles and `debuginfo` for profiling.
 
@@ -17,12 +17,11 @@ Upon completion, you can find HTML output in `target/criterion/`.
 
 In general, it's possible to profile any example, benchmark, or test.
 1. Compile the required executable with `--profile bench` (or `release`)
-2. Run that executable with appropriate command line args
-
+2. Run that executable with your chosen profiler and the appropriate command line args.
 
 The drawback is that its annoying and requires figuring the name of the compiled executable, and appropriate command line flags to actually execute the code.
 
-For example, on macOS to profile memory allocations one would type out something like
+For example, to profile memory allocations on macOS one would type out something like
 ``` sh
 xcrun xctrace record \
     --template 'Allocations' \
@@ -38,14 +37,11 @@ An alternative is to find useful cargo subcommands that make our life easy.
 
 samply is an extremely good cross-platform profiler. I have found it quite useful, though reading the traces takes some effort given our heavy use of iterators.
 
-
 ``` sh
-cargo samply --test
+cargo samply --bench manifest -- "commit_rebase_split_manifests/type/inline" --test
 ```
 
-``` sh
-cargo samply --test
-```
+will run that benchmark once and open up a profile in the Firefox Profiler.
 
 ## [`cargo-instruments`](https://github.com/cmyr/cargo-instruments)
 
