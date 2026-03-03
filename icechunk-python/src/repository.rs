@@ -515,7 +515,7 @@ impl PyUpdateType {
 }
 
 #[pyclass(name = "Update")]
-#[derive(Debug)] //, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PyUpdate {
     #[pyo3(get)]
     kind: PyUpdateType,
@@ -527,19 +527,18 @@ pub(crate) struct PyUpdate {
     backup_path: Option<String>,
 }
 
-/*
-impl<'py> IntoPyObject<'py> for PyUpdate {
-    type Target = PyDict;
-
-    type Output = Bound<'py, Self::Target>;
-
-    type Error = PyErr;
-
-    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
-        self.0.into_pyobject(py)
+#[pymethods]
+impl PyUpdate {
+    fn __repr__(&self) -> Cow<'static, str> {
+        format!(
+            "Update(kind={}, updated_at='{}', backup_path={:?})",
+            self.kind.__repr__(),
+            self.updated_at,
+            self.backup_path
+        )
+        .into()
     }
 }
-*/
 
 fn mk_update(
     update: &UpdateType,
