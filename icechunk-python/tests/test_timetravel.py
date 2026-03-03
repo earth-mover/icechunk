@@ -626,26 +626,30 @@ Arrays deleted:
     assert actual == await repo.lookup_snapshot_async(actual.id)
 
     if any_spec_version is None or any_spec_version > 1:
-        ops = [type(op) for op in repo.ops_log()]
+        ops = [op.kind for op in repo.ops_log()]
         flush_or_commit = (
-            [ic.NewCommitUpdate]
+            [ic.UpdateType.NewCommit]
             if not using_flush
-            else [ic.BranchResetUpdate, ic.NewDetachedSnapshotUpdate]
+            else [ic.UpdateType.BranchReset, ic.UpdateType.NewDetachedSnapshot]
         )
         expected = (
-            [ic.BranchCreatedUpdate, ic.TagCreatedUpdate, ic.BranchDeletedUpdate]
+            [
+                ic.UpdateType.BranchCreated,
+                ic.UpdateType.TagCreated,
+                ic.UpdateType.BranchDeleted,
+            ]
             + flush_or_commit
             + [
-                ic.BranchCreatedUpdate,
+                ic.UpdateType.BranchCreated,
             ]
             + flush_or_commit
             + flush_or_commit
             + [
-                ic.RepoInitializedUpdate,
+                ic.UpdateType.RepoInitialized,
             ]
         )
 
-        assert ops == expected
+        assert all(isinstance(o, e) for (o, e) in zip(ops, expected, strict=True))
 
 
 async def test_branch_reset_async(any_spec_version: int | None) -> None:
@@ -1117,9 +1121,9 @@ def test_ops_log_commit_snap_id() -> None:
     snap_id = session.commit("commit 1")
 
     change = next(repo.ops_log())
-    assert isinstance(change, ic.NewCommitUpdate)
-    assert change.new_snap_id == snap_id
-    assert change.branch == "main"
+    assert isinstance(change.kind, ic.UpdateType.NewCommit)
+    assert change.kind.new_snap_id == snap_id
+    assert change.kind.branch == "main"
 
 
 def test_ops_log_amend_snap_id() -> None:
@@ -1139,8 +1143,8 @@ def test_ops_log_amend_snap_id() -> None:
     array[:] = 43
     new_snap_id = session.amend("amended")
 
-    change = next(repo.ops_log())
-    assert isinstance(change, ic.CommitAmendedUpdate)
+    change = next(repo.ops_log()).kind
+    assert isinstance(change, ic.UpdateType.CommitAmended)
     assert change.new_snap_id == new_snap_id
     assert change.previous_snap_id == old_snap_id
     assert change.branch == "main"
