@@ -8,7 +8,7 @@ use icechunk::repository::{Repository, VersionInfo};
 use napi_derive::napi;
 use tokio::sync::RwLock;
 
-use crate::config::JsRepositoryConfig;
+use crate::config::{JsRepositoryConfig, JsStorageSettings};
 use crate::errors::IntoNapiResult;
 use crate::session::JsSession;
 use crate::storage::JsStorage;
@@ -62,6 +62,7 @@ impl JsRepository {
         config: Option<JsRepositoryConfig>,
         spec_version: Option<u32>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<JsCredentials>>>,
+        check_clean_root: Option<bool>,
     ) -> napi::Result<JsRepository> {
         let config = convert_config(config)?;
         let version = spec_version
@@ -69,9 +70,15 @@ impl JsRepository {
             .transpose()
             .map_napi_err()?;
         let creds = convert_credentials(authorize_virtual_chunk_access);
-        let repo = Repository::create(config, Arc::clone(&storage.0), creds, version)
-            .await
-            .map_napi_err()?;
+        let repo = Repository::create(
+            config,
+            Arc::clone(&storage.0),
+            creds,
+            version,
+            check_clean_root.unwrap_or(true),
+        )
+        .await
+        .map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 
@@ -95,6 +102,7 @@ impl JsRepository {
         config: Option<JsRepositoryConfig>,
         spec_version: Option<u32>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<JsCredentials>>>,
+        check_clean_root: Option<bool>,
     ) -> napi::Result<JsRepository> {
         let config = convert_config(config)?;
         let version = spec_version
@@ -102,16 +110,25 @@ impl JsRepository {
             .transpose()
             .map_napi_err()?;
         let creds = convert_credentials(authorize_virtual_chunk_access);
-        let repo =
-            Repository::open_or_create(config, Arc::clone(&storage.0), creds, version)
-                .await
-                .map_napi_err()?;
+        let repo = Repository::open_or_create(
+            config,
+            Arc::clone(&storage.0),
+            creds,
+            version,
+            check_clean_root.unwrap_or(true),
+        )
+        .await
+        .map_napi_err()?;
         Ok(JsRepository(Arc::new(RwLock::new(repo))))
     }
 
     #[napi]
-    pub async fn exists(storage: &JsStorage) -> napi::Result<bool> {
-        Repository::exists(Arc::clone(&storage.0)).await.map_napi_err()
+    pub async fn exists(
+        storage: &JsStorage,
+        storage_settings: Option<JsStorageSettings>,
+    ) -> napi::Result<bool> {
+        let settings = storage_settings.map(|s| s.into());
+        Repository::exists(Arc::clone(&storage.0), settings).await.map_napi_err()
     }
 
     #[napi]
