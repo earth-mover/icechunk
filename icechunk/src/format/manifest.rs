@@ -381,7 +381,7 @@ impl Manifest {
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024 * 1024);
 
-        let mut all = sorted_chunks.iter().peekable();
+        let mut all = sorted_chunks.into_iter().peekable();
 
         let mut array_manifests = Vec::with_capacity(1);
         while let Some(current_node) = all.peek().map(|chunk| &chunk.node).cloned() {
@@ -585,10 +585,10 @@ fn checksum(payload: &generated::ChunkRef<'_>) -> Option<Checksum> {
 
 fn mk_chunk_ref<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
-    chunk: &ChunkInfo,
+    chunk: ChunkInfo,
 ) -> flatbuffers::WIPOffset<generated::ChunkRef<'bldr>> {
     let index = Some(builder.create_vector(chunk.coord.0.as_slice()));
-    match &chunk.payload {
+    match chunk.payload {
         ChunkPayload::Inline(bytes) => {
             let bytes = builder.create_vector(bytes.as_ref());
             let args = generated::ChunkRefArgs {
