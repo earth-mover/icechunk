@@ -361,11 +361,15 @@ impl RepoInfo {
                 (ut, dt, backup_path)
             })
         });
-        // assert backup path is only present when there are previous updates
+        // A backup_path points to the previous repo info file. It is only meaningful
+        // when there are previous updates (you can't back up what doesn't exist).
+        // However, previous updates CAN exist without a backup_path: during migration,
+        // synthetic ops log entries are generated with no prior repo info file to
+        // reference. (This differs from RepoInitializedUpdate, which has neither
+        // previous updates nor a backup path.)
         assert!(
-            last_update.is_none() && backup_path.is_none()
-                || last_update.is_some() && backup_path.is_some(),
-            "A backup path must be provided if and only if there are previous updates"
+            backup_path.is_none() || last_update.is_some(),
+            "A backup path must not be provided without previous updates"
         );
 
         // Reject updates whose timestamp is not strictly newer than the top of the ops log
