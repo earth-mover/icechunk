@@ -606,7 +606,15 @@ pub fn lookup_index_by_key<'a, T: ::flatbuffers::Follow<'a> + 'a, K: Ord>(
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::roundtrip_serialization_tests;
+    use crate::strategies::{attributes_id, spec_version};
     use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
+
+    roundtrip_serialization_tests!(
+        serialize_and_deserialize_attribute_ids - attributes_id,
+        serialize_and_deserialize_spec_version_bin - spec_version
+    );
 
     #[icechunk_macros::test]
     fn test_object_id_serialization() {

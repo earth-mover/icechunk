@@ -20,6 +20,7 @@ from numpy.testing import assert_array_equal
 
 import icechunk as ic
 import zarr
+from tests.conftest import Permission
 
 UPDATED_SPLITTING_CONFIG = ic.ManifestSplittingConfig.from_dict(
     {
@@ -49,10 +50,12 @@ def mk_repo(
         )
         container = ic.VirtualChunkContainer("s3://testbucket/", virtual_store_config)
         config.set_virtual_chunk_container(container)
+    access_key_id, secret_access_key = Permission.READONLY.keys()
     credentials = ic.containers_credentials(
         {
             "s3://testbucket": ic.s3_credentials(
-                access_key_id="minio123", secret_access_key="minio123"
+                access_key_id=access_key_id,
+                secret_access_key=secret_access_key,
             )
         }
     )

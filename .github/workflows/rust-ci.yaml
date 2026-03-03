@@ -59,7 +59,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
           for _ in {1..30}; do
-              if curl --silent --fail http://rustfs:9000/health; then
+              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
               break
               fi
               sleep 1

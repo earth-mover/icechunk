@@ -14,7 +14,7 @@ doctest *args='':
 
 [doc("Run all Rust tests with RUST_LOG enabled (e.g. `just test-logs debug`)")]
 test-logs level *args='':
-  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --all-targets {{args}} -- --nocapture
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --all-targets --nocapture {{args}}
 
 [doc("Compile tests without running them")]
 compile-tests *args='':
