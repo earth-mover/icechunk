@@ -244,8 +244,20 @@ fn generate_migration_ops_log(
         ));
     }
 
-    // Sort chronologically, then reverse for newest-first order
+    // Sort chronologically (oldest first)
     entries.sort_by_key(|(_, time)| *time);
+
+    // Ensure strictly increasing timestamps: if an entry collides with or is
+    // before the previous one, bump it by 1μs.  This mirrors the real ops log
+    // where every operation gets a unique timestamp.
+    for i in 1..entries.len() {
+        let prev_time = entries[i - 1].1;
+        if entries[i].1 <= prev_time {
+            entries[i].1 = prev_time + TimeDelta::microseconds(1);
+        }
+    }
+
+    // Reverse for newest-first order
     entries.reverse();
     entries
 }
@@ -748,13 +760,13 @@ mod tests {
             "TagCreatedUpdate (idx {deleted_tag_created_idx}) should be newer than NewCommitUpdate (idx {commit_idx})"
         );
 
-        // Verify timestamps are non-increasing (newest first)
+        // Verify timestamps are strictly decreasing (newest first)
         for window in ops_log.windows(2) {
             let (time_a, _, _) = &window[0];
             let (time_b, _, _) = &window[1];
             assert!(
-                time_a >= time_b,
-                "ops log timestamps must be non-increasing: {time_a} should be >= {time_b}"
+                time_a > time_b,
+                "ops log timestamps must be strictly decreasing: {time_a} should be > {time_b}"
             );
         }
 

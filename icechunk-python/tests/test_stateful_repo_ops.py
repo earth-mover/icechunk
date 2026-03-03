@@ -1069,18 +1069,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             return
         actual_ops = list(self.repo.ops_log())
 
-        # ops should be ordered: strictly decreasing for normal repos,
-        # non-increasing after migration (synthetic entries can share timestamps)
-        if self.model.migrated:
-            assert all(
-                first.updated_at >= second.updated_at
-                for (first, second) in itertools.pairwise(actual_ops)
-            )
-        else:
-            assert all(
-                first.updated_at > second.updated_at
-                for (first, second) in itertools.pairwise(actual_ops)
-            )
+        # ops should be strictly decreasing in both normal and migrated repos
+        assert all(
+            first.updated_at > second.updated_at
+            for (first, second) in itertools.pairwise(actual_ops)
+        )
 
         if self.model.migrated:
             # The model tracks RepoMigratedUpdate + all post-migration ops.
