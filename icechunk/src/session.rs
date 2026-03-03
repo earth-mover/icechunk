@@ -2065,8 +2065,8 @@ impl<'a> FlushProcess<'a> {
                         {
                             all_chunks_vec.push(Ok(ChunkInfo {
                                 node: node_id.clone(),
-                                coord: idx.clone(),
-                                payload: payload.clone(),
+                                coord: idx,
+                                payload: payload,
                             }));
                         }
                     }
