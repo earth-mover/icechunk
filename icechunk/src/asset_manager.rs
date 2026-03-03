@@ -596,7 +596,11 @@ impl AssetManager {
     pub async fn update_repo_info(
         &self,
         retry_settings: &storage::RetriesSettings,
-        mut update: impl FnMut(Arc<RepoInfo>, &str) -> RepositoryResult<Arc<RepoInfo>>,
+        mut update: impl FnMut(
+            Arc<RepoInfo>,
+            &str,
+            VersionInfo,
+        ) -> RepositoryResult<Arc<RepoInfo>>,
     ) -> RepositoryResult<VersionInfo> {
         let max_attempts = retry_settings.max_tries().get() as usize;
 
@@ -619,7 +623,7 @@ impl AssetManager {
         loop {
             let (repo_info, repo_version) = self.fetch_repo_info().await?;
             let backup_path = self.backup_path_for_repo_info();
-            let new_repo = update(repo_info, backup_path.as_str())?;
+            let new_repo = update(repo_info, backup_path.as_str(), repo_version.clone())?;
             trace!(attempts, "Attempting to update repo object");
             match write_repo_info(
                 Arc::clone(&new_repo),
@@ -1770,15 +1774,16 @@ mod test {
             SpecVersionBin::current(),
             (&initial).try_into()?,
             100,
+            None,
         ));
         manager.create_repo_info(repo_info.clone()).await?;
 
-        assert_eq!(manager.use_repo_info_cache, false);
+        assert!(!manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), None);
 
         let (fetched_repo_info, _) = manager.fetch_repo_info().await?;
 
-        assert_eq!(manager.use_repo_info_cache, false);
+        assert!(!manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), None);
 
         assert_eq!(repo_info.clone(), fetched_repo_info);
@@ -1804,17 +1809,18 @@ mod test {
             SpecVersionBin::current(),
             (&initial).try_into()?,
             100,
+            None,
         ));
         let new_version = manager.create_repo_info(repo_info.clone()).await?;
 
         let cached = Some((repo_info.clone(), new_version.clone()));
 
-        assert_eq!(manager.use_repo_info_cache, true);
+        assert!(manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), cached);
 
         let (fetched_repo_info, version) = manager.fetch_repo_info().await?;
 
-        assert_eq!(manager.use_repo_info_cache, true);
+        assert!(manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), cached);
 
         assert_eq!(repo_info.clone(), fetched_repo_info);

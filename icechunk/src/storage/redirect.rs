@@ -90,7 +90,8 @@ impl RedirectStorage {
         })?;
         let res = client.execute(req).await.map_err(|e| {
             StorageError::from(StorageErrorKind::BadRedirect(format!(
-                "Request to redirect url ({}) failed, cannot find target Storage instance: {e}", &self.url
+                "Request to redirect url ({}) failed, cannot find target Storage instance: {e}",
+                &self.url
             )))
         })?;
         let storage_url = res.headers().get("location").ok_or_else(|| {

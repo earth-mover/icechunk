@@ -255,7 +255,10 @@ def to_dict(config: ManifestSplittingConfig) -> SplitSizesDict:
 
 
 def upgrade_icechunk_repository(
-    repo: Repository, *, dry_run: bool = True, delete_unused_v1_files: bool = True
+    repo: Repository,
+    *,
+    dry_run: bool,
+    delete_unused_v1_files: bool = True,
 ) -> None:
     """
     Migrate a repository to the latest version of Icechunk.
@@ -269,6 +272,16 @@ def upgrade_icechunk_repository(
 
     The operation is usually fast, but it can take several minutes if there is a very
     large version history (thousands of snapshots).
+
+    Parameters
+    ----------
+    repo : Repository
+        The repository to upgrade.
+    dry_run : bool
+        If True, perform a dry run without actually upgrading. If False, perform
+        the upgrade.
+    delete_unused_v1_files : bool, optional
+        If True (the default), delete unused v1 files after upgrading.
     """
     _upgrade_icechunk_repository(
         repo._repository, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files

@@ -267,6 +267,24 @@ impl From<&generated::ManifestFileInfo> for ManifestFileInfo {
 
 pub type SnapshotProperties = BTreeMap<String, Value>;
 
+/// Insert a key-value pair into the `__icechunk` namespace object within snapshot properties.
+/// Creates the `__icechunk` object if it doesn't exist.
+pub fn inject_icechunk_metadata(
+    properties: &mut SnapshotProperties,
+    key: &str,
+    value: Value,
+) {
+    match properties.get_mut("__icechunk") {
+        Some(Value::Object(map)) => {
+            map.insert(key.to_string(), value);
+        }
+        _ => {
+            properties
+                .insert("__icechunk".to_string(), serde_json::json!({ key: value }));
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Eq, Hash)]
 pub struct ManifestFileInfo {
     pub id: ManifestId,
@@ -453,7 +471,12 @@ impl Snapshot {
     }
 
     pub fn initial(spec_version: SpecVersionBin) -> IcechunkResult<Self> {
-        let properties = [("__root".to_string(), serde_json::Value::from(true))].into();
+        let mut properties = SnapshotProperties::default();
+        inject_icechunk_metadata(
+            &mut properties,
+            "is_root",
+            serde_json::Value::from(true),
+        );
         let nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::new();
         Self::from_iter(
             Some(Self::INITIAL_SNAPSHOT_ID),
@@ -755,8 +778,18 @@ mod tests {
     use crate::format::{IcechunkFormatError, ObjectId};
 
     use super::*;
+    use crate::{
+        roundtrip_serialization_tests,
+        strategies::{manifest_file_info, node_snapshot},
+    };
     use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
     use std::iter::{self};
+
+    roundtrip_serialization_tests!(
+        serialize_and_deserialize_node_snapshot - node_snapshot,
+        serialize_and_deserialize_manifest_file_info - manifest_file_info
+    );
 
     #[icechunk_macros::test]
     fn test_get_node() -> Result<(), Box<dyn std::error::Error>> {

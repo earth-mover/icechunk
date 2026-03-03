@@ -40,6 +40,16 @@ debug = "line-tables-only" # allow file:line info in backtraces
 [profile.dev.package."*"]
 opt-level = 2
 
+# Full debug profile for use with lldb/gdb
+[profile.dbg]
+inherits = "dev"
+opt-level = 0
+debug = true
+
+[profile.dbg.package."*"]
+opt-level = 0
+debug = true
+
 # The CI profile optimizes for reduced compile times, since they
 # dominate runtime in github actions, and cache between runs
 # doesn't always work well.

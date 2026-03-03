@@ -22,19 +22,25 @@ This guide describes the local development workflow for:
 - Building the [Documentation](#building-documentation)
 - Setup instructions for additional resources (e.g. [Local Storage Docker Containers](#docker-setup-for-local-storage-testing))
 
-### Python Development Workflow
+### Setting up your development environment
 
-The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
+We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rust dependencies in the development workflow. This will ensure that your development workflow reflects the CI as closely as possible. If you do not want to use pixi we provide more manual alternatives in tabs.
 
-```bash
-cd icechunk-python
-```
+=== "pixi (Recommended)"
+    Activate the developer shell (all following commands should be run within)
 
-#### Prerequisites
+    ```bash
+    pixi shell -m icechunk-python/pyproject.toml
+    ```
+    !!! Usage without pixi shell
+        You could run all commands below using this pattern:
+        ```shell
+        pixi run -m icechunk-python/pyproject.toml <your-command>
+        ```
+        This is used e.g. in the [Readthedocs build](https://github.com/earth-mover/icechunk/blob/main/.readthedocs.yaml).
 
-#### Setting up your development environment
 
-=== "uv (Recommended)"
+=== "uv"
 
     The easiest way to get started is with [uv](https://docs.astral.sh/uv/), which handles virtual environments and dependencies:
 
@@ -50,19 +56,6 @@ cd icechunk-python
     ```
 
     **Why these steps?** Icechunk is a mixed Python/Rust project. The `maturin-import-hook` enables incremental Rust compilation (7-20 seconds) instead of full rebuilds (5+ minutes) every time you run tests or import the module. This makes development significantly faster.
-
-    Now you can run tests and other commands:
-
-    ```bash
-    # Run tests (Rust changes will automatically trigger incremental rebuild)
-    uv run pytest
-
-    # Run type checking
-    uv run mypy python tests
-
-    # Run linting
-    uv run ruff check python
-    ```
 
 === "Venv"
 
@@ -92,16 +85,42 @@ cd icechunk-python
     maturin develop
     ```
 
+All build, test, and code quality tasks are managed with [`just`](https://github.com/casey/just). Run `just --list` to see all available recipes with descriptions.
+
+### Python Development Workflow
+
+
 #### Testing
 
-=== "uv"
+=== "pixi (Recommended)"
+    The Python code is developed in the `icechunk-python` subdirectory. When you use pixi all commands can be run from the repo root.
 
     ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
+    just pytest
+    ```
+
+=== "uv"
+    The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
+
+    ```bash
+    cd icechunk-python
+    ```
+
+    ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
     uv run pytest
     ```
 === "Venv/Conda"
 
+    The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
+
     ```bash
+    cd icechunk-python
+    ```
+
+    ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
     pytest
     ```
 
@@ -111,7 +130,20 @@ cd icechunk-python
 
 !!! important
 
-    The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions.
+    The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions. If this is not set up some tests will fail
+
+
+#### Code Quality Checks
+
+=== "pixi (Recommended)"
+    The Python code is developed in the `icechunk-python` subdirectory. When you use pixi all commands can be run from the repo root.
+
+    ```bash
+    just ruff-format
+    just ruff # add --fix to automatically apply safe fixes
+    just mypy
+    just py-pre-commit
+    ```
 
 
 #### Testing with Upstream Dependencies
@@ -196,7 +228,12 @@ uv run scripts/check_xarray_docs_sync.py --update-known-diffs
 
 #### Prerequisites
 
-You need to have already created and activated a virtual environment ([see above](#python-development-workflow)), because the full rust build will also compile the python bindings.
+Make sure you have activated your [development environment](#setting-up-your-development-environment) before proceeding, because the full rust build will also compile the python bindings.
+
+##### just, cargo-nextest, cargo-deny
+
+!!! note
+    If you use pixi and have activated the shell per instructions [above](#setting-up-your-development-environment) you can skip to the next section!
 
 Install the `just` command runner (used for build tasks and pre-commit hooks):
 
@@ -219,7 +256,13 @@ cargo install cargo-nextest
 or check the [installation instructions](https://nexte.st/docs/installation/)
 for pre-built binaries or using package managers.
 
-#### WASM Compiler Setup (macOS)
+To run all code quality checks you will also need `cargo-deny`:
+
+```bash
+cargo install cargo-deny
+```
+
+##### WASM Compiler Setup (macOS)
 
 To compile `icechunk` for `wasm32-wasip1-threads`, you need the Rust target and a C toolchain with WebAssembly support (needed by `zstd-sys`).
 
@@ -282,15 +325,9 @@ cargo test test_name
 
 !!! important
 
-    The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions.
+    The full Rust test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions.
 
 #### Code Quality
-
-To run all code quality checks you will also need `cargo-deny`:
-
-```bash
-cargo install cargo-deny
-```
 
 We use a tiered pre-commit system for fast development:
 
@@ -355,64 +392,28 @@ pre-commit run rust-pre-commit-ci --hook-stage manual
 
 The documentation is built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/).
 
-**System dependencies**: Install Cairo graphics library for image processing:
-
-=== "macOS"
-
-    ```bash
-    brew install cairo
-    ```
-
-    If `mkdocs` fails to find Cairo, set the library path:
-
-    ```bash
-    export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
-    ```
-
-    You can add this to your `~/.zshrc` to make it permanent.
-
-=== "Ubuntu/Debian"
-
-    ```bash
-    sudo apt-get install libcairo2-dev
-    ```
-
-=== "Fedora/RHEL"
-
-    ```bash
-    sudo dnf install cairo-devel
-    ```
-
-From the `icechunk-python` directory:
+Make sure to [activate](#setting-up-your-development-environment) the pixi shell before running these commands.
 
 ```bash
-# Install icechunk with docs dependencies
-uv sync --group docs
-
 # Start the MkDocs development server
-cd docs
-uv run mkdocs serve
+just docs-serve
 ```
-
-!!! note "Use `--livereload` for file watching"
-    Due to a [Click 8.3.x bug](https://github.com/mkdocs/mkdocs/issues/4032), file watching may not work without the `--livereload` flag. Always use `mkdocs serve --livereload` to ensure automatic rebuilds when you edit files.
 
 The development server will start at `http://127.0.0.1:8000` with live reload enabled.
 
 **Build static site**:
 
 ```bash
-cd docs
-uv run mkdocs build
+just docs-build
 ```
 
 This builds the site to `docs/.site` directory.
 
 **Tips**:
 
-- Use `mkdocs serve --dirty` to only rebuild changed files (faster for iterative development)
+- Use `just docs-serve --dirty` to only rebuild changed files (faster for iterative development)
 - You may need to restart if you make changes to `mkdocs.yml`
-- For debugging the doc build logs, check out [docs-output-filter](https://github.com/ianhi/docs-output-filter) (you can run `uv run docs-output-filter -- mkdocs serve --livereload` once installed). *This also works to debug remote builds like RTD with the `--url` flag* 😍
+- For debugging the doc build logs, check out [docs-output-filter](https://github.com/ianhi/docs-output-filter) (you can run `docs-output-filter -- just docs-serve` once installed). *`docs-output-filter` also works to debug remote builds like RTD with the `--url` flag*
 
 ### Docker setup for local storage testing
 

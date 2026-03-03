@@ -10,12 +10,6 @@ def test_migration_1_to_2_dry_run(tmpdir: Path) -> None:
     repo = ic.Repository.open(storage)
     assert repo.spec_version == 1
 
-    # running by default with dry_run=True
-    ic.upgrade_icechunk_repository(repo)
-
-    repo = ic.Repository.open(storage)
-    assert repo.spec_version == 1
-
     # running with explicit dry_run=True
     ic.upgrade_icechunk_repository(repo, dry_run=True)
     repo = ic.Repository.open(storage)

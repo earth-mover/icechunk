@@ -23,3 +23,6 @@ icechunk-python/uv.lock
 
 # Jetbrains IDE
 .idea/
+# pixi environments
+.pixi/*
+!.pixi/config.toml

@@ -485,6 +485,10 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult>;
 
+    /// List objects in storage whose keys start with the given prefix.
+    ///
+    /// Returns a stream of [`ListInfo`] entries, each containing the object's key and size in bytes.
+    /// Pass an empty prefix to list all objects in the repository's storage root.
     async fn list_objects<'a>(
         &'a self,
         settings: &Settings,
@@ -693,7 +697,10 @@ pub fn new_s3_storage(
         && (endpoint.contains("fly.storage.tigris.dev")
             || endpoint.contains("t3.storage.dev"))
     {
-        return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
+        return Err(StorageError::from(StorageErrorKind::Other(
+            "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead"
+                .to_string(),
+        )));
     }
 
     let st = S3Storage::new(
@@ -855,7 +862,10 @@ pub async fn new_s3_object_store_storage(
         && (endpoint.contains("fly.storage.tigris.dev")
             || endpoint.contains("t3.storage.dev"))
     {
-        return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
+        return Err(StorageError::from(StorageErrorKind::Other(
+            "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead"
+                .to_string(),
+        )));
     }
     let storage =
         ObjectStorage::new_s3(bucket, prefix, credentials, Some(config)).await?;

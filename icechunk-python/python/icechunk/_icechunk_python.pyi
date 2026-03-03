@@ -1657,6 +1657,7 @@ class PyRepository:
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         spec_version: int | None = None,
+        check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
     async def create_async(
@@ -1666,6 +1667,7 @@ class PyRepository:
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         spec_version: int | None = None,
+        check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
     def open(
@@ -1691,6 +1693,7 @@ class PyRepository:
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         create_version: int | None = None,
+        check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
     async def open_or_create_async(
@@ -1700,6 +1703,7 @@ class PyRepository:
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
         create_version: int | None = None,
+        check_clean_root: bool = True,
     ) -> PyRepository: ...
     @staticmethod
     def exists(
@@ -2483,6 +2487,25 @@ class Storage:
     ) -> Storage: ...
     def __repr__(self) -> str: ...
     def default_settings(self) -> StorageSettings: ...
+    def list_objects(
+        self, settings: StorageSettings | None = None, prefix: str | None = None
+    ) -> list[tuple[str, int]]:
+        """List objects in the storage backend, optionally filtered by a key prefix.
+
+        Parameters
+        ----------
+        settings : StorageSettings | None
+            Optional storage settings to override the defaults (retries, concurrency, etc.).
+        prefix : str | None
+            If provided, only objects whose keys start with this prefix are returned.
+            When ``None`` or empty, all objects under the repository root are listed.
+
+        Returns
+        -------
+        list[tuple[str, int]]
+            A list of ``(key, size_in_bytes)`` tuples for each object found.
+        """
+        ...
 
 class VersionSelection(Enum):
     """Enum for selecting the which version of a conflict
