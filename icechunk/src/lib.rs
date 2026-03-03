@@ -66,9 +66,11 @@ pub use store::Store;
 
 #[cfg(test)]
 pub(crate) mod test_utils {
+    #[allow(unused_imports)]
     use rstest::rstest;
     use rstest_reuse::{self, *};
 
+    #[allow(unused_imports)]
     use crate::format::format_constants::SpecVersionBin;
 
     #[template]
