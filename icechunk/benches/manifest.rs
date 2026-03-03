@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::ops::Range;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -66,13 +67,13 @@ async fn setup_repo(
 async fn set_chunks(
     path: Path,
     session: &mut Session,
-    num_chunks: u32,
+    chunks: Range<u32>,
     kind: ChunkKind,
 ) -> Result<(), Box<dyn Error>> {
     match kind {
         ChunkKind::Inline => {
             let bytes = Bytes::copy_from_slice(&42i8.to_be_bytes());
-            for idx in 0..num_chunks {
+            for idx in chunks {
                 let payload = session.get_chunk_writer().unwrap()(bytes.clone()).await?;
                 session
                     .set_chunk_ref(path.clone(), ChunkIndices(vec![idx]), Some(payload))
@@ -80,7 +81,7 @@ async fn set_chunks(
             }
         }
         ChunkKind::Virtual => {
-            for idx in 0..num_chunks {
+            for idx in chunks {
                 let payload = ChunkPayload::Virtual(VirtualChunkRef {
                     location: VirtualChunkLocation::from_absolute_path(&format!(
                         "s3://bucket/chunk_{idx}"
@@ -133,7 +134,7 @@ fn benchmark_set_chunks(c: &mut Criterion) {
                             rt.block_on({
                                 let path = path.clone();
                                 async {
-                                    set_chunks(path, &mut session, num_chunks, kind)
+                                    set_chunks(path, &mut session, 0..num_chunks, kind)
                                         .await
                                         .unwrap();
                                 }
@@ -174,9 +175,14 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                 .await
                 .unwrap();
             let mut write_session = repo.writable_session("main").await.unwrap();
-            set_chunks(path.clone(), &mut write_session, num_chunks, ChunkKind::Inline)
-                .await
-                .unwrap();
+            set_chunks(
+                path.clone(),
+                &mut write_session,
+                0..num_chunks,
+                ChunkKind::Inline,
+            )
+            .await
+            .unwrap();
             write_session.commit("foo", None).await.unwrap();
 
             let session = repo
@@ -279,7 +285,7 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
                                 .unwrap();
                                 let mut session =
                                     repo.writable_session("main").await.unwrap();
-                                set_chunks(path, &mut session, num_chunks, kind)
+                                set_chunks(path, &mut session, 0..num_chunks, kind)
                                     .await
                                     .unwrap();
                                 session
@@ -300,8 +306,72 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmarks committing a million chunks
+/// split across 1-1000 manifests
+fn benchmark_append_split_manifests(c: &mut Criterion) {
+    let mut group = c.benchmark_group("append_split_manifests");
+    group.sample_size(10).sampling_mode(criterion::SamplingMode::Flat);
+
+    let rt = Runtime::new().unwrap();
+
+    let path: Path = "/temperature".try_into().unwrap();
+    let chunk_size = 1u32;
+    let num_chunks = 1_000_000u32;
+    let num_manifests = 50u32;
+
+    let split_size = num_chunks.div_ceil(num_manifests);
+    let split_config = ManifestSplittingConfig::with_size(split_size);
+
+    for kind in [ChunkKind::Inline, ChunkKind::Virtual] {
+        group.bench_with_input(
+            BenchmarkId::new("chunk_type", kind.to_string()),
+            &kind,
+            |b, &kind| {
+                // We need to do these shenanigans so we can time the commit and not the set.
+                b.iter_custom(|_iters| {
+                    // Fresh repo per sample
+                    let shape =
+                        ArrayShape::new(vec![(num_chunks.into(), chunk_size.into())])
+                            .unwrap();
+                    let repo = rt.block_on(async {
+                        setup_repo(path.clone(), shape, None, Some(split_config.clone()))
+                            .await
+                            .unwrap()
+                    });
+
+                    // 100 sequential commits, timing only the commit
+                    let mut total = std::time::Duration::ZERO;
+                    for batch in 0..num_manifests {
+                        let mut session = rt.block_on(async {
+                            let mut session =
+                                repo.writable_session("main").await.unwrap();
+                            set_chunks(
+                                path.clone(),
+                                &mut session,
+                                batch * split_size..(batch + 1) * split_size,
+                                kind,
+                            )
+                            .await
+                            .unwrap();
+                            session
+                        });
+                        let start = std::time::Instant::now();
+                        rt.block_on(async {
+                            session.commit("commit", None).await.unwrap();
+                        });
+                        total += start.elapsed();
+                    }
+                    total
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    benchmark_append_split_manifests,
     benchmark_commit_split_manifests,
     benchmark_set_chunks,
     benchmark_get_chunks
