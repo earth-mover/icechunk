@@ -954,6 +954,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # this method only exists to reduce verbosity of hypothesis output
         # It cannot be called `check_invariants` because that clashes
         # with an existing method on the superclass
+
+        assert self.model.spec_version == getattr(self.repo, "spec_version", 1)
         self.check_list_prefix_from_root()
         self.check_tags()
         self.check_branches()
