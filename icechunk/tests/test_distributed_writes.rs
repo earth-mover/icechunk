@@ -3,6 +3,7 @@ use chrono::Utc;
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
+use rstest_reuse::{self, *};
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use bytes::Bytes;
@@ -19,6 +20,12 @@ use tokio::task::JoinSet;
 
 mod common;
 use common::Permission;
+
+#[template]
+#[rstest]
+#[case::v1(SpecVersionBin::V1dot0)]
+#[case::v2(SpecVersionBin::V2dot0)]
+fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
 const SIZE: usize = 10;
 
@@ -97,9 +104,7 @@ async fn verify(ds: Session) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 async fn test_distributed_writes_in_minio(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -110,9 +115,7 @@ async fn test_distributed_writes_in_minio(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 #[ignore = "needs credentials from env"]
 async fn test_distributed_writes_in_aws(
     #[case] spec_version: SpecVersionBin,
@@ -124,9 +127,7 @@ async fn test_distributed_writes_in_aws(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 #[ignore = "needs credentials from env"]
 async fn test_distributed_writes_in_r2(
     #[case] spec_version: SpecVersionBin,
@@ -138,9 +139,7 @@ async fn test_distributed_writes_in_r2(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 #[ignore = "needs credentials from env"]
 async fn test_distributed_writes_in_tigris(
     #[case] spec_version: SpecVersionBin,

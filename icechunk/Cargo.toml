@@ -88,7 +88,8 @@ port_check = "0.3.0"
 pretty_assertions = "1.4.1"
 proptest = "1.10.0"
 proptest-state-machine = "0.7.0"
-rstest = "0.24"
+rstest = "0.26.1"
+rstest_reuse = "0.7.0"
 tempfile = "3.26.0"
 test-log = { version = "0.2.19", default-features = false, features = [
   "trace",

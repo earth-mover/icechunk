@@ -28,6 +28,7 @@ use icechunk_macros::tokio_test;
 use object_store::azure::AzureConfigKey;
 use pretty_assertions::{assert_eq, assert_ne};
 use rstest::rstest;
+use rstest_reuse::{self, *};
 use tempfile::tempdir;
 use tokio::{
     io::{AsyncRead, AsyncReadExt as _},
@@ -38,6 +39,12 @@ use zstd::zstd_safe::WriteBuf;
 
 mod common;
 use common::Permission;
+
+#[template]
+#[rstest]
+#[case::v1(SpecVersionBin::V1dot0)]
+#[case::v2(SpecVersionBin::V2dot0)]
+fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
 #[allow(clippy::expect_used)]
 async fn mk_s3_storage(
@@ -279,9 +286,7 @@ pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 pub async fn test_tag_write_get(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -304,9 +309,7 @@ pub async fn test_tag_write_get(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 pub async fn test_fetch_non_existing_tag(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -329,9 +332,7 @@ pub async fn test_fetch_non_existing_tag(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 pub async fn test_create_existing_tag(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -588,9 +589,7 @@ pub async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 pub async fn test_fetch_non_existing_branch(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -611,9 +610,7 @@ pub async fn test_fetch_non_existing_branch(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 #[allow(clippy::panic)]
 pub async fn test_write_config_on_empty(
     #[case] spec_version: SpecVersionBin,
@@ -652,9 +649,7 @@ pub async fn test_write_config_on_empty(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_on_existing(
     #[case] spec_version: SpecVersionBin,
@@ -695,9 +690,7 @@ pub async fn test_write_config_on_existing(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 pub async fn test_write_config_fails_on_bad_version_when_non_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -731,9 +724,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_fails_on_bad_version_when_existing(
     #[case] spec_version: SpecVersionBin,
@@ -790,9 +781,7 @@ pub async fn test_write_config_fails_on_bad_version_when_existing(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 #[allow(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_can_overwrite_with_unsafe_config(
     #[case] spec_version: SpecVersionBin,

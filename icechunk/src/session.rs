@@ -2841,6 +2841,15 @@ mod tests {
     use icechunk_macros::tokio_test;
     use itertools::{Itertools, assert_equal};
     use rstest::rstest;
+    use rstest_reuse::{self, *};
+
+    use pretty_assertions::assert_eq;
+    use proptest::prelude::{prop_assert, prop_assert_eq};
+    use storage::logging::LoggingStorage;
+    use test_strategy::proptest;
+    use tokio::sync::Barrier;
+
+    use crate::test_utils::spec_version_cases;
 
     async fn assert_manifest_count(
         asset_manager: &Arc<AssetManager>,
@@ -2852,11 +2861,6 @@ mod tests {
             "Mismatch in manifest count: expected {expected}, but got {total_manifests}",
         );
     }
-    use pretty_assertions::assert_eq;
-    use proptest::prelude::{prop_assert, prop_assert_eq};
-    use storage::logging::LoggingStorage;
-    use test_strategy::proptest;
-    use tokio::sync::Barrier;
 
     async fn create_memory_store_repository(spec_version: SpecVersionBin) -> Repository {
         let storage =
@@ -3065,9 +3069,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_repository_with_default_commit_metadata(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -3118,9 +3120,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_repository_with_splits_and_resizes(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -3544,9 +3544,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_repository_with_updates_and_writes(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -3895,9 +3893,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_basic_delete_and_flush(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -3919,9 +3915,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_basic_delete_after_flush(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -3940,9 +3934,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_commit_after_deleting_old_node(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -3963,9 +3955,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_delete_children(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -3996,9 +3986,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_delete_children_of_old_nodes(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -4019,9 +4007,7 @@ mod tests {
     }
 
     #[tokio_test(flavor = "multi_thread")]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_all_chunks_iterator(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -4095,9 +4081,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_manifests_shrink(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -4316,9 +4300,7 @@ mod tests {
     }
 
     #[tokio_test(flavor = "multi_thread")]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_commit_and_refs(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -4606,9 +4588,7 @@ mod tests {
 
     /// Integration test that fetch_snapshot_info correctly identifies initial vs non-initial.
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_fetch_snapshot_info_is_initial(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -4633,9 +4613,7 @@ mod tests {
 
     /// Test that the initial snapshot has an empty transaction log that can be fetched.
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_initial_snapshot_has_empty_transaction_log(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -4689,9 +4667,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_empty_commit(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -4733,9 +4709,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_no_double_commit(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -4907,9 +4881,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_setting_w_invalid_coords(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -4980,9 +4952,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_array_shift(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -5037,9 +5007,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_flush(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -5309,9 +5277,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_rebase_without_fast_forward(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -5375,9 +5341,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_rebase_fast_forwarding_over_chunk_writes(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -5816,9 +5780,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     /// Tests `commit_rebasing` retries the proper number of times when there are conflicts
     async fn test_commit_rebasing_attempts(
         #[case] spec_version: SpecVersionBin,

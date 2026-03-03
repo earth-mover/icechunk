@@ -1850,6 +1850,7 @@ mod tests {
     use icechunk_macros::tokio_test;
     use itertools::enumerate;
     use rstest::rstest;
+    use rstest_reuse::{self, *};
     use storage::logging::LoggingStorage;
     use tempfile::TempDir;
 
@@ -1869,6 +1870,7 @@ mod tests {
         ops::manifests::rewrite_manifests,
         session::{CommitMethod, SessionError, get_chunk},
         storage::new_in_memory_storage,
+        test_utils::spec_version_cases,
     };
 
     use super::*;
@@ -1896,11 +1898,9 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_repository_persistent_config(
-        #[case] spec_version: SpecVersionBin,
+        spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
@@ -1994,9 +1994,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_manage_refs(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -2164,9 +2162,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_resize_rewrites_manifests(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -2244,9 +2240,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_splits_change_in_session(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -2353,9 +2347,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn tests_manifest_rewriting_simple(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -2497,9 +2489,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn tests_manifest_splitting_simple(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -2769,9 +2759,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_manifest_splitting_complex_writes(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -3023,9 +3011,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_manifest_splits_merge_sessions(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -3193,9 +3179,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     async fn test_commits_with_conflicting_manifest_splits(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
@@ -3311,9 +3295,7 @@ mod tests {
     }
 
     #[tokio_test]
-    #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[apply(spec_version_cases)]
     /// Writes four arrays to a repo, checks preloading of the manifests
     ///
     /// Three of the arrays have a preload name. But on of them (time) is larger

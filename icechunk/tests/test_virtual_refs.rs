@@ -30,6 +30,7 @@ use icechunk::{
 };
 use icechunk_macros::tokio_test;
 use rstest::rstest;
+use rstest_reuse::{self, *};
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
@@ -46,6 +47,12 @@ use object_store::{
     local::LocalFileSystem,
 };
 use pretty_assertions::assert_eq;
+
+#[template]
+#[rstest]
+#[case::v1(SpecVersionBin::V1dot0)]
+#[case::v2(SpecVersionBin::V2dot0)]
+fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
 fn minio_s3_config() -> (S3Options, S3Credentials) {
     let config = S3Options {
@@ -333,9 +340,7 @@ async fn write_chunks_to_azure(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 async fn test_repository_with_local_virtual_refs(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn Error>> {
@@ -439,9 +444,7 @@ async fn test_repository_with_local_virtual_refs(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 async fn test_repository_with_minio_virtual_refs(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn Error>> {
@@ -584,9 +587,7 @@ async fn test_repository_with_minio_virtual_refs(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 async fn test_zarr_store_virtual_refs_minio_set_and_get(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -659,9 +660,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 async fn test_zarr_store_virtual_refs_azure_set_and_get(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -717,9 +716,7 @@ async fn test_zarr_store_virtual_refs_azure_set_and_get(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 async fn test_zarr_store_virtual_refs_from_public_s3(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -763,9 +760,7 @@ async fn test_zarr_store_virtual_refs_from_public_s3(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 async fn test_zarr_store_virtual_refs_from_public_gcs(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -849,9 +844,7 @@ async fn test_zarr_store_virtual_refs_from_public_gcs(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 async fn test_zarr_store_with_multiple_virtual_chunk_containers(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {

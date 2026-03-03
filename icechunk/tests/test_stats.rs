@@ -22,14 +22,19 @@ use icechunk::{
 };
 use icechunk_macros::tokio_test;
 use rstest::rstest;
+use rstest_reuse::{self, *};
 
 mod common;
 use common::Permission;
 
-#[tokio_test]
+#[template]
 #[rstest]
 #[case::v1(SpecVersionBin::V1dot0)]
 #[case::v2(SpecVersionBin::V2dot0)]
+fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
+
+#[tokio_test]
+#[apply(spec_version_cases)]
 pub async fn test_repo_chunks_storage_in_memory(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -38,9 +43,7 @@ pub async fn test_repo_chunks_storage_in_memory(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 pub async fn test_repo_chunks_storage_in_minio(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -51,9 +54,7 @@ pub async fn test_repo_chunks_storage_in_minio(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 #[ignore = "needs credentials from env"]
 pub async fn test_repo_chunks_storage_in_aws(
     #[case] spec_version: SpecVersionBin,
@@ -65,9 +66,7 @@ pub async fn test_repo_chunks_storage_in_aws(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 #[ignore = "needs credentials from env"]
 pub async fn test_repo_chunks_storage_in_tigris(
     #[case] spec_version: SpecVersionBin,
@@ -79,9 +78,7 @@ pub async fn test_repo_chunks_storage_in_tigris(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 #[ignore = "needs credentials from env"]
 pub async fn test_repo_chunks_storage_in_r2(
     #[case] spec_version: SpecVersionBin,
@@ -251,9 +248,7 @@ pub async fn do_test_repo_chunks_storage(
 }
 
 #[tokio_test]
-#[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[apply(spec_version_cases)]
 pub async fn test_virtual_chunk_deduplication(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
