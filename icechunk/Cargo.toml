@@ -98,6 +98,7 @@ test-strategy = "0.4.5"
 warp = { version = "0.4.2", features = ["server"] }
 noxious-client = "1.0"
 uuid = { version = "1.21", features = ["v4"] }
+criterion = { version = "0.8.2", features = ["async_tokio"] }
 
 [lints]
 workspace = true
@@ -125,3 +126,7 @@ cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs"]
 name = "icechunk"
 path = "src/bin/icechunk/main.rs"
 required-features = ["cli"]
+
+[[bench]]
+name = "manifest"
+harness = false

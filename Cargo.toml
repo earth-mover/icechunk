@@ -25,8 +25,11 @@ push = false
 lto = "thin"
 codegen-units = 1
 
-[profile.perf]
-inherits = "release"
+# Some settings for faster compiles when benchmarking
+[profile.bench]
+opt-level = 2
+lto = "off"
+codegen-units = 8
 debug = 1
 
 # Enable a small amount of optimization in debug mode
@@ -62,3 +65,7 @@ debug = 0
 # enable a small bit of optimization in this case.
 [profile.ci.package."*"]
 opt-level = 1
+
+# For convenience with cargo-samply
+[profile.samply]
+inherits = "bench"

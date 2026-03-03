@@ -1,10 +1,11 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, dead_code)]
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
 use icechunk::{
     Repository, RepositoryConfig, Store,
     config::{ManifestConfig, ManifestSplittingConfig},
     format::{
         ChunkIndices,
+        format_constants::SpecVersionBin,
         manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef},
     },
     session::Session,
@@ -16,15 +17,15 @@ use tokio::{
     task::JoinSet,
 };
 
-const TOTAL_NUM_REFS: usize = 100_000_000;
+const TOTAL_NUM_REFS: usize = 10_000_000;
 const MANIFEST_SPLIT_SIZE: u32 = 1_000_000;
 const CHUNK_SIZE: u32 = 1;
-const TASK_CHUNK_SIZE: usize = 1_000; // each task writes this many refs in serial
+const TASK_CHUNK_SIZE: usize = 1_000;
 const NUM_TASKS: usize = TOTAL_NUM_REFS / TASK_CHUNK_SIZE;
 const MAX_CONCURRENT_TASKS: usize = 100;
 
-// #[tokio::test]
-async fn test_write_large_number_of_refs() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage = new_in_memory_storage().await?;
     let config = RepositoryConfig {
         inline_chunk_threshold_bytes: Some(128),
@@ -34,8 +35,14 @@ async fn test_write_large_number_of_refs() -> Result<(), Box<dyn std::error::Err
         }),
         ..Default::default()
     };
-    let repo =
-        Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
+    let repo = Repository::create(
+        Some(config),
+        storage,
+        HashMap::new(),
+        Some(SpecVersionBin::V2dot0),
+        true,
+    )
+    .await?;
     let session = Arc::new(RwLock::new(repo.writable_session("main").await?));
     let store = Store::from_session(Arc::clone(&session)).await;
 
@@ -65,8 +72,8 @@ async fn test_write_large_number_of_refs() -> Result<(), Box<dyn std::error::Err
     let zarr_meta = Bytes::copy_from_slice(array_json.as_ref());
     store.set("array/zarr.json", zarr_meta).await?;
 
+    eprintln!("Writing {TOTAL_NUM_REFS} chunk refs...");
     let mut set = JoinSet::new();
-
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TASKS));
 
     for i in 0..NUM_TASKS {
@@ -79,14 +86,15 @@ async fn test_write_large_number_of_refs() -> Result<(), Box<dyn std::error::Err
     }
 
     set.join_all().await;
+    eprintln!("Done writing refs, committing...");
 
     session.write().await.commit("first", None).await?;
+    eprintln!("Done.");
 
     Ok(())
 }
 
 async fn write_chunk_refs_batch(session: Arc<RwLock<Session>>, batch: usize) {
-    // let mut guard = session.write().await;
     for i in batch * TASK_CHUNK_SIZE..(batch + 1) * TASK_CHUNK_SIZE {
         let payload = ChunkPayload::Virtual(VirtualChunkRef {
             location: VirtualChunkLocation::from_absolute_path(
