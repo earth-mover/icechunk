@@ -381,12 +381,13 @@ impl Manifest {
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024 * 1024);
 
+        let len = sorted_chunks.len();
         let mut all = sorted_chunks.into_iter().peekable();
 
         let mut array_manifests = Vec::with_capacity(1);
         while let Some(current_node) = all.peek().map(|chunk| &chunk.node).cloned() {
-            // TODO: what is a good capacity
-            let mut refs = Vec::with_capacity(8_192);
+            // TODO: adjust capacity when multiple arrays have their manifests consolidated in to one.
+            let mut refs = Vec::with_capacity(len);
             while let Some(chunk) = all.next_if(|chunk| chunk.node == current_node) {
                 refs.push(mk_chunk_ref(&mut builder, chunk));
             }
