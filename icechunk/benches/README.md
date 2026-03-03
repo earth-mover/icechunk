@@ -24,7 +24,7 @@ The drawback is that its annoying and requires figuring the name of the compiled
 
 For example, on macOS to profile memory allocations one would type out something like
 ``` sh
-xcrun xctrace record \                                                                                                                                                       130 ↵
+xcrun xctrace record \
     --template 'Allocations' \
     --output test_large_manifests_alloc2.trace \
     --launch -- \
@@ -59,7 +59,7 @@ cargo instruments -t Allocations --profile bench --example large_manifests
 ```
 
 ``` sh
-cargo instruments-t Allocations --profile bench --bench manifest -- "commit/virtual/1000$"
+cargo instruments -t Allocations --profile bench --bench manifest -- "commit/virtual/1000$"
 ```
 
  Sadly this one doesn't allow profiling tests directly; you'll have to do something manual like
