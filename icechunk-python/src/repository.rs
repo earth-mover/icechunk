@@ -446,220 +446,85 @@ impl PyGCSummary {
 
 impl_pickle!(PyGCSummary);
 
-#[pyclass(name = "UpdateType", eq, subclass)]
+#[pyclass(name = "UpdateType", eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum PyUpdateType {
+    RepoInitialized {},
+    RepoMigrated { from_version: u8, to_version: u8 },
+    ConfigChanged {},
+    MetadataChanged {},
+    GCRan {},
+    ExpirationRan {},
+    TagCreated { name: String },
+    BranchCreated { name: String },
+    TagDeleted { name: String, previous_snap_id: String },
+    BranchDeleted { name: String, previous_snap_id: String },
+    BranchReset { name: String, previous_snap_id: String },
+    NewCommit { branch: String, new_snap_id: String },
+    CommitAmended { branch: String, previous_snap_id: String, new_snap_id: String },
+    NewDetachedSnapshot { new_snap_id: String },
+}
+
+#[pymethods]
+impl PyUpdateType {
+    fn __repr__(&self) -> Cow<'static, str> {
+        match self {
+            Self::RepoInitialized {} => "RepoInitialized()".into(),
+            Self::ConfigChanged {} => "ConfigChanged()".into(),
+            Self::MetadataChanged {} => "MetadataChanged()".into(),
+            Self::TagCreated { name } => format!("TagCreated(name={})", name).into(),
+            Self::TagDeleted { name, previous_snap_id } => format!(
+                "TagDeleted(name={}, previous_snap_id={})",
+                name, previous_snap_id
+            )
+            .into(),
+            Self::BranchCreated { name } => {
+                format!("BranchCreated(name={})", name).into()
+            }
+            Self::BranchDeleted { name, previous_snap_id } => format!(
+                "BranchDeleted(name={}, previous_snap_id={})",
+                name, previous_snap_id
+            )
+            .into(),
+            Self::BranchReset { name, previous_snap_id } => format!(
+                "BranchReset(name={}, previous_snap_id={})",
+                name, previous_snap_id
+            )
+            .into(),
+            Self::NewCommit { branch, new_snap_id } => {
+                format!("NewCommit(branch={}, new_snap_id={})", branch, new_snap_id)
+                    .into()
+            }
+            Self::CommitAmended { branch, previous_snap_id, new_snap_id } => format!(
+                "CommitAmended(branch={}, previous_snap_id={}, new_snap_id={})",
+                branch, previous_snap_id, new_snap_id,
+            )
+            .into(),
+            Self::RepoMigrated { from_version, to_version } => format!(
+                "RepoMigrated(from_version={}, to_version={})",
+                from_version, to_version
+            )
+            .into(),
+            Self::GCRan {} => "GCRan()".into(),
+            Self::ExpirationRan {} => "ExpirationRan()".into(),
+            Self::NewDetachedSnapshot { new_snap_id } => {
+                format!("NewDetachedSnapshot(new_snap_id={})", new_snap_id).into()
+            }
+        }
+    }
+}
+
+#[pyclass(name = "Update", eq)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyUpdateType {
+pub(crate) struct PyUpdate {
+    #[pyo3(get)]
+    kind: PyUpdateType,
+
     #[pyo3(get)]
     updated_at: DateTime<Utc>,
 
     #[pyo3(get)]
     backup_path: Option<String>,
-}
-
-#[pyclass(name = "RepoInitializedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyRepoInitializedUpdate;
-
-#[pyclass(name = "RepoMigratedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyRepoMigratedUpdate {
-    #[pyo3(get)]
-    from_version: u8,
-    #[pyo3(get)]
-    to_version: u8,
-}
-
-#[pyclass(name = "ConfigChangedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyConfigChangedUpdate;
-
-#[pyclass(name = "MetadataChangedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyMetadataChangedUpdate;
-
-#[pyclass(name = "GCRanUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyGCRanUpdate;
-
-#[pyclass(name = "ExpirationRanUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyExpirationRanUpdate;
-
-#[pyclass(name = "TagCreatedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyTagCreatedUpdate {
-    #[pyo3(get)]
-    name: String,
-}
-
-#[pyclass(name = "BranchCreatedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyBranchCreatedUpdate {
-    #[pyo3(get)]
-    name: String,
-}
-
-#[pyclass(name = "TagDeletedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyTagDeletedUpdate {
-    #[pyo3(get)]
-    name: String,
-    #[pyo3(get)]
-    previous_snap_id: String,
-}
-
-#[pyclass(name = "BranchDeletedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyBranchDeletedUpdate {
-    #[pyo3(get)]
-    name: String,
-    #[pyo3(get)]
-    previous_snap_id: String,
-}
-
-#[pyclass(name = "BranchResetUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyBranchResetUpdate {
-    #[pyo3(get)]
-    name: String,
-    #[pyo3(get)]
-    previous_snap_id: String,
-}
-
-#[pyclass(name = "NewCommitUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyNewCommitUpdate {
-    #[pyo3(get)]
-    branch: String,
-    #[pyo3(get)]
-    new_snap_id: String,
-}
-
-#[pyclass(name = "CommitAmendedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyCommitAmendedUpdate {
-    #[pyo3(get)]
-    branch: String,
-    #[pyo3(get)]
-    previous_snap_id: String,
-    #[pyo3(get)]
-    new_snap_id: String,
-}
-
-#[pyclass(name = "NewDetachedSnapshotUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyNewDetachedSnapshotUpdate {
-    #[pyo3(get)]
-    new_snap_id: String,
-}
-
-#[pymethods]
-impl PyRepoInitializedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok("RepoInitializedUpdate()".to_string())
-    }
-}
-
-#[pymethods]
-impl PyConfigChangedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok("ConfigChangedUpdate()".to_string())
-    }
-}
-
-#[pymethods]
-impl PyMetadataChangedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok("MetadataChangedUpdate()".to_string())
-    }
-}
-
-#[pymethods]
-impl PyTagCreatedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!("TagCreatedUpdate(name={})", self.name))
-    }
-}
-
-#[pymethods]
-impl PyTagDeletedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!(
-            "TagDeletedUpdate(name={}, previous_snap_id={})",
-            self.name, self.previous_snap_id
-        ))
-    }
-}
-
-#[pymethods]
-impl PyBranchCreatedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!("BranchCreatedUpdate(name={})", self.name))
-    }
-}
-
-#[pymethods]
-impl PyBranchDeletedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!(
-            "BranchDeletedUpdate(name={}, previous_snap_id={})",
-            self.name, self.previous_snap_id
-        ))
-    }
-}
-
-#[pymethods]
-impl PyBranchResetUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!(
-            "BranchResetUpdate(name={}, previous_snap_id={})",
-            self.name, self.previous_snap_id
-        ))
-    }
-}
-
-#[pymethods]
-impl PyNewCommitUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!(
-            "NewCommitUpdate(branch={}, new_snap_id={})",
-            self.branch, self.new_snap_id
-        ))
-    }
-}
-
-#[pymethods]
-impl PyCommitAmendedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!(
-            "CommitAmendedUpdate(branch={}, previous_snap_id={}, new_snap_id={})",
-            self.branch, self.previous_snap_id, self.new_snap_id,
-        ))
-    }
-}
-
-#[pymethods]
-impl PyRepoMigratedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!(
-            "RepoMigratedUpdate(from_version={}, to_version={})",
-            self.from_version, self.to_version
-        ))
-    }
-}
-
-#[pymethods]
-impl PyGCRanUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok("GCRanUpdate()".to_string())
-    }
-}
-
-#[pymethods]
-impl PyExpirationRanUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok("ExpirationRanUpdate()".to_string())
-    }
 }
 
 fn mk_update_type(
@@ -671,132 +536,160 @@ fn mk_update_type(
         let res = match update {
             UpdateType::RepoInitializedUpdate => Bound::new(
                 py,
-                (PyRepoInitializedUpdate, PyUpdateType { updated_at, backup_path }),
+                PyUpdate {
+                    kind: PyUpdateType::RepoInitialized {},
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::RepoMigratedUpdate { from_version, to_version } => Bound::new(
                 py,
-                (
-                    PyRepoMigratedUpdate {
+                PyUpdate {
+                    kind: PyUpdateType::RepoMigrated {
                         from_version: *from_version as u8,
                         to_version: *to_version as u8,
                     },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::ConfigChangedUpdate => Bound::new(
                 py,
-                (PyConfigChangedUpdate, PyUpdateType { updated_at, backup_path }),
+                PyUpdate {
+                    kind: PyUpdateType::ConfigChanged {},
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::MetadataChangedUpdate => Bound::new(
                 py,
-                (PyMetadataChangedUpdate, PyUpdateType { updated_at, backup_path }),
+                PyUpdate {
+                    kind: PyUpdateType::MetadataChanged {},
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::TagCreatedUpdate { name } => Bound::new(
                 py,
-                (
-                    PyTagCreatedUpdate { name: name.clone() },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                PyUpdate {
+                    kind: PyUpdateType::TagCreated { name: name.clone() },
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::TagDeletedUpdate { name, previous_snap_id } => Bound::new(
                 py,
-                (
-                    PyTagDeletedUpdate {
+                PyUpdate {
+                    kind: PyUpdateType::TagDeleted {
                         name: name.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::BranchCreatedUpdate { name } => Bound::new(
                 py,
-                (
-                    PyBranchCreatedUpdate { name: name.clone() },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                PyUpdate {
+                    kind: PyUpdateType::BranchCreated { name: name.clone() },
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::BranchDeletedUpdate { name, previous_snap_id } => Bound::new(
                 py,
-                (
-                    PyBranchDeletedUpdate {
+                PyUpdate {
+                    kind: PyUpdateType::BranchDeleted {
                         name: name.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::BranchResetUpdate { name, previous_snap_id } => Bound::new(
                 py,
-                (
-                    PyBranchResetUpdate {
+                PyUpdate {
+                    kind: PyUpdateType::BranchReset {
                         name: name.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::NewCommitUpdate { branch, new_snap_id } => Bound::new(
                 py,
-                (
-                    PyNewCommitUpdate {
+                PyUpdate {
+                    kind: PyUpdateType::NewCommit {
                         branch: branch.clone(),
                         new_snap_id: new_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::CommitAmendedUpdate { branch, previous_snap_id, new_snap_id } => {
                 Bound::new(
                     py,
-                    (
-                        PyCommitAmendedUpdate {
+                    PyUpdate {
+                        kind: PyUpdateType::CommitAmended {
                             branch: branch.clone(),
                             previous_snap_id: previous_snap_id.to_string(),
                             new_snap_id: new_snap_id.to_string(),
                         },
-                        PyUpdateType { updated_at, backup_path },
-                    ),
+                        updated_at,
+                        backup_path,
+                    },
                 )?
                 .into_any()
                 .unbind()
             }
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id } => Bound::new(
                 py,
-                (
-                    PyNewDetachedSnapshotUpdate { new_snap_id: new_snap_id.to_string() },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                PyUpdate {
+                    kind: PyUpdateType::NewDetachedSnapshot {
+                        new_snap_id: new_snap_id.to_string(),
+                    },
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
-            UpdateType::GCRanUpdate => {
-                Bound::new(py, (PyGCRanUpdate, PyUpdateType { updated_at, backup_path }))?
-                    .into_any()
-                    .unbind()
-            }
+            UpdateType::GCRanUpdate => Bound::new(
+                py,
+                PyUpdate { kind: PyUpdateType::GCRan {}, updated_at, backup_path },
+            )?
+            .into_any()
+            .unbind(),
             UpdateType::ExpirationRanUpdate => Bound::new(
                 py,
-                (PyExpirationRanUpdate, PyUpdateType { updated_at, backup_path }),
+                PyUpdate {
+                    kind: PyUpdateType::ExpirationRan {},
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),

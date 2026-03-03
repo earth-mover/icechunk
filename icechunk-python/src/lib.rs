@@ -32,12 +32,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
 use repository::{
-    PyBranchCreatedUpdate, PyBranchDeletedUpdate, PyBranchResetUpdate,
-    PyCommitAmendedUpdate, PyConfigChangedUpdate, PyDiff, PyExpirationRanUpdate,
-    PyGCRanUpdate, PyGCSummary, PyManifestFileInfo, PyMetadataChangedUpdate,
-    PyNewCommitUpdate, PyNewDetachedSnapshotUpdate, PyRepoInitializedUpdate,
-    PyRepoMigratedUpdate, PyRepository, PySnapshotInfo, PyTagCreatedUpdate,
-    PyTagDeletedUpdate, PyUpdateType,
+    PyDiff, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo, PyUpdate,
+    PyUpdateType,
 };
 use session::{ChunkType, PySession, PySessionMode};
 use stats::PyChunkStorageStats;
@@ -204,20 +200,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGCSummary>()?;
     m.add_class::<PyDiff>()?;
     m.add_class::<PyUpdateType>()?;
-    m.add_class::<PyRepoInitializedUpdate>()?;
-    m.add_class::<PyRepoMigratedUpdate>()?;
-    m.add_class::<PyConfigChangedUpdate>()?;
-    m.add_class::<PyMetadataChangedUpdate>()?;
-    m.add_class::<PyTagCreatedUpdate>()?;
-    m.add_class::<PyTagDeletedUpdate>()?;
-    m.add_class::<PyBranchCreatedUpdate>()?;
-    m.add_class::<PyBranchDeletedUpdate>()?;
-    m.add_class::<PyBranchResetUpdate>()?;
-    m.add_class::<PyNewCommitUpdate>()?;
-    m.add_class::<PyNewDetachedSnapshotUpdate>()?;
-    m.add_class::<PyCommitAmendedUpdate>()?;
-    m.add_class::<PyGCRanUpdate>()?;
-    m.add_class::<PyExpirationRanUpdate>()?;
+    m.add_class::<PyUpdate>()?;
     m.add_class::<VirtualChunkSpec>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
