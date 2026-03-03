@@ -1034,8 +1034,8 @@ impl Session {
         let res = try_stream! {
             let new_chunks = stream::iter(
                 self.change_set()
-                    .new_array_chunk_iterator(&node.id, array_path)
-                    .map(|chunk_info| Ok::<ChunkIndices, SessionError>(chunk_info.coord)),
+                    .array_chunks_iterator(&node.id, array_path)
+                    .map(|(coord, _)| Ok::<ChunkIndices, SessionError>(coord.clone())),
             );
 
             for await maybe_coords in updated_chunks.chain(new_chunks) {
@@ -2010,10 +2010,22 @@ impl<'a> FlushProcess<'a> {
             if self.change_set.array_manifest(node_id).is_some() {
                 let chunks = stream::iter(
                     self.change_set
-                        .new_array_chunk_iterator(node_id, node_path)
+                        .array_chunks_iterator(node_id, node_path)
                         // FIXME: do we need to optimize this so we don't need multiple passes over all chunks calling
                         // contains?
-                        .filter(|chunk| extent.contains(&chunk.coord.0))
+                        .filter_map(|(coord, payload)| {
+                            if let Some(payload) = payload
+                                && extent.contains(&coord.0)
+                            {
+                                Some(ChunkInfo {
+                                    node: node_id.clone(),
+                                    coord: coord.clone(),
+                                    payload: payload.clone(),
+                                })
+                            } else {
+                                None
+                            }
+                        })
                         .map(Ok),
                 );
                 let new_ref = self.write_manifest_from_iterator(chunks).await?;

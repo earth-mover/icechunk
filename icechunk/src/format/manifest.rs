@@ -55,6 +55,7 @@ impl ManifestExtents {
         Self(ranges.into_iter().collect())
     }
 
+    #[inline(always)]
     pub fn contains(&self, coord: &[u32]) -> bool {
         self.iter().zip(coord.iter()).all(|(range, that)| range.contains(that))
     }
