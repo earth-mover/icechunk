@@ -1,3 +1,8 @@
+// NOTE: All expensive setup must go INSIDE the bench_with_input / iter_custom closure,
+// not before it. Criterion's filter (the CLI argument) is only checked inside
+// bench_with_input. Any work done before that call runs unconditionally for every
+// benchmark in the group, even when filtered out.
+
 use std::collections::HashMap;
 use std::error::Error;
 use std::ops::Range;
@@ -16,7 +21,7 @@ use icechunk::format::{ByteRange, ChunkIndices, Path};
 #[cfg(feature = "logs")]
 use icechunk::initialize_tracing;
 use icechunk::repository::{Repository, VersionInfo};
-use icechunk::session::{Session, get_chunk};
+use icechunk::session::{CommitMethod, Session, get_chunk};
 use icechunk::storage::new_in_memory_storage;
 use icechunk::{RepositoryConfig, Storage};
 use tokio::runtime::Runtime;
@@ -153,100 +158,139 @@ fn benchmark_set_chunks(c: &mut Criterion) {
 }
 
 /// Benchmarks getting of a random sequence of `nget` = 1000 chunks
-/// from a million chunks spluit across 1-1000 manifests.
+/// from a million chunks split across 1-1000 manifests.
 /// We always get the first and last chunk; the rest are randomly sampled.
+///
+/// The repo and chunks are created once, then `rewrite_manifests` is used
+/// to re-split for each `num_manifests` value.
 fn benchmark_get_chunks(c: &mut Criterion) {
     let mut group = c.benchmark_group("get_chunks");
 
     let chunk_size = 1u32;
     let path: Path = "/temperature".try_into().unwrap();
     let rt = Runtime::new().unwrap();
-    let mut rng = rand::rng();
 
     // grab 1000 chunks
     let nget = 1000;
     // form a total of a million chunks
     let num_chunks: u32 = 1_000_000;
+
+    // One-time setup: create repo and write all chunks (no splitting).
+    let mut storage_cache: Option<Arc<dyn Storage + Send + Sync>> = None;
+
     // split across this many manifests
     for num_manifests in [1u32, 10, 100, 1_000] {
+        group.throughput(Throughput::Elements(num_manifests as u64));
+
         let split_size = num_chunks.div_ceil(num_manifests);
         let split_config = ManifestSplittingConfig::with_size(split_size);
-        let (session, get_chunks) = rt.block_on(async {
-            let shape =
-                ArrayShape::new(vec![(num_chunks.into(), chunk_size.into())]).unwrap();
-            let repo = setup_repo(path.clone(), shape, None, Some(split_config.clone()))
-                .await
-                .unwrap();
-            let mut write_session = repo.writable_session("main").await.unwrap();
-            set_chunks(
-                path.clone(),
-                &mut write_session,
-                0..num_chunks,
-                ChunkKind::Inline,
-            )
-            .await
-            .unwrap();
-            write_session.commit("foo", None).await.unwrap();
 
-            let session = repo
-                .readonly_session(&VersionInfo::BranchTipRef("main".into()))
-                .await
-                .unwrap();
-
-            // generate a list of chunks to get
-            // we always get the first and last chunk
-            // and randomly generate the rest
-            let mut get_chunks: Vec<usize> = Vec::with_capacity(nget);
-            get_chunks.push(0);
-            get_chunks.append(
-                &mut rand::seq::index::sample(
-                    &mut rng,
-                    (num_chunks - 1) as usize,
-                    nget - 2,
+        // Lazy init: write chunks once, then rewrite manifests for each split config.
+        let storage = storage_cache.get_or_insert_with(|| {
+            rt.block_on(async {
+                let shape = ArrayShape::new(vec![(num_chunks.into(), chunk_size.into())])
+                    .unwrap();
+                let repo = setup_repo(path.clone(), shape, None, None).await.unwrap();
+                let mut write_session = repo.writable_session("main").await.unwrap();
+                set_chunks(
+                    path.clone(),
+                    &mut write_session,
+                    0..num_chunks,
+                    ChunkKind::Inline,
                 )
-                .into_vec(),
-            );
-            get_chunks.push((num_chunks - 1) as usize);
-            (Arc::new(session), get_chunks)
+                .await
+                .unwrap();
+                write_session.commit("data", None).await.unwrap();
+                repo.storage().clone()
+            })
         });
 
-        group.throughput(Throughput::Elements(num_manifests as u64));
+        // Re-open with the new splitting config and rewrite manifests.
+        let session = rt.block_on(async {
+            let man_config = ManifestConfig {
+                preload: Some(ManifestPreloadConfig {
+                    max_total_refs: None,
+                    preload_if: None,
+                    max_arrays_to_scan: None,
+                }),
+                splitting: Some(split_config),
+            };
+            let config = RepositoryConfig {
+                manifest: Some(man_config),
+                ..RepositoryConfig::default()
+            };
+            let repo =
+                Repository::open(Some(config), Arc::clone(storage), HashMap::new())
+                    .await
+                    .unwrap();
+            let mut session = repo.writable_session("main").await.unwrap();
+            session
+                .rewrite_manifests("rewrite", None, CommitMethod::Amend)
+                .await
+                .unwrap();
+
+            Arc::new(
+                repo.readonly_session(&VersionInfo::BranchTipRef("main".into()))
+                    .await
+                    .unwrap(),
+            )
+        });
+
         group.bench_with_input(
             BenchmarkId::from_parameter(num_manifests),
             &num_manifests,
             |b, _| {
-                b.iter(|| {
-                    rt.block_on(async {
-                        stream::iter(get_chunks.iter().copied())
-                            .for_each(|idx| {
-                                let session = session.clone();
-                                let path = path.clone();
-                                async move {
-                                    get_chunk(
-                                        session
-                                            .get_chunk_reader(
-                                                &path,
-                                                &ChunkIndices(vec![idx as u32]),
-                                                &ByteRange::ALL,
-                                            )
-                                            .await
-                                            .unwrap(),
-                                    )
-                                    .await
-                                    .unwrap()
-                                    .unwrap();
-                                }
-                            })
-                            .await
-                    })
-                })
+                b.iter_batched(
+                    || {
+                        // Generate a fresh random sample per iteration
+                        let mut rng = rand::rng();
+                        let mut get_chunks: Vec<usize> = Vec::with_capacity(nget);
+                        get_chunks.push(0);
+                        get_chunks.append(
+                            &mut rand::seq::index::sample(
+                                &mut rng,
+                                (num_chunks - 1) as usize,
+                                nget - 2,
+                            )
+                            .into_vec(),
+                        );
+                        get_chunks.push((num_chunks - 1) as usize);
+                        get_chunks
+                    },
+                    |get_chunks| {
+                        rt.block_on(async {
+                            stream::iter(get_chunks.into_iter())
+                                .for_each(|idx| {
+                                    let session = session.clone();
+                                    let path = path.clone();
+                                    async move {
+                                        get_chunk(
+                                            session
+                                                .get_chunk_reader(
+                                                    &path,
+                                                    &ChunkIndices(vec![idx as u32]),
+                                                    &ByteRange::ALL,
+                                                )
+                                                .await
+                                                .unwrap(),
+                                        )
+                                        .await
+                                        .unwrap()
+                                        .unwrap();
+                                    }
+                                })
+                                .await
+                        })
+                    },
+                    BatchSize::SmallInput,
+                )
             },
         );
     }
     group.finish();
 }
 
-/// Benchmarks committing a million chunks
+/// Benchmarks committing half a million chunks
 /// split across 1-1000 manifests
 fn benchmark_commit_split_manifests(c: &mut Criterion) {
     let mut group = c.benchmark_group("commit_split_manifests");
@@ -258,7 +302,7 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
 
     let rt = Runtime::new().unwrap();
 
-    let num_chunks = 1_000_000u32;
+    let num_chunks = 500_000u32;
     for kind in [ChunkKind::Inline, ChunkKind::Virtual] {
         for num_manifests in [1, 10, 100, 1_000] {
             let split_size = num_chunks.div_ceil(num_manifests);
@@ -309,7 +353,7 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmarks committing a million chunks
+/// Benchmarks committing half a million chunks
 /// by sequential appending such that each commit is a new manifest.
 fn benchmark_append_split_manifests(c: &mut Criterion) {
     let mut group = c.benchmark_group("append_split_manifests");
@@ -319,7 +363,7 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
 
     let path: Path = "/temperature".try_into().unwrap();
     let chunk_size = 1u32;
-    let num_chunks = 10_000_000u32;
+    let num_chunks = 500_000u32;
     let num_manifests = 50u32;
 
     let split_size = num_chunks.div_ceil(num_manifests);
@@ -379,7 +423,7 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
     #[cfg(feature = "logs")]
     initialize_tracing(None);
     let mut group = c.benchmark_group("commit_rebase_split_manifests");
-    // group.sample_size(10).sampling_mode(criterion::SamplingMode::Flat);
+    group.sample_size(10).sampling_mode(criterion::SamplingMode::Flat);
 
     let rt = Runtime::new().unwrap();
 
@@ -462,6 +506,5 @@ criterion_group!(
 );
 criterion_main!(benches);
 
-// TODO: commit with rebase
 // TODO: open repo with large number of snapshots
 // TODO: latency store
