@@ -12,23 +12,28 @@ from hypothesis import assume, given, settings
 from zarr.testing.strategies import arrays, numpy_arrays
 
 
-def create() -> IcechunkStore:
-    repo = Repository.create(in_memory_storage())
+def create(spec_version: int | None) -> IcechunkStore:
+    repo = Repository.create(in_memory_storage(), spec_version=spec_version)
     return repo.writable_session("main").store
 
 
-icechunk_stores = st.builds(create)
+@st.composite
+def icechunk_stores(
+    draw: st.DrawFn,
+    spec_version: st.SearchStrategy[int | None] = st.sampled_from([None, 1, 2]),  # noqa: B008
+) -> IcechunkStore:
+    return create(spec_version=draw(spec_version))
 
 
-@settings(report_multiple_bugs=True, deadline=None)
-@given(data=st.data(), nparray=numpy_arrays())
-def test_roundtrip(data: st.DataObject, nparray: Any) -> None:
+@settings(report_multiple_bugs=True, deadline=None, max_examples=300)
+@given(data=st.data(), nparray=numpy_arrays(), spec_version=st.sampled_from([None, 1, 2]))
+def test_roundtrip(data: st.DataObject, nparray: Any, spec_version: int | None) -> None:
     # TODO: support size-0 arrays GH392
     assume(nparray.size > 0)
 
     zarray = data.draw(
         arrays(
-            stores=icechunk_stores,
+            stores=icechunk_stores(spec_version=st.just(spec_version)),
             arrays=st.just(nparray),
             zarr_formats=st.just(3),
         )

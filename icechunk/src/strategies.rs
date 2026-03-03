@@ -13,11 +13,15 @@ use crate::config::{
 use crate::config::{GcsBearerCredential, GcsStaticCredentials};
 use crate::format::format_constants::SpecVersionBin;
 use crate::format::manifest::{
-    ChunkPayload, ChunkRef, ManifestExtents, SecondsSinceEpoch, VirtualChunkLocation,
-    VirtualChunkRef,
+    ChunkPayload, ChunkRef, ManifestExtents, ManifestRef, ManifestSplits,
+    SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef,
 };
-use crate::format::snapshot::{ArrayShape, DimensionName};
-use crate::format::{ChunkId, ChunkIndices, NodeId, Path, manifest};
+use crate::format::snapshot::{
+    ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
+};
+use crate::format::{
+    AttributesId, ChunkId, ChunkIndices, ManifestId, NodeId, Path, SnapshotId, manifest,
+};
 use crate::session::Session;
 use crate::storage::{
     ConcurrencySettings, ETag, RetriesSettings, Settings, new_in_memory_storage,
@@ -40,6 +44,7 @@ use std::ops::{Bound, Range};
 use std::path::PathBuf;
 
 use crate::change_set::{ArrayData, Move};
+use crate::refs::RefData;
 
 const MAX_NDIM: usize = 4;
 
@@ -654,4 +659,71 @@ prop_compose! {
     pub fn gen_move()(to in path(), from in path()) -> Move {
         Move{to, from}
     }
+}
+
+fn snapshot_id() -> impl Strategy<Value = SnapshotId> {
+    uniform12(any::<u8>()).prop_map(SnapshotId::new)
+}
+pub fn ref_data() -> impl Strategy<Value = RefData> {
+    snapshot_id().prop_map(|snapshot| RefData { snapshot })
+}
+
+fn manifest_id() -> impl Strategy<Value = ManifestId> {
+    uniform12(any::<u8>()).prop_map(ManifestId::new)
+}
+
+prop_compose! {
+    pub fn manifest_ref()
+    (ndim in any::<u8>().prop_map(usize::from))
+    (object_id in manifest_id(),
+     extents in manifest_extents(ndim),
+    ) -> ManifestRef {
+        ManifestRef{ object_id, extents }
+    }
+}
+
+pub fn manifest_splits() -> impl Strategy<Value = ManifestSplits> {
+    (1..10usize)
+        .prop_flat_map(|dim_size| vec(manifest_extents(dim_size), 1..10))
+        .prop_map(ManifestSplits::from_extents)
+}
+
+type ArrayInfo = (ArrayShape, Option<Vec<DimensionName>>, Vec<ManifestRef>);
+fn array_info() -> impl Strategy<Value = ArrayInfo> {
+    (array_shape(), option::of(vec(dimension_name(), 5..10)), vec(manifest_ref(), 1..8))
+}
+
+fn node_data() -> impl Strategy<Value = NodeData> {
+    use NodeData::*;
+    prop_oneof![
+        Just(Group),
+        array_info().prop_map(|(shape, dimension_names, manifests)| Array {
+            shape,
+            dimension_names,
+            manifests
+        }),
+    ]
+}
+
+prop_compose! {
+   pub fn node_snapshot()
+    (id in node_id(),
+        path in path(),
+        user_data in bytes(),
+        node_data in node_data()) -> NodeSnapshot {
+        NodeSnapshot{id, path, user_data, node_data}
+    }
+}
+
+prop_compose! {
+pub fn manifest_file_info()
+(id in manifest_id(),
+size_bytes in any::<u64>(),
+num_chunk_refs in any::<u32>()) -> ManifestFileInfo  {
+    ManifestFileInfo{id, size_bytes, num_chunk_refs}
+}
+}
+
+pub fn attributes_id() -> impl Strategy<Value = AttributesId> {
+    uniform12(any::<u8>()).prop_map(AttributesId::new)
 }
