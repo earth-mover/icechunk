@@ -620,7 +620,7 @@ impl Session {
                 if shape.valid_chunk_coord(&new_chunk_index) {
                     change_set.set_chunk_ref(
                         node.id.clone(),
-                        new_chunk_index.clone(),
+                        new_chunk_index,
                         new_payload,
                     )?;
                 } else {

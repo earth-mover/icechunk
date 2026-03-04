@@ -326,8 +326,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             #     pending_model, session.store, pending_arrays | pending_groups
             # )
 
-        # Prefer commit (75%) over discard (25%) to exercise more code paths
-        if data.draw(st.sampled_from([True, True, True, False])):  # 3:1 odds
+        if data.draw(st.sampled_from([True, True, True, False])):
             note(f"committing {num_moves} moves")
             self.model = pending_model
             self.all_arrays = pending_arrays
