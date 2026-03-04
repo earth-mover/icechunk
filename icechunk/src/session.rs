@@ -1837,6 +1837,7 @@ async fn get_existing_node(
         Some(renamed_path) => {
             match snapshot.get_node(renamed_path.as_ref()) {
                 Ok(node) => {
+                    let node = Arc::unwrap_or_clone(node);
                     let node = match node.node_data {
                         NodeData::Array { ref manifests, .. } => {
                             if let Some(new_data) = change_set.get_updated_array(&node.id)
