@@ -688,7 +688,6 @@ impl Session {
 
     // Helper function that accepts a NodeSnapshot instead of a path,
     // this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
-    #[instrument(skip(self, node, data))]
     async fn set_node_chunk_ref(
         &mut self,
         node: NodeSnapshot,

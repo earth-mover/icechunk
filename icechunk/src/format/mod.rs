@@ -68,7 +68,7 @@ pub const V1_REFS_FILE_PATH: &str = "refs";
 
 /// A normalized Zarr path: absolute (starts with `/`) and no trailing slash.
 #[serde_as]
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
 pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
 
 /// Marker trait for object ID type tags (sealed).
@@ -501,6 +501,12 @@ pub mod format_constants {
 
     pub const ICECHUNK_COMPRESSION_METADATA_KEY: &str = "ic_comp_alg";
     pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
+}
+
+impl fmt::Debug for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
 }
 
 impl Display for Path {
