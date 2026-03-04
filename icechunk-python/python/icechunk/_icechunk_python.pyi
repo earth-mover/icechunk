@@ -9,7 +9,9 @@ from collections.abc import (
     Sequence,
 )
 from enum import Enum
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, final
+
+from typing_extensions import disjoint_base
 
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
@@ -1561,82 +1563,97 @@ class GCSummary:
         """
         ...
 
-class UpdateType:
+@final
+class Update:
+    @property
+    def kind(self) -> UpdateType: ...
     @property
     def updated_at(self) -> datetime.datetime: ...
     @property
     def backup_path(self) -> str | None: ...
 
-class RepoInitializedUpdate(UpdateType):
-    pass
+@disjoint_base
+class UpdateType:
+    @final
+    class BranchCreated(UpdateType):
+        @property
+        def name(self) -> str: ...
 
-class RepoMigratedUpdate(UpdateType):
-    @property
-    def from_version(self) -> int: ...
-    @property
-    def to_version(self) -> int: ...
+    @final
+    class BranchDeleted(UpdateType):
+        @property
+        def name(self) -> str: ...
+        @property
+        def previous_snap_id(self) -> str: ...
 
-class ConfigChangedUpdate(UpdateType):
-    pass
+    @final
+    class BranchReset(UpdateType):
+        @property
+        def name(self) -> str: ...
+        @property
+        def previous_snap_id(self) -> str: ...
 
-class MetadataChangedUpdate(UpdateType):
-    pass
+    @final
+    class CommitAmended(UpdateType):
+        @property
+        def branch(self) -> str: ...
+        @property
+        def previous_snap_id(self) -> str: ...
+        @property
+        def new_snap_id(self) -> str: ...
 
-class TagCreatedUpdate(UpdateType):
-    @property
-    def name(self) -> str: ...
+    @final
+    class ConfigChanged(UpdateType): ...
 
-class TagDeletedUpdate(UpdateType):
-    @property
-    def name(self) -> str: ...
-    @property
-    def previous_snap_id(self) -> str: ...
+    @final
+    class ExpirationRan(UpdateType): ...
 
-class BranchCreatedUpdate(UpdateType):
-    @property
-    def name(self) -> str: ...
+    @final
+    class FeatureFlagChanged(UpdateType):
+        @property
+        def id(self) -> int: ...
+        @property
+        def new_value(self) -> bool | None: ...
 
-class BranchDeletedUpdate(UpdateType):
-    @property
-    def name(self) -> str: ...
-    @property
-    def previous_snap_id(self) -> str: ...
+    @final
+    class GCRan(UpdateType): ...
 
-class BranchResetUpdate(UpdateType):
-    @property
-    def name(self) -> str: ...
-    @property
-    def previous_snap_id(self) -> str: ...
+    @final
+    class MetadataChanged(UpdateType): ...
 
-class NewCommitUpdate(UpdateType):
-    @property
-    def branch(self) -> str: ...
-    @property
-    def new_snap_id(self) -> str: ...
+    @final
+    class NewCommit(UpdateType):
+        @property
+        def branch(self) -> str: ...
+        @property
+        def new_snap_id(self) -> str: ...
 
-class CommitAmendedUpdate(UpdateType):
-    @property
-    def branch(self) -> str: ...
-    @property
-    def previous_snap_id(self) -> str: ...
-    @property
-    def new_snap_id(self) -> str: ...
+    @final
+    class NewDetachedSnapshot(UpdateType):
+        @property
+        def new_snap_id(self) -> str: ...
 
-class NewDetachedSnapshotUpdate(UpdateType):
-    @property
-    def new_snap_id(self) -> str: ...
+    @final
+    class RepoInitialized(UpdateType): ...
 
-class GCRanUpdate(UpdateType):
-    pass
+    @final
+    class RepoMigrated(UpdateType):
+        @property
+        def from_version(self) -> int: ...
+        @property
+        def to_version(self) -> int: ...
 
-class ExpirationRanUpdate(UpdateType):
-    pass
+    @final
+    class TagCreated(UpdateType):
+        @property
+        def name(self) -> str: ...
 
-class FeatureFlagChangedUpdate(UpdateType):
-    @property
-    def id(self) -> int: ...
-    @property
-    def new_value(self) -> bool | None: ...
+    @final
+    class TagDeleted(UpdateType):
+        @property
+        def name(self) -> str: ...
+        @property
+        def previous_snap_id(self) -> str: ...
 
 class FeatureFlag:
     @property
@@ -1788,7 +1805,7 @@ class PyRepository:
         tag: str | None = None,
         snapshot_id: str | None = None,
     ) -> AsyncIterator[SnapshotInfo]: ...
-    def async_ops_log(self) -> AsyncIterator[UpdateType]: ...
+    def async_ops_log(self) -> AsyncIterator[Update]: ...
     def create_branch(self, branch_name: str, snapshot_id: str) -> None: ...
     async def create_branch_async(self, branch_name: str, snapshot_id: str) -> None: ...
     def list_branches(self) -> set[str]: ...
