@@ -2822,7 +2822,7 @@ def spec_version() -> int:
 
 def _upgrade_icechunk_repository(
     repo: PyRepository, *, dry_run: bool = True, delete_unused_v1_files: bool = True
-) -> None:
+) -> PyRepository:
     """
     Migrate a repository to the latest version of Icechunk.
 
