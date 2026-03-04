@@ -97,10 +97,10 @@ class UpdateModel:
     ictype = ic.UpdateType
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, self.ictype):
+        if not isinstance(other, ic.Update) or not isinstance(other.kind, self.ictype):
             return NotImplemented
         return all(
-            getattr(self, f.name) == getattr(other, f.name)
+            getattr(self, f.name) == getattr(other.kind, f.name)
             for f in fields(self)
             # we check ictype with isinstance above
             if f.name != "ictype"
@@ -1094,10 +1094,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         all_backups = [op.backup_path for op in actual_ops if op.backup_path is not None]
         assert len(all_backups) == len(set(all_backups))
 
-        assert all(
-            isinstance(a.kind, m.ictype)
-            for m, a in zip(self.model.ops_log[::-1], actual_ops, strict=True)
-        )
+        assert self.model.ops_log[::-1] == actual_ops
         assert isinstance(
             actual_ops[-1].kind,
             ic.UpdateType.RepoInitialized | ic.UpdateType.RepoMigrated,
