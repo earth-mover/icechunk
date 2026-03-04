@@ -345,16 +345,16 @@ async fn do_migrate(
 }
 
 pub async fn migrate_1_to_2(
-    repo: &mut Repository,
+    repo: Repository,
     dry_run: bool,
     delete_unused_v1_files: bool,
 ) -> MigrationResult<()> {
     let start_time = Instant::now();
-    validate_start(repo).await?;
+    validate_start(&repo).await?;
 
     info!("Starting migration");
     info!("Collecting refs");
-    let refs = all_roots(repo).await?.try_collect::<Vec<_>>().await?;
+    let refs = all_roots(&repo).await?.try_collect::<Vec<_>>().await?;
     let tags = Vec::from_iter(refs.iter().filter_map(|(r, id)| {
         if r.is_tag() { Some((r.name(), id.clone())) } else { None }
     }));
@@ -384,7 +384,7 @@ pub async fn migrate_1_to_2(
     info!("Collecting non-dangling snapshots, this make take a few minutes");
     let snap_ids = refs.iter().map(|(_, id)| id);
     let all_snapshots =
-        pointed_snapshots(repo, snap_ids).await?.try_collect::<Vec<_>>().await?;
+        pointed_snapshots(&repo, snap_ids).await?.try_collect::<Vec<_>>().await?;
     info!("Found {} non-dangling snapshots", all_snapshots.len());
 
     info!("Generating migration ops log");
@@ -419,7 +419,7 @@ pub async fn migrate_1_to_2(
     // Fetch snapshot IDs for deleted tags
     let mut deleted_tags_with_snap: Vec<(&str, SnapshotId)> = Vec::new();
     for name in &deleted_tag_names {
-        if let Some(snap_id) = fetch_deleted_tag_snapshot_id(repo, name).await {
+        if let Some(snap_id) = fetch_deleted_tag_snapshot_id(&repo, name).await {
             deleted_tags_with_snap.push((name, snap_id));
         } else {
             warn!(
@@ -483,7 +483,7 @@ pub async fn migrate_1_to_2(
         );
         Ok(())
     } else {
-        do_migrate(repo, repo_info, start_time, delete_unused_v1_files).await
+        do_migrate(&repo, repo_info, start_time, delete_unused_v1_files).await
     }
 }
 
@@ -618,7 +618,8 @@ mod tests {
     #[tokio_test]
     /// Copy the source tree 1.0 repository to a temp dir, then migrate it
     async fn test_1_to_2_migration() -> Result<(), Box<dyn std::error::Error>> {
-        let (mut repo, _tmp) = prepare_v1_repo().await?;
+        let (repo, _tmp) = prepare_v1_repo().await?;
+        let storage = repo.storage().clone();
 
         let mut tag_ancestries_before = HashMap::new();
         for tag in repo.list_tags().await? {
@@ -640,9 +641,8 @@ mod tests {
             branch_ancestries_before.insert(branch, anc);
         }
 
-        migrate_1_to_2(&mut repo, false, true).await.unwrap();
-        let repo =
-            Repository::open(None, repo.storage().clone(), Default::default()).await?;
+        migrate_1_to_2(repo, false, true).await.unwrap();
+        let repo = Repository::open(None, storage, Default::default()).await?;
 
         let mut tag_ancestries_after = HashMap::new();
         for tag in repo.list_tags().await? {
@@ -776,27 +776,44 @@ mod tests {
     }
 
     #[tokio_test]
+    /// Migrating an already-V2 repo should return InvalidRepositoryMigration (issue #1524)
+    async fn test_1_to_2_migration_already_v2() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let (repo, _tmp) = prepare_v1_repo().await?;
+        let storage = repo.storage().clone();
+
+        migrate_1_to_2(repo, false, true).await.unwrap();
+
+        // Reopen the now-V2 repo and try to migrate again
+        let repo = Repository::open(None, storage, Default::default()).await?;
+        let result = migrate_1_to_2(repo, false, true).await;
+        assert!(result.is_err(), "migrating an already-V2 repo should return an error");
+
+        Ok(())
+    }
+
+    #[tokio_test]
     /// Copy the source tree 1.0 repository to a temp dir, then migrate it in dry-run mode
     async fn test_1_to_2_migration_dry_run() -> Result<(), Box<dyn std::error::Error>> {
-        let (mut repo, _tmp) = prepare_v1_repo().await?;
+        let (repo, _tmp) = prepare_v1_repo().await?;
+        let storage = repo.storage().clone();
 
-        migrate_1_to_2(&mut repo, true, true).await.unwrap();
-        let repo =
-            Repository::open(None, repo.storage().clone(), Default::default()).await?;
+        migrate_1_to_2(repo, true, true).await.unwrap();
+        let repo = Repository::open(None, storage, Default::default()).await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V1dot0);
         Ok(())
     }
 
     #[tokio_test]
-    /// Copy the source tree 1.0 repository to a temp dir, then migrate it in dry-run mode
+    /// Copy the source tree 1.0 repository to a temp dir, then migrate it without deleting v1 files
     async fn test_1_to_2_migration_without_delete()
     -> Result<(), Box<dyn std::error::Error>> {
-        let (mut repo, _tmp) = prepare_v1_repo().await?;
+        let (repo, _tmp) = prepare_v1_repo().await?;
+        let storage = repo.storage().clone();
 
-        migrate_1_to_2(&mut repo, false, false).await.unwrap();
-        let repo =
-            Repository::open(None, repo.storage().clone(), Default::default()).await?;
+        migrate_1_to_2(repo, false, false).await.unwrap();
+        let repo = Repository::open(None, storage, Default::default()).await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
 

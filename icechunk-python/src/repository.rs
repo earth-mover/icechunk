@@ -782,14 +782,26 @@ impl PyRepository {
         py: Python<'_>,
         dry_run: bool,
         delete_unused_v1_files: bool,
-    ) -> PyResult<()> {
+    ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let mut repo = self.0.write().await;
-                migrations::migrate_1_to_2(&mut repo, dry_run, delete_unused_v1_files)
+                let repo = self.0.read().await;
+                let storage = repo.storage().clone();
+                let config = Some(repo.config().clone());
+                drop(repo);
+
+                let fresh = Repository::open(config, storage.clone(), Default::default())
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                migrations::migrate_1_to_2(fresh, dry_run, delete_unused_v1_files)
                     .await
                     .map_err(PyIcechunkStoreError::MigrationError)?;
-                Ok(())
+
+                // Reopen to get a fresh repo with the correct spec version
+                let reopened = Repository::open(None, storage, Default::default())
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(Self(Arc::new(RwLock::new(reopened))))
             })
         })
     }
