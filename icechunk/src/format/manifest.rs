@@ -55,6 +55,7 @@ impl ManifestExtents {
         Self(ranges.into_iter().collect())
     }
 
+    #[inline(always)]
     pub fn contains(&self, coord: &[u32]) -> bool {
         self.iter().zip(coord.iter()).all(|(range, that)| range.contains(that))
     }
@@ -380,12 +381,13 @@ impl Manifest {
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024 * 1024);
 
-        let mut all = sorted_chunks.iter().peekable();
+        let len = sorted_chunks.len();
+        let mut all = sorted_chunks.into_iter().peekable();
 
         let mut array_manifests = Vec::with_capacity(1);
         while let Some(current_node) = all.peek().map(|chunk| &chunk.node).cloned() {
-            // TODO: what is a good capacity
-            let mut refs = Vec::with_capacity(8_192);
+            // TODO: adjust capacity when multiple arrays have their manifests consolidated in to one.
+            let mut refs = Vec::with_capacity(len);
             while let Some(chunk) = all.next_if(|chunk| chunk.node == current_node) {
                 refs.push(mk_chunk_ref(&mut builder, chunk));
             }
@@ -584,10 +586,10 @@ fn checksum(payload: &generated::ChunkRef<'_>) -> Option<Checksum> {
 
 fn mk_chunk_ref<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
-    chunk: &ChunkInfo,
+    chunk: ChunkInfo,
 ) -> flatbuffers::WIPOffset<generated::ChunkRef<'bldr>> {
     let index = Some(builder.create_vector(chunk.coord.0.as_slice()));
-    match &chunk.payload {
+    match chunk.payload {
         ChunkPayload::Inline(bytes) => {
             let bytes = builder.create_vector(bytes.as_ref());
             let args = generated::ChunkRefArgs {
