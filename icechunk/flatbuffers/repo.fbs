@@ -70,6 +70,12 @@ table GCRanUpdate {
 table ExpirationRanUpdate {
 }
 
+table FeatureFlagChangedUpdate {
+    id: uint16;
+    new_value: bool;
+    is_set: bool;
+}
+
 union UpdateType {
   RepoInitializedUpdate,
   RepoMigratedUpdate,
@@ -84,7 +90,8 @@ union UpdateType {
   CommitAmendedUpdate,
   NewDetachedSnapshotUpdate,
   GCRanUpdate,
-  ExpirationRanUpdate
+  ExpirationRanUpdate,
+  FeatureFlagChangedUpdate, 
 }
 
 table Update {
@@ -123,6 +130,12 @@ table Repo {
 
   // RepositoryConfig serialized as flexbuffers
   config: [uint8];
+
+  // List of features flags ids explicitly set by the user in state enabled/disabled
+  // Flags not present in either list are at their default value
+  // Sorted in ascending order of id
+  enabled_feature_flags: [uint16];
+  disabled_feature_flags: [uint16];
 }
 
 root_type Repo;

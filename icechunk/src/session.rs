@@ -39,6 +39,7 @@ use crate::{
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
+    feature_flags::raise_if_feature_flag_disabled,
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
@@ -1118,7 +1119,15 @@ impl Session {
         let update_type =
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
         let num_updates = self.config.num_updates_per_repo_info_file();
+        let is_rearrange = self.mode() == SessionMode::Rearrange;
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            if is_rearrange {
+                raise_if_feature_flag_disabled(
+                    repo_info.as_ref(),
+                    "move_node",
+                    "flush rearrange session",
+                )?;
+            }
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
                 ..new_snap.as_ref().try_into()?
@@ -1274,6 +1283,7 @@ impl Session {
             let _ = self.change_set_mut()?;
         }
         let change_set = &mut self.change_set;
+        let is_rearrange = matches!(change_set, ChangeSet::Rearrange(_));
 
         let id = do_commit(
             Arc::clone(&self.asset_manager),
@@ -1286,6 +1296,7 @@ impl Session {
             commit_method,
             self.config.manifest().splitting(),
             allow_empty,
+            is_rearrange,
             self.config.repo_update_retries().retries(),
             num_updates,
         )
@@ -2566,6 +2577,7 @@ async fn do_commit(
     commit_method: CommitMethod,
     split_config: &ManifestSplittingConfig,
     allow_empty: bool,
+    is_rearrange: bool,
     retry_settings: &storage::RetriesSettings,
     num_updates_per_repo_info_file: u16,
 ) -> SessionResult<SnapshotId> {
@@ -2614,6 +2626,7 @@ async fn do_commit(
                 snapshot_id,
                 new_snapshot,
                 commit_method,
+                is_rearrange,
                 retry_settings,
                 num_updates_per_repo_info_file,
             )
@@ -2675,18 +2688,27 @@ async fn do_commit_v1(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn do_commit_v2(
     asset_manager: Arc<AssetManager>,
     branch_name: &str,
     parent_snapshot_id: &SnapshotId,
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
+    is_rearrange: bool,
     retry_settings: &storage::RetriesSettings,
     num_updates_per_repo_info_file: u16,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+        if is_rearrange {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                "move_node",
+                "commit rearrange session",
+            )?;
+        }
         attempt += 1;
         let actual_parent = repo_info.resolve_branch(branch_name)?;
         if &actual_parent != parent_snapshot_id {

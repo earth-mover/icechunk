@@ -38,6 +38,10 @@ use crate::{
         RepositoryConfig,
     },
     error::ICError,
+    feature_flags::{
+        FEATURE_FLAGS, FeatureFlag, find_feature_flag_id,
+        raise_if_feature_flag_disabled,
+    },
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
@@ -736,6 +740,79 @@ impl Repository {
         Ok(())
     }
 
+    #[instrument(skip(self))]
+    pub async fn feature_flags(
+        &self,
+    ) -> RepositoryResult<impl Iterator<Item = FeatureFlag>> {
+        let (repo_info, _) = self.get_repo_info().await?;
+        let enabled_flags: HashSet<u16> =
+            if let Some(iter) = repo_info.enabled_feature_flags()? {
+                iter.collect()
+            } else {
+                HashSet::new()
+            };
+        let disabled_flags: HashSet<u16> =
+            if let Some(iter) = repo_info.disabled_feature_flags()? {
+                iter.collect()
+            } else {
+                HashSet::new()
+            };
+        let res = FEATURE_FLAGS.iter().map(move |(name, (id, default_enabled))| {
+            let setting = enabled_flags
+                .get(id)
+                .map(|_| true)
+                .or_else(|| disabled_flags.get(id).map(|_| false));
+            FeatureFlag::new(*id, name, *default_enabled, setting)
+        });
+
+        Ok(res)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn enabled_feature_flags(
+        &self,
+    ) -> RepositoryResult<impl Iterator<Item = FeatureFlag>> {
+        Ok(self.feature_flags().await?.filter(|ff| ff.enabled()))
+    }
+
+    #[instrument(skip(self))]
+    pub async fn disabled_feature_flags(
+        &self,
+    ) -> RepositoryResult<impl Iterator<Item = FeatureFlag>> {
+        Ok(self.feature_flags().await?.filter(|ff| !ff.enabled()))
+    }
+
+    #[instrument(skip(self))]
+    /// set_to = Some(true) will enable it
+    /// set_to = Some(false) will disable it
+    /// set_to = None will set it to default state by deleting from repo info object
+    pub async fn set_feature_flag(
+        &self,
+        feature_flag: &str,
+        set_to: Option<bool>,
+    ) -> RepositoryResult<()> {
+        // this feature is only available in IC2
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+
+        let num_updates = self.config.num_updates_per_repo_info_file();
+        let flag_id = find_feature_flag_id(feature_flag)?;
+
+        let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            Ok(Arc::new(repo_info.update_feature_flag(
+                self.spec_version(),
+                flag_id,
+                set_to,
+                backup_path,
+                num_updates,
+            )?))
+        };
+        let _ = self
+            .asset_manager
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .await?;
+        Ok(())
+    }
+
     #[instrument(skip(storage, config))]
     pub(crate) async fn store_config(
         storage: Arc<dyn Storage + Send + Sync>,
@@ -1264,6 +1341,11 @@ impl Repository {
     async fn delete_tag_v2(&self, tag: &str) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                "delete_tag",
+                "tag delete",
+            )?;
             let new_repo = repo_info
                 .delete_tag(self.spec_version(), tag, backup_path, num_updates)
                 .map_err(|err| match err {
@@ -1331,6 +1413,11 @@ impl Repository {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                "create_tag",
+                "tag creation",
+            )?;
             let new_repo = repo_info
                 .add_tag(
                     self.spec_version(),
@@ -1656,6 +1743,15 @@ impl Repository {
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
         let snapshot_id = self.lookup_branch(branch).await?;
+
+        // TODO: inefficient, lookup branch already does this
+        let (ri, _) = self.asset_manager().fetch_repo_info().await?;
+
+        raise_if_feature_flag_disabled(
+            ri.as_ref(),
+            "move_node",
+            "create rearrange session",
+        )?;
 
         let session = Session::create_rearrange_session(
             self.config.clone(),
