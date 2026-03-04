@@ -456,10 +456,7 @@ pub(crate) enum PyUpdateType {
     CommitAmended { branch: String, previous_snap_id: String, new_snap_id: String },
     ConfigChanged {},
     ExpirationRan {},
-    FeatureFlagChangedUpdate {
-    id: u16,
-    new_value: Option<bool>,
-},
+    FeatureFlagChangedUpdate { id: u16, new_value: Option<bool> },
     GCRan {},
     MetadataChanged {},
     NewCommit { branch: String, new_snap_id: String },
@@ -468,7 +465,6 @@ pub(crate) enum PyUpdateType {
     RepoMigrated { from_version: u8, to_version: u8 },
     TagCreated { name: String },
     TagDeleted { name: String, previous_snap_id: String },
-
 }
 
 #[pymethods]
@@ -512,11 +508,11 @@ impl PyUpdateType {
             )
             .into(),
             Self::GCRan {} => "GCRan()".into(),
-        Self::FeatureFlagChangedUpdate {id, new_value} => format!(
-            "FeatureFlagChangedUpdate(id={}, new_value={})",
-            id,
-            format_option(new_value.map(format_bool))
-        ),
+            Self::FeatureFlagChangedUpdate { id, new_value } => format!(
+                "FeatureFlagChangedUpdate(id={}, new_value={})",
+                id,
+                format_option(new_value.map(format_bool))
+            ),
             Self::ExpirationRan {} => "ExpirationRan()".into(),
             Self::NewDetachedSnapshot { new_snap_id } => {
                 format!("NewDetachedSnapshot(new_snap_id={})", new_snap_id).into()

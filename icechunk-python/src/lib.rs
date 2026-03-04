@@ -32,8 +32,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
 use repository::{
-    PyDiff, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo, PyUpdate,
-    PyUpdateType, PyFeatureFlag, 
+    PyDiff, PyFeatureFlag, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo,
+    PyUpdate, PyUpdateType,
 };
 use session::{ChunkType, PySession, PySessionMode};
 use stats::PyChunkStorageStats;
