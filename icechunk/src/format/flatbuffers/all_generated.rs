@@ -199,13 +199,13 @@ pub mod generated {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_UPDATE_TYPE: u8 = 14;
+    pub const ENUM_MAX_UPDATE_TYPE: u8 = 15;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 15] = [
+    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 16] = [
         UpdateType::NONE,
         UpdateType::RepoInitializedUpdate,
         UpdateType::RepoMigratedUpdate,
@@ -221,6 +221,7 @@ pub mod generated {
         UpdateType::NewDetachedSnapshotUpdate,
         UpdateType::GCRanUpdate,
         UpdateType::ExpirationRanUpdate,
+        UpdateType::FeatureFlagChangedUpdate,
     ];
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -243,9 +244,10 @@ pub mod generated {
         pub const NewDetachedSnapshotUpdate: Self = Self(12);
         pub const GCRanUpdate: Self = Self(13);
         pub const ExpirationRanUpdate: Self = Self(14);
+        pub const FeatureFlagChangedUpdate: Self = Self(15);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 14;
+        pub const ENUM_MAX: u8 = 15;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::NONE,
             Self::RepoInitializedUpdate,
@@ -262,6 +264,7 @@ pub mod generated {
             Self::NewDetachedSnapshotUpdate,
             Self::GCRanUpdate,
             Self::ExpirationRanUpdate,
+            Self::FeatureFlagChangedUpdate,
         ];
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
@@ -281,6 +284,7 @@ pub mod generated {
                 Self::NewDetachedSnapshotUpdate => Some("NewDetachedSnapshotUpdate"),
                 Self::GCRanUpdate => Some("GCRanUpdate"),
                 Self::ExpirationRanUpdate => Some("ExpirationRanUpdate"),
+                Self::FeatureFlagChangedUpdate => Some("FeatureFlagChangedUpdate"),
                 _ => None,
             }
         }
@@ -5779,6 +5783,160 @@ pub mod generated {
             ds.finish()
         }
     }
+    pub enum FeatureFlagChangedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct FeatureFlagChangedUpdate<'a> {
+        pub _tab: ::flatbuffers::Table<'a>,
+    }
+
+    impl<'a> ::flatbuffers::Follow<'a> for FeatureFlagChangedUpdate<'a> {
+        type Inner = FeatureFlagChangedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: unsafe { ::flatbuffers::Table::new(buf, loc) } }
+        }
+    }
+
+    impl<'a> FeatureFlagChangedUpdate<'a> {
+        pub const VT_ID: ::flatbuffers::VOffsetT = 4;
+        pub const VT_NEW_VALUE: ::flatbuffers::VOffsetT = 6;
+        pub const VT_IS_SET: ::flatbuffers::VOffsetT = 8;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
+            FeatureFlagChangedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: ::flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args FeatureFlagChangedUpdateArgs,
+        ) -> ::flatbuffers::WIPOffset<FeatureFlagChangedUpdate<'bldr>> {
+            let mut builder = FeatureFlagChangedUpdateBuilder::new(_fbb);
+            builder.add_id(args.id);
+            builder.add_is_set(args.is_set);
+            builder.add_new_value(args.new_value);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn id(&self) -> u16 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<u16>(FeatureFlagChangedUpdate::VT_ID, Some(0)).unwrap()
+            }
+        }
+        #[inline]
+        pub fn new_value(&self) -> bool {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<bool>(FeatureFlagChangedUpdate::VT_NEW_VALUE, Some(false))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn is_set(&self) -> bool {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<bool>(FeatureFlagChangedUpdate::VT_IS_SET, Some(false))
+                    .unwrap()
+            }
+        }
+    }
+
+    impl ::flatbuffers::Verifiable for FeatureFlagChangedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut ::flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
+            v.visit_table(pos)?
+                .visit_field::<u16>("id", Self::VT_ID, false)?
+                .visit_field::<bool>("new_value", Self::VT_NEW_VALUE, false)?
+                .visit_field::<bool>("is_set", Self::VT_IS_SET, false)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct FeatureFlagChangedUpdateArgs {
+        pub id: u16,
+        pub new_value: bool,
+        pub is_set: bool,
+    }
+    impl<'a> Default for FeatureFlagChangedUpdateArgs {
+        #[inline]
+        fn default() -> Self {
+            FeatureFlagChangedUpdateArgs { id: 0, new_value: false, is_set: false }
+        }
+    }
+
+    pub struct FeatureFlagChangedUpdateBuilder<
+        'a: 'b,
+        'b,
+        A: ::flatbuffers::Allocator + 'a,
+    > {
+        fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a>
+        FeatureFlagChangedUpdateBuilder<'a, 'b, A>
+    {
+        #[inline]
+        pub fn add_id(&mut self, id: u16) {
+            self.fbb_.push_slot::<u16>(FeatureFlagChangedUpdate::VT_ID, id, 0);
+        }
+        #[inline]
+        pub fn add_new_value(&mut self, new_value: bool) {
+            self.fbb_.push_slot::<bool>(
+                FeatureFlagChangedUpdate::VT_NEW_VALUE,
+                new_value,
+                false,
+            );
+        }
+        #[inline]
+        pub fn add_is_set(&mut self, is_set: bool) {
+            self.fbb_.push_slot::<bool>(
+                FeatureFlagChangedUpdate::VT_IS_SET,
+                is_set,
+                false,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> FeatureFlagChangedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            FeatureFlagChangedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> ::flatbuffers::WIPOffset<FeatureFlagChangedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            ::flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl ::core::fmt::Debug for FeatureFlagChangedUpdate<'_> {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+            let mut ds = f.debug_struct("FeatureFlagChangedUpdate");
+            ds.field("id", &self.id());
+            ds.field("new_value", &self.new_value());
+            ds.field("is_set", &self.is_set());
+            ds.finish()
+        }
+    }
     pub enum UpdateOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -6088,6 +6246,22 @@ pub mod generated {
                 None
             }
         }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_feature_flag_changed_update(
+            &self,
+        ) -> Option<FeatureFlagChangedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::FeatureFlagChangedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { FeatureFlagChangedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
     }
 
     impl ::flatbuffers::Verifiable for Update<'_> {
@@ -6113,6 +6287,7 @@ pub mod generated {
           UpdateType::NewDetachedSnapshotUpdate => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<NewDetachedSnapshotUpdate>>("UpdateType::NewDetachedSnapshotUpdate", pos),
           UpdateType::GCRanUpdate => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<GCRanUpdate>>("UpdateType::GCRanUpdate", pos),
           UpdateType::ExpirationRanUpdate => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<ExpirationRanUpdate>>("UpdateType::ExpirationRanUpdate", pos),
+          UpdateType::FeatureFlagChangedUpdate => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<FeatureFlagChangedUpdate>>("UpdateType::FeatureFlagChangedUpdate", pos),
           _ => Ok(()),
         }
      })?
@@ -6295,6 +6470,13 @@ pub mod generated {
                         ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
                     }
                 }
+                UpdateType::FeatureFlagChangedUpdate => {
+                    if let Some(x) = self.update_type_as_feature_flag_changed_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
                 _ => {
                     let x: Option<()> = None;
                     ds.field("update_type", &x)
@@ -6331,6 +6513,8 @@ pub mod generated {
         pub const VT_LATEST_UPDATES: ::flatbuffers::VOffsetT = 18;
         pub const VT_REPO_BEFORE_UPDATES: ::flatbuffers::VOffsetT = 20;
         pub const VT_CONFIG: ::flatbuffers::VOffsetT = 22;
+        pub const VT_ENABLED_FEATURE_FLAGS: ::flatbuffers::VOffsetT = 24;
+        pub const VT_DISABLED_FEATURE_FLAGS: ::flatbuffers::VOffsetT = 26;
 
         #[inline]
         pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -6347,6 +6531,12 @@ pub mod generated {
             args: &'args RepoArgs<'args>,
         ) -> ::flatbuffers::WIPOffset<Repo<'bldr>> {
             let mut builder = RepoBuilder::new(_fbb);
+            if let Some(x) = args.disabled_feature_flags {
+                builder.add_disabled_feature_flags(x);
+            }
+            if let Some(x) = args.enabled_feature_flags {
+                builder.add_enabled_feature_flags(x);
+            }
             if let Some(x) = args.config {
                 builder.add_config(x);
             }
@@ -6525,6 +6715,24 @@ pub mod generated {
                     )
             }
         }
+        #[inline]
+        pub fn enabled_feature_flags(&self) -> Option<::flatbuffers::Vector<'a, u16>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, u16>>>(Repo::VT_ENABLED_FEATURE_FLAGS, None)
+            }
+        }
+        #[inline]
+        pub fn disabled_feature_flags(&self) -> Option<::flatbuffers::Vector<'a, u16>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, u16>>>(Repo::VT_DISABLED_FEATURE_FLAGS, None)
+            }
+        }
     }
 
     impl ::flatbuffers::Verifiable for Repo<'_> {
@@ -6544,6 +6752,8 @@ pub mod generated {
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<Update>>>>("latest_updates", Self::VT_LATEST_UPDATES, true)?
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("repo_before_updates", Self::VT_REPO_BEFORE_UPDATES, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, u8>>>("config", Self::VT_CONFIG, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, u16>>>("enabled_feature_flags", Self::VT_ENABLED_FEATURE_FLAGS, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, u16>>>("disabled_feature_flags", Self::VT_DISABLED_FEATURE_FLAGS, false)?
      .finish();
             Ok(())
         }
@@ -6589,6 +6799,10 @@ pub mod generated {
         >,
         pub repo_before_updates: Option<::flatbuffers::WIPOffset<&'a str>>,
         pub config: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, u8>>>,
+        pub enabled_feature_flags:
+            Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, u16>>>,
+        pub disabled_feature_flags:
+            Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, u16>>>,
     }
     impl<'a> Default for RepoArgs<'a> {
         #[inline]
@@ -6604,6 +6818,8 @@ pub mod generated {
                 latest_updates: None, // required field
                 repo_before_updates: None,
                 config: None,
+                enabled_feature_flags: None,
+                disabled_feature_flags: None,
             }
         }
     }
@@ -6719,6 +6935,30 @@ pub mod generated {
                 .push_slot_always::<::flatbuffers::WIPOffset<_>>(Repo::VT_CONFIG, config);
         }
         #[inline]
+        pub fn add_enabled_feature_flags(
+            &mut self,
+            enabled_feature_flags: ::flatbuffers::WIPOffset<
+                ::flatbuffers::Vector<'b, u16>,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+                Repo::VT_ENABLED_FEATURE_FLAGS,
+                enabled_feature_flags,
+            );
+        }
+        #[inline]
+        pub fn add_disabled_feature_flags(
+            &mut self,
+            disabled_feature_flags: ::flatbuffers::WIPOffset<
+                ::flatbuffers::Vector<'b, u16>,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+                Repo::VT_DISABLED_FEATURE_FLAGS,
+                disabled_feature_flags,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> RepoBuilder<'a, 'b, A> {
@@ -6751,6 +6991,8 @@ pub mod generated {
             ds.field("latest_updates", &self.latest_updates());
             ds.field("repo_before_updates", &self.repo_before_updates());
             ds.field("config", &self.config());
+            ds.field("enabled_feature_flags", &self.enabled_feature_flags());
+            ds.field("disabled_feature_flags", &self.disabled_feature_flags());
             ds.finish()
         }
     }

@@ -49,6 +49,7 @@ icechunk._icechunk_python.Credentials.S3
 icechunk._icechunk_python.Credentials.S3.__match_args__
 icechunk._icechunk_python.Credentials.S3.__new__
 icechunk._icechunk_python.Diff
+icechunk._icechunk_python.FeatureFlag
 icechunk._icechunk_python.GCSummary
 icechunk._icechunk_python.GcsBearerCredential
 icechunk._icechunk_python.GcsCredentials
@@ -179,6 +180,7 @@ icechunk._icechunk_python.UpdateType.CommitAmended.__match_args__
 icechunk._icechunk_python.UpdateType.CommitAmended.__new__
 icechunk._icechunk_python.UpdateType.ConfigChanged.__match_args__
 icechunk._icechunk_python.UpdateType.ExpirationRan.__match_args__
+icechunk._icechunk_python.UpdateType.FeatureFlagChanged.__new__
 icechunk._icechunk_python.UpdateType.GCRan.__match_args__
 icechunk._icechunk_python.UpdateType.MetadataChanged.__match_args__
 icechunk._icechunk_python.UpdateType.NewCommit.__match_args__

@@ -33,7 +33,7 @@ use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
 use repository::{
     PyDiff, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo, PyUpdate,
-    PyUpdateType,
+    PyUpdateType, PyFeatureFlag, 
 };
 use session::{ChunkType, PySession, PySessionMode};
 use stats::PyChunkStorageStats;
@@ -201,6 +201,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDiff>()?;
     m.add_class::<PyUpdateType>()?;
     m.add_class::<PyUpdate>()?;
+    m.add_class::<PyFeatureFlag>()?;
     m.add_class::<VirtualChunkSpec>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
