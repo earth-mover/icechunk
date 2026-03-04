@@ -15,7 +15,7 @@ async def test_shift_using_function() -> None:
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=True)
     array = root.create_array(
-        "array", shape=(50,), chunks=(2,), dtype="i4", fill_value=42, data=np.arange(50)
+        "array", chunks=(2,), dtype="i4", fill_value=42, data=np.arange(50)
     )
     session.commit("create array")
 
@@ -44,7 +44,7 @@ async def test_shift_left() -> None:
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=True)
     array = root.create_array(
-        "array", shape=(50,), chunks=(2,), dtype="i4", fill_value=42, data=np.arange(50)
+        "array", chunks=(2,), dtype="i4", fill_value=42, data=np.arange(50)
     )
     session.commit("create array")
 
@@ -67,7 +67,7 @@ async def test_shift_right() -> None:
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=True)
     array = root.create_array(
-        "array", shape=(50,), chunks=(2,), dtype="i4", fill_value=-1, data=np.arange(50)
+        "array", chunks=(2,), dtype="i4", fill_value=-1, data=np.arange(50)
     )
     session.commit("create array")
 
@@ -91,7 +91,7 @@ async def test_resize_then_shift_right() -> None:
     root = zarr.group(store=session.store, overwrite=True)
     # 50 elements, chunk size 2 = 25 chunks
     array = root.create_array(
-        "array", shape=(50,), chunks=(2,), dtype="i4", fill_value=42, data=np.arange(50)
+        "array", chunks=(2,), dtype="i4", fill_value=42, data=np.arange(50)
     )
     session.commit("create array")
 
@@ -131,7 +131,6 @@ async def test_shift_2d() -> None:
     # 4x4 array with 2x2 chunks = 2x2 chunks grid
     array = root.create_array(
         "array",
-        shape=(4, 4),
         chunks=(2, 2),
         dtype="i4",
         fill_value=-1,
@@ -160,7 +159,6 @@ async def test_shift_3d_mixed_offset() -> None:
     # 6x4x8 array with 2x2x4 chunks = 3x2x2 chunks grid
     array = root.create_array(
         "array",
-        shape=(6, 4, 8),
         chunks=(2, 2, 4),
         dtype="i4",
         fill_value=-1,
@@ -191,7 +189,7 @@ async def test_shift_zero_offset() -> None:
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=True)
     array = root.create_array(
-        "array", shape=(10,), chunks=(2,), dtype="i4", fill_value=42, data=np.arange(10)
+        "array", chunks=(2,), dtype="i4", fill_value=42, data=np.arange(10)
     )
     session.commit("create array")
 
@@ -211,7 +209,7 @@ async def test_shift_persists_after_commit() -> None:
     session = repo.writable_session("main")
     root = zarr.group(store=session.store, overwrite=True)
     array = root.create_array(
-        "array", shape=(10,), chunks=(2,), dtype="i4", fill_value=-1, data=np.arange(10)
+        "array", chunks=(2,), dtype="i4", fill_value=-1, data=np.arange(10)
     )
     session.commit("create array")
 
