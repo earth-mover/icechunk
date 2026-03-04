@@ -303,7 +303,6 @@ impl ManifestFileInfo {
     }
 }
 
-// #[derive(PartialEq)]
 pub struct Snapshot {
     buffer: Vec<u8>,
     spec_version: SpecVersionBin,
@@ -388,8 +387,8 @@ impl Snapshot {
         Ok(Snapshot {
             buffer,
             spec_version,
-            // FIXME: use config parameter
-            node_cache: Cache::new(5),
+            // this number is low because we cache a very large number of snapshot nodes.
+            node_cache: Cache::new(1),
         })
     }
 
@@ -477,8 +476,8 @@ impl Snapshot {
         Ok(Snapshot {
             buffer,
             spec_version,
-            // FIXME: use config parameter
-            node_cache: Cache::new(5),
+            // this number is low because we cache a very large number of snapshot nodes.
+            node_cache: Cache::new(1),
         })
     }
 
