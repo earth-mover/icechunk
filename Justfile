@@ -6,7 +6,7 @@ alias pre := pre-commit
 
 [doc("Run all Rust tests via cargo-nextest")]
 test *args='':
-  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --all-targets {{args}}
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples {{args}}
 
 [doc("Run Rust doc tests only")]
 doctest *args='':
@@ -14,7 +14,7 @@ doctest *args='':
 
 [doc("Run all Rust tests with RUST_LOG enabled (e.g. `just test-logs debug`)")]
 test-logs level *args='':
-  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --all-targets {{args}} -- --nocapture
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples --nocapture {{args}}
 
 [doc("Compile tests without running them")]
 compile-tests *args='':
@@ -44,9 +44,9 @@ format-nix *args='':
 check-deps *args='':
   cargo deny --all-features check {{args}}
 
-[doc("Run all Rust examples (skips limits_chunk_refs)")]
+[doc("Run all Rust examples (skips limits_chunk_refs, large_manifests)")]
 run-all-examples:
-  for example in icechunk/examples/*.rs; do if [[ ${example} =~ "limits_chunk_refs" ]]; then continue; fi; cargo run --profile {{profile}} --example "$(basename "${example%.rs}")"; done
+  for example in icechunk/examples/*.rs; do case "$example" in *limits_chunk_refs*|*large_manifests*) continue;; esac; cargo run --profile {{profile}} --example "$(basename "${example%.rs}")"; done
 
 [doc("Fast Rust pre-commit: format + lint (~3s)")]
 pre-commit-fast:

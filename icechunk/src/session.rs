@@ -39,6 +39,7 @@ use crate::{
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
+    feature_flags::{MOVE_NODE_FLAG, raise_if_feature_flag_disabled},
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
@@ -430,7 +431,7 @@ impl Session {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, node))]
     pub async fn delete_node(&mut self, node: NodeSnapshot) -> SessionResult<()> {
         match node {
             NodeSnapshot { node_data: NodeData::Group, path: node_path, .. } => {
@@ -650,7 +651,7 @@ impl Session {
     // Record the write, referencing or delete of a chunk
     //
     // Caller has to write the chunk before calling this.
-    #[instrument(skip(self))]
+    #[instrument(skip(self, data))]
     pub async fn set_chunk_ref(
         &mut self,
         path: Path,
@@ -684,7 +685,7 @@ impl Session {
 
     // Helper function that accepts a NodeSnapshot instead of a path,
     // this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
-    #[instrument(skip(self))]
+    #[instrument(skip(self, node, data))]
     async fn set_node_chunk_ref(
         &mut self,
         node: NodeSnapshot,
@@ -1001,7 +1002,7 @@ impl Session {
         all_chunks(&self.asset_manager, self.change_set(), self.snapshot_id()).await
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, node))]
     pub async fn all_node_chunks<'a>(
         &'a self,
         node: &'a NodeSnapshot,
@@ -1118,7 +1119,15 @@ impl Session {
         let update_type =
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
         let num_updates = self.config.num_updates_per_repo_info_file();
-        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+        let is_rearrange = self.mode() == SessionMode::Rearrange;
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            if is_rearrange {
+                raise_if_feature_flag_disabled(
+                    repo_info.as_ref(),
+                    MOVE_NODE_FLAG,
+                    "flush rearrange session",
+                )?;
+            }
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
                 ..new_snap.as_ref().try_into()?
@@ -1274,6 +1283,7 @@ impl Session {
             let _ = self.change_set_mut()?;
         }
         let change_set = &mut self.change_set;
+        let is_rearrange = matches!(change_set, ChangeSet::Rearrange(_));
 
         let id = do_commit(
             Arc::clone(&self.asset_manager),
@@ -1286,6 +1296,7 @@ impl Session {
             commit_method,
             self.config.manifest().splitting(),
             allow_empty,
+            is_rearrange,
             self.config.repo_update_retries().retries(),
             num_updates,
         )
@@ -2566,6 +2577,7 @@ async fn do_commit(
     commit_method: CommitMethod,
     split_config: &ManifestSplittingConfig,
     allow_empty: bool,
+    is_rearrange: bool,
     retry_settings: &storage::RetriesSettings,
     num_updates_per_repo_info_file: u16,
 ) -> SessionResult<SnapshotId> {
@@ -2614,6 +2626,7 @@ async fn do_commit(
                 snapshot_id,
                 new_snapshot,
                 commit_method,
+                is_rearrange,
                 retry_settings,
                 num_updates_per_repo_info_file,
             )
@@ -2675,18 +2688,27 @@ async fn do_commit_v1(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn do_commit_v2(
     asset_manager: Arc<AssetManager>,
     branch_name: &str,
     parent_snapshot_id: &SnapshotId,
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
+    is_rearrange: bool,
     retry_settings: &storage::RetriesSettings,
     num_updates_per_repo_info_file: u16,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
-    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str| {
+    let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+        if is_rearrange {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                MOVE_NODE_FLAG,
+                "commit rearrange session",
+            )?;
+        }
         attempt += 1;
         let actual_parent = repo_info.resolve_branch(branch_name)?;
         if &actual_parent != parent_snapshot_id {
@@ -2860,7 +2882,7 @@ mod tests {
     async fn create_memory_store_repository() -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new(), None).await.unwrap()
+        Repository::create(None, storage, HashMap::new(), None, true).await.unwrap()
     }
 
     #[proptest(async = "tokio")]
@@ -3136,6 +3158,7 @@ mod tests {
             storage,
             HashMap::new(),
             None,
+            true,
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
@@ -3543,7 +3566,7 @@ mod tests {
             ..Default::default()
         };
         let repository =
-            Repository::create(Some(config), storage, HashMap::new(), None).await?;
+            Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -3970,7 +3993,7 @@ mod tests {
     #[tokio_test(flavor = "multi_thread")]
     async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::create(None, storage, HashMap::new(), None).await?;
+        let repo = Repository::create(None, storage, HashMap::new(), None, true).await?;
         let mut ds = repo.writable_session("main").await?;
         let def = Bytes::copy_from_slice(b"");
 
@@ -4041,7 +4064,8 @@ mod tests {
         let in_mem_storage = Arc::new(ObjectStorage::new_in_memory().await?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
 
         // there should be no manifests yet
         assert!(
@@ -4705,7 +4729,8 @@ mod tests {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4765,7 +4790,8 @@ mod tests {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4796,7 +4822,8 @@ mod tests {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
         let mut ds = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4858,7 +4885,8 @@ mod tests {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
         let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
         let mut session = repo.writable_session("main").await?;
         let shape = ArrayShape::new(vec![(20, 2)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;

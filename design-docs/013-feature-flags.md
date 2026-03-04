@@ -11,7 +11,8 @@ We add to `repo.fbs`
 
 table Repo {
   ...
-  features: [string];
+  enabled_features: [u16];
+  disabled_features: [u16];
 }
 ```
 
@@ -20,39 +21,38 @@ API:
 
 ```python
 
-class FeatureFlagStatus(Enum):
-  Enabled
-  Disabled
-  Unset
-
 class FeatureFlag:
+  it: int
   name: str
   default_enabled: bool
-  status: FeatureFlagStatus
+  setting: bool | None  # None for unset
 
   @property
-  def enabled(&self) -> bool:
+  def enabled(&self) -> bool:  # takes into account the default and the setting
     ...
 
 class Repository:
   ...
   def feature_flags(self) -> list[FeatureFlag]:
     ...
+  def enabled_feature_flags(self) -> list[FeatureFlag]:
+    ...
+  def disabled_feature_flags(self) -> list[FeatureFlag]:
+    ...
 
-  def update_feature_flag(self, feature_name: str, status: FeatureFlagStatus):
+  def update_feature_flag(self, feature_name: str, set_to: bool | None):
     ...
 ```
 
 Icechunk code has (something isomorphic to) a hardcoded list of `FeatureFlag`.
 
-The presence of a string in the `features` array means that the opposite of
-its default state is enabled. For features that are `default_enabled = false`
-the presence means `enabled`, but if `default_enabled = true` the presence
-means `disabled`.
+The presence of a string in the `enabled_features` array means that it was
+explicitly set by the user. Same for `disabled_features`, a flag that is
+not present in either lists is at its default value.
 
 We organize `default_enabled` for existing features so most features are in their
-default states. Unset feature flags are not serialized so most repos will have
-an empty list of features (which is serialized as null).
+default states. Default feature flags are not serialized so most repos will have
+two empty lists of features (which is serialized as null).
 
 Before executing a function Icechunk checks the status of the corresponding
 feature flag. Of course feature flags cannot be enforced, since user has access

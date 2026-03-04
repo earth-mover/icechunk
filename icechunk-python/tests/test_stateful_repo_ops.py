@@ -234,6 +234,7 @@ class Model:
         self.deleted_tags: set[str] = set()
 
         self.ops_log: list[UpdateModel] = []
+        self.migrated: bool = False
 
         # a tag once created, can never be recreated even after expiration
         self.created_tags: set[str] = set()
@@ -272,14 +273,21 @@ class Model:
     def get(self, key: str) -> Buffer | None:
         return self.store.get(key)
 
+    def delete_doc(self, key: str) -> None:
+        if key in self.store:
+            del self.store[key]
+            self.changes_made = True
+
     def upgrade(self, dry_run: bool) -> None:
         if not dry_run:
             # only reachable snapshots are migrated over
             self.commits = {
                 k: v for k, v in self.commits.items() if k in self.reachable_snapshots()
             }
-            # The ops log starts fresh after migration from v1,
+            # The ops log now contains synthetic entries with synthetic ordering
+            # reconstructed from the snapshot graph, so we skip exact comparison after migration.
             self.ops_log = [RepoMigratedUpdateModel(self.spec_version, 2)]
+            self.migrated = True
             self.spec_version = 2
 
     @property
@@ -546,12 +554,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # instead we explicitly add a rule to make a lot of commits
         commit_ids = []
         for should_amend in amend_or_commit:
-            # annoyingly we need to ensure we overwrite with different data, otherwise icechunk doesn't like it.
-            path, meta = data.draw(
-                st.tuples(metadata_paths, v3_array_metadata).filter(
-                    lambda pm: self.model.get(pm[0]) != pm[1]
-                )
-            )
+            # We need to ensure we overwrite with different data, otherwise icechunk doesn't register a change.
+            # Delete first then set, to avoid slow hypothesis filter rejection.
+            path, meta = data.draw(st.tuples(metadata_paths, v3_array_metadata))
+            self.delete_doc(path)
             self.set_doc(path, meta)
             msg = data.draw(st.text(max_size=MAX_TEXT_SIZE))
             if (
@@ -574,6 +580,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             # not at branch head, modifications not possible.
             with pytest.raises(IcechunkError, match="read-only store"):
                 self.sync_store.set(path, value)
+
+    def delete_doc(self, path: str) -> None:
+        note(f"deleting path {path!r}")
+        if self.model.branch is not None:
+            self.sync_store.delete(path)
+            self.model.delete_doc(path)
 
     @precondition(lambda self: self.model.spec_version >= 2)
     @rule(meta=simple_attrs)
@@ -942,6 +954,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # this method only exists to reduce verbosity of hypothesis output
         # It cannot be called `check_invariants` because that clashes
         # with an existing method on the superclass
+
+        assert self.model.spec_version == getattr(self.repo, "spec_version", 1)
         self.check_list_prefix_from_root()
         self.check_tags()
         self.check_branches()
@@ -1057,14 +1071,22 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             return
         actual_ops = list(self.repo.ops_log())
 
-        # ops should be ordered
+        # ops should be strictly decreasing in both normal and migrated repos
         assert all(
             first.updated_at > second.updated_at
             for (first, second) in itertools.pairwise(actual_ops)
         )
 
-        # backup paths must be unique
-        all_backups = [op.backup_path for op in actual_ops]
+        if self.model.migrated:
+            # The model tracks RepoMigratedUpdate + all post-migration ops.
+            # This is because the synthetically reconstructed ops log upon migration
+            # will not match what the model has recorded.
+            # Compare only the post-migration entries the model knows about.
+            n = len(self.model.ops_log)
+            actual_ops = actual_ops[:n]
+
+        # non-None backup paths must be unique
+        all_backups = [op.backup_path for op in actual_ops if op.backup_path is not None]
         assert len(all_backups) == len(set(all_backups))
 
         assert self.model.ops_log[::-1] == actual_ops

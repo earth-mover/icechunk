@@ -337,6 +337,12 @@ pub enum IcechunkFormatErrorKind {
         "update timestamp is invalid, please verify if the machine clock has drifted: update time: `{new_time}`, latest update time: `{latest_time}`"
     )]
     InvalidUpdateTimestamp { latest_time: DateTime<Utc>, new_time: DateTime<Utc> },
+    #[error("invalid feature flag name: {name}")]
+    InvalidFeatureFlagName { name: String },
+    #[error("invalid feature flag id: {id}")]
+    InvalidFeatureFlagId { id: u16 },
+    #[error("{feature_description} is disabled by a feature flag ({feature_flag})")]
+    FeatureFlagDisabled { feature_description: String, feature_flag: String },
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
@@ -606,7 +612,15 @@ pub fn lookup_index_by_key<'a, T: ::flatbuffers::Follow<'a> + 'a, K: Ord>(
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::roundtrip_serialization_tests;
+    use crate::strategies::{attributes_id, spec_version};
     use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
+
+    roundtrip_serialization_tests!(
+        serialize_and_deserialize_attribute_ids - attributes_id,
+        serialize_and_deserialize_spec_version_bin - spec_version
+    );
 
     #[icechunk_macros::test]
     fn test_object_id_serialization() {

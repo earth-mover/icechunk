@@ -40,11 +40,11 @@ As an example, if the repo has a VCC like
       anonymous: false
 ```
 
-A valid `ChunkRef` could have location: `vcc://my-virtual-icechunk/4K2JE645QXEXJ8BFDX70`.
+A valid `ChunkRef` could have location: `_vcc://my-virtual-icechunk/4K2JE645QXEXJ8BFDX70`.
 This would resolve to an object in the S3 compatible store, with bucket name
 `testbucket` and key `my-repo/chunks/4K2JE645QXEXJ8BFDX70`.
 
-Hostnames in urls with protocol `vcc` must much the name of a VCC as defined in
+Hostnames in urls with protocol `_vcc` must much the name of a VCC as defined in
 the repo configuration, and if it doesn't those relative chunk refs
 will generate an error when dereferenced.
 
@@ -79,8 +79,9 @@ table Manifest {
   // existing field
   arrays: [ArrayManifest] (required);
 
-  // NEW OPTIONAL FIELD
-  location_dictionary: [uint8]
+  // NEW OPTIONAL FIELDS
+  location_dictionary: [uint8];
+  compression_algorithm: uint8;
 }
 
 table ChunkRef {
