@@ -5189,7 +5189,14 @@ mod tests {
 
         ds2.delete_group(path.clone()).await?;
         ds2.add_group(path.clone(), Bytes::from("group-metadata")).await?;
-        assert!(ds2.commit("delete+re-add group", None).await.is_err());
+        assert!(matches!(
+            ds2.commit("delete+re-add group", None).await,
+            Err(SessionError {
+                kind: SessionErrorKind::Conflict {
+                    expected_parent, actual_parent
+                }, ..
+            }) if expected_parent != actual_parent
+        ));
 
         ds2.rebase(&ConflictDetector).await?;
         ds2.commit("delete+re-add group", None).await?;
@@ -5218,7 +5225,14 @@ mod tests {
         let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_group(path.clone()).await?;
         ds2.add_group(path.clone(), user_data()).await?;
-        assert!(ds2.commit("delete+re-add group", None).await.is_err());
+        assert!(matches!(
+            ds2.commit("delete+re-add group", None).await,
+            Err(SessionError {
+                kind: SessionErrorKind::Conflict {
+                    expected_parent, actual_parent
+                }, ..
+            }) if expected_parent != actual_parent
+        ));
 
         assert_has_conflict(
             &Conflict::DeleteOfUpdatedGroup { path, node_id: node.id },
