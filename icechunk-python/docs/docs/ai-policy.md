@@ -26,11 +26,11 @@ say so in the PR description and note how they were used.
 ## Core Principle: Communication
 
 PR descriptions, issue comments, and review responses must be your own words. The
-substance and reasoning must come from you — do not paste AI-generated text as
+substance and reasoning must come from you. Do not paste AI-generated text as
 comments or review responses.
 
 Using AI to polish grammar, spelling, or formatting is fine and does not require
-disclosure. This is especially welcomed if English is not your first language.
+disclosure.
 
 ## Code and Tests
 
