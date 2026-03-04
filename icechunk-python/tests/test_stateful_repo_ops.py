@@ -602,6 +602,14 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.repo = icechunk.upgrade_icechunk_repository(
             self.repo, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
         )
+        # Reopening discards uncommitted changes - reset session and model
+        branch = (
+            self.model.branch
+            if self.model.branch in self.model.branch_heads
+            else DEFAULT_BRANCH
+        )
+        self.session = self.repo.writable_session(branch)
+        self.model.checkout_branch(branch)
 
         self.model.upgrade(dry_run)
         if not dry_run:
