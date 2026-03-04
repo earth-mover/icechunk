@@ -30,6 +30,10 @@ build *args:
 build-release *args:
   cargo build --release "$@"
 
+[doc("Prepare environment for development")]
+develop *args='':
+  cd icechunk-python && uv run -m maturin_import_hook site install && maturin develop --uv --profile {{profile}} {{args}}
+
 [doc("Run clippy lints on all features")]
 lint *args:
   cargo clippy --profile {{profile}} --all-features "$@"
