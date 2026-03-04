@@ -370,48 +370,59 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
     let split_config = ManifestSplittingConfig::with_size(split_size);
 
     for kind in [ChunkKind::Inline, ChunkKind::Virtual] {
-        group.bench_with_input(
-            BenchmarkId::new("", kind.to_string()),
-            &kind,
-            |b, &kind| {
-                // We need to do these shenanigans so we can time the commit and not the set.
-                b.iter_custom(|_iters| {
-                    // Fresh repo per sample
-                    let shape =
-                        ArrayShape::new(vec![(num_chunks.into(), chunk_size.into())])
-                            .unwrap();
-                    let repo = rt.block_on(async {
-                        setup_repo(path.clone(), shape, None, Some(split_config.clone()))
-                            .await
-                            .unwrap()
-                    });
-
-                    // 100 sequential commits, timing only the commit
-                    let mut total = std::time::Duration::ZERO;
-                    for batch in 0..num_manifests {
-                        let mut session = rt.block_on(async {
-                            let mut session =
-                                repo.writable_session("main").await.unwrap();
-                            set_chunks(
+        for phase in ["set", "commit"] {
+            group.bench_with_input(
+                BenchmarkId::new(phase, kind.to_string()),
+                &kind,
+                |b, &kind| {
+                    b.iter_custom(|_iters| {
+                        // Fresh repo per sample
+                        let shape =
+                            ArrayShape::new(vec![(num_chunks.into(), chunk_size.into())])
+                                .unwrap();
+                        let repo = rt.block_on(async {
+                            setup_repo(
                                 path.clone(),
-                                &mut session,
-                                batch * split_size..(batch + 1) * split_size,
-                                kind,
+                                shape,
+                                None,
+                                Some(split_config.clone()),
                             )
                             .await
-                            .unwrap();
-                            session
+                            .unwrap()
                         });
-                        let start = std::time::Instant::now();
-                        rt.block_on(async {
-                            session.commit("commit", None).await.unwrap();
-                        });
-                        total += start.elapsed();
-                    }
-                    total
-                })
-            },
-        );
+
+                        let mut total = std::time::Duration::ZERO;
+                        for batch in 0..num_manifests {
+                            let start_set = std::time::Instant::now();
+                            let mut session = rt.block_on(async {
+                                let mut session =
+                                    repo.writable_session("main").await.unwrap();
+                                set_chunks(
+                                    path.clone(),
+                                    &mut session,
+                                    batch * split_size..(batch + 1) * split_size,
+                                    kind,
+                                )
+                                .await
+                                .unwrap();
+                                session
+                            });
+                            let set_elapsed = start_set.elapsed();
+
+                            let start_commit = std::time::Instant::now();
+                            rt.block_on(async {
+                                session.commit("commit", None).await.unwrap();
+                            });
+                            let commit_elapsed = start_commit.elapsed();
+
+                            total +=
+                                if phase == "set" { set_elapsed } else { commit_elapsed };
+                        }
+                        total
+                    })
+                },
+            );
+        }
     }
     group.finish();
 }
