@@ -91,7 +91,7 @@ union UpdateType {
   NewDetachedSnapshotUpdate,
   GCRanUpdate,
   ExpirationRanUpdate,
-  FeatureFlagChangedUpdate, 
+  FeatureFlagChangedUpdate,
 }
 
 table Update {
