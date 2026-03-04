@@ -338,6 +338,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             self.store = self.repo.writable_session("main").store
 
     @rule(data=st.data())
+    @precondition(lambda self: Version(self.ic.__version__).major >= 2)
     @precondition(lambda self: self.repo.spec_version >= 2)
     @precondition(lambda self: bool(self.all_arrays))
     def shift_array(self, data: st.DataObject) -> None:
