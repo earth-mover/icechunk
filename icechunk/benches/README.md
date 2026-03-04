@@ -6,6 +6,13 @@ The benchmarks are written using `criterion.rs` as harness.
 3. Run those benchmarks only for inline chunks: `cargo bench --bench manifest -- "commit_split_manifests/inline"`
 4. Run those benchmarks only for inline chunks and specifically 1000 manifests: `cargo bench --bench manifest -- "commit_split_manifests/virtual/1000$"`
 5. Examine logs for a particular benchmark: `ICECHUNK_LOG=icechunk=trace cargo bench --features logs --bench manifest -- "commit_rebase_split_manifests/inline" --test --nocapture`. You will need to add the `initialize_tracing(None)` line at the beginning of the benchmark function.
+6. To compare `main` vs `HEAD` do it manually using "baselines":
+    ``` sh
+    git switch support/v1.x \
+    && cargo bench --bench manifest -- --save-baseline v1  \
+    && git switch optimize-manifest-writes \
+    && cargo bench --bench manifest -- --baseline v1
+    ```
 
 Settings for the default `bench` profile have been edited to include some, but not all, optimizations for faster compiles and `debuginfo` for profiling.
 

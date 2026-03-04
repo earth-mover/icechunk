@@ -491,24 +491,21 @@ impl ChangeSet {
         &self,
     ) -> impl Iterator<Item = (Path, ChunkInfo)> + use<'_> {
         self.edits().new_arrays.iter().flat_map(|(path, (node_id, _))| {
-            self.new_array_chunk_iterator(node_id, path).map(|ci| (path.clone(), ci))
+            self.array_chunks_iterator(node_id, path).filter_map(
+                move |(coords, payload)| {
+                    payload.as_ref().map(|p| {
+                        (
+                            path.clone(),
+                            ChunkInfo {
+                                node: node_id.clone(),
+                                coord: coords.clone(),
+                                payload: p.clone(),
+                            },
+                        )
+                    })
+                },
+            )
         })
-    }
-
-    pub fn new_array_chunk_iterator<'a>(
-        &'a self,
-        node_id: &'a NodeId,
-        node_path: &Path,
-    ) -> impl Iterator<Item = ChunkInfo> + use<'a> {
-        self.array_chunks_iterator(node_id, node_path).filter_map(
-            move |(coords, payload)| {
-                payload.as_ref().map(|p| ChunkInfo {
-                    node: node_id.clone(),
-                    coord: coords.clone(),
-                    payload: p.clone(),
-                })
-            },
-        )
     }
 
     pub fn array_manifest(&self, node_id: &NodeId) -> Option<&ChunkTable> {

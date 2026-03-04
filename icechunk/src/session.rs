@@ -215,6 +215,7 @@ pub type SessionResult<T> = Result<T, SessionError>;
 // and at read time to choose which manifest to query for chunk payload
 /// It is useful to have this act on an iterator (e.g. get_chunk_ref)
 /// The find method on ManifestSplits is simply a helper.
+#[inline(always)]
 pub fn find_coord<'a, I>(
     iter: I,
     coord: &'a ChunkIndices,
@@ -236,11 +237,13 @@ where
 }
 
 impl ManifestSplits {
+    #[inline(always)]
     pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<&'a ManifestExtents> {
         debug_assert_eq!(coord.0.len(), self.0[0].len());
         find_coord(self.iter(), coord).map(|x| x.1)
     }
 
+    #[inline(always)]
     pub fn position(&self, coord: &ChunkIndices) -> Option<usize> {
         debug_assert_eq!(coord.0.len(), self.0[0].len());
         find_coord(self.iter(), coord).map(|x| x.0)
@@ -1035,8 +1038,8 @@ impl Session {
         let res = try_stream! {
             let new_chunks = stream::iter(
                 self.change_set()
-                    .new_array_chunk_iterator(&node.id, array_path)
-                    .map(|chunk_info| Ok::<ChunkIndices, SessionError>(chunk_info.coord)),
+                    .array_chunks_iterator(&node.id, array_path)
+                    .map(|(coord, _)| Ok::<ChunkIndices, SessionError>(coord.clone())),
             );
 
             for await maybe_coords in updated_chunks.chain(new_chunks) {
@@ -2021,10 +2024,22 @@ impl<'a> FlushProcess<'a> {
             if self.change_set.array_manifest(node_id).is_some() {
                 let chunks = stream::iter(
                     self.change_set
-                        .new_array_chunk_iterator(node_id, node_path)
+                        .array_chunks_iterator(node_id, node_path)
                         // FIXME: do we need to optimize this so we don't need multiple passes over all chunks calling
                         // contains?
-                        .filter(|chunk| extent.contains(&chunk.coord.0))
+                        .filter_map(|(coord, payload)| {
+                            if let Some(payload) = payload
+                                && extent.contains(&coord.0)
+                            {
+                                Some(ChunkInfo {
+                                    node: node_id.clone(),
+                                    coord: coord.clone(),
+                                    payload: payload.clone(),
+                                })
+                            } else {
+                                None
+                            }
+                        })
                         .map(Ok),
                 );
                 let new_ref = self.write_manifest_from_iterator(chunks).await?;
@@ -2064,8 +2079,8 @@ impl<'a> FlushProcess<'a> {
                         {
                             all_chunks_vec.push(Ok(ChunkInfo {
                                 node: node_id.clone(),
-                                coord: idx.clone(),
-                                payload: payload.clone(),
+                                coord: idx,
+                                payload,
                             }));
                         }
                     }
