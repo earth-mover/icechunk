@@ -21,7 +21,7 @@ AI assistance, or generated entirely by an AI tool.
 ### Disclosure
 
 If AI tools were used to generate or modify code or tests in your contribution, you **must**
-say so in the PR description and note which tools were used.
+say so in the PR description and note how they were used.
 
 ## Core Principle: Communication
 
@@ -58,8 +58,8 @@ shifts the burden from the contributor to the reviewer. To guard against this as
 
 If you are planning a large AI-assisted contribution (e.g., a significant refactor, a
 framework migration, or a new subsystem), **open an issue first** to discuss the scope
-and approach with maintainers. This helps us align on whether the change is wanted, how
-it should be structured, and what level of testing and documentation is expected.
+and approach with maintainers. This helps us decide if the change is worthwhile, how
+it should be structured, and any other important decisions.
 
 Maintainers reserve the right to close PRs where the scope makes meaningful review
 impractical, or to request that large changes be broken into smaller, reviewable pieces.
@@ -67,6 +67,7 @@ impractical, or to request that large changes be broken into smaller, reviewable
 ## Documentation
 
 AI tools can be useful for drafting or restructuring documentation. The same core
-principle applies: you must review the result for accuracy and be able to stand behind
-it. Icechunk has domain-specific semantics that AI tools frequently get wrong, do not
-submit documentation that you haven't carefully read and verified.
+principles as with code apply to documentation as well. You must review the result
+for accuracy and are ultimately responsible for all changes made. Icechunk has domain-specific
+semantics that AI tools frequently get wrong, do not submit documentation that you
+haven't carefully read and verified.
