@@ -56,20 +56,20 @@ def test_set_and_unset_flags_on_repo() -> None:
     assert by_name[flag_name].enabled
     assert by_name[flag_name].setting is None
 
-    # Check ops log has the right FeatureFlagChangedUpdate entries
+    # Check ops log has the right FeatureFlagChanged entries
     ops = list(repo.ops_log())
     # Most recent first: set(flag, None), set(other, True), set(flag, False), RepoInitialized
     assert len(ops) == 4
-    assert isinstance(ops[0], ic.FeatureFlagChangedUpdate)
-    assert ops[0].id == flag_id
-    assert ops[0].new_value is None
-    assert isinstance(ops[1], ic.FeatureFlagChangedUpdate)
-    assert ops[1].id == other_id
-    assert ops[1].new_value is True
-    assert isinstance(ops[2], ic.FeatureFlagChangedUpdate)
-    assert ops[2].id == flag_id
-    assert ops[2].new_value is False
-    assert isinstance(ops[3], ic.RepoInitializedUpdate)
+    assert isinstance(ops[0].kind, ic.UpdateType.FeatureFlagChanged)
+    assert ops[0].kind.id == flag_id
+    assert ops[0].kind.new_value is None
+    assert isinstance(ops[1].kind, ic.UpdateType.FeatureFlagChanged)
+    assert ops[1].kind.id == other_id
+    assert ops[1].kind.new_value is True
+    assert isinstance(ops[2].kind, ic.UpdateType.FeatureFlagChanged)
+    assert ops[2].kind.id == flag_id
+    assert ops[2].kind.new_value is False
+    assert isinstance(ops[3].kind, ic.UpdateType.RepoInitialized)
 
 
 async def test_set_and_unset_flags_on_repo_async() -> None:
