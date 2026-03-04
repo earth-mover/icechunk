@@ -150,7 +150,7 @@ fn _upgrade_icechunk_repository(
     repo: &PyRepository,
     dry_run: bool,
     delete_unused_v1_files: bool,
-) -> PyResult<()> {
+) -> PyResult<PyRepository> {
     repo.migrate_1_to_2(py, dry_run, delete_unused_v1_files)
 }
 

@@ -263,7 +263,7 @@ def upgrade_icechunk_repository(
     *,
     dry_run: bool,
     delete_unused_v1_files: bool = True,
-) -> None:
+) -> Repository:
     """
     Migrate a repository to the latest version of Icechunk.
 
@@ -277,6 +277,9 @@ def upgrade_icechunk_repository(
     The operation is usually fast, but it can take several minutes if there is a very
     large version history (thousands of snapshots).
 
+    Returns a new Repository object. The original repo object should not be used
+    after calling this function.
+
     Parameters
     ----------
     repo : Repository
@@ -286,10 +289,16 @@ def upgrade_icechunk_repository(
         the upgrade.
     delete_unused_v1_files : bool, optional
         If True (the default), delete unused v1 files after upgrading.
+
+    Returns
+    -------
+    Repository
+        A freshly opened repository with the updated spec version.
     """
-    _upgrade_icechunk_repository(
+    new_repo = _upgrade_icechunk_repository(
         repo._repository, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
     )
+    return Repository(new_repo)
 
 
 ManifestSplittingConfig.from_dict = staticmethod(from_dict)  # type: ignore[method-assign]

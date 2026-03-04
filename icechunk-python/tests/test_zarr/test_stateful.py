@@ -217,11 +217,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     def upgrade_spec_version(self, dry_run: bool, delete_unused_v1_files: bool) -> None:
         """Upgrade repository from spec version 1 to version 2."""
-        self.ic.upgrade_icechunk_repository(
+        self.repo = self.ic.upgrade_icechunk_repository(
             self.repo, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
         )
-        # Reopen to pick up the upgraded spec version
-        self.repo = self.actor.open(self.storage)
         self.store = self.repo.writable_session("main").store
         if not dry_run:
             assert self.repo.spec_version == 2

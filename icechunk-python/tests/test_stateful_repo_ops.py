@@ -599,12 +599,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def upgrade_spec_version(self, dry_run: bool, delete_unused_v1_files: bool) -> None:
         # don't test simple cases of catching error upgradging a v2 spec
         # that should be covered in unit tests
-        icechunk.upgrade_icechunk_repository(
+        self.repo = icechunk.upgrade_icechunk_repository(
             self.repo, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
         )
-
-        # TODO: remove the reopen after https://github.com/earth-mover/icechunk/issues/1521
-        self._reopen_repository()
 
         self.model.upgrade(dry_run)
         if not dry_run:

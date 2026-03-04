@@ -11,8 +11,7 @@ def test_migration_1_to_2_dry_run(tmpdir: Path) -> None:
     assert repo.spec_version == 1
 
     # running with explicit dry_run=True
-    ic.upgrade_icechunk_repository(repo, dry_run=True)
-    repo = ic.Repository.open(storage)
+    repo = ic.upgrade_icechunk_repository(repo, dry_run=True)
     assert repo.spec_version == 1
 
 
@@ -22,6 +21,5 @@ def test_migration_1_to_2(tmpdir: Path) -> None:
     repo = ic.Repository.open(storage)
     assert repo.spec_version == 1
 
-    ic.upgrade_icechunk_repository(repo, dry_run=False)
-    repo = ic.Repository.open(storage)
+    repo = ic.upgrade_icechunk_repository(repo, dry_run=False)
     assert repo.spec_version == 2
