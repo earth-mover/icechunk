@@ -26,7 +26,7 @@ import zarr
 try:
     from tests.conftest import Permission
 except ImportError:
-    from conftest import Permission
+    from conftest import Permission  # type: ignore[import-not-found,no-redef]
 
 UPDATED_SPLITTING_CONFIG = ic.ManifestSplittingConfig.from_dict(
     {
@@ -295,7 +295,7 @@ async def do_icechunk_can_read_old_repo(path: str) -> None:
     try:
         from tests.conftest import write_chunks_to_minio
     except ImportError:
-        from conftest import write_chunks_to_minio
+        from conftest import write_chunks_to_minio  # type: ignore[no-redef]
 
     repo = mk_repo(create=False, store_path=path)
     main_snapshot = repo.lookup_branch("main")
