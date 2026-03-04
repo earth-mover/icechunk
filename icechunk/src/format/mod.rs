@@ -530,6 +530,11 @@ impl Path {
         Path(Utf8UnixPathBuf::from("/".to_string()))
     }
 
+    // Fast-path unvalidated constructor for use when reading from Snapshots
+    pub fn from_checked(path: &str) -> Path {
+        Path(Utf8UnixPathBuf::from(path))
+    }
+
     pub fn new(path: &str) -> Result<Path, PathError> {
         let buf = Utf8UnixPathBuf::from(path);
         if !buf.is_absolute() {

@@ -253,7 +253,7 @@ impl<'a> TryFrom<generated::NodeSnapshot<'a>> for NodeSnapshot {
         };
         let res = NodeSnapshot {
             id: value.id().into(),
-            path: value.path().to_string().try_into()?,
+            path: Path::from_checked(value.path()),
             node_data,
             user_data: Bytes::copy_from_slice(value.user_data().bytes()),
         };
