@@ -9,7 +9,9 @@ from collections.abc import (
     Sequence,
 )
 from enum import Enum
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, final
+
+from typing_extensions import disjoint_base
 
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
@@ -1561,6 +1563,7 @@ class GCSummary:
         """
         ...
 
+@final
 class Update:
     @property
     def kind(self) -> UpdateType: ...
@@ -1569,23 +1572,28 @@ class Update:
     @property
     def backup_path(self) -> str | None: ...
 
+@disjoint_base
 class UpdateType:
+    @final
     class BranchCreated(UpdateType):
         @property
         def name(self) -> str: ...
 
+    @final
     class BranchDeleted(UpdateType):
         @property
         def name(self) -> str: ...
         @property
         def previous_snap_id(self) -> str: ...
 
+    @final
     class BranchReset(UpdateType):
         @property
         def name(self) -> str: ...
         @property
         def previous_snap_id(self) -> str: ...
 
+    @final
     class CommitAmended(UpdateType):
         @property
         def branch(self) -> str: ...
@@ -1594,33 +1602,46 @@ class UpdateType:
         @property
         def new_snap_id(self) -> str: ...
 
+    @final
     class ConfigChanged(UpdateType): ...
+
+    @final
     class ExpirationRan(UpdateType): ...
+
+    @final
     class GCRan(UpdateType): ...
+
+    @final
     class MetadataChanged(UpdateType): ...
 
+    @final
     class NewCommit(UpdateType):
         @property
         def branch(self) -> str: ...
         @property
         def new_snap_id(self) -> str: ...
 
+    @final
     class NewDetachedSnapshot(UpdateType):
         @property
         def new_snap_id(self) -> str: ...
 
+    @final
     class RepoInitialized(UpdateType): ...
 
+    @final
     class RepoMigrated(UpdateType):
         @property
         def from_version(self) -> int: ...
         @property
         def to_version(self) -> int: ...
 
+    @final
     class TagCreated(UpdateType):
         @property
         def name(self) -> str: ...
 
+    @final
     class TagDeleted(UpdateType):
         @property
         def name(self) -> str: ...
