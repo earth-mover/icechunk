@@ -5184,12 +5184,12 @@ mod tests {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
 
         let path: Path = "/foo/bar".try_into().unwrap();
-        ds1.add_group("/foo/baz".try_into().unwrap(), user_data()).await?;
+        ds1.add_group("/foo/quux".try_into().unwrap(), user_data()).await?;
         ds1.commit("add sibling group", None).await?;
 
         ds2.delete_group(path.clone()).await?;
         ds2.add_group(path.clone(), Bytes::from("group-metadata")).await?;
-        ds2.commit("delete+re-add group", None).await.unwrap_err();
+        assert!(ds2.commit("delete+re-add group", None).await.is_err());
 
         ds2.rebase(&ConflictDetector).await?;
         ds2.commit("delete+re-add group", None).await?;
@@ -5218,7 +5218,7 @@ mod tests {
         let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_group(path.clone()).await?;
         ds2.add_group(path.clone(), user_data()).await?;
-        ds2.commit("delete+re-add group", None).await.unwrap_err();
+        assert!(ds2.commit("delete+re-add group", None).await.is_err());
 
         assert_has_conflict(
             &Conflict::DeleteOfUpdatedGroup { path, node_id: node.id },
