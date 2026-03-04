@@ -95,6 +95,10 @@ pub enum RepositoryErrorKind {
     ParentDirectoryNotClean,
     #[error("the repository doesn't exist")]
     RepositoryDoesntExist,
+    #[error(
+        "this repository uses Icechunk v2 format, please upgrade the icechunk library"
+    )]
+    RepositoryIsV2,
     #[error("error in repository serialization")]
     SerializationError(#[from] Box<rmp_serde::encode::Error>),
     #[error("error in repository deserialization")]
@@ -254,6 +258,10 @@ impl Repository {
         authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
     ) -> RepositoryResult<Self> {
         debug!("Opening Repository");
+        if storage.has_v2_repo_info().await? {
+            return Err(RepositoryErrorKind::RepositoryIsV2.into());
+        }
+
         let storage_c = Arc::clone(&storage);
         let handle1 = tokio::spawn(
             async move { Self::fetch_config(storage_c.as_ref()).await }.in_current_span(),
@@ -2577,6 +2585,29 @@ mod tests {
 
         assert!(
             Repository::create(None, Arc::clone(&storage), HashMap::new()).await.is_err()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_open_fails_for_v2_repo() -> Result<(), Box<dyn Error>> {
+        let repo_dir = TempDir::new()?;
+
+        // Write a fake v2 repo info file
+        std::fs::write(repo_dir.path().join("repo"), b"fake v2 repo info")?;
+
+        let storage: Arc<dyn Storage + Send + Sync> =
+            new_local_filesystem_storage(repo_dir.path())
+                .await
+                .expect("Creating local storage failed");
+
+        let result = Repository::open(None, Arc::clone(&storage), HashMap::new()).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err.kind, RepositoryErrorKind::RepositoryIsV2),
+            "Expected RepositoryIsV2 error, got: {err:?}"
         );
 
         Ok(())

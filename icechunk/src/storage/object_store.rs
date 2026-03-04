@@ -623,6 +623,15 @@ impl Storage for ObjectStorage {
         Ok(res.last_modified)
     }
 
+    async fn has_object(&self, settings: &Settings, key: &str) -> StorageResult<bool> {
+        let path = self.get_path_str("", key);
+        match self.get_client(settings).await.head(&path).await {
+            Ok(_) => Ok(true),
+            Err(object_store::Error::NotFound { .. }) => Ok(false),
+            Err(err) => Err(Box::new(err).into()),
+        }
+    }
+
     #[instrument(skip(self))]
     async fn get_object_range_buf(
         &self,
