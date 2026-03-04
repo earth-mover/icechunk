@@ -39,8 +39,7 @@ use crate::{
     },
     error::ICError,
     feature_flags::{
-        FEATURE_FLAGS, FeatureFlag, find_feature_flag_id,
-        raise_if_feature_flag_disabled,
+        FEATURE_FLAGS, FeatureFlag, find_feature_flag_id, raise_if_feature_flag_disabled,
     },
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,

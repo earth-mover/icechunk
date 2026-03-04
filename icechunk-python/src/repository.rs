@@ -1458,10 +1458,7 @@ impl PyRepository {
         })
     }
 
-    pub(crate) fn feature_flags(
-        &self,
-        py: Python<'_>,
-    ) -> PyResult<Vec<PyFeatureFlag>> {
+    pub(crate) fn feature_flags(&self, py: Python<'_>) -> PyResult<Vec<PyFeatureFlag>> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let flags: Vec<PyFeatureFlag> = self
