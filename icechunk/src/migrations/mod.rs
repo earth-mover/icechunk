@@ -776,6 +776,21 @@ mod tests {
     }
 
     #[tokio_test]
+    /// Calling migrate_1_to_2 twice on the same repo object should not panic (issue #1524)
+    async fn test_1_to_2_double_migration_does_not_panic()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut repo, _tmp) = prepare_v1_repo().await?;
+
+        migrate_1_to_2(&mut repo, false, true).await.unwrap();
+
+        // Second migration on the same repo object must not panic
+        let result = migrate_1_to_2(&mut repo, false, true).await;
+        assert!(result.is_err(), "double migration should return an error, not succeed");
+
+        Ok(())
+    }
+
+    #[tokio_test]
     /// Copy the source tree 1.0 repository to a temp dir, then migrate it in dry-run mode
     async fn test_1_to_2_migration_dry_run() -> Result<(), Box<dyn std::error::Error>> {
         let (mut repo, _tmp) = prepare_v1_repo().await?;
