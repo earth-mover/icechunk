@@ -2069,7 +2069,7 @@ impl<'a> FlushProcess<'a> {
                             all_chunks_vec.push(Ok(ChunkInfo {
                                 node: node_id.clone(),
                                 coord: idx,
-                                payload: payload,
+                                payload,
                             }));
                         }
                     }
