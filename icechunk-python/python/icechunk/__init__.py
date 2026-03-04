@@ -258,6 +258,16 @@ def to_dict(config: ManifestSplittingConfig) -> SplitSizesDict:
     }
 
 
+class _InvalidatedRepository:
+    """Sentinel replacing a PyRepository after migration to prevent stale usage."""
+
+    def __getattr__(self, name: str) -> object:
+        raise RuntimeError(
+            "This repository has been invalidated by upgrade_icechunk_repository(). "
+            "Use the new Repository object returned by that function instead."
+        )
+
+
 def upgrade_icechunk_repository(
     repo: Repository,
     *,
@@ -298,6 +308,8 @@ def upgrade_icechunk_repository(
     new_repo = _upgrade_icechunk_repository(
         repo._repository, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
     )
+    if not dry_run:
+        repo._repository = _InvalidatedRepository()  # type: ignore[assignment]
     return Repository(new_repo)
 
 
