@@ -622,7 +622,7 @@ prop_compose! {
 fn virtual_chunk_location() -> impl Strategy<Value = VirtualChunkLocation> {
     url_with_host_and_path()
         .prop_filter_map("Could not generate url with valid host and path", |url| {
-            VirtualChunkLocation::from_absolute_path(&url).ok()
+            VirtualChunkLocation::from_url(&url).ok()
         })
 }
 

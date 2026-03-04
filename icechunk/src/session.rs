@@ -390,7 +390,7 @@ impl Session {
         &self,
         chunk_location: &VirtualChunkLocation,
     ) -> Option<&VirtualChunkContainer> {
-        self.virtual_resolver.matching_container(chunk_location.url())
+        self.virtual_resolver.matching_container(chunk_location)
     }
 
     /// Compute an overview of the current session changes
@@ -1056,13 +1056,19 @@ impl Session {
     pub async fn all_virtual_chunk_locations(
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<String>> + '_> {
-        let stream =
-            self.all_chunks().await?.try_filter_map(|(_, info)| match info.payload {
-                ChunkPayload::Virtual(reference) => {
-                    ready(Ok(Some(reference.location.url().to_string())))
-                }
-                _ => ready(Ok(None)),
-            });
+        let resolver = &self.virtual_resolver;
+        let stream = self.all_chunks().await?.try_filter_map(move |(_, info)| match info
+            .payload
+        {
+            ChunkPayload::Virtual(reference) => {
+                let expanded = match resolver.expand_location(reference.location.url()) {
+                    Ok(abs) => abs,
+                    Err(e) => return ready(Err(e.into())),
+                };
+                ready(Ok(Some(expanded)))
+            }
+            _ => ready(Ok(None)),
+        });
         Ok(stream)
     }
 

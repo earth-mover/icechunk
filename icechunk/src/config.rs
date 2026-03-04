@@ -575,10 +575,30 @@ impl RepositoryConfig {
 }
 
 impl RepositoryConfig {
-    pub fn set_virtual_chunk_container(&mut self, cont: VirtualChunkContainer) {
-        let mut before = self.virtual_chunk_containers.clone().unwrap_or_default();
+    pub fn set_virtual_chunk_container(
+        &mut self,
+        cont: VirtualChunkContainer,
+    ) -> Result<(), String> {
+        let before = self.virtual_chunk_containers.clone().unwrap_or_default();
+        // Check name uniqueness: if the new container has a name, no existing
+        // container with the same name should have a different url_prefix
+        if let Some(ref new_name) = cont.name {
+            for existing in before.values() {
+                if existing.name.as_deref() == Some(new_name.as_str())
+                    && existing.url_prefix() != cont.url_prefix()
+                {
+                    return Err(format!(
+                        "A virtual chunk container named '{}' already exists with a different url_prefix ('{}')",
+                        new_name,
+                        existing.url_prefix()
+                    ));
+                }
+            }
+        }
+        let mut before = before;
         before.insert(cont.url_prefix().to_string(), cont);
         self.virtual_chunk_containers = Some(before);
+        Ok(())
     }
 
     pub fn get_virtual_chunk_container(
@@ -670,21 +690,23 @@ mod tests {
     fn test_merge_replaces_virtual_chunk_containers() {
         // Create a config with a VCC
         let mut config1 = RepositoryConfig::default();
-        config1.set_virtual_chunk_container(
-            VirtualChunkContainer::new(
-                "s3://bucket1/".to_string(),
-                ObjectStoreConfig::S3(S3Options {
-                    region: Some("us-east-1".to_string()),
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                }),
+        config1
+            .set_virtual_chunk_container(
+                VirtualChunkContainer::new(
+                    "s3://bucket1/".to_string(),
+                    ObjectStoreConfig::S3(S3Options {
+                        region: Some("us-east-1".to_string()),
+                        endpoint_url: None,
+                        anonymous: false,
+                        allow_http: false,
+                        force_path_style: false,
+                        network_stream_timeout_seconds: None,
+                        requester_pays: false,
+                    }),
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        );
+            .unwrap();
 
         // Create a config with no VCCs (cleared)
         let mut config2 = RepositoryConfig::default();
@@ -705,39 +727,43 @@ mod tests {
     fn test_merge_replaces_virtual_chunk_containers_with_new_ones() {
         // Create a config with VCC1
         let mut config1 = RepositoryConfig::default();
-        config1.set_virtual_chunk_container(
-            VirtualChunkContainer::new(
-                "s3://bucket1/".to_string(),
-                ObjectStoreConfig::S3(S3Options {
-                    region: Some("us-east-1".to_string()),
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                }),
+        config1
+            .set_virtual_chunk_container(
+                VirtualChunkContainer::new(
+                    "s3://bucket1/".to_string(),
+                    ObjectStoreConfig::S3(S3Options {
+                        region: Some("us-east-1".to_string()),
+                        endpoint_url: None,
+                        anonymous: false,
+                        allow_http: false,
+                        force_path_style: false,
+                        network_stream_timeout_seconds: None,
+                        requester_pays: false,
+                    }),
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        );
+            .unwrap();
 
         // Create a config with VCC2
         let mut config2 = RepositoryConfig::default();
-        config2.set_virtual_chunk_container(
-            VirtualChunkContainer::new(
-                "s3://bucket2/".to_string(),
-                ObjectStoreConfig::S3(S3Options {
-                    region: Some("us-west-2".to_string()),
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                }),
+        config2
+            .set_virtual_chunk_container(
+                VirtualChunkContainer::new(
+                    "s3://bucket2/".to_string(),
+                    ObjectStoreConfig::S3(S3Options {
+                        region: Some("us-west-2".to_string()),
+                        endpoint_url: None,
+                        anonymous: false,
+                        allow_http: false,
+                        force_path_style: false,
+                        network_stream_timeout_seconds: None,
+                        requester_pays: false,
+                    }),
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        );
+            .unwrap();
 
         // Merge: config2's VCCs should replace config1's VCCs
         let merged = config1.merge(config2);
@@ -848,5 +874,88 @@ virtual_chunk_containers:
         assert!(config.caching.is_none());
         assert!(config.storage.is_none());
         assert!(config.manifest.is_none());
+    }
+
+    #[icechunk_macros::test]
+    fn test_set_vcc_name_uniqueness() {
+        let mut config = RepositoryConfig::default();
+
+        // First named container succeeds
+        config
+            .set_virtual_chunk_container(
+                VirtualChunkContainer::new_named(
+                    "my-data".to_string(),
+                    "s3://bucket1/prefix/".to_string(),
+                    ObjectStoreConfig::S3(S3Options {
+                        region: Some("us-east-1".to_string()),
+                        endpoint_url: None,
+                        anonymous: false,
+                        allow_http: false,
+                        force_path_style: false,
+                        network_stream_timeout_seconds: None,
+                        requester_pays: false,
+                    }),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        // Same name, different prefix should fail
+        let result = config.set_virtual_chunk_container(
+            VirtualChunkContainer::new_named(
+                "my-data".to_string(),
+                "s3://bucket2/other/".to_string(),
+                ObjectStoreConfig::S3(S3Options {
+                    region: Some("us-east-1".to_string()),
+                    endpoint_url: None,
+                    anonymous: false,
+                    allow_http: false,
+                    force_path_style: false,
+                    network_stream_timeout_seconds: None,
+                    requester_pays: false,
+                }),
+            )
+            .unwrap(),
+        );
+        assert!(result.is_err());
+
+        // Same name, same prefix should succeed (update)
+        config
+            .set_virtual_chunk_container(
+                VirtualChunkContainer::new_named(
+                    "my-data".to_string(),
+                    "s3://bucket1/prefix/".to_string(),
+                    ObjectStoreConfig::S3(S3Options {
+                        region: Some("us-west-2".to_string()),
+                        endpoint_url: None,
+                        anonymous: false,
+                        allow_http: false,
+                        force_path_style: false,
+                        network_stream_timeout_seconds: None,
+                        requester_pays: false,
+                    }),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        // Unnamed containers always succeed
+        config
+            .set_virtual_chunk_container(
+                VirtualChunkContainer::new(
+                    "s3://bucket3/".to_string(),
+                    ObjectStoreConfig::S3(S3Options {
+                        region: Some("us-east-1".to_string()),
+                        endpoint_url: None,
+                        anonymous: false,
+                        allow_http: false,
+                        force_path_style: false,
+                        network_stream_timeout_seconds: None,
+                        requester_pays: false,
+                    }),
+                )
+                .unwrap(),
+            )
+            .unwrap();
     }
 }
