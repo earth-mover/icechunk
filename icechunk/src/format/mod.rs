@@ -339,6 +339,8 @@ pub enum IcechunkFormatErrorKind {
     InvalidUpdateTimestamp { latest_time: DateTime<Utc>, new_time: DateTime<Utc> },
     #[error("invalid feature flag name: {name}")]
     InvalidFeatureFlagName { name: String },
+    #[error("invalid feature flag id: {id}")]
+    InvalidFeatureFlagId { id: u16 },
     #[error("{feature_description} is disabled by a feature flag ({feature_flag})")]
     FeatureFlagDisabled { feature_description: String, feature_flag: String },
 }

@@ -58,32 +58,37 @@ impl FeatureFlag {
     }
 }
 
+// Feature flag ID constants.
+// IDs 1-2 are reserved for future commit/amend flags.
+pub const MOVE_NODE_FLAG: u16 = 3;
+pub const CREATE_TAG_FLAG: u16 = 4;
+pub const DELETE_TAG_FLAG: u16 = 5;
+
 /// Query the repo info object and determine if the feature flag is enabled or not.
 /// This function takes into account user settings in repo info object and the
 /// default state of the given feature flag.
 /// If this function returns `true` it means the feature must be enabled, either
 /// because it's enabled by default or because the user enabled it by choice.
 /// Same is true for `false` return values.
-pub fn feature_flag_enabled(repo_info: &RepoInfo, flag: &str) -> IcechunkResult<bool> {
-    let (id, default) = FEATURE_FLAGS.get(flag).ok_or_else(|| {
-        IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidFeatureFlagName {
-            name: flag.to_string(),
-        })
-    })?;
-    Ok(repo_info.feature_flag_enabled(*id)?.unwrap_or(*default))
+fn feature_flag_enabled(repo_info: &RepoInfo, flag_id: u16) -> IcechunkResult<bool> {
+    repo_info
+        .feature_flag_enabled(flag_id)?
+        .map(Ok)
+        .unwrap_or_else(|| find_flag_by_id(flag_id).map(|(_, default)| default))
 }
 
 pub fn raise_if_feature_flag_disabled(
     repo_info: &RepoInfo,
-    feature_flag: &str,
+    flag_id: u16,
     feature_description: &str,
 ) -> IcechunkResult<()> {
-    if feature_flag_enabled(repo_info, feature_flag)? {
+    if feature_flag_enabled(repo_info, flag_id)? {
         Ok(())
     } else {
+        let (name, _) = find_flag_by_id(flag_id)?;
         Err(IcechunkFormatError::from(IcechunkFormatErrorKind::FeatureFlagDisabled {
             feature_description: feature_description.to_string(),
-            feature_flag: feature_flag.to_string(),
+            feature_flag: name.to_string(),
         }))
     }
 }
@@ -96,13 +101,25 @@ pub fn find_feature_flag_id(flag: &str) -> IcechunkResult<u16> {
     })
 }
 
+fn find_flag_by_id(flag_id: u16) -> IcechunkResult<(&'static str, bool)> {
+    FEATURE_FLAGS
+        .iter()
+        .find(|(_, (id, _))| *id == flag_id)
+        .map(|(name, (_, default))| (*name, *default))
+        .ok_or_else(|| {
+            IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidFeatureFlagId {
+                id: flag_id,
+            })
+        })
+}
+
 pub(crate) static FEATURE_FLAGS: LazyLock<HashMap<&str, (u16, bool)>> =
     LazyLock::new(|| {
         let res = HashMap::from([
             // (name, (id, default_enabled))
-            ("move_node", (3, true)), // leaving id space at the top for commit and amend
-            ("create_tag", (4, true)),
-            ("delete_tag", (5, true)),
+            ("move_node", (MOVE_NODE_FLAG, true)),
+            ("create_tag", (CREATE_TAG_FLAG, true)),
+            ("delete_tag", (DELETE_TAG_FLAG, true)),
         ]);
         //  check we didn't duplicate ids
         debug_assert_eq!(
@@ -178,52 +195,52 @@ mod tests {
             100,
             None,
         );
-        assert!(feature_flag_enabled(&ri, "move_node").unwrap());
-        assert!(feature_flag_enabled(&ri, "create_tag").unwrap());
-        assert!(feature_flag_enabled(&ri, "delete_tag").unwrap());
+        assert!(feature_flag_enabled(&ri, MOVE_NODE_FLAG).unwrap());
+        assert!(feature_flag_enabled(&ri, CREATE_TAG_FLAG).unwrap());
+        assert!(feature_flag_enabled(&ri, DELETE_TAG_FLAG).unwrap());
         assert!(matches!(
-            feature_flag_enabled(&ri, "INVALID_FLAG"),
-            Err(IcechunkFormatError { kind: IcechunkFormatErrorKind::InvalidFeatureFlagName { name }, ..}) if name == "INVALID_FLAG"
+            feature_flag_enabled(&ri, 9999),
+            Err(IcechunkFormatError { kind: IcechunkFormatErrorKind::InvalidFeatureFlagId { id }, ..}) if id == 9999
         ));
 
         let ri = ri
             .update_feature_flag(
                 SpecVersionBin::current(),
-                find_feature_flag_id("create_tag").unwrap(),
+                CREATE_TAG_FLAG,
                 Some(false),
                 "foo",
                 100,
             )
             .unwrap();
-        assert!(!feature_flag_enabled(&ri, "create_tag").unwrap());
-        assert!(feature_flag_enabled(&ri, "delete_tag").unwrap());
-        assert!(feature_flag_enabled(&ri, "move_node").unwrap());
+        assert!(!feature_flag_enabled(&ri, CREATE_TAG_FLAG).unwrap());
+        assert!(feature_flag_enabled(&ri, DELETE_TAG_FLAG).unwrap());
+        assert!(feature_flag_enabled(&ri, MOVE_NODE_FLAG).unwrap());
 
         let ri = ri
             .update_feature_flag(
                 SpecVersionBin::current(),
-                find_feature_flag_id("create_tag").unwrap(),
+                CREATE_TAG_FLAG,
                 None,
                 "foo",
                 100,
             )
             .unwrap();
-        assert!(feature_flag_enabled(&ri, "create_tag").unwrap());
-        assert!(feature_flag_enabled(&ri, "delete_tag").unwrap());
-        assert!(feature_flag_enabled(&ri, "move_node").unwrap());
+        assert!(feature_flag_enabled(&ri, CREATE_TAG_FLAG).unwrap());
+        assert!(feature_flag_enabled(&ri, DELETE_TAG_FLAG).unwrap());
+        assert!(feature_flag_enabled(&ri, MOVE_NODE_FLAG).unwrap());
 
         let ri = ri
             .update_feature_flag(
                 SpecVersionBin::current(),
-                find_feature_flag_id("create_tag").unwrap(),
+                CREATE_TAG_FLAG,
                 Some(true),
                 "foo",
                 100,
             )
             .unwrap();
-        assert!(feature_flag_enabled(&ri, "create_tag").unwrap());
-        assert!(feature_flag_enabled(&ri, "delete_tag").unwrap());
-        assert!(feature_flag_enabled(&ri, "move_node").unwrap());
+        assert!(feature_flag_enabled(&ri, CREATE_TAG_FLAG).unwrap());
+        assert!(feature_flag_enabled(&ri, DELETE_TAG_FLAG).unwrap());
+        assert!(feature_flag_enabled(&ri, MOVE_NODE_FLAG).unwrap());
     }
 
     #[tokio::test]
@@ -239,15 +256,15 @@ mod tests {
         let all = repo.feature_flags().await.unwrap().collect::<Vec<_>>();
         assert_eq!(
             all.iter().find(|f| f.name == "move_node").unwrap().id,
-            find_feature_flag_id("move_node").unwrap()
+            MOVE_NODE_FLAG
         );
         assert_eq!(
             all.iter().find(|f| f.name == "create_tag").unwrap().id,
-            find_feature_flag_id("create_tag").unwrap()
+            CREATE_TAG_FLAG
         );
         assert_eq!(
             all.iter().find(|f| f.name == "delete_tag").unwrap().id,
-            find_feature_flag_id("delete_tag").unwrap()
+            DELETE_TAG_FLAG
         );
         assert_eq!(all, repo.enabled_feature_flags().await.unwrap().collect::<Vec<_>>());
         assert!(repo.disabled_feature_flags().await.unwrap().next().is_none());
@@ -257,7 +274,7 @@ mod tests {
         // disable create tag explicitly
         repo.set_feature_flag("create_tag", Some(false)).await.unwrap();
         updates.push(UpdateType::FeatureFlagChanged {
-            id: find_feature_flag_id("create_tag").unwrap(),
+            id: CREATE_TAG_FLAG,
             new_value: Some(false),
         });
 
@@ -275,7 +292,7 @@ mod tests {
         // enable delete_tag explicitly
         repo.set_feature_flag("delete_tag", Some(true)).await.unwrap();
         updates.push(UpdateType::FeatureFlagChanged {
-            id: find_feature_flag_id("delete_tag").unwrap(),
+            id: DELETE_TAG_FLAG,
             new_value: Some(true),
         });
 
@@ -290,7 +307,7 @@ mod tests {
         // set create_tag to default
         repo.set_feature_flag("create_tag", None).await.unwrap();
         updates.push(UpdateType::FeatureFlagChanged {
-            id: find_feature_flag_id("create_tag").unwrap(),
+            id: CREATE_TAG_FLAG,
             new_value: None,
         });
 

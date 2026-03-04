@@ -39,7 +39,8 @@ use crate::{
     },
     error::ICError,
     feature_flags::{
-        FEATURE_FLAGS, FeatureFlag, find_feature_flag_id, raise_if_feature_flag_disabled,
+        CREATE_TAG_FLAG, DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG,
+        find_feature_flag_id, raise_if_feature_flag_disabled,
     },
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
@@ -1342,7 +1343,7 @@ impl Repository {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             raise_if_feature_flag_disabled(
                 repo_info.as_ref(),
-                "delete_tag",
+                DELETE_TAG_FLAG,
                 "tag delete",
             )?;
             let new_repo = repo_info
@@ -1414,7 +1415,7 @@ impl Repository {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             raise_if_feature_flag_disabled(
                 repo_info.as_ref(),
-                "create_tag",
+                CREATE_TAG_FLAG,
                 "tag creation",
             )?;
             let new_repo = repo_info
@@ -1748,7 +1749,7 @@ impl Repository {
 
         raise_if_feature_flag_disabled(
             ri.as_ref(),
-            "move_node",
+            MOVE_NODE_FLAG,
             "create rearrange session",
         )?;
 

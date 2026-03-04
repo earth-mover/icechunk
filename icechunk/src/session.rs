@@ -39,7 +39,7 @@ use crate::{
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
-    feature_flags::raise_if_feature_flag_disabled,
+    feature_flags::{MOVE_NODE_FLAG, raise_if_feature_flag_disabled},
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
@@ -1124,7 +1124,7 @@ impl Session {
             if is_rearrange {
                 raise_if_feature_flag_disabled(
                     repo_info.as_ref(),
-                    "move_node",
+                    MOVE_NODE_FLAG,
                     "flush rearrange session",
                 )?;
             }
@@ -2705,7 +2705,7 @@ async fn do_commit_v2(
         if is_rearrange {
             raise_if_feature_flag_disabled(
                 repo_info.as_ref(),
-                "move_node",
+                MOVE_NODE_FLAG,
                 "commit rearrange session",
             )?;
         }
