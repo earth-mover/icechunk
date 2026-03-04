@@ -34,10 +34,10 @@ use pyo3::wrap_pyfunction;
 use repository::{
     PyBranchCreatedUpdate, PyBranchDeletedUpdate, PyBranchResetUpdate,
     PyCommitAmendedUpdate, PyConfigChangedUpdate, PyDiff, PyExpirationRanUpdate,
-    PyGCRanUpdate, PyGCSummary, PyManifestFileInfo, PyMetadataChangedUpdate,
-    PyNewCommitUpdate, PyNewDetachedSnapshotUpdate, PyRepoInitializedUpdate,
-    PyRepoMigratedUpdate, PyRepository, PySnapshotInfo, PyTagCreatedUpdate,
-    PyTagDeletedUpdate, PyUpdateType,
+    PyFeatureFlag, PyFeatureFlagChangedUpdate, PyGCRanUpdate, PyGCSummary,
+    PyManifestFileInfo, PyMetadataChangedUpdate, PyNewCommitUpdate,
+    PyNewDetachedSnapshotUpdate, PyRepoInitializedUpdate, PyRepoMigratedUpdate,
+    PyRepository, PySnapshotInfo, PyTagCreatedUpdate, PyTagDeletedUpdate, PyUpdateType,
 };
 use session::{ChunkType, PySession, PySessionMode};
 use stats::PyChunkStorageStats;
@@ -218,6 +218,8 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCommitAmendedUpdate>()?;
     m.add_class::<PyGCRanUpdate>()?;
     m.add_class::<PyExpirationRanUpdate>()?;
+    m.add_class::<PyFeatureFlagChangedUpdate>()?;
+    m.add_class::<PyFeatureFlag>()?;
     m.add_class::<VirtualChunkSpec>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;

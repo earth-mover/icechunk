@@ -97,6 +97,10 @@ pub enum UpdateType {
     },
     GCRanUpdate,
     ExpirationRanUpdate,
+    FeatureFlagChanged {
+        id: u16,
+        new_value: Option<bool>,
+    },
 }
 
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
@@ -120,6 +124,8 @@ impl RepoInfo {
     pub fn new<
         'a,
         I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
+        EFFIt: DoubleEndedIterator<Item = u16> + ExactSizeIterator,
+        DFFIt: DoubleEndedIterator<Item = u16> + ExactSizeIterator,
     >(
         spec_version: SpecVersionBin,
         tags: impl IntoIterator<Item = (&'a str, SnapshotId)>,
@@ -132,6 +138,8 @@ impl RepoInfo {
         num_updates_per_file: u16,
         previous_info: Option<&'a str>,
         config_bytes: Option<&[u8]>,
+        sorted_enabled_feature_flags: Option<EFFIt>,
+        sorted_disabled_feature_flags: Option<DFFIt>,
     ) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = snapshots.into_iter().collect();
         snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
@@ -151,6 +159,8 @@ impl RepoInfo {
             num_updates_per_file,
             previous_info,
             config_bytes,
+            sorted_enabled_feature_flags,
+            sorted_disabled_feature_flags,
         )
     }
 
@@ -158,6 +168,8 @@ impl RepoInfo {
     fn from_parts<
         'a,
         I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
+        EFFIt: DoubleEndedIterator<Item = u16> + ExactSizeIterator,
+        DFFIt: DoubleEndedIterator<Item = u16> + ExactSizeIterator,
     >(
         spec_version: SpecVersionBin,
         sorted_tags: impl IntoIterator<Item = (&'a str, u32)>,
@@ -170,6 +182,8 @@ impl RepoInfo {
         num_updates_per_file: u16,
         previous_info: Option<&'a str>,
         config_bytes: Option<&[u8]>,
+        sorted_enabled_feature_flags: Option<EFFIt>,
+        sorted_disabled_feature_flags: Option<DFFIt>,
     ) -> IcechunkResult<Self> {
         trace!("Creating new repo info from parts");
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
@@ -299,6 +313,11 @@ impl RepoInfo {
 
         let metadata = builder.create_vector(metadata_items.as_slice());
 
+        let enabled_feature_flags =
+            sorted_enabled_feature_flags.map(|it| builder.create_vector_from_iter(it));
+        let disabled_feature_flags =
+            sorted_disabled_feature_flags.map(|it| builder.create_vector_from_iter(it));
+
         let (latest_updates, repo_before_updates) = Self::mk_latest_updates(
             &mut builder,
             update,
@@ -321,6 +340,8 @@ impl RepoInfo {
             latest_updates: Some(latest_updates),
             repo_before_updates,
             config,
+            enabled_feature_flags,
+            disabled_feature_flags,
         };
         let repo = generated::Repo::create(&mut builder, &repo_args);
         builder.finish(repo, Some("Ichk"));
@@ -463,6 +484,8 @@ impl RepoInfo {
             num_updates_per_file,
             None,
             config_bytes.as_deref(),
+            None::<std::iter::Empty<u16>>,
+            None::<std::iter::Empty<u16>>,
         )
         .expect("Cannot generate initial snapshot")
     }
@@ -500,6 +523,42 @@ impl RepoInfo {
             .try_collect()
     }
 
+    pub fn enabled_feature_flags(
+        &self,
+    ) -> IcechunkResult<Option<impl DoubleEndedIterator<Item = u16> + ExactSizeIterator>>
+    {
+        Ok(self.root()?.enabled_feature_flags().map(|v| v.iter()))
+    }
+
+    pub fn disabled_feature_flags(
+        &self,
+    ) -> IcechunkResult<Option<impl DoubleEndedIterator<Item = u16> + ExactSizeIterator>>
+    {
+        Ok(self.root()?.disabled_feature_flags().map(|v| v.iter()))
+    }
+
+    /// None means not set, use the default value
+    /// Some(true) means enabled
+    /// Some(false) means disabled
+    pub fn feature_flag_enabled(&self, id: u16) -> IcechunkResult<Option<bool>> {
+        let root = self.root()?;
+        if root
+            .enabled_feature_flags()
+            .and_then(|v| v.lookup_by_key(id, |this, key| this.cmp(key)))
+            .is_some()
+        {
+            return Ok(Some(true));
+        }
+        if root
+            .disabled_feature_flags()
+            .and_then(|v| v.lookup_by_key(id, |this, key| this.cmp(key)))
+            .is_some()
+        {
+            return Ok(Some(false));
+        }
+        Ok(None)
+    }
+
     fn all_tags(&self) -> IcechunkResult<impl Iterator<Item = (&str, u32)>> {
         Ok(self.root()?.tags().iter().map(|r| (r.name(), r.snapshot_index())))
     }
@@ -517,6 +576,78 @@ impl RepoInfo {
     ) -> IcechunkResult<impl Iterator<Item = IcechunkResult<SnapshotInfo>>> {
         let root = self.root()?;
         Ok(root.snapshots().iter().map(move |snap| mk_snapshot_info(&root, &snap)))
+    }
+
+    /// Doesn't check the validity of flag_id
+    pub fn update_feature_flag(
+        &self,
+        spec_version: SpecVersionBin,
+        flag_id: u16,
+        enabled: Option<bool>,
+        previous_file: &str,
+        num_updates_per_file: u16,
+    ) -> IcechunkResult<Self> {
+        let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+        let (eff, dff): (Option<Vec<_>>, Option<Vec<_>>) = match enabled {
+            Some(false) => {
+                let e = self
+                    .enabled_feature_flags()?
+                    .map(|it| it.filter(|x| *x != flag_id).collect());
+
+                let mut d: BTreeSet<_> = self
+                    .disabled_feature_flags()?
+                    .map(|it| it.collect())
+                    .unwrap_or_default();
+                d.insert(flag_id);
+                let d = d.into_iter().collect();
+                (e, Some(d))
+            }
+            Some(true) => {
+                let d = self
+                    .disabled_feature_flags()?
+                    .map(|it| it.filter(|x| *x != flag_id).collect());
+
+                let mut e: BTreeSet<_> = self
+                    .enabled_feature_flags()?
+                    .map(|it| it.collect())
+                    .unwrap_or_default();
+                e.insert(flag_id);
+                let e = e.into_iter().collect();
+                (Some(e), d)
+            }
+            None => {
+                let e = self
+                    .enabled_feature_flags()?
+                    .map(|it| it.filter(|x| *x != flag_id).collect());
+                let d = self
+                    .disabled_feature_flags()?
+                    .map(|it| it.filter(|x| *x != flag_id).collect());
+                (e, d)
+            }
+        };
+
+        Self::from_parts(
+            spec_version,
+            self.all_tags()?,
+            self.all_branches()?,
+            self.deleted_tags()?,
+            snaps,
+            &self.metadata()?,
+            UpdateInfo {
+                update_type: UpdateType::FeatureFlagChanged {
+                    id: flag_id,
+                    new_value: enabled,
+                },
+                update_time: Utc::now(),
+                previous_updates: self.latest_updates()?,
+            },
+            Some(previous_file),
+            num_updates_per_file,
+            self.repo_before_updates()?,
+            self.config_bytes_raw()?.as_deref(),
+            eff.map(|it| it.into_iter()),
+            dff.map(|it| it.into_iter()),
+        )
     }
 
     pub fn add_snapshot(
@@ -570,6 +701,8 @@ impl RepoInfo {
             num_updates_per_file,
             self.repo_before_updates()?,
             self.config_bytes_raw()?.as_deref(),
+            self.enabled_feature_flags()?,
+            self.disabled_feature_flags()?,
         )?;
         Ok(res)
     }
@@ -614,6 +747,8 @@ impl RepoInfo {
                     num_updates_per_file,
                     self.repo_before_updates()?,
                     self.config_bytes_raw()?.as_deref(),
+                    self.enabled_feature_flags()?,
+                    self.disabled_feature_flags()?,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -655,6 +790,8 @@ impl RepoInfo {
                     num_updates_per_file,
                     self.repo_before_updates()?,
                     self.config_bytes_raw()?.as_deref(),
+                    self.enabled_feature_flags()?,
+                    self.disabled_feature_flags()?,
                 )
             }
             Err(IcechunkFormatError {
@@ -702,6 +839,8 @@ impl RepoInfo {
                     num_updates_per_file,
                     self.repo_before_updates()?,
                     self.config_bytes_raw()?.as_deref(),
+                    self.enabled_feature_flags()?,
+                    self.disabled_feature_flags()?,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -756,6 +895,8 @@ impl RepoInfo {
                     num_updates_per_file,
                     self.repo_before_updates()?,
                     self.config_bytes_raw()?.as_deref(),
+                    self.enabled_feature_flags()?,
+                    self.disabled_feature_flags()?,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -802,6 +943,8 @@ impl RepoInfo {
                     num_updates_per_file,
                     self.repo_before_updates()?,
                     self.config_bytes_raw()?.as_deref(),
+                    self.enabled_feature_flags()?,
+                    self.disabled_feature_flags()?,
                 )
             }
             Err(IcechunkFormatError {
@@ -838,6 +981,8 @@ impl RepoInfo {
             num_updates_per_file,
             self.repo_before_updates()?,
             self.config_bytes_raw()?.as_deref(),
+            self.enabled_feature_flags()?,
+            self.disabled_feature_flags()?,
         )
     }
 
@@ -867,6 +1012,8 @@ impl RepoInfo {
             num_updates_per_file,
             self.repo_before_updates()?,
             Some(config_bytes.as_slice()),
+            self.enabled_feature_flags()?,
+            self.disabled_feature_flags()?,
         )
     }
 
@@ -1057,6 +1204,13 @@ impl RepoInfo {
             generated::UpdateType::GCRanUpdate => Ok(UpdateType::GCRanUpdate),
             generated::UpdateType::ExpirationRanUpdate => {
                 Ok(UpdateType::ExpirationRanUpdate)
+            }
+            generated::UpdateType::FeatureFlagChangedUpdate => {
+                let up = update.update_type_as_feature_flag_changed_update().unwrap();
+                Ok(UpdateType::FeatureFlagChanged {
+                    id: up.id(),
+                    new_value: if up.is_set() { Some(up.new_value()) } else { None },
+                })
             }
             _ => Err(IcechunkFormatErrorKind::InvalidFlatBuffer(
                 flatbuffers::InvalidFlatbuffer::InconsistentUnion {
@@ -1347,6 +1501,18 @@ fn update_type_to_fb<'bldr>(
             generated::ExpirationRanUpdate::create(
                 builder,
                 &generated::ExpirationRanUpdateArgs {},
+            )
+            .as_union_value(),
+        )),
+        UpdateType::FeatureFlagChanged { id, new_value } => Ok((
+            generated::UpdateType::FeatureFlagChangedUpdate,
+            generated::FeatureFlagChangedUpdate::create(
+                builder,
+                &generated::FeatureFlagChangedUpdateArgs {
+                    id: *id,
+                    new_value: new_value.unwrap_or_default(),
+                    is_set: new_value.is_some(),
+                },
             )
             .as_union_value(),
         )),

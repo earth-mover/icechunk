@@ -472,6 +472,8 @@ pub async fn migrate_1_to_2(
         migration_page_size,
         None,
         Some(config_bytes.as_slice()),
+        None::<std::iter::Empty<u16>>,
+        None::<std::iter::Empty<u16>>,
     )?);
 
     if dry_run {

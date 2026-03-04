@@ -12,6 +12,7 @@ use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Repository,
     config::Credentials,
+    feature_flags::FeatureFlag,
     format::{
         SnapshotId,
         format_constants::SpecVersionBin,
@@ -40,7 +41,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     config::{
         PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings, datetime_repr,
-        format_option_to_string,
+        format_bool, format_option, format_option_to_string,
     },
     errors::PyIcechunkStoreError,
     impl_pickle,
@@ -553,6 +554,15 @@ pub(crate) struct PyNewDetachedSnapshotUpdate {
     new_snap_id: String,
 }
 
+#[pyclass(name = "FeatureFlagChangedUpdate", eq, extends=PyUpdateType)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PyFeatureFlagChangedUpdate {
+    #[pyo3(get)]
+    id: u16,
+    #[pyo3(get)]
+    new_value: Option<bool>,
+}
+
 #[pymethods]
 impl PyRepoInitializedUpdate {
     fn __repr__(&self) -> PyResult<String> {
@@ -659,6 +669,58 @@ impl PyGCRanUpdate {
 impl PyExpirationRanUpdate {
     fn __repr__(&self) -> PyResult<String> {
         Ok("ExpirationRanUpdate()".to_string())
+    }
+}
+
+#[pymethods]
+impl PyFeatureFlagChangedUpdate {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!(
+            "FeatureFlagChangedUpdate(id={}, new_value={})",
+            self.id,
+            format_option(self.new_value.map(format_bool))
+        ))
+    }
+}
+
+#[pyclass(name = "FeatureFlag", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PyFeatureFlag {
+    #[pyo3(get)]
+    id: u16,
+    #[pyo3(get)]
+    name: String,
+    #[pyo3(get)]
+    default_enabled: bool,
+    #[pyo3(get)]
+    setting: Option<bool>,
+    #[pyo3(get)]
+    enabled: bool,
+}
+
+#[pymethods]
+impl PyFeatureFlag {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!(
+            "FeatureFlag(id={}, name={}, default_enabled={}, setting={}, enabled={})",
+            self.id,
+            self.name,
+            format_bool(self.default_enabled),
+            format_option(self.setting.map(format_bool)),
+            format_bool(self.enabled),
+        ))
+    }
+}
+
+impl From<FeatureFlag> for PyFeatureFlag {
+    fn from(flag: FeatureFlag) -> Self {
+        Self {
+            id: flag.id(),
+            name: flag.name().to_string(),
+            default_enabled: flag.default_enabled(),
+            setting: flag.setting(),
+            enabled: flag.enabled(),
+        }
     }
 }
 
@@ -797,6 +859,15 @@ fn mk_update_type(
             UpdateType::ExpirationRanUpdate => Bound::new(
                 py,
                 (PyExpirationRanUpdate, PyUpdateType { updated_at, backup_path }),
+            )?
+            .into_any()
+            .unbind(),
+            UpdateType::FeatureFlagChanged { id, new_value } => Bound::new(
+                py,
+                (
+                    PyFeatureFlagChangedUpdate { id: *id, new_value: *new_value },
+                    PyUpdateType { updated_at, backup_path },
+                ),
             )?
             .into_any()
             .unbind(),
@@ -1384,6 +1455,154 @@ impl PyRepository {
                 .map_err(PyIcechunkStoreError::RepositoryError)?
                 .into();
             Ok(res)
+        })
+    }
+
+    pub(crate) fn feature_flags(&self, py: Python<'_>) -> PyResult<Vec<PyFeatureFlag>> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let flags: Vec<PyFeatureFlag> = self
+                    .0
+                    .read()
+                    .await
+                    .feature_flags()
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?
+                    .map(PyFeatureFlag::from)
+                    .collect();
+                Ok(flags)
+            })
+        })
+    }
+
+    pub(crate) fn feature_flags_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let flags: Vec<PyFeatureFlag> = repository
+                .read()
+                .await
+                .feature_flags()
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?
+                .map(PyFeatureFlag::from)
+                .collect();
+            Ok(flags)
+        })
+    }
+
+    pub(crate) fn enabled_feature_flags(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<Vec<PyFeatureFlag>> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let flags: Vec<PyFeatureFlag> = self
+                    .0
+                    .read()
+                    .await
+                    .enabled_feature_flags()
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?
+                    .map(PyFeatureFlag::from)
+                    .collect();
+                Ok(flags)
+            })
+        })
+    }
+
+    pub(crate) fn enabled_feature_flags_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let flags: Vec<PyFeatureFlag> = repository
+                .read()
+                .await
+                .enabled_feature_flags()
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?
+                .map(PyFeatureFlag::from)
+                .collect();
+            Ok(flags)
+        })
+    }
+
+    pub(crate) fn disabled_feature_flags(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<Vec<PyFeatureFlag>> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let flags: Vec<PyFeatureFlag> = self
+                    .0
+                    .read()
+                    .await
+                    .disabled_feature_flags()
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?
+                    .map(PyFeatureFlag::from)
+                    .collect();
+                Ok(flags)
+            })
+        })
+    }
+
+    pub(crate) fn disabled_feature_flags_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let flags: Vec<PyFeatureFlag> = repository
+                .read()
+                .await
+                .disabled_feature_flags()
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?
+                .map(PyFeatureFlag::from)
+                .collect();
+            Ok(flags)
+        })
+    }
+
+    pub(crate) fn set_feature_flag(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        setting: Option<bool>,
+    ) -> PyResult<()> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                self.0
+                    .read()
+                    .await
+                    .set_feature_flag(name, setting)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(())
+            })
+        })
+    }
+
+    pub(crate) fn set_feature_flag_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        name: String,
+        setting: Option<bool>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            repository
+                .read()
+                .await
+                .set_feature_flag(&name, setting)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(())
         })
     }
 
