@@ -5,7 +5,7 @@ volumes:
 services:
   rustfs:
     container_name: icechunk_rustfs
-    image: rustfs/rustfs:1.0.0-alpha.83
+    image: rustfs/rustfs:1.0.0-alpha.85
     hostname: rustfs
     healthcheck:
       test: curl 127.0.0.1:9000/health
@@ -29,7 +29,7 @@ services:
 
   rustfs_init:
     container_name: icechunk_rustfs_init
-    image: rustfs/rc:v0.1.3
+    image: rustfs/rc:v0.1.4
     restart: "no"
     depends_on:
       rustfs:
@@ -43,11 +43,6 @@ services:
 
         rc alias set local http://rustfs:9000 minio123 minio123
         rc admin user add local readonly basicuser
-        rc admin user add local modify modifydata
-
-        apk add --no-cache aws-cli
-        export AWS_ACCESS_KEY_ID=minio123
-        export AWS_SECRET_ACCESS_KEY=minio123
 
         echo '{
           "Version": "2012-10-17",
@@ -63,7 +58,18 @@ services:
                 "arn:aws:s3:::testbucket",
                 "arn:aws:s3:::testbucket/*"
               ]
-            },
+            }
+          ]
+        }' > policy.json
+
+        rc admin policy create local readonly policy.json
+        rc admin policy attach local --user readonly readonly
+
+        rc admin user add local modify modifydata
+
+        echo '{
+          "Version": "2012-10-17",
+          "Statement": [
             {
               "Sid": "AllowToModify",
               "Effect": "Allow",
@@ -80,15 +86,10 @@ services:
               ]
             }
           ]
-        }' >> policy.json
-        cat policy.json
+        }' > policy.json
 
-        aws --endpoint-url http://rustfs:9000 s3api put-bucket-policy \
-          --bucket testbucket \
-          --policy file://policy.json
-
-        aws --endpoint-url http://rustfs:9000 s3api get-bucket-policy \
-          --bucket testbucket
+        rc admin policy create local modify policy.json
+        rc admin policy attach local --user modify modify
 
         exit 0
 
