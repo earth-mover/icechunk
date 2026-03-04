@@ -238,15 +238,17 @@ where
 
 impl ManifestSplits {
     #[inline(always)]
-    pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<&'a ManifestExtents> {
-        debug_assert_eq!(coord.0.len(), self.0[0].len());
-        find_coord(self.iter(), coord).map(|x| x.1)
-    }
-
-    #[inline(always)]
-    pub fn position(&self, coord: &ChunkIndices) -> Option<usize> {
-        debug_assert_eq!(coord.0.len(), self.0[0].len());
-        find_coord(self.iter(), coord).map(|x| x.0)
+    pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<ManifestExtents> {
+        debug_assert_eq!(coord.0.len(), self.0.len());
+        let mut ranges = Vec::with_capacity(self.0.len());
+        for (edges, loc) in self.0.iter().zip(coord.0.iter()) {
+            let bin = edges.partition_point(|&e| e <= *loc);
+            if bin == 0 || bin >= edges.len() {
+                return None;
+            }
+            ranges.push(edges[bin - 1]..edges[bin]);
+        }
+        Some(ManifestExtents::from_ranges_iter(ranges))
     }
 }
 
@@ -2148,7 +2150,7 @@ impl<'a> FlushProcess<'a> {
             .array_chunks_iterator(&node.id, &node.path)
             .fold(HashMap::new(), |mut res, (idx, payload)| {
                 if let Some(extents) = splits.find(idx) {
-                    let entry = res.entry(extents.clone()).or_default();
+                    let entry = res.entry(extents).or_default();
                     entry.insert(idx.clone(), payload.clone());
                 }
                 res
@@ -2160,7 +2162,7 @@ impl<'a> FlushProcess<'a> {
                 .iter()
                 .filter_map(|mr| {
                     // order is critical here, `overlap_with` is not symmetric
-                    match mr.extents.overlap_with(extent) {
+                    match mr.extents.overlap_with(&extent) {
                         Overlap::None => None,
                         ov => Some((mr, ov)),
                     }
@@ -2169,7 +2171,7 @@ impl<'a> FlushProcess<'a> {
 
             let no_changes = Default::default();
             let modified_chunks =
-                updated_chunks_by_extent.get(extent).unwrap_or(&no_changes);
+                updated_chunks_by_extent.get(&extent).unwrap_or(&no_changes);
 
             if !modified_chunks.is_empty() || rewrite_manifests {
                 // if we were ask to rewrite manifests, or there are modified chunks in this split
@@ -2178,7 +2180,7 @@ impl<'a> FlushProcess<'a> {
                     .write_manifest_with_changes(
                         intersecting_manifests.iter().map(|(mr, _)| *mr),
                         modified_chunks,
-                        extent,
+                        &extent,
                         &node.id,
                         snapshot_id,
                     )
@@ -2209,7 +2211,7 @@ impl<'a> FlushProcess<'a> {
                         .write_manifest_with_changes(
                             std::iter::once(mref),
                             &no_changes,
-                            extent,
+                            &extent,
                             &node.id,
                             snapshot_id,
                         )
@@ -3091,16 +3093,33 @@ mod tests {
     async fn test_which_split() -> Result<(), Box<dyn Error>> {
         let splits = ManifestSplits::from_edges(vec![vec![0, 10, 20]]);
 
-        assert_eq!(splits.position(&ChunkIndices(vec![1])), Some(0));
-        assert_eq!(splits.position(&ChunkIndices(vec![11])), Some(1));
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1])),
+            Some(ManifestExtents::new(&[0], &[10]))
+        );
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![11])),
+            Some(ManifestExtents::new(&[10], &[20]))
+        );
 
         let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
 
         let splits = ManifestSplits::from_edges(edges);
-        assert_eq!(splits.position(&ChunkIndices(vec![1, 1])), Some(0));
-        assert_eq!(splits.position(&ChunkIndices(vec![1, 10])), Some(1));
-        assert_eq!(splits.position(&ChunkIndices(vec![1, 11])), Some(1));
-        assert!(splits.position(&ChunkIndices(vec![21, 21])).is_none());
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1, 1])),
+            Some(ManifestExtents::new(&[0, 0], &[10, 10]))
+        );
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1, 10])),
+            Some(ManifestExtents::new(&[0, 10], &[10, 20]))
+        );
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1, 11])),
+            Some(ManifestExtents::new(&[0, 10], &[10, 20]))
+        );
+        assert!(splits.find(&ChunkIndices(vec![21, 21])).is_none());
+        assert!(splits.find(&ChunkIndices(vec![0, 21])).is_none());
+        assert!(splits.find(&ChunkIndices(vec![21, 0])).is_none());
 
         Ok(())
     }
