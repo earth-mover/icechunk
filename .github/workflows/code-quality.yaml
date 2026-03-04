@@ -37,7 +37,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           add-job-id-key: "false"
-          add-rust-environment-hash-key: "false"
 
       - uses: prefix-dev/setup-pixi@v0.9.4
         with:
