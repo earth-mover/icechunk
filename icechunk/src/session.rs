@@ -214,6 +214,7 @@ pub type SessionResult<T> = Result<T, SessionError>;
 // and at read time to choose which manifest to query for chunk payload
 /// It is useful to have this act on an iterator (e.g. get_chunk_ref)
 /// The find method on ManifestSplits is simply a helper.
+#[inline(always)]
 pub fn find_coord<'a, I>(
     iter: I,
     coord: &'a ChunkIndices,
@@ -235,11 +236,13 @@ where
 }
 
 impl ManifestSplits {
+    #[inline(always)]
     pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<&'a ManifestExtents> {
         debug_assert_eq!(coord.0.len(), self.0[0].len());
         find_coord(self.iter(), coord).map(|x| x.1)
     }
 
+    #[inline(always)]
     pub fn position(&self, coord: &ChunkIndices) -> Option<usize> {
         debug_assert_eq!(coord.0.len(), self.0[0].len());
         find_coord(self.iter(), coord).map(|x| x.0)
