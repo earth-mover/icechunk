@@ -1,0 +1,72 @@
+<!-- markdownlint-disable MD013 -->
+
+# AI Usage Policy
+
+**Note:** Icechunk developers use AI tools as part of our development workflow.
+This policy's aim is not to restrict AI tool usage. Its goals are to ensure that
+
+- Reviewers are not overburdened
+- Contributions can be maintained
+- The submitter can vouch for and explain all changes
+
+## Core Principle: Changes
+
+If you submit a pull request, you are responsible for understanding and having fully reviewed
+the changes. You must be able to explain why each change is correct[^1] and how it fits into
+the project. This applies regardless of whether the code was written by hand, with
+AI assistance, or generated entirely by an AI tool.
+
+[^1]: You may also open a draft PR with changes in order to discuss and receive feedback on the best approach if you are not sure what the best way forward is.
+
+### Disclosure
+
+If AI tools were used to generate or modify code or tests in your contribution, you **must**
+say so in the PR description and note which tools were used.
+
+## Core Principle: Communication
+
+PR descriptions, issue comments, and review responses must be your own words. The
+substance and reasoning must come from you — do not paste AI-generated text as
+comments or review responses.
+
+Using AI to polish grammar, spelling, or formatting is fine and does not require
+disclosure. This is especially welcomed if English is not your first language.
+
+## Code and Tests
+
+### Review Every Line
+
+You must have personally reviewed and understood all changes before submitting.
+
+If you used AI to generate code, you are expected to have read it critically and tested it.
+As with a hand-written PR, the description should explain the approach and reasoning behind the changes.
+Do not leave it to reviewers to figure out what the code does and why.
+
+#### Not Acceptable
+
+> I pointed an agent at the issue and here are the changes
+
+#### Acceptable
+
+> I iterated multiple times with an agent to produce this. The agent wrote the code at my direction,
+> and I have fully read and validated the changes.
+
+### Large AI-Assisted Contributions
+
+Generating code with agents is fast and easy. Reviewing it is not. Making a PR with a large diff
+shifts the burden from the contributor to the reviewer. To guard against this asymmetry:
+
+If you are planning a large AI-assisted contribution (e.g., a significant refactor, a
+framework migration, or a new subsystem), **open an issue first** to discuss the scope
+and approach with maintainers. This helps us align on whether the change is wanted, how
+it should be structured, and what level of testing and documentation is expected.
+
+Maintainers reserve the right to close PRs where the scope makes meaningful review
+impractical, or to request that large changes be broken into smaller, reviewable pieces.
+
+## Documentation
+
+AI tools can be useful for drafting or restructuring documentation. The same core
+principle applies: you must review the result for accuracy and be able to stand behind
+it. Icechunk has domain-specific semantics that AI tools frequently get wrong, do not
+submit documentation that you haven't carefully read and verified.

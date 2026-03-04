@@ -13,6 +13,8 @@ Icechunk is an open source (Apache 2.0) project and welcomes contributions in th
 - Documentation improvements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
 - Bug fixes and enhancements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
 
+🤖 Please review our [AI Usage Policy](ai-policy.md) before submitting pull requests.
+
 ## Development
 
 This guide describes the local development workflow for:
