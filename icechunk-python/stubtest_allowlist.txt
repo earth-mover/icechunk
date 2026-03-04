@@ -55,6 +55,8 @@ icechunk._icechunk_python.Credentials.S3.__match_args__
 icechunk._icechunk_python.Credentials.S3.__new__
 icechunk._icechunk_python.Diff
 icechunk._icechunk_python.ExpirationRanUpdate
+icechunk._icechunk_python.FeatureFlag
+icechunk._icechunk_python.FeatureFlagChangedUpdate
 icechunk._icechunk_python.GCRanUpdate
 icechunk._icechunk_python.GCSummary
 icechunk._icechunk_python.GcsBearerCredential

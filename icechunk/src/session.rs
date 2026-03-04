@@ -39,6 +39,7 @@ use crate::{
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
+    feature_flags::{MOVE_NODE_FLAG, raise_if_feature_flag_disabled},
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
@@ -214,6 +215,7 @@ pub type SessionResult<T> = Result<T, SessionError>;
 // and at read time to choose which manifest to query for chunk payload
 /// It is useful to have this act on an iterator (e.g. get_chunk_ref)
 /// The find method on ManifestSplits is simply a helper.
+#[inline(always)]
 pub fn find_coord<'a, I>(
     iter: I,
     coord: &'a ChunkIndices,
@@ -235,11 +237,13 @@ where
 }
 
 impl ManifestSplits {
+    #[inline(always)]
     pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<&'a ManifestExtents> {
         debug_assert_eq!(coord.0.len(), self.0[0].len());
         find_coord(self.iter(), coord).map(|x| x.1)
     }
 
+    #[inline(always)]
     pub fn position(&self, coord: &ChunkIndices) -> Option<usize> {
         debug_assert_eq!(coord.0.len(), self.0[0].len());
         find_coord(self.iter(), coord).map(|x| x.0)
@@ -1034,8 +1038,8 @@ impl Session {
         let res = try_stream! {
             let new_chunks = stream::iter(
                 self.change_set()
-                    .new_array_chunk_iterator(&node.id, array_path)
-                    .map(|chunk_info| Ok::<ChunkIndices, SessionError>(chunk_info.coord)),
+                    .array_chunks_iterator(&node.id, array_path)
+                    .map(|(coord, _)| Ok::<ChunkIndices, SessionError>(coord.clone())),
             );
 
             for await maybe_coords in updated_chunks.chain(new_chunks) {
@@ -1118,7 +1122,15 @@ impl Session {
         let update_type =
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
         let num_updates = self.config.num_updates_per_repo_info_file();
+        let is_rearrange = self.mode() == SessionMode::Rearrange;
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            if is_rearrange {
+                raise_if_feature_flag_disabled(
+                    repo_info.as_ref(),
+                    MOVE_NODE_FLAG,
+                    "flush rearrange session",
+                )?;
+            }
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
                 ..new_snap.as_ref().try_into()?
@@ -1274,6 +1286,7 @@ impl Session {
             let _ = self.change_set_mut()?;
         }
         let change_set = &mut self.change_set;
+        let is_rearrange = matches!(change_set, ChangeSet::Rearrange(_));
 
         let id = do_commit(
             Arc::clone(&self.asset_manager),
@@ -1286,6 +1299,7 @@ impl Session {
             commit_method,
             self.config.manifest().splitting(),
             allow_empty,
+            is_rearrange,
             self.config.repo_update_retries().retries(),
             num_updates,
         )
@@ -2010,10 +2024,22 @@ impl<'a> FlushProcess<'a> {
             if self.change_set.array_manifest(node_id).is_some() {
                 let chunks = stream::iter(
                     self.change_set
-                        .new_array_chunk_iterator(node_id, node_path)
+                        .array_chunks_iterator(node_id, node_path)
                         // FIXME: do we need to optimize this so we don't need multiple passes over all chunks calling
                         // contains?
-                        .filter(|chunk| extent.contains(&chunk.coord.0))
+                        .filter_map(|(coord, payload)| {
+                            if let Some(payload) = payload
+                                && extent.contains(&coord.0)
+                            {
+                                Some(ChunkInfo {
+                                    node: node_id.clone(),
+                                    coord: coord.clone(),
+                                    payload: payload.clone(),
+                                })
+                            } else {
+                                None
+                            }
+                        })
                         .map(Ok),
                 );
                 let new_ref = self.write_manifest_from_iterator(chunks).await?;
@@ -2053,8 +2079,8 @@ impl<'a> FlushProcess<'a> {
                         {
                             all_chunks_vec.push(Ok(ChunkInfo {
                                 node: node_id.clone(),
-                                coord: idx.clone(),
-                                payload: payload.clone(),
+                                coord: idx,
+                                payload,
                             }));
                         }
                     }
@@ -2566,6 +2592,7 @@ async fn do_commit(
     commit_method: CommitMethod,
     split_config: &ManifestSplittingConfig,
     allow_empty: bool,
+    is_rearrange: bool,
     retry_settings: &storage::RetriesSettings,
     num_updates_per_repo_info_file: u16,
 ) -> SessionResult<SnapshotId> {
@@ -2614,6 +2641,7 @@ async fn do_commit(
                 snapshot_id,
                 new_snapshot,
                 commit_method,
+                is_rearrange,
                 retry_settings,
                 num_updates_per_repo_info_file,
             )
@@ -2675,18 +2703,27 @@ async fn do_commit_v1(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn do_commit_v2(
     asset_manager: Arc<AssetManager>,
     branch_name: &str,
     parent_snapshot_id: &SnapshotId,
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
+    is_rearrange: bool,
     retry_settings: &storage::RetriesSettings,
     num_updates_per_repo_info_file: u16,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+        if is_rearrange {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                MOVE_NODE_FLAG,
+                "commit rearrange session",
+            )?;
+        }
         attempt += 1;
         let actual_parent = repo_info.resolve_branch(branch_name)?;
         if &actual_parent != parent_snapshot_id {

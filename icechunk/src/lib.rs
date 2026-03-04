@@ -39,6 +39,7 @@ pub mod compat;
 pub mod config;
 pub mod conflicts;
 pub mod error;
+pub mod feature_flags;
 pub mod format;
 pub mod inspect;
 pub mod migrations;
