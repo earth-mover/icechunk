@@ -227,6 +227,10 @@ impl Storage for LoggingStorage {
         self.backend.get_snapshot_last_modified(settings, snapshot).await
     }
 
+    async fn has_object(&self, settings: &Settings, key: &str) -> StorageResult<bool> {
+        self.backend.has_object(settings, key).await
+    }
+
     async fn get_object_range_buf(
         &self,
         settings: &Settings,

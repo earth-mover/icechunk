@@ -566,6 +566,8 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         snapshot: &SnapshotId,
     ) -> StorageResult<DateTime<Utc>>;
 
+    async fn has_object(&self, settings: &Settings, key: &str) -> StorageResult<bool>;
+
     async fn root_is_clean(&self) -> StorageResult<bool> {
         match self.list_objects(&Settings::default(), "").await?.next().await {
             None => Ok(true),
@@ -575,13 +577,7 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
     }
 
     async fn has_v2_repo_info(&self) -> StorageResult<bool> {
-        let mut stream = self.list_objects(&self.default_settings(), "").await?;
-        while let Some(item) = stream.next().await {
-            if item?.id == V2_REPO_INFO_PATH {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        self.has_object(&self.default_settings(), V2_REPO_INFO_PATH).await
     }
 
     async fn list_chunks(

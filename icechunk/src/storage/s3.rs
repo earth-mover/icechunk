@@ -1045,6 +1045,31 @@ impl Storage for S3Storage {
         Ok(res)
     }
 
+    async fn has_object(&self, settings: &Settings, key: &str) -> StorageResult<bool> {
+        let key = self.get_path_str("", key)?;
+        let mut req = self
+            .get_client(settings)
+            .await
+            .head_object()
+            .bucket(self.bucket.clone())
+            .key(key);
+
+        if self.config.requester_pays {
+            req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
+        }
+
+        match req.send().await {
+            Ok(_) => Ok(true),
+            Err(err)
+                if err.as_service_error().is_some_and(|e| e.is_not_found())
+                    || err.raw_response().is_some_and(|r| r.status().as_u16() == 404) =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(Box::new(err).into()),
+        }
+    }
+
     #[instrument(skip(self))]
     async fn get_object_range_buf(
         &self,
