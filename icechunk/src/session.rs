@@ -210,11 +210,9 @@ impl From<RefError> for SessionError {
 
 pub type SessionResult<T> = Result<T, SessionError>;
 
-// Returns the index of split_range that includes ChunkIndices
-// This can be used at write time to split manifests based on the config
-// and at read time to choose which manifest to query for chunk payload
+// Returns the index of split_range that includes ChunkIndices using _linear search_.
+// This is used at read time to choose which manifest to query for chunk payload
 /// It is useful to have this act on an iterator (e.g. get_chunk_ref)
-/// The find method on ManifestSplits is simply a helper.
 #[inline(always)]
 pub fn find_coord<'a, I>(
     iter: I,
@@ -237,12 +235,16 @@ where
 }
 
 impl ManifestSplits {
+    /// Binary search to locate ManifestExtents for a given chunk coordinate.
     #[inline(always)]
     pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<ManifestExtents> {
         debug_assert_eq!(coord.0.len(), self.0.len());
         let mut ranges = Vec::with_capacity(self.0.len());
         for (edges, loc) in self.0.iter().zip(coord.0.iter()) {
+            // Find insertion point for axis chunk index in sorted vector of split edges.
             let bin = edges.partition_point(|&e| e <= *loc);
+            // detected bin is out of range. This _should_ never happen
+            // note that if loc == 0, then bin = 1
             if bin == 0 || bin >= edges.len() {
                 return None;
             }

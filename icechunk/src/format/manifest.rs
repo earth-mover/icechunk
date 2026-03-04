@@ -136,29 +136,10 @@ pub struct ManifestRef {
 
 // ManifestSplits can be constructed from a iterable of shard edges or boundaries
 // along each dimension.
-/// # Examples
-/// ```
-/// use icechunk::format::manifest::{ManifestSplits, ManifestExtents};
-/// let actual = ManifestSplits(vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]);
-/// let expected = ManifestSplits(vec![
-///     ManifestExtents::new(&[0, 3], &[1, 4]),
-///     ManifestExtents::new(&[0, 4], &[1, 5]),
-///     ManifestExtents::new(&[1, 3], &[2, 4]),
-///     ManifestExtents::new(&[1, 4], &[2, 5]),
-///     ]
-/// );
-/// assert_eq!(actual, expected);
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestSplits(pub Vec<Vec<u32>>);
 
 impl ManifestSplits {
-    /// Used at read-time
-    // pub fn from_extents(extents: Vec<ManifestExtents>) -> Self {
-    //     assert!(!extents.is_empty());
-    //     Self(extents)
-    // }
-
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -168,9 +149,10 @@ impl ManifestSplits {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = ManifestExtents> {
-        // let iter = vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]
         self.0
             .iter()
+            // assume
+            // vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]
             .cloned()
             // vec![(0, 1), (1, 2)], vec![(3, 4), (4, 5)]
             .map(|x| x.into_iter().tuple_windows())
