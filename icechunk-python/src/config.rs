@@ -108,14 +108,14 @@ pub(crate) fn format_option_to_string<T: Display>(o: Option<T>) -> String {
     }
 }
 
-fn format_option<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
+pub(crate) fn format_option<'a, T: AsRef<str> + 'a>(o: Option<T>) -> String {
     match o.as_ref() {
         None => "None".to_string(),
         Some(s) => s.as_ref().to_string(),
     }
 }
 
-fn format_bool(b: bool) -> &'static str {
+pub(crate) fn format_bool(b: bool) -> &'static str {
     match b {
         true => "True",
         false => "False",

@@ -15,11 +15,11 @@ class Permission(Enum):
 
     def keys(self) -> tuple[str, str]:
         match self:
-            case self.READONLY:
+            case Permission.READONLY:
                 return ("readonly", "basicuser")
-            case self.MODIFY:
+            case Permission.MODIFY:
                 return ("modify", "modifydata")
-            case self.SUPERUSER:
+            case Permission.SUPERUSER:
                 return ("minio123", "minio123")
 
 
@@ -36,6 +36,7 @@ def parse_repo(
             storage=in_memory_storage(),
             spec_version=spec_version,
         )
+    raise ValueError(f"Unknown store type: {store}")
 
 
 @pytest.fixture(scope="function")

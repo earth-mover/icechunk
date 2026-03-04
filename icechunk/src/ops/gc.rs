@@ -590,6 +590,8 @@ async fn delete_snapshots_from_repo_info(
             num_updates_per_repo_info_file,
             repo_info.repo_before_updates()?,
             config_bytes.as_deref(),
+            repo_info.enabled_feature_flags()?,
+            repo_info.disabled_feature_flags()?,
         )?;
 
         Ok(Arc::new(new_repo_info))
@@ -1050,6 +1052,8 @@ pub async fn expire_v2_one_attempt(
             num_updates_per_repo_info_file,
             repo_info.repo_before_updates()?,
             config_bytes.as_deref(),
+            repo_info.enabled_feature_flags()?,
+            repo_info.disabled_feature_flags()?,
         )?;
 
         Ok(Arc::new(new_repo_info))

@@ -20,7 +20,13 @@ from numpy.testing import assert_array_equal
 
 import icechunk as ic
 import zarr
-from tests.conftest import Permission
+
+# This file can be run as a script to regenerate test data (see module docstring).
+# When run as a script, `tests` is not a package, so we fall back to a direct import.
+try:
+    from tests.conftest import Permission
+except ImportError:
+    from conftest import Permission  # type: ignore[import-not-found,no-redef]
 
 UPDATED_SPLITTING_CONFIG = ic.ManifestSplittingConfig.from_dict(
     {
@@ -286,8 +292,10 @@ async def write_a_test_repo(path: str) -> None:
 
 
 async def do_icechunk_can_read_old_repo(path: str) -> None:
-    # we import here so it works when the script is ran by pytest
-    from tests.conftest import write_chunks_to_minio
+    try:
+        from tests.conftest import write_chunks_to_minio
+    except ImportError:
+        from conftest import write_chunks_to_minio  # type: ignore[no-redef]
 
     repo = mk_repo(create=False, store_path=path)
     main_snapshot = repo.lookup_branch("main")

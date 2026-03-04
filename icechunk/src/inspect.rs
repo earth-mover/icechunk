@@ -218,6 +218,10 @@ impl From<UpdateType> for UpdateTypeInspect {
                 type_name: "ExpirationRanUpdate".into(),
                 details: serde_json::json!({}),
             },
+            UpdateType::FeatureFlagChanged { id, new_value } => Self {
+                type_name: "FeatureFlagChanged".into(),
+                details: serde_json::json!({"id": id, "new_value": new_value}),
+            },
         }
     }
 }
