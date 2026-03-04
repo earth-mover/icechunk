@@ -160,56 +160,50 @@ where
         .await
         .expect("Cannot create local Storage");
 
-    println!("Using in memory storage");
-    f("in_memory", s2).await?;
-    println!("Using local filesystem storage");
-    f("local_filesystem", s5).await?;
-    println!("Using s3 native storage on MinIO");
-    f("s3_native", s1).await?;
-    println!("Using s3 native storage on MinIO, slash prefix");
-    f("s3_native", s1slash).await?;
-    println!("Using s3 object_store storage on MinIO");
-    f("s3_object_store", s3).await?;
-    println!("Using s3 object_store storage on MinIO, slash prefix");
-    f("s3_object_store", s3slash).await?;
-    println!("Using azure_blob storage");
-    f("azure_blob", s4).await?;
-    println!("Using azure_blob storage, slash prefix");
-    f("azure_blob", s4slash).await?;
+    let mut storages: Vec<(&'static str, Arc<dyn Storage + Send + Sync>)> = vec![
+        ("in_memory", s2),
+        ("local_filesystem", s5),
+        ("s3_native", s1),
+        ("s3_native_slash", s1slash),
+        ("s3_object_store", s3),
+        ("s3_object_store_slash", s3slash),
+        ("azure_blob", s4),
+        ("azure_blob_slash", s4slash),
+    ];
 
     if env::var("AWS_BUCKET").is_ok() {
         let prefix = common::get_random_prefix("with_storage");
         let s = common::make_aws_integration_storage(prefix.clone())?;
-        println!("Using AWS storage");
-        f("AWS", s).await?;
+        storages.push(("AWS", s));
 
         let prefix = format!("{}/", common::get_random_prefix("with_storage"));
         let s = common::make_aws_integration_storage(prefix.clone())?;
-        println!("Using AWS storage, slashh prefix");
-        f("AWS", s).await?;
+        storages.push(("AWS_slash", s));
     }
     if env::var("R2_BUCKET").is_ok() {
         let prefix = common::get_random_prefix("with_storage");
         let s = common::make_r2_integration_storage(prefix.clone())?;
-        println!("Using R2 storage");
-        f("R2", s).await?;
+        storages.push(("R2", s));
 
         let prefix = format!("{}/", common::get_random_prefix("with_storage"));
         let s = common::make_r2_integration_storage(prefix.clone())?;
-        println!("Using R2 storage, slash prefix");
-        f("R2", s).await?;
+        storages.push(("R2_slash", s));
     }
     if env::var("TIGRIS_BUCKET").is_ok() {
         let prefix = common::get_random_prefix("with_storage");
         let s = common::make_tigris_integration_storage(prefix.clone())?;
-        println!("Using Tigris storage");
-        f("Tigris", s).await?;
+        storages.push(("Tigris", s));
 
         let prefix = format!("{}/", common::get_random_prefix("with_storage"));
         let s = common::make_tigris_integration_storage(prefix.clone())?;
-        println!("Using Tigris storage, slash prefix");
-        f("Tigris", s).await?;
+        storages.push(("Tigris_slash", s));
     }
+
+    let futures = storages.into_iter().map(|(name, storage)| {
+        println!("Using {name} storage");
+        f(name, storage)
+    });
+    futures::future::try_join_all(futures).await?;
 
     Ok(())
 }
