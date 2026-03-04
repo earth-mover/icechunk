@@ -306,6 +306,11 @@ impl ManifestFileInfo {
 pub struct Snapshot {
     buffer: Vec<u8>,
     spec_version: SpecVersionBin,
+    // It is _extremely_ common to set/get chunks in large batches sequentially.
+    // Without a cache we incur the cost of repeatedly decoding the flatbuffer.
+    // This cache is very small (size 1 currently), because we could cache a large number of
+    // snapshots. The size of 1 is fine for typically workloads that iterate sequentially
+    // through nodes.
     node_cache: Cache<Path, Arc<NodeSnapshot>>,
 }
 
