@@ -355,6 +355,7 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
 
 /// Benchmarks committing half a million chunks
 /// by sequential appending such that each commit is a new manifest.
+/// The sequential repeated commit really stresses `get_existing_node` and flatbuffer decoding.
 fn benchmark_append_split_manifests(c: &mut Criterion) {
     let mut group = c.benchmark_group("append_split_manifests");
     group.sample_size(10).sampling_mode(criterion::SamplingMode::Flat);

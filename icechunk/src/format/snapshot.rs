@@ -1,6 +1,8 @@
 //! Repository state at a point in time (arrays, groups, and manifest references).
 
-use std::{collections::BTreeMap, convert::Infallible, num::NonZeroU64, sync::Arc};
+use std::{
+    collections::BTreeMap, convert::Infallible, num::NonZeroU64, ops::Range, sync::Arc,
+};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -199,9 +201,12 @@ impl From<&generated::ObjectId12> for AttributesId {
 
 impl<'a> From<generated::ManifestRef<'a>> for ManifestRef {
     fn from(value: generated::ManifestRef<'a>) -> Self {
-        let from = value.extents().iter().map(|range| range.from()).collect::<Vec<_>>();
-        let to = value.extents().iter().map(|range| range.to()).collect::<Vec<_>>();
-        let extents = ManifestExtents::new(from.as_slice(), to.as_slice());
+        let extents = ManifestExtents::from_ranges_iter(
+            value
+                .extents()
+                .iter()
+                .map(|range| Range { start: range.from(), end: range.to() }),
+        );
         ManifestRef { object_id: value.object_id().into(), extents }
     }
 }
