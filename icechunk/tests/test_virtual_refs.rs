@@ -13,6 +13,7 @@ use icechunk::{
     },
     format::{
         ByteRange, ChunkId, ChunkIndices, Path,
+        format_constants::SpecVersionBin,
         manifest::{
             Checksum, ChunkPayload, SecondsSinceEpoch, VirtualChunkLocation,
             VirtualChunkRef, VirtualReferenceErrorKind,
@@ -28,6 +29,8 @@ use icechunk::{
     virtual_chunks::VirtualChunkContainer,
 };
 use icechunk_macros::tokio_test;
+use rstest::rstest;
+use rstest_reuse::{self, *};
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
@@ -44,6 +47,12 @@ use object_store::{
     local::LocalFileSystem,
 };
 use pretty_assertions::assert_eq;
+
+#[template]
+#[rstest]
+#[case::v1(SpecVersionBin::V1dot0)]
+#[case::v2(SpecVersionBin::V2dot0)]
+fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
 fn minio_s3_config() -> (S3Options, S3Credentials) {
     let config = S3Options {
@@ -68,6 +77,7 @@ async fn create_repository(
     storage: Arc<dyn Storage + Send + Sync>,
     virtual_chunk_containers: Vec<VirtualChunkContainer>,
     credentials: HashMap<String, Option<Credentials>>,
+    spec_version: SpecVersionBin,
 ) -> Repository {
     let virtual_chunk_containers = virtual_chunk_containers
         .into_iter()
@@ -81,7 +91,7 @@ async fn create_repository(
         }),
         storage,
         credentials,
-        None,
+        Some(spec_version),
         true,
     )
     .await
@@ -109,6 +119,7 @@ async fn write_chunks_to_store(
 async fn create_local_repository(
     repo_path: &StdPath,
     chunks_path: Option<&StdPath>,
+    spec_version: SpecVersionBin,
 ) -> Repository {
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
         ObjectStorage::new_local_filesystem(repo_path)
@@ -196,10 +207,10 @@ async fn create_local_repository(
         creds.insert(prefix, None);
     }
 
-    create_repository(storage, containers, creds).await
+    create_repository(storage, containers, creds, spec_version).await
 }
 
-async fn create_minio_repository() -> Repository {
+async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
     let prefix = format!("{:?}", ChunkId::random());
     let (config, credentials) = minio_s3_config();
     let storage: Arc<dyn Storage + Send + Sync> =
@@ -269,7 +280,7 @@ async fn create_minio_repository() -> Repository {
     ]
     .into();
 
-    create_repository(storage, containers, credentials).await
+    create_repository(storage, containers, credentials, spec_version).await
 }
 
 async fn write_chunks_to_local_fs(chunks: impl Iterator<Item = (String, Bytes)>) {
@@ -329,7 +340,10 @@ async fn write_chunks_to_azure(
 }
 
 #[tokio_test]
-async fn test_repository_with_local_virtual_refs() -> Result<(), Box<dyn Error>> {
+#[apply(spec_version_cases)]
+async fn test_repository_with_local_virtual_refs(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn Error>> {
     let chunk_dir = TempDir::new()?;
     let chunk_1 = chunk_dir.path().join("chunk-1").to_str().unwrap().to_owned();
     let chunk_2 = chunk_dir.path().join("chunk-2").to_str().unwrap().to_owned();
@@ -340,7 +354,9 @@ async fn test_repository_with_local_virtual_refs() -> Result<(), Box<dyn Error>>
     write_chunks_to_local_fs(chunks.iter().cloned()).await;
 
     let repo_dir = TempDir::new()?;
-    let repo = create_local_repository(repo_dir.path(), Some(chunk_dir.path())).await;
+    let repo =
+        create_local_repository(repo_dir.path(), Some(chunk_dir.path()), spec_version)
+            .await;
     let mut ds = repo.writable_session("main").await.unwrap();
 
     let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
@@ -428,7 +444,10 @@ async fn test_repository_with_local_virtual_refs() -> Result<(), Box<dyn Error>>
 }
 
 #[tokio_test]
-async fn test_repository_with_minio_virtual_refs() -> Result<(), Box<dyn Error>> {
+#[apply(spec_version_cases)]
+async fn test_repository_with_minio_virtual_refs(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn Error>> {
     let bytes1 = Bytes::copy_from_slice(b"first");
     let bytes2 = Bytes::copy_from_slice(b"second0000");
     let chunks = [
@@ -437,7 +456,7 @@ async fn test_repository_with_minio_virtual_refs() -> Result<(), Box<dyn Error>>
     ];
     write_chunks_to_minio(chunks.iter().cloned()).await;
 
-    let repo = create_minio_repository().await;
+    let repo = create_minio_repository(spec_version).await;
     let mut ds = repo.writable_session("main").await.unwrap();
 
     let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
@@ -568,8 +587,10 @@ async fn test_repository_with_minio_virtual_refs() -> Result<(), Box<dyn Error>>
 }
 
 #[tokio_test]
-async fn test_zarr_store_virtual_refs_minio_set_and_get()
--> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+async fn test_zarr_store_virtual_refs_minio_set_and_get(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     let bytes1 = Bytes::copy_from_slice(b"first");
     let bytes2 = Bytes::copy_from_slice(b"second0000");
     let chunks = [
@@ -578,7 +599,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
     ];
     write_chunks_to_minio(chunks.iter().cloned()).await;
 
-    let repo = create_minio_repository().await;
+    let repo = create_minio_repository(spec_version).await;
     let ds = repo.writable_session("main").await.unwrap();
     let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
@@ -639,8 +660,10 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
 }
 
 #[tokio_test]
-async fn test_zarr_store_virtual_refs_azure_set_and_get()
--> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+async fn test_zarr_store_virtual_refs_azure_set_and_get(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     let bytes1 = Bytes::copy_from_slice(b"first");
     let bytes2 = Bytes::copy_from_slice(b"second0000");
     let chunks =
@@ -648,7 +671,7 @@ async fn test_zarr_store_virtual_refs_azure_set_and_get()
     let prefix = ChunkId::random().to_string();
     write_chunks_to_azure(prefix.clone(), chunks.iter().cloned()).await;
 
-    let repo = create_minio_repository().await;
+    let repo = create_minio_repository(spec_version).await;
     let ds = repo.writable_session("main").await.unwrap();
     let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
@@ -693,10 +716,12 @@ async fn test_zarr_store_virtual_refs_azure_set_and_get()
 }
 
 #[tokio_test]
-async fn test_zarr_store_virtual_refs_from_public_s3()
--> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+async fn test_zarr_store_virtual_refs_from_public_s3(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = TempDir::new()?;
-    let repo = create_local_repository(repo_dir.path(), None).await;
+    let repo = create_local_repository(repo_dir.path(), None, spec_version).await;
     let ds = repo.writable_session("main").await.unwrap();
 
     let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
@@ -735,10 +760,12 @@ async fn test_zarr_store_virtual_refs_from_public_s3()
 }
 
 #[tokio_test]
-async fn test_zarr_store_virtual_refs_from_public_gcs()
--> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+async fn test_zarr_store_virtual_refs_from_public_gcs(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = TempDir::new()?;
-    let repo = create_local_repository(repo_dir.path(), None).await;
+    let repo = create_local_repository(repo_dir.path(), None, spec_version).await;
     let ds = repo.writable_session("main").await.unwrap();
 
     let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
@@ -817,8 +844,10 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
 }
 
 #[tokio_test]
-async fn test_zarr_store_with_multiple_virtual_chunk_containers()
--> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+async fn test_zarr_store_with_multiple_virtual_chunk_containers(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     // we create a repository with 3 virtual chunk containers: one for minio chunks, one for
     // local filesystem chunks and one for chunks in a public S3 bucket.
 
@@ -886,8 +915,14 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         config.set_virtual_chunk_container(container);
     }
 
-    let repo =
-        Repository::create(Some(config), storage, virtual_creds, None, true).await?;
+    let repo = Repository::create(
+        Some(config),
+        storage,
+        virtual_creds,
+        Some(spec_version),
+        true,
+    )
+    .await?;
 
     let old_timestamp = SecondsSinceEpoch(chrono::Utc::now().timestamp() as u32 - 5);
 
