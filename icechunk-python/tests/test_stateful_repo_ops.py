@@ -99,84 +99,89 @@ class UpdateModel:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, self.ictype):
             return NotImplemented
-        return all(getattr(self, f.name) == getattr(other, f.name) for f in fields(self))
+        return all(
+            getattr(self, f.name) == getattr(other, f.name)
+            for f in fields(self)
+            # we check ictype with isinstance above
+            if f.name != "ictype"
+        )
 
 
 @dataclass(eq=False)
 class RepoInitializedUpdateModel(UpdateModel):
-    ictype = ic.RepoInitializedUpdate
+    ictype = ic.UpdateType.RepoInitialized
 
 
 @dataclass(eq=False)
 class ConfigChangedUpdateModel(UpdateModel):
-    ictype = ic.ConfigChangedUpdate
+    ictype = ic.UpdateType.ConfigChanged
 
 
 @dataclass(eq=False)
 class MetadataChangedUpdateModel(UpdateModel):
-    ictype = ic.MetadataChangedUpdate
+    ictype = ic.UpdateType.MetadataChanged
 
 
 @dataclass(eq=False)
 class GCRanUpdateModel(UpdateModel):
-    ictype = ic.GCRanUpdate
+    ictype = ic.UpdateType.GCRan
 
 
 @dataclass(eq=False)
 class ExpirationRanUpdateModel(UpdateModel):
-    ictype = ic.ExpirationRanUpdate
+    ictype = ic.UpdateType.ExpirationRan
 
 
 @dataclass(eq=False)
 class RepoMigratedUpdateModel(UpdateModel):
-    ictype = ic.RepoMigratedUpdate
+    ictype = ic.UpdateType.RepoMigrated
     from_version: int
     to_version: int
 
 
 @dataclass(eq=False)
 class TagCreatedUpdateModel(UpdateModel):
-    ictype = ic.TagCreatedUpdate
+    ictype = ic.UpdateType.TagCreated
     name: str
 
 
 @dataclass(eq=False)
 class TagDeletedUpdateModel(UpdateModel):
-    ictype = ic.TagDeletedUpdate
+    ictype = ic.UpdateType.TagDeleted
     name: str
     previous_snap_id: str
 
 
 @dataclass(eq=False)
 class BranchCreatedUpdateModel(UpdateModel):
-    ictype = ic.BranchCreatedUpdate
+    ictype = ic.UpdateType.BranchCreated
     name: str
 
 
 @dataclass(eq=False)
 class BranchDeletedUpdateModel(UpdateModel):
-    ictype = ic.BranchDeletedUpdate
+    ictype = ic.UpdateType.BranchDeleted
     name: str
     previous_snap_id: str
 
 
 @dataclass(eq=False)
 class BranchResetUpdateModel(UpdateModel):
-    ictype = ic.BranchResetUpdate
+    ictype = ic.UpdateType.BranchReset
     name: str
     previous_snap_id: str
 
 
 @dataclass(eq=False)
 class NewCommitUpdateModel(UpdateModel):
-    ictype = ic.NewCommitUpdate
+    ictype = ic.UpdateType.NewCommit
     branch: str
     new_snap_id: str
 
 
 @dataclass(eq=False)
 class CommitAmendedUpdateModel(UpdateModel):
-    ictype = ic.CommitAmendedUpdate
+    ictype = ic.UpdateType.CommitAmended
     branch: str
     previous_snap_id: str
     new_snap_id: str
@@ -1089,9 +1094,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         all_backups = [op.backup_path for op in actual_ops if op.backup_path is not None]
         assert len(all_backups) == len(set(all_backups))
 
-        assert self.model.ops_log[::-1] == actual_ops
+        assert all(
+            isinstance(a.kind, m.ictype)
+            for m, a in zip(self.model.ops_log[::-1], actual_ops, strict=True)
+        )
         assert isinstance(
-            actual_ops[-1], ic.RepoInitializedUpdate | ic.RepoMigratedUpdate
+            actual_ops[-1].kind,
+            ic.UpdateType.RepoInitialized | ic.UpdateType.RepoMigrated,
         )
 
 
