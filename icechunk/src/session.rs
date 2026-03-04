@@ -1070,7 +1070,7 @@ impl Session {
         let id = match current {
             Err(RefError { kind: RefErrorKind::RefNotFound(_), .. }) => {
                 do_commit(
-                    self.storage.as_ref(),
+                    Arc::clone(&self.storage),
                     Arc::clone(&self.asset_manager),
                     self.storage_settings.as_ref(),
                     branch_name,
@@ -1094,7 +1094,7 @@ impl Session {
                     .into())
                 } else {
                     do_commit(
-                        self.storage.as_ref(),
+                        Arc::clone(&self.storage),
                         Arc::clone(&self.asset_manager),
                         self.storage_settings.as_ref(),
                         branch_name,
@@ -2163,7 +2163,7 @@ async fn do_flush(
 
 #[allow(clippy::too_many_arguments)]
 async fn do_commit(
-    storage: &(dyn Storage + Send + Sync),
+    storage: Arc<dyn Storage + Send + Sync>,
     asset_manager: Arc<AssetManager>,
     storage_settings: &storage::Settings,
     branch_name: &str,
@@ -2175,15 +2175,30 @@ async fn do_commit(
     rewrite_manifests: bool,
 ) -> SessionResult<SnapshotId> {
     info!(branch_name, old_snapshot_id=%snapshot_id, "Commit started");
+
+    // Spawn v2 repo check in background, runs in parallel with flush
+    let v2_check_storage = Arc::clone(&storage);
+    let v2_check = tokio::spawn(
+        async move { v2_check_storage.has_v2_repo_info().await }.in_current_span(),
+    );
+
     let parent_snapshot = snapshot_id.clone();
     let properties = properties.unwrap_or_default();
     let flush_data = FlushProcess::new(asset_manager, change_set, snapshot_id, splits);
     let new_snapshot =
         do_flush(flush_data, message, properties, rewrite_manifests).await?;
 
+    // Check v2 result before updating branch
+    if v2_check.await.map_err(SessionError::from)?.map_err(SessionError::from)? {
+        return Err(SessionErrorKind::RepositoryError(
+            RepositoryErrorKind::RepositoryIsV2,
+        )
+        .into());
+    }
+
     debug!(branch_name, new_snapshot_id=%new_snapshot, "Updating branch");
     let id = match update_branch(
-        storage,
+        storage.as_ref(),
         storage_settings,
         branch_name,
         new_snapshot.clone(),
