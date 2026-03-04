@@ -456,7 +456,7 @@ pub(crate) enum PyUpdateType {
     CommitAmended { branch: String, previous_snap_id: String, new_snap_id: String },
     ConfigChanged {},
     ExpirationRan {},
-    FeatureFlagChangedUpdate { id: u16, new_value: Option<bool> },
+    FeatureFlagChanged { id: u16, new_value: Option<bool> },
     GCRan {},
     MetadataChanged {},
     NewCommit { branch: String, new_snap_id: String },
@@ -508,11 +508,12 @@ impl PyUpdateType {
             )
             .into(),
             Self::GCRan {} => "GCRan()".into(),
-            Self::FeatureFlagChangedUpdate { id, new_value } => format!(
-                "FeatureFlagChangedUpdate(id={}, new_value={})",
+            Self::FeatureFlagChanged { id, new_value } => format!(
+                "FeatureFlagChanged(id={}, new_value={})",
                 id,
                 format_option(new_value.map(format_bool))
-            ),
+            )
+            .into(),
             Self::ExpirationRan {} => "ExpirationRan()".into(),
             Self::NewDetachedSnapshot { new_snap_id } => {
                 format!("NewDetachedSnapshot(new_snap_id={})", new_snap_id).into()
@@ -756,10 +757,14 @@ fn mk_update(
             .unbind(),
             UpdateType::FeatureFlagChanged { id, new_value } => Bound::new(
                 py,
-                (
-                    PyFeatureFlagChangedUpdate { id: *id, new_value: *new_value },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                PyUpdate {
+                    kind: PyUpdateType::FeatureFlagChanged {
+                        id: *id,
+                        new_value: *new_value,
+                    },
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),

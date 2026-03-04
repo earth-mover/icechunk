@@ -181,6 +181,7 @@ icechunk._icechunk_python.UpdateType.CommitAmended.__new__
 icechunk._icechunk_python.UpdateType.ConfigChanged.__match_args__
 icechunk._icechunk_python.UpdateType.ExpirationRan.__match_args__
 icechunk._icechunk_python.UpdateType.FeatureFlagChanged.__new__
+icechunk._icechunk_python.UpdateType.FeatureFlagChanged.__match_args__
 icechunk._icechunk_python.UpdateType.GCRan.__match_args__
 icechunk._icechunk_python.UpdateType.MetadataChanged.__match_args__
 icechunk._icechunk_python.UpdateType.NewCommit.__match_args__

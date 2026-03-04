@@ -1609,6 +1609,13 @@ class UpdateType:
     class ExpirationRan(UpdateType): ...
 
     @final
+    class FeatureFlagChanged(UpdateType):
+        @property
+        def id(self) -> int: ...
+        @property
+        def new_value(self) -> bool | None: ...
+
+    @final
     class GCRan(UpdateType): ...
 
     @final
@@ -1647,12 +1654,6 @@ class UpdateType:
         def name(self) -> str: ...
         @property
         def previous_snap_id(self) -> str: ...
-
-class FeatureFlagChangedUpdate(UpdateType):
-    @property
-    def id(self) -> int: ...
-    @property
-    def new_value(self) -> bool | None: ...
 
 class FeatureFlag:
     @property
