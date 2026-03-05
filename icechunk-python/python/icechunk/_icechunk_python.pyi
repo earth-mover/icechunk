@@ -1438,7 +1438,11 @@ class RepositoryConfig:
         ...
     def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None:
         """
-        Set the virtual chunk container for the repository.
+        Add or update a virtual chunk container in the repository configuration.
+
+        For named containers, the name is the identity: if a container with the
+        same name already exists (even with a different url_prefix), it will be
+        replaced. For unnamed containers, the url_prefix is the key.
 
         Parameters
         ----------

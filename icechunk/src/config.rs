@@ -579,25 +579,14 @@ impl RepositoryConfig {
         &mut self,
         cont: VirtualChunkContainer,
     ) -> Result<(), String> {
-        let before = self.virtual_chunk_containers.clone().unwrap_or_default();
-        // Check name uniqueness: if the new container has a name, no existing
-        // container with the same name should have a different url_prefix
+        let containers =
+            self.virtual_chunk_containers.get_or_insert_with(Default::default);
         if let Some(ref new_name) = cont.name {
-            for existing in before.values() {
-                if existing.name.as_deref() == Some(new_name.as_str())
-                    && existing.url_prefix() != cont.url_prefix()
-                {
-                    return Err(format!(
-                        "A virtual chunk container named '{}' already exists with a different url_prefix ('{}')",
-                        new_name,
-                        existing.url_prefix()
-                    ));
-                }
-            }
+            // Named containers are identified by name. Remove any existing
+            // container with the same name (which may have a different url_prefix).
+            containers.retain(|_, v| v.name.as_deref() != Some(new_name.as_str()));
         }
-        let mut before = before;
-        before.insert(cont.url_prefix().to_string(), cont);
-        self.virtual_chunk_containers = Some(before);
+        containers.insert(cont.url_prefix().to_string(), cont);
         Ok(())
     }
 
@@ -900,24 +889,27 @@ virtual_chunk_containers:
             )
             .unwrap();
 
-        // Same name, different prefix should fail
-        let result = config.set_virtual_chunk_container(
-            VirtualChunkContainer::new_named(
-                "my-data".to_string(),
-                "s3://bucket2/other/".to_string(),
-                ObjectStoreConfig::S3(S3Options {
-                    region: Some("us-east-1".to_string()),
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                    network_stream_timeout_seconds: None,
-                    requester_pays: false,
-                }),
+        // Same name, different prefix should replace the old entry
+        config
+            .set_virtual_chunk_container(
+                VirtualChunkContainer::new_named(
+                    "my-data".to_string(),
+                    "s3://bucket2/other/".to_string(),
+                    ObjectStoreConfig::S3(S3Options {
+                        region: Some("us-east-1".to_string()),
+                        endpoint_url: None,
+                        anonymous: false,
+                        allow_http: false,
+                        force_path_style: false,
+                        network_stream_timeout_seconds: None,
+                        requester_pays: false,
+                    }),
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        );
-        assert!(result.is_err());
+            .unwrap();
+        assert!(config.get_virtual_chunk_container("s3://bucket1/prefix/").is_none());
+        assert!(config.get_virtual_chunk_container("s3://bucket2/other/").is_some());
 
         // Same name, same prefix should succeed (update)
         config

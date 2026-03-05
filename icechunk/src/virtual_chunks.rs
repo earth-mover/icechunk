@@ -1326,6 +1326,16 @@ mod tests {
                 ..
             }) if name == "unknown"
         ));
+
+        // No slash after the name
+        let result = resolver.expand_location("vcc://chunk.nc");
+        assert!(matches!(
+            result,
+            Err(VirtualReferenceError {
+                kind: VirtualReferenceErrorKind::NoContainerForName(name),
+                ..
+            }) if name == "chunk.nc"
+        ));
     }
 
     #[test]
