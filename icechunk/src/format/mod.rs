@@ -531,7 +531,7 @@ impl Path {
     }
 
     // Fast-path unvalidated constructor for use when reading from Snapshots
-    pub fn from_checked(path: &str) -> Path {
+    pub fn from_trusted(path: &str) -> Path {
         Path(Utf8UnixPathBuf::from(path))
     }
 
