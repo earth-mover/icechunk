@@ -94,6 +94,7 @@ docs = [
   "sphinx_design",
   "sphinx_togglebutton",
   "sphinx-autodoc-typehints",
+  "rich",
 ]
 
 [tool.maturin]
