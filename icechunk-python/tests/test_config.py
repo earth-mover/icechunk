@@ -29,9 +29,10 @@ def tmp_store(
 
 
 def test_config_fetch(any_spec_version: int | None) -> None:
+    storage = icechunk.in_memory_storage()
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
-    storage = icechunk.in_memory_storage()
+    config.storage = storage.default_settings()
     repo = icechunk.Repository.create(
         storage=storage,
         config=config,
@@ -43,14 +44,15 @@ def test_config_fetch(any_spec_version: int | None) -> None:
 
 
 def test_config_save(any_spec_version: int | None) -> None:
-    config = icechunk.RepositoryConfig.default()
     storage = icechunk.in_memory_storage()
+    config = icechunk.RepositoryConfig.default()
     repo = icechunk.Repository.create(
         storage=storage,
         spec_version=any_spec_version,
     )
 
     config.inline_chunk_threshold_bytes = 5
+    config.storage = storage.default_settings()
     repo = icechunk.Repository.open(
         storage=storage,
         config=config,
@@ -247,14 +249,15 @@ def test_spec_version() -> None:
 
 
 def test_config_from_store(any_spec_version: int | None) -> None:
+    storage = icechunk.in_memory_storage()
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
+    config.storage = storage.default_settings()
 
     store_config = icechunk.s3_store(region="us-east-1")
     container = icechunk.VirtualChunkContainer("s3://example/", store_config)
     config.set_virtual_chunk_container(container)
 
-    storage = icechunk.in_memory_storage()
     repo = icechunk.Repository.create(
         storage=storage,
         config=config,
