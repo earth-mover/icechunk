@@ -168,6 +168,9 @@ pub async fn create_tag(
     name: &str,
     snapshot: SnapshotId,
 ) -> RefResult<()> {
+    if !storage.can_write().await? {
+        return Err(RefErrorKind::Storage(StorageErrorKind::ReadOnly).into());
+    }
     let key = tag_key(name)?;
     let path = format!("{V1_REFS_FILE_PATH}/{key}");
     let data = RefData { snapshot };
@@ -200,6 +203,9 @@ pub async fn update_branch(
     new_snapshot: SnapshotId,
     current_snapshot: Option<&SnapshotId>,
 ) -> RefResult<VersionInfo> {
+    if !storage.can_write().await? {
+        return Err(RefErrorKind::Storage(StorageErrorKind::ReadOnly).into());
+    }
     let (ref_data, version) = match fetch_branch(storage, storage_settings, name).await {
         Ok((ref_data, version)) => (Some(ref_data), version),
         Err(RefError { kind: RefErrorKind::RefNotFound(..), .. }) => {
@@ -354,6 +360,9 @@ pub async fn delete_branch(
     storage_settings: &storage::Settings,
     branch: &str,
 ) -> RefResult<()> {
+    if !storage.can_write().await? {
+        return Err(RefErrorKind::Storage(StorageErrorKind::ReadOnly).into());
+    }
     // we make sure the branch exists
     _ = fetch_branch_tip(storage, storage_settings, branch).await?;
 
@@ -374,6 +383,9 @@ pub async fn delete_tag(
     storage_settings: &storage::Settings,
     tag: &str,
 ) -> RefResult<()> {
+    if !storage.can_write().await? {
+        return Err(RefErrorKind::Storage(StorageErrorKind::ReadOnly).into());
+    }
     // we make sure the tag exists
     _ = fetch_tag(storage, storage_settings, tag).await?;
 

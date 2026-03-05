@@ -337,6 +337,9 @@ impl Storage for RedirectStorage {
         metadata: Vec<(String, String)>,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
+        if !self.can_write().await? {
+            return Err(StorageErrorKind::ReadOnly.into());
+        }
         self.backend()
             .await?
             .put_object(settings, path, bytes, content_type, metadata, previous_version)
@@ -351,6 +354,9 @@ impl Storage for RedirectStorage {
         content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
+        if !self.can_write().await? {
+            return Err(StorageErrorKind::ReadOnly.into());
+        }
         self.backend().await?.copy_object(settings, from, to, content_type, version).await
     }
 
@@ -368,6 +374,9 @@ impl Storage for RedirectStorage {
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
+        if !self.can_write().await? {
+            return Err(StorageErrorKind::ReadOnly.into());
+        }
         self.backend().await?.delete_batch(settings, prefix, batch).await
     }
 

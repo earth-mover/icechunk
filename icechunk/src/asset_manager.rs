@@ -289,6 +289,12 @@ impl AssetManager {
         previous_version: &VersionInfo,
         backup_path: Option<&str>,
     ) -> RepositoryResult<Option<VersionInfo>> {
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot update config".to_string(),
+            )
+            .into());
+        }
         let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
         let content_type = Some("application/yaml");
         if let Some(backup_path) = backup_path {
@@ -709,6 +715,12 @@ impl AssetManager {
         chunk_id: ChunkId,
         bytes: Bytes,
     ) -> RepositoryResult<()> {
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot write chunk".to_string(),
+            )
+            .into());
+        }
         trace!(%chunk_id, size_bytes=bytes.len(), "Writing chunk");
 
         let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
@@ -855,6 +867,12 @@ impl AssetManager {
         &self,
         chunks: BoxStream<'_, (ChunkId, u64)>,
     ) -> RepositoryResult<DeleteObjectsResult> {
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot delete chunks".to_string(),
+            )
+            .into());
+        }
         Ok(self
             .storage
             .delete_objects(
@@ -869,6 +887,12 @@ impl AssetManager {
         &self,
         manifests: BoxStream<'_, (ManifestId, u64)>,
     ) -> RepositoryResult<DeleteObjectsResult> {
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot delete manifests".to_string(),
+            )
+            .into());
+        }
         Ok(self
             .storage
             .delete_objects(
@@ -883,6 +907,12 @@ impl AssetManager {
         &self,
         snapshots: BoxStream<'_, (SnapshotId, u64)>,
     ) -> RepositoryResult<DeleteObjectsResult> {
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot delete snapshots".to_string(),
+            )
+            .into());
+        }
         Ok(self
             .storage
             .delete_objects(
@@ -897,6 +927,12 @@ impl AssetManager {
         &self,
         transaction_logs: BoxStream<'_, (SnapshotId, u64)>,
     ) -> RepositoryResult<DeleteObjectsResult> {
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot delete transaction logs".to_string(),
+            )
+            .into());
+        }
         Ok(self
             .storage
             .delete_objects(
@@ -1058,6 +1094,12 @@ async fn write_new_manifest(
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<u64> {
+    if !storage.can_write().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot write manifest".to_string(),
+        )
+        .into());
+    }
     use format_constants::*;
     let metadata = vec![
         (
@@ -1162,6 +1204,12 @@ async fn write_new_snapshot(
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<SnapshotId> {
+    if !storage.can_write().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot write snapshot".to_string(),
+        )
+        .into());
+    }
     use format_constants::*;
     let metadata = vec![
         (
@@ -1245,6 +1293,12 @@ async fn write_new_tx_log(
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<()> {
+    if !storage.can_write().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot write transaction log".to_string(),
+        )
+        .into());
+    }
     use format_constants::*;
     let metadata = vec![
         (
@@ -1328,6 +1382,12 @@ pub async fn write_repo_info(
     storage_settings: &storage::Settings,
     path: Option<&str>,
 ) -> RepositoryResult<VersionInfo> {
+    if !storage.can_write().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot write repo info".to_string(),
+        )
+        .into());
+    }
     use format_constants::*;
     let metadata = vec![
         (

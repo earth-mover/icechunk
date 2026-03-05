@@ -110,6 +110,8 @@ pub enum StorageErrorKind {
     },
     #[error("Redirect Storage error: {0}")]
     BadRedirect(String),
+    #[error("storage is read-only")]
+    ReadOnly,
     #[error("storage error: {0}")]
     Other(String),
 }
@@ -574,6 +576,9 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         prefix: &str,
         ids: BoxStream<'_, (String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
+        if !self.can_write().await? {
+            return Err(StorageErrorKind::ReadOnly.into());
+        }
         let res = Arc::new(Mutex::new(DeleteObjectsResult::default()));
         ids.chunks(1_000)
             // FIXME: configurable concurrency

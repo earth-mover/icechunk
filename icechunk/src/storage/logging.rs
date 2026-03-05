@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
-    StorageResult, VersionInfo, VersionedUpdateResult,
+    StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult,
 };
 use crate::private;
 
@@ -71,6 +71,9 @@ impl Storage for LoggingStorage {
         metadata: Vec<(String, String)>,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
+        if !self.can_write().await? {
+            return Err(StorageErrorKind::ReadOnly.into());
+        }
         self.fetch_log
             .lock()
             .expect("poison lock")
@@ -88,6 +91,9 @@ impl Storage for LoggingStorage {
         content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
+        if !self.can_write().await? {
+            return Err(StorageErrorKind::ReadOnly.into());
+        }
         self.fetch_log
             .lock()
             .expect("poison lock")
@@ -113,6 +119,9 @@ impl Storage for LoggingStorage {
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
+        if !self.can_write().await? {
+            return Err(StorageErrorKind::ReadOnly.into());
+        }
         self.fetch_log
             .lock()
             .expect("poison lock")
