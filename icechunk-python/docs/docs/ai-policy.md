@@ -47,10 +47,14 @@ Do not leave it to reviewers to figure out what the code does and why.
 
 > I pointed an agent at the issue and here are the changes
 
+> This is what Claude came up with. 🤷 
+
 #### Acceptable
 
 > I iterated multiple times with an agent to produce this. The agent wrote the code at my direction,
 > and I have fully read and validated the changes.
+
+> I pointed an agent at the issue and it generated a first draft. I reviewed the changes thoroughly and understand the implementation well.
 
 ### Large AI-Assisted Contributions
 
@@ -71,5 +75,5 @@ that large changes be broken into smaller, reviewable pieces.
 AI tools can be useful for drafting or restructuring documentation. The same core
 principles as with code apply to documentation as well. You must review the result
 for accuracy and are ultimately responsible for all changes made. Icechunk has domain-specific
-semantics that AI tools frequently get wrong, do not submit documentation that you
+semantics that AI tools frequently get wrong. Do not submit documentation that you
 haven't carefully read and verified.
