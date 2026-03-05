@@ -497,11 +497,11 @@ async def test_write_minio_virtual_refs_with_vcc_urls(
     any_spec_version: int | None,
 ) -> None:
     """Write virtual refs using vcc:// relative URLs and verify they resolve correctly."""
-    prefix = str(uuid.uuid4())
+    path = str(uuid.uuid4())
     write_chunks_to_minio(
         [
-            (f"{prefix}/chunk-1", b"first"),
-            (f"{prefix}/chunk-2", b"second"),
+            (f"{path}/chunk-1", b"first"),
+            (f"{path}/chunk-2", b"second"),
         ],
     )
 
@@ -540,13 +540,13 @@ async def test_write_minio_virtual_refs_with_vcc_urls(
     # Write refs using vcc:// relative URLs
     store.set_virtual_ref(
         "c/0/0/0",
-        f"vcc://minio-data/{prefix}/chunk-1",
+        f"vcc://minio-data/{path}/chunk-1",
         offset=0,
         length=4,
     )
     store.set_virtual_ref(
         "c/1/0/0",
-        f"vcc://minio-data/{prefix}/chunk-2",
+        f"vcc://minio-data/{path}/chunk-2",
         offset=1,
         length=4,
     )
@@ -563,8 +563,8 @@ async def test_write_minio_virtual_refs_with_vcc_urls(
 
     # all_virtual_chunk_locations should return expanded absolute URLs
     all_locations = set(session.all_virtual_chunk_locations())
-    assert f"s3://testbucket/{prefix}/chunk-1" in all_locations
-    assert f"s3://testbucket/{prefix}/chunk-2" in all_locations
+    assert f"s3://testbucket/{path}/chunk-1" in all_locations
+    assert f"s3://testbucket/{path}/chunk-2" in all_locations
     # Should not contain vcc:// URLs
     assert not any(loc.startswith("vcc://") for loc in all_locations)
 
@@ -575,19 +575,19 @@ async def test_write_minio_virtual_refs_with_vcc_urls(
         chunks=[
             VirtualChunkSpec(
                 index=[0, 0, 0],
-                location=f"vcc://minio-data/{prefix}/chunk-1",
+                location=f"vcc://minio-data/{path}/chunk-1",
                 offset=0,
                 length=4,
             ),
             VirtualChunkSpec(
                 index=[1, 0, 0],
-                location=f"vcc://minio-data/{prefix}/chunk-2",
+                location=f"vcc://minio-data/{path}/chunk-2",
                 offset=0,
                 length=4,
             ),
             VirtualChunkSpec(
                 index=[2, 0, 0],
-                location=f"s3://testbucket/{prefix}/chunk-1",
+                location=f"s3://testbucket/{path}/chunk-1",
                 offset=1,
                 length=4,
             ),
