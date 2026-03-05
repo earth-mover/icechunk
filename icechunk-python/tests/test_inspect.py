@@ -58,7 +58,15 @@ async def test_inspect_manifest() -> None:
     assert sync_result["id"] == manifest_id
     assert sync_result["num_arrays"] > 0
     assert sync_result["total_chunk_refs"] > 0
-    assert sync_result["total_chunk_refs"] == sync_result["total_inline"] + sync_result["total_native"] + sync_result["total_virtual"]
+    assert (
+        sync_result["total_chunk_refs"]
+        == sync_result["total_inline"]
+        + sync_result["total_native"]
+        + sync_result["total_virtual"]
+    )
     assert len(sync_result["arrays"]) == sync_result["num_arrays"]
     for arr in sync_result["arrays"]:
-        assert arr["num_chunk_refs"] == arr["num_inline"] + arr["num_native"] + arr["num_virtual"]
+        assert (
+            arr["num_chunk_refs"]
+            == arr["num_inline"] + arr["num_native"] + arr["num_virtual"]
+        )
