@@ -683,9 +683,19 @@ prop_compose! {
 }
 
 pub fn manifest_splits() -> impl Strategy<Value = ManifestSplits> {
+    // Generate 1..10 axes, each with 2..6 sorted unique edges (so 1..5 bins per axis)
     (1..10usize)
-        .prop_flat_map(|dim_size| vec(manifest_extents(dim_size), 1..10))
-        .prop_map(ManifestSplits::from_extents)
+        .prop_flat_map(|ndim| {
+            vec(
+                proptest::collection::hash_set(0u32..1000, 2..6usize).prop_map(|s| {
+                    let mut v: Vec<u32> = s.into_iter().collect();
+                    v.sort();
+                    v
+                }),
+                ndim,
+            )
+        })
+        .prop_map(ManifestSplits::from_edges)
 }
 
 type ArrayInfo = (ArrayShape, Option<Vec<DimensionName>>, Vec<ManifestRef>);
