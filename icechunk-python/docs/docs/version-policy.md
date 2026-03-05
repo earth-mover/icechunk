@@ -1,27 +1,16 @@
 # Icechunk Version Policy
 
-## Overview
+## On-Disk Format
+
+The Icechunk on-disk format is defined by the format specification ("Icechunk Spec"), which is versioned by a single integer. The spec version increments if and only if there is an on-disk incompatible change, as defined by the [spec document](./spec.md).
+
+## Library Versions
 
 Versions are identified by a triplet of integers: `<major>.<minor>.<patch>` (e.g. `2.3.1`).
 
 All official Icechunk libraries — Python, Rust, and JavaScript/WASM — use a versioning scheme where the **major version number matches the on-disk format version**.
 
 This means that breaking API changes may occur in minor releases rather than requiring a major version bump.
-
-
-| Component | Meaning |
-|-----------|---------|
-| **Major** | Matches the [Icechunk Spec](#icechunk-spec) version. Incremented only when a new on-disk format version is released. |
-| **Minor** | New features and potentially breaking API changes. |
-| **Patch** | Bug fixes only. |
-
-
-
-## Icechunk Spec
-
-The Icechunk format specification ("Icechunk Spec") is versioned by a single integer. The spec version increments if and only if there is an on-disk incompatible change, as defined by the [spec document](./spec.md).
-
-## What to expect from each release type
 
 ### Major releases
 
@@ -43,7 +32,7 @@ A patch release (e.g. `2.1.0` to `2.1.1`) contains only bug fixes. No new featur
 
 Users should always feel safe upgrading to the latest patch release.
 
-## Data format compatibility
+## Library - Data format compatibility
 
 ### Reading
 
