@@ -2,11 +2,9 @@
 
 # AI Usage Policy
 
-**Note:** Some Icechunk developers use AI tools as part of our development workflow.
-
-As AI tools continue to develop we expect that most contributors will use them. We do
-not want to restrict the tools used by our contributors. With that in mind this policy
-does not aim to restrict AI tool usage. Its goals are to ensure that:
+**Note:** Some Icechunk developers use AI tools as part of our development workflow. We
+assume this is now common. Tools, patterns, and norms are evolving fast — this policy aims to avoid
+restricting contributors' choice of tooling while ensuring that:
 
 - Reviewers are not overburdened
 - Contributions can be maintained
