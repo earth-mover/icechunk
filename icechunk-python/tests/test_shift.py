@@ -7,7 +7,7 @@ import icechunk as ic
 import zarr
 
 
-async def test_shift_using_function() -> None:
+def test_shift_using_function() -> None:
     """Test reindex_array with a custom shift function (low-level API)."""
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
@@ -36,7 +36,7 @@ async def test_shift_using_function() -> None:
     np.testing.assert_equal(array[42:], np.arange(42, 50))
 
 
-async def test_shift_left() -> None:
+def test_shift_left() -> None:
     """Test shifting left - vacated positions retain stale data."""
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
@@ -59,7 +59,7 @@ async def test_shift_left() -> None:
     np.testing.assert_equal(array[42:], np.arange(42, 50))
 
 
-async def test_shift_right() -> None:
+def test_shift_right() -> None:
     """Test shifting right - vacated positions retain stale data."""
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
@@ -82,7 +82,7 @@ async def test_shift_right() -> None:
     np.testing.assert_equal(array[8:50], np.arange(0, 42))
 
 
-async def test_resize_then_shift_right() -> None:
+def test_resize_then_shift_right() -> None:
     """Test manual resize + shift right - stale data remains in vacated positions."""
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
@@ -121,7 +121,7 @@ async def test_resize_then_shift_right() -> None:
     np.testing.assert_equal(array[8:58], np.arange(50))
 
 
-async def test_shift_2d() -> None:
+def test_shift_2d() -> None:
     """Test shift on a 2D array - vacated positions retain stale data."""
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
@@ -148,7 +148,7 @@ async def test_shift_2d() -> None:
     np.testing.assert_equal(array[2:4, :], np.arange(8).reshape(2, 4))
 
 
-async def test_shift_3d_mixed_offset() -> None:
+def test_shift_3d_mixed_offset() -> None:
     """Test 3D shift with mixed offsets (-1, 0, -1)."""
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
@@ -179,7 +179,7 @@ async def test_shift_3d_mixed_offset() -> None:
     np.testing.assert_equal(array[0:4, :, 0:4], original[2:6, :, 4:8])
 
 
-async def test_shift_zero_offset() -> None:
+def test_shift_zero_offset() -> None:
     """Test that zero offset works correctly (no change)."""
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
@@ -199,7 +199,7 @@ async def test_shift_zero_offset() -> None:
     np.testing.assert_equal(array[:], np.arange(10))
 
 
-async def test_shift_persists_after_commit() -> None:
+def test_shift_persists_after_commit() -> None:
     """Test that shift changes persist after commit."""
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
