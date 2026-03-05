@@ -226,7 +226,11 @@ impl PySession {
         })
     }
 
-    pub fn shift_array(&mut self, array_path: String, offset: Vec<i64>) -> PyResult<()> {
+    pub fn shift_array(
+        &mut self,
+        array_path: String,
+        chunk_offset: Vec<i64>,
+    ) -> PyResult<()> {
         let array_path = Path::new(array_path.as_str())
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
@@ -235,7 +239,7 @@ impl PySession {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let mut session = self.0.write().await;
             session
-                .shift_array(&array_path, offset.as_slice())
+                .shift_array(&array_path, chunk_offset.as_slice())
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(())
