@@ -17,7 +17,8 @@ AI assistance, or generated entirely by an AI tool.
 
 If you submit a pull request, you are responsible for understanding and having fully reviewed
 the changes. You must be able to explain why each change is correct[^1] and how it fits into
-the project.
+the project. Strive to minimize changes to ease the burden on reviewers — avoid
+including unnecessary or loosely related changes.
 
 [^1]: You may also open a draft PR with changes in order to discuss and receive feedback on the
 best approach if you are not sure what the best way forward is.
