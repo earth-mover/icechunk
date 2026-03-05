@@ -5148,7 +5148,7 @@ mod tests {
         let repository = create_memory_store_repository(SpecVersionBin::current()).await;
         let mut ds = repository.writable_session("main").await?;
 
-        ds.add_group("/foo/bar".try_into().unwrap(), Bytes::New()).await?;
+        ds.add_group("/foo/bar".try_into().unwrap(), Bytes::new()).await?;
         ds.add_array(
             "/foo/bar/some-array".try_into().unwrap(),
             basic_shape(),
@@ -5225,7 +5225,7 @@ mod tests {
         ds1.commit("add sibling group", None).await?;
 
         ds2.delete_group(path.clone()).await?;
-        ds2.add_group(path.clone(), Bytes::New()).await?;
+        ds2.add_group(path.clone(), Bytes::new()).await?;
         assert!(matches!(
             ds2.commit("delete+re-add group", None).await,
             Err(SessionError {
