@@ -503,6 +503,8 @@ pub mod format_constants {
     pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
 }
 
+// The impl of Debug for Utf8UnixPathBuf is expensive and triggered often by tracing Spans
+// This implemnetation is much cheaper, and removes formatting from our samply profiles.
 impl fmt::Debug for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
