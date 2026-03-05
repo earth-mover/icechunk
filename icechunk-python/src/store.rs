@@ -319,9 +319,8 @@ impl PyStore {
             let store = Arc::clone(&self.0);
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let location =
-                    VirtualChunkLocation::from_absolute_path(location.as_str())
-                        .map_err(PyIcechunkStoreError::from)?;
+                let location = VirtualChunkLocation::from_url(location.as_str())
+                    .map_err(PyIcechunkStoreError::from)?;
                 let virtual_ref = VirtualChunkRef {
                     location,
                     offset,
@@ -350,7 +349,7 @@ impl PyStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let location = VirtualChunkLocation::from_absolute_path(location.as_str())
+            let location = VirtualChunkLocation::from_url(location.as_str())
                 .map_err(PyIcechunkStoreError::from)?;
             let virtual_ref = VirtualChunkRef {
                 location,
@@ -382,10 +381,9 @@ impl PyStore {
                     .map(|vcs| {
                         let checksum = vcs.checksum();
                         let index = ChunkIndices(vcs.index);
-                        let location = VirtualChunkLocation::from_absolute_path(
-                            vcs.location.as_str(),
-                        )
-                        .map_err(PyIcechunkStoreError::from)?;
+                        let location =
+                            VirtualChunkLocation::from_url(vcs.location.as_str())
+                                .map_err(PyIcechunkStoreError::from)?;
                         let vref = VirtualChunkRef {
                             offset: vcs.offset,
                             length: vcs.length,
@@ -443,10 +441,9 @@ impl PyStore {
                     .map(|vcs| {
                         let checksum = vcs.checksum();
                         let index = ChunkIndices(vcs.index);
-                        let location = VirtualChunkLocation::from_absolute_path(
-                            vcs.location.as_str(),
-                        )
-                        .map_err(PyIcechunkStoreError::from)?;
+                        let location =
+                            VirtualChunkLocation::from_url(vcs.location.as_str())
+                                .map_err(PyIcechunkStoreError::from)?;
                         let vref = VirtualChunkRef {
                             offset: vcs.offset,
                             length: vcs.length,

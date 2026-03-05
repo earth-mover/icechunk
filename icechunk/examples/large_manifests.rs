@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn write_chunk_refs_batch(session: Arc<RwLock<Session>>, batch: usize) {
     for i in batch * TASK_CHUNK_SIZE..(batch + 1) * TASK_CHUNK_SIZE {
         let payload = ChunkPayload::Virtual(VirtualChunkRef {
-            location: VirtualChunkLocation::from_absolute_path(
+            location: VirtualChunkLocation::from_url(
                 format!("s3://foo/bar/{i}").as_str(),
             )
             .unwrap(),

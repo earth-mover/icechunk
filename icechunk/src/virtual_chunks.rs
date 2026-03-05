@@ -70,7 +70,8 @@ use crate::{
     format::{
         ChunkOffset,
         manifest::{
-            Checksum, SecondsSinceEpoch, VirtualReferenceError, VirtualReferenceErrorKind,
+            Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualReferenceError,
+            VirtualReferenceErrorKind,
         },
     },
     private,
@@ -98,6 +99,28 @@ pub type VirtualChunkCredentialsError = String;
 
 impl VirtualChunkContainer {
     pub fn new(url_prefix: String, store: ObjectStoreConfig) -> Result<Self, String> {
+        Self::create(None, url_prefix, store)
+    }
+
+    pub fn new_named(
+        name: ContainerName,
+        url_prefix: String,
+        store: ObjectStoreConfig,
+    ) -> Result<Self, String> {
+        if name.is_empty() || name.contains('/') {
+            return Err(
+                "VirtualChunkContainer name must be non-empty and not contain '/'"
+                    .to_string(),
+            );
+        }
+        Self::create(Some(name), url_prefix, store)
+    }
+
+    fn create(
+        name: Option<ContainerName>,
+        url_prefix: String,
+        store: ObjectStoreConfig,
+    ) -> Result<Self, String> {
         if !url_prefix.ends_with('/') {
             return Err(
                 "VirtualChunkContainer url_prefix must end in a / character".to_string()
@@ -176,7 +199,11 @@ impl VirtualChunkContainer {
             }
         };
 
-        Ok(Self { url_prefix, store, name: None })
+        Ok(Self { url_prefix, store, name })
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 
     pub fn url_prefix(&self) -> &str {
@@ -276,13 +303,6 @@ pub(crate) fn sort_containers(containers: &mut [VirtualChunkContainer]) {
     containers.sort_by_key(|cont| -(cont.url_prefix.len() as i64));
 }
 
-fn find_container<'a>(
-    chunk_location: &str,
-    containers: &'a [VirtualChunkContainer],
-) -> Option<&'a VirtualChunkContainer> {
-    containers.iter().find(|cont| chunk_location.starts_with(cont.url_prefix.as_str()))
-}
-
 type BucketName = String;
 type CacheKey = (ContainerName, Option<BucketName>);
 
@@ -320,7 +340,14 @@ impl VirtualChunkResolver {
 
         let mut containers = containers
             .filter_map(|cont| {
-                VirtualChunkContainer::new(add_trailing(cont.url_prefix), cont.store)
+                let url_prefix = add_trailing(cont.url_prefix);
+                let result = match cont.name {
+                    Some(name) => {
+                        VirtualChunkContainer::new_named(name, url_prefix, cont.store)
+                    }
+                    None => VirtualChunkContainer::new(url_prefix, cont.store),
+                };
+                result
                     .inspect_err(|err| {
                         tracing::warn!(
                             "Invalid virtual chunk container, ignoring it: {err}"
@@ -337,9 +364,50 @@ impl VirtualChunkResolver {
 
     pub fn matching_container(
         &self,
+        chunk_location: &VirtualChunkLocation,
+    ) -> Option<&VirtualChunkContainer> {
+        if let Some((name, _)) = chunk_location.parse_vcc() {
+            self.matching_container_by_name(name)
+        } else {
+            self.matching_container_by_url(chunk_location.url())
+        }
+    }
+
+    fn matching_container_by_url(
+        &self,
         chunk_location: &str,
     ) -> Option<&VirtualChunkContainer> {
-        find_container(chunk_location, self.containers.as_ref())
+        self.containers
+            .iter()
+            .find(|cont| chunk_location.starts_with(cont.url_prefix.as_str()))
+    }
+
+    fn matching_container_by_name(&self, name: &str) -> Option<&VirtualChunkContainer> {
+        self.containers.iter().find(|c| c.name.as_deref() == Some(name))
+    }
+
+    /// Expand a chunk location to an absolute URL. For `vcc://name/path` locations,
+    /// resolves the name to a container's url_prefix. For absolute URLs, returns as-is.
+    pub fn expand_location(
+        &self,
+        location: &str,
+    ) -> Result<String, VirtualReferenceError> {
+        let Some(rest) =
+            location.strip_prefix(crate::format::manifest::VCC_RELATIVE_URL_SCHEME)
+        else {
+            return Ok(location.to_string());
+        };
+        let Some(slash) = rest.find('/') else {
+            return Err(
+                VirtualReferenceErrorKind::NoContainerForName(rest.to_string()).into()
+            );
+        };
+        let name = &rest[..slash];
+        let relative_path = &rest[slash + 1..];
+        let cont = self.matching_container_by_name(name).ok_or_else(|| {
+            VirtualReferenceErrorKind::NoContainerForName(name.to_string())
+        })?;
+        Ok(format!("{}{}", cont.url_prefix(), relative_path))
     }
 
     async fn get_fetcher(
@@ -348,9 +416,10 @@ impl VirtualChunkResolver {
     ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
         let location = chunk_location.to_string();
         let location = urlencoding::decode(location.as_str())?;
-        let cont = self.matching_container(location.as_ref()).ok_or_else(|| {
-            VirtualReferenceErrorKind::NoContainerForUrl(chunk_location.to_string())
-        })?;
+        let cont =
+            self.matching_container_by_url(location.as_ref()).ok_or_else(|| {
+                VirtualReferenceErrorKind::NoContainerForUrl(chunk_location.to_string())
+            })?;
 
         let cache_key = fetcher_cache_key(cont, chunk_location)?;
         // TODO: we shouldn't need to clone the container name
@@ -370,12 +439,11 @@ impl VirtualChunkResolver {
         range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
+        let location = self.expand_location(chunk_location)?;
+
         // this resolves things like /../
-        let url = Url::parse(chunk_location).map_err(|e| {
-            VirtualReferenceErrorKind::CannotParseUrl {
-                cause: e,
-                url: chunk_location.to_string(),
-            }
+        let url = Url::parse(&location).map_err(|e| {
+            VirtualReferenceErrorKind::CannotParseUrl { cause: e, url: location.clone() }
         })?;
         let fetcher = self.get_fetcher(&url).await?;
         fetcher.fetch_chunk(&url, range, checksum).await
@@ -973,7 +1041,9 @@ mod tests {
     use crate::{
         ObjectStoreConfig,
         config::S3Options,
-        format::manifest::{VirtualReferenceError, VirtualReferenceErrorKind},
+        format::manifest::{
+            VirtualChunkLocation, VirtualReferenceError, VirtualReferenceErrorKind,
+        },
         virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
     };
 
@@ -1161,5 +1231,130 @@ mod tests {
                 ..
             }) if error_path.as_str() == path
         ));
+    }
+
+    fn s3_store_config() -> ObjectStoreConfig {
+        ObjectStoreConfig::S3(S3Options {
+            region: Some("us-east-1".to_string()),
+            endpoint_url: None,
+            anonymous: false,
+            allow_http: false,
+            force_path_style: false,
+            network_stream_timeout_seconds: None,
+            requester_pays: false,
+        })
+    }
+
+    #[test]
+    fn test_new_named_container() {
+        let cont = VirtualChunkContainer::new_named(
+            "my-data".to_string(),
+            "s3://bucket/prefix/".to_string(),
+            s3_store_config(),
+        )
+        .unwrap();
+        assert_eq!(cont.name(), Some("my-data"));
+        assert_eq!(cont.url_prefix(), "s3://bucket/prefix/");
+    }
+
+    #[test]
+    fn test_new_named_container_invalid_name() {
+        // Empty name
+        assert!(
+            VirtualChunkContainer::new_named(
+                "".to_string(),
+                "s3://bucket/prefix/".to_string(),
+                s3_store_config(),
+            )
+            .is_err()
+        );
+
+        // Name with slash
+        assert!(
+            VirtualChunkContainer::new_named(
+                "a/b".to_string(),
+                "s3://bucket/prefix/".to_string(),
+                s3_store_config(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_expand_location() {
+        let cont = VirtualChunkContainer::new_named(
+            "my-data".to_string(),
+            "s3://bucket/prefix/".to_string(),
+            s3_store_config(),
+        )
+        .unwrap();
+        let resolver = VirtualChunkResolver::new(
+            [cont].into_iter(),
+            Default::default(),
+            Default::default(),
+        );
+
+        // vcc:// expands to absolute
+        let expanded =
+            resolver.expand_location("vcc://my-data/path/to/chunk.nc").unwrap();
+        assert_eq!(expanded, "s3://bucket/prefix/path/to/chunk.nc");
+
+        // Absolute URL passes through as-is
+        let expanded = resolver.expand_location("s3://bucket/prefix/chunk.nc").unwrap();
+        assert_eq!(expanded, "s3://bucket/prefix/chunk.nc");
+    }
+
+    #[test]
+    fn test_expand_location_unknown_name() {
+        let cont = VirtualChunkContainer::new_named(
+            "my-data".to_string(),
+            "s3://bucket/prefix/".to_string(),
+            s3_store_config(),
+        )
+        .unwrap();
+        let resolver = VirtualChunkResolver::new(
+            [cont].into_iter(),
+            Default::default(),
+            Default::default(),
+        );
+
+        let result = resolver.expand_location("vcc://unknown/chunk.nc");
+        assert!(matches!(
+            result,
+            Err(VirtualReferenceError {
+                kind: VirtualReferenceErrorKind::NoContainerForName(name),
+                ..
+            }) if name == "unknown"
+        ));
+
+        // No slash after the name
+        let result = resolver.expand_location("vcc://chunk.nc");
+        assert!(matches!(
+            result,
+            Err(VirtualReferenceError {
+                kind: VirtualReferenceErrorKind::NoContainerForName(name),
+                ..
+            }) if name == "chunk.nc"
+        ));
+    }
+
+    #[test]
+    fn test_resolver_preserves_names() {
+        let cont = VirtualChunkContainer::new_named(
+            "my-data".to_string(),
+            "s3://bucket/prefix/".to_string(),
+            s3_store_config(),
+        )
+        .unwrap();
+        let resolver = VirtualChunkResolver::new(
+            [cont].into_iter(),
+            Default::default(),
+            Default::default(),
+        );
+
+        let loc = VirtualChunkLocation::from_vcc_path("my-data", "chunk.nc").unwrap();
+        let found = resolver.matching_container(&loc);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name(), Some("my-data"));
     }
 }
