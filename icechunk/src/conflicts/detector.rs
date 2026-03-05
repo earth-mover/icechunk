@@ -36,12 +36,18 @@ impl ConflictSolver for ConflictDetector {
             });
         }
 
+        let deleted_paths: HashSet<&Path> = current_changes
+            .deleted_groups()
+            .map(|(p, _)| p)
+            .chain(current_changes.deleted_arrays().map(|(p, _)| p))
+            .collect();
+
         let new_nodes_explicit_conflicts = stream::iter(
             current_changes
                 .new_nodes()
                 // Filter out new nodes that are delete+recreate (not a conflict).
                 // Content conflicts for these are detected lower down in this function.
-                .filter(|(path, id)| !current_changes.is_deleted(path, id))
+                .filter(|(path, _id)| !deleted_paths.contains(path))
                 .map(Ok),
         )
         .try_filter_map(|(path, _)| async {
