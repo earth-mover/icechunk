@@ -15,7 +15,7 @@ use err_into::ErrorInto;
 use futures::{
     Stream, StreamExt, TryStreamExt,
     future::Either,
-    stream::{self},
+    stream::{self, FuturesUnordered},
 };
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
@@ -2062,47 +2062,42 @@ impl<'a> FlushProcess<'a> {
     async fn write_manifest_with_changes(
         &mut self,
         previous_manifests: impl Iterator<Item = &ManifestRef>,
-        modified_chunks: &ChunkTable,
+        modified_chunks: ChunkTable,
         extent: &ManifestExtents,
         node_id: &NodeId,
         old_snapshot: &SnapshotId,
     ) -> SessionResult<Option<ManifestRef>> {
         // Collect unmodified chunks from all intersecting manifests
-        let mut all_chunks_vec: Vec<Result<ChunkInfo, SessionError>> = Vec::new();
 
-        // add chunks from previous manifests that are not modified
+        // First add chunks from previous manifests that are not modified
+        let futs = FuturesUnordered::new();
         for mref in previous_manifests {
-            let manifest =
-                fetch_manifest(&mref.object_id, old_snapshot, &self.asset_manager)
-                    .await?;
-
-            for item in manifest.iter(node_id.clone()) {
-                match item {
-                    Ok((idx, payload)) => {
-                        if !modified_chunks.contains_key(&idx) && extent.contains(&idx.0)
+            futs.push(fetch_manifest(&mref.object_id, old_snapshot, &self.asset_manager));
+        }
+        let mut all_chunks_vec = futs
+            .try_fold(Vec::new(), |mut acc, manifest| async {
+                acc.extend(manifest.iter(node_id.clone()).filter_map_ok(
+                    |(idx, payload)| {
+                        if extent.contains(&idx.0) && !modified_chunks.contains_key(&idx)
                         {
-                            all_chunks_vec.push(Ok(ChunkInfo {
-                                node: node_id.clone(),
-                                coord: idx,
-                                payload,
-                            }));
+                            Some(ChunkInfo { node: node_id.clone(), coord: idx, payload })
+                        } else {
+                            None
                         }
-                    }
-                    Err(e) => all_chunks_vec.push(Err(e.into())),
-                }
-            }
-        }
+                    },
+                ));
+                Ok(acc)
+            })
+            .await?;
 
-        // add modified chunks
-        for (idx, maybe_payload) in modified_chunks.iter() {
-            if let Some(payload) = maybe_payload.as_ref() {
-                all_chunks_vec.push(Ok(ChunkInfo {
-                    node: node_id.clone(),
-                    coord: idx.clone(),
-                    payload: payload.clone(),
-                }));
-            }
-        }
+        // Then add modified chunks from ChangeSet
+        all_chunks_vec.extend(modified_chunks.into_iter().filter_map(
+            |(idx, maybe_payload)| {
+                maybe_payload.map(|payload| {
+                    Ok(ChunkInfo { node: node_id.clone(), coord: idx, payload })
+                })
+            },
+        ));
 
         self.write_manifest_from_iterator(stream::iter(all_chunks_vec).err_into()).await
     }
@@ -2147,7 +2142,7 @@ impl<'a> FlushProcess<'a> {
         //             elist of refs
         //             * else create a new manifest filtering out the chunks that are outside of
         //             the extent
-        let updated_chunks_by_extent: HashMap<ManifestExtents, ChunkTable> = self
+        let mut updated_chunks_by_extent: HashMap<ManifestExtents, ChunkTable> = self
             .change_set
             .array_chunks_iterator(&node.id, &node.path)
             .fold(HashMap::new(), |mut res, (idx, payload)| {
@@ -2171,9 +2166,8 @@ impl<'a> FlushProcess<'a> {
                 })
                 .collect();
 
-            let no_changes = Default::default();
             let modified_chunks =
-                updated_chunks_by_extent.get(&extent).unwrap_or(&no_changes);
+                updated_chunks_by_extent.remove(&extent).unwrap_or_default();
 
             if !modified_chunks.is_empty() || rewrite_manifests {
                 // if we were ask to rewrite manifests, or there are modified chunks in this split
@@ -2212,7 +2206,7 @@ impl<'a> FlushProcess<'a> {
                         // one that contains only the chunks we want
                         .write_manifest_with_changes(
                             std::iter::once(mref),
-                            &no_changes,
+                            Default::default(),
                             &extent,
                             &node.id,
                             snapshot_id,
