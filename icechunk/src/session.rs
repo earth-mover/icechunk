@@ -5123,8 +5123,7 @@ mod tests {
         let repository = create_memory_store_repository(SpecVersionBin::current()).await;
         let mut ds = repository.writable_session("main").await?;
 
-        ds.add_group("/foo/bar".try_into().unwrap(), Bytes::from("group-metadata"))
-            .await?;
+        ds.add_group("/foo/bar".try_into().unwrap(), Bytes::New()).await?;
         ds.add_array(
             "/foo/bar/some-array".try_into().unwrap(),
             basic_shape(),
