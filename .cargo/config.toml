@@ -1,5 +1,2 @@
-# Note: tokio_unstable was removed because it causes napi-rs to create a
-# multi-thread tokio runtime on WASI, which panics when Node.js WASI
-# doesn't support OS thread spawning.
-# [target.wasm32-wasip1-threads]
-# rustflags = ["--cfg", "tokio_unstable"]
+[target.wasm32-wasip1-threads]
+rustflags = ["--cfg", "tokio_unstable"]
