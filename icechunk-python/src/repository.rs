@@ -14,13 +14,13 @@ use icechunk::{
     config::Credentials,
     feature_flags::FeatureFlag,
     format::{
-        SnapshotId,
+        ManifestId, SnapshotId,
         format_constants::SpecVersionBin,
         repo_info::UpdateType,
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
         transaction_log::Diff,
     },
-    inspect::{repo_info_json, snapshot_json},
+    inspect::{manifest_json, repo_info_json, snapshot_json},
     migrations,
     ops::{
         gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
@@ -2549,6 +2549,42 @@ impl PyRepository {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let lock = repository.read().await;
             let res = repo_info_json(lock.asset_manager(), pretty)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(res)
+        })
+    }
+
+    #[pyo3(signature = (manifest_id, *, pretty = true))]
+    fn inspect_manifest(&self, manifest_id: String, pretty: bool) -> PyResult<String> {
+        let result = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(async move {
+                let lock = self.0.read().await;
+                let id = ManifestId::try_from(manifest_id.as_str())
+                    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+                let res = manifest_json(lock.asset_manager(), &id, pretty).await?;
+                Ok(res)
+            })
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
+        Ok(result)
+    }
+
+    #[pyo3(signature = (manifest_id, *, pretty = true))]
+    fn inspect_manifest_async<'py>(
+        &self,
+        py: Python<'py>,
+        manifest_id: String,
+        pretty: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let lock = repository.read().await;
+            let id = ManifestId::try_from(manifest_id.as_str())
+                .map_err(|e| {
+                    RepositoryError::from(RepositoryErrorKind::Other(e.to_string()))
+                })
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            let res = manifest_json(lock.asset_manager(), &id, pretty)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(res)
