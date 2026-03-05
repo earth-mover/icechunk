@@ -345,9 +345,6 @@ impl Storage for ObjectStorage {
         metadata: Vec<(String, String)>,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
-        if !self.backend.can_write() {
-            return Err(StorageErrorKind::ReadOnly.into());
-        }
         let path = self.prefixed_path(path);
         let mut attributes = Attributes::new();
         if settings.unsafe_use_metadata() {
@@ -391,9 +388,6 @@ impl Storage for ObjectStorage {
         _content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
-        if !self.backend.can_write() {
-            return Err(StorageErrorKind::ReadOnly.into());
-        }
         // FIXME: add support for content type, version check and metadata
         let from = self.prefixed_path(from);
         let to = self.prefixed_path(to);
@@ -440,9 +434,6 @@ impl Storage for ObjectStorage {
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
-        if !self.backend.can_write() {
-            return Err(StorageErrorKind::ReadOnly.into());
-        }
         let mut sizes = HashMap::new();
         let mut ids = Vec::new();
         for (id, size) in batch {

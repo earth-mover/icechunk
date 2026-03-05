@@ -616,9 +616,6 @@ impl Storage for S3Storage {
         metadata: Vec<(String, String)>,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
-        if !self.can_write().await? {
-            return Err(StorageErrorKind::ReadOnly.into());
-        }
         let path = self.prefixed_path(path);
         if bytes.len() >= settings.minimum_size_for_multipart_upload() as usize {
             self.put_object_multipart(
@@ -651,9 +648,6 @@ impl Storage for S3Storage {
         content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
-        if !self.can_write().await? {
-            return Err(StorageErrorKind::ReadOnly.into());
-        }
         let from = format!("{}/{}", self.bucket, self.prefixed_path(from));
         let to = self.prefixed_path(to);
         let mut req = self
@@ -767,9 +761,6 @@ impl Storage for S3Storage {
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
-        if !self.can_write().await? {
-            return Err(StorageErrorKind::ReadOnly.into());
-        }
         let mut sizes = HashMap::new();
         let mut ids = Vec::new();
         for (id, size) in batch.into_iter() {
