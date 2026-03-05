@@ -30,7 +30,7 @@ shift_array("/arr", (-2,)) # → shifts by 2 chunks = 4 elements
 
 Why chunks instead of elements? Because these are **metadata-only operations**. Shifting by partial chunks would require splitting and rewriting chunk data.
 
-## shift_array { #shift_array }
+## `shift_array` { #shift_array }
 
 The [`shift_array`][icechunk.Session.shift_array] method moves all chunks by a fixed offset per dimension (negative to shift toward index 0, positive toward higher indices). Out-of-bounds chunks are discarded, and vacated positions retain stale data.
 
@@ -132,7 +132,7 @@ Computing the index shift in element space is straightforward: multiply each chu
 
 This pattern works identically whether your array is 1 KB or 1 PB, and whether it's on local disk or cloud object storage—the shift is always instant with zero data transfer.
 
-## reindex_array { #reindex_array }
+## `reindex_array` { #reindex_array }
 
 For transformations that [`shift_array`][icechunk.Session.shift_array] can't express, [`reindex_array`][icechunk.Session.reindex_array] gives you complete control. You provide a function that maps each chunk's old position to its new position.
 
