@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 // NOTE: All expensive setup must go INSIDE the bench_with_input / iter_custom closure,
 // not before it. Criterion's filter (the CLI argument) is only checked inside
 // bench_with_input. Any work done before that call runs unconditionally for every

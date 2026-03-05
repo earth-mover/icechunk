@@ -12,11 +12,7 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use futures::{
-    Stream, StreamExt, TryStreamExt,
-    future::Either,
-    stream::{self, FuturesUnordered},
-};
+use futures::{Stream, StreamExt, TryStreamExt, future::Either, stream};
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
@@ -2070,24 +2066,39 @@ impl<'a> FlushProcess<'a> {
         // Collect unmodified chunks from all intersecting manifests
 
         // First add chunks from previous manifests that are not modified
-        let futs = FuturesUnordered::new();
-        for mref in previous_manifests {
-            futs.push(fetch_manifest(&mref.object_id, old_snapshot, &self.asset_manager));
-        }
-        let mut all_chunks_vec = futs
-            .try_fold(Vec::new(), |mut acc, manifest| async {
-                acc.extend(manifest.iter(node_id.clone()).filter_map_ok(
-                    |(idx, payload)| {
-                        if extent.contains(&idx.0) && !modified_chunks.contains_key(&idx)
-                        {
-                            Some(ChunkInfo { node: node_id.clone(), coord: idx, payload })
-                        } else {
-                            None
-                        }
-                    },
-                ));
-                Ok(acc)
+        let futs = previous_manifests
+            .map(|mref| {
+                fetch_manifest(&mref.object_id, old_snapshot, &self.asset_manager)
             })
+            .collect::<Vec<_>>();
+
+        // We could be more clever here by considering size of manifests and fetching more in parallel if they are small
+        // but for now we concurrently fetch one manifess as we iterate through another one.
+        let mut all_chunks_vec = stream::iter(futs)
+            .buffer_unordered(1)
+            .try_fold(
+                Vec::with_capacity(modified_chunks.len()),
+                |mut acc, manifest| async {
+                    acc.extend(manifest.iter(node_id.clone()).filter_map_ok(
+                        |(idx, payload)| {
+                            // we expect that most users have no splitting
+                            // and so the first condition here is most restrictive.
+                            if !modified_chunks.contains_key(&idx)
+                                && extent.contains(&idx.0)
+                            {
+                                Some(ChunkInfo {
+                                    node: node_id.clone(),
+                                    coord: idx,
+                                    payload,
+                                })
+                            } else {
+                                None
+                            }
+                        },
+                    ));
+                    Ok(acc)
+                },
+            )
             .await?;
 
         // Then add modified chunks from ChangeSet
