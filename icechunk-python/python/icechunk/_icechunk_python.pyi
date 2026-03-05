@@ -238,18 +238,24 @@ class VirtualChunkContainer:
 
     Attributes
     ----------
+    name: str | None
+        Optional name for this container. When set, chunks can use relative ``vcc://name/path``
+        locations instead of full absolute URLs.
     url_prefix: str
         The prefix of urls that will use this containers configuration for reading virtual references.
     store: ObjectStoreConfig
         The storage backend to use for the virtual chunk container.
     """
 
-    name: str
+    name: str | None
     url_prefix: str
     store: ObjectStoreConfig
 
     def __new__(
-        cls, url_prefix: str, store: _AnyObjectStoreConfig
+        cls,
+        url_prefix: str,
+        store: _AnyObjectStoreConfig,
+        name: str | None = None,
     ) -> VirtualChunkContainer:
         """
         Create a new `VirtualChunkContainer` object
@@ -260,6 +266,9 @@ class VirtualChunkContainer:
             The prefix of urls that will use this containers configuration for reading virtual references.
         store: ObjectStoreConfig
             The storage backend to use for the virtual chunk container.
+        name: str | None
+            Optional name for this container. When set, chunks can use relative ``vcc://name/path``
+            locations instead of full absolute URLs.
         """
 
 class VirtualChunkSpec:
@@ -1429,7 +1438,11 @@ class RepositoryConfig:
         ...
     def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None:
         """
-        Set the virtual chunk container for the repository.
+        Add or update a virtual chunk container in the repository configuration.
+
+        For named containers, the name is the identity: if a container with the
+        same name already exists (even with a different url_prefix), it will be
+        replaced. For unnamed containers, the url_prefix is the key.
 
         Parameters
         ----------
