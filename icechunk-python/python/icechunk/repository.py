@@ -9,6 +9,7 @@ from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
     ChunkStorageStats,
     Diff,
+    FeatureFlag,
     GCSummary,
     ManifestFileInfo,
     PyRepository,
@@ -16,7 +17,7 @@ from icechunk._icechunk_python import (
     SnapshotInfo,
     Storage,
     StorageSettings,
-    UpdateType,
+    Update,
 )
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
@@ -690,6 +691,98 @@ class Repository:
         """
         return await self._repository.update_metadata_async(metadata)
 
+    def feature_flags(self) -> list[FeatureFlag]:
+        """
+        Get all feature flags and their current state.
+
+        Returns
+        -------
+        list[FeatureFlag]
+            All feature flags with their id, name, default, setting, and effective state.
+        """
+        return self._repository.feature_flags()
+
+    async def feature_flags_async(self) -> list[FeatureFlag]:
+        """
+        Get all feature flags and their current state (async version).
+
+        Returns
+        -------
+        list[FeatureFlag]
+            All feature flags with their id, name, default, setting, and effective state.
+        """
+        return await self._repository.feature_flags_async()
+
+    def enabled_feature_flags(self) -> list[FeatureFlag]:
+        """
+        Get feature flags that are currently enabled.
+
+        Returns
+        -------
+        list[FeatureFlag]
+            Feature flags whose effective state is enabled.
+        """
+        return self._repository.enabled_feature_flags()
+
+    async def enabled_feature_flags_async(self) -> list[FeatureFlag]:
+        """
+        Get feature flags that are currently enabled (async version).
+
+        Returns
+        -------
+        list[FeatureFlag]
+            Feature flags whose effective state is enabled.
+        """
+        return await self._repository.enabled_feature_flags_async()
+
+    def disabled_feature_flags(self) -> list[FeatureFlag]:
+        """
+        Get feature flags that are currently disabled.
+
+        Returns
+        -------
+        list[FeatureFlag]
+            Feature flags whose effective state is disabled.
+        """
+        return self._repository.disabled_feature_flags()
+
+    async def disabled_feature_flags_async(self) -> list[FeatureFlag]:
+        """
+        Get feature flags that are currently disabled (async version).
+
+        Returns
+        -------
+        list[FeatureFlag]
+            Feature flags whose effective state is disabled.
+        """
+        return await self._repository.disabled_feature_flags_async()
+
+    def set_feature_flag(self, name: str, setting: bool | None) -> None:
+        """
+        Set a feature flag.
+
+        Parameters
+        ----------
+        name : str
+            The name of the feature flag.
+        setting : bool | None
+            True to enable, False to disable, None to reset to default.
+        """
+        self._repository.set_feature_flag(name, setting)
+
+    async def set_feature_flag_async(self, name: str, setting: bool | None) -> None:
+        """
+        Set a feature flag (async version).
+
+        Parameters
+        ----------
+        name : str
+            The name of the feature flag.
+        setting : bool | None
+            True to enable, False to disable, None to reset to default.
+        """
+        await self._repository.set_feature_flag_async(name, setting)
+
     def ancestry(
         self,
         *,
@@ -760,19 +853,19 @@ class Repository:
             branch=branch, tag=tag, snapshot_id=snapshot_id
         )
 
-    def ops_log(self) -> Iterator[UpdateType]:
+    def ops_log(self) -> Iterator[Update]:
         """
         Get a summary of changes to the repository
         """
 
         # the returned object is both an Async and Sync iterator
         res = cast(
-            Iterator[UpdateType],
+            Iterator[Update],
             self._repository.async_ops_log(),
         )
         return res
 
-    def ops_log_async(self) -> AsyncIterator[UpdateType]:
+    def ops_log_async(self) -> AsyncIterator[Update]:
         """
         Get a summary of changes to the repository
         """

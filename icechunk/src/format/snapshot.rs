@@ -1,12 +1,15 @@
 //! Repository state at a point in time (arrays, groups, and manifest references).
 
-use std::{collections::BTreeMap, convert::Infallible, num::NonZeroU64, sync::Arc};
+use std::{
+    collections::BTreeMap, convert::Infallible, num::NonZeroU64, ops::Range, sync::Arc,
+};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use flatbuffers::{FlatBufferBuilder, VerifierOptions};
 use itertools::Itertools as _;
+use quick_cache::sync::{Cache, GuardResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -198,9 +201,12 @@ impl From<&generated::ObjectId12> for AttributesId {
 
 impl<'a> From<generated::ManifestRef<'a>> for ManifestRef {
     fn from(value: generated::ManifestRef<'a>) -> Self {
-        let from = value.extents().iter().map(|range| range.from()).collect::<Vec<_>>();
-        let to = value.extents().iter().map(|range| range.to()).collect::<Vec<_>>();
-        let extents = ManifestExtents::new(from.as_slice(), to.as_slice());
+        let extents = ManifestExtents::from_ranges_iter(
+            value
+                .extents()
+                .iter()
+                .map(|range| Range { start: range.from(), end: range.to() }),
+        );
         ManifestRef { object_id: value.object_id().into(), extents }
     }
 }
@@ -247,7 +253,7 @@ impl<'a> TryFrom<generated::NodeSnapshot<'a>> for NodeSnapshot {
         };
         let res = NodeSnapshot {
             id: value.id().into(),
-            path: value.path().to_string().try_into()?,
+            path: Path::from_trusted(value.path()),
             node_data,
             user_data: Bytes::copy_from_slice(value.user_data().bytes()),
         };
@@ -302,10 +308,15 @@ impl ManifestFileInfo {
     }
 }
 
-#[derive(PartialEq)]
 pub struct Snapshot {
     buffer: Vec<u8>,
     spec_version: SpecVersionBin,
+    // It is _extremely_ common to set/get chunks in large batches sequentially.
+    // Without a cache we incur the cost of repeatedly decoding the flatbuffer.
+    // This cache is very small (size 1 currently), because we could cache a large number of
+    // snapshots. The size of 1 is fine for typically workloads that iterate sequentially
+    // through nodes.
+    node_cache: Cache<Path, Arc<NodeSnapshot>>,
 }
 
 impl std::fmt::Debug for Snapshot {
@@ -383,7 +394,12 @@ impl Snapshot {
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;
-        Ok(Snapshot { buffer, spec_version })
+        Ok(Snapshot {
+            buffer,
+            spec_version,
+            // this number is low because we cache a very large number of snapshot nodes.
+            node_cache: Cache::new(1),
+        })
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -467,7 +483,12 @@ impl Snapshot {
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Ok(Snapshot { buffer, spec_version })
+        Ok(Snapshot {
+            buffer,
+            spec_version,
+            // this number is low because we cache a very large number of snapshot nodes.
+            node_cache: Cache::new(1),
+        })
     }
 
     pub fn initial(spec_version: SpecVersionBin) -> IcechunkResult<Self> {
@@ -572,7 +593,7 @@ impl Snapshot {
         )
     }
 
-    pub fn get_node(&self, path: &Path) -> IcechunkResult<NodeSnapshot> {
+    fn _get_node(&self, path: &Path) -> IcechunkResult<NodeSnapshot> {
         let res = self
             .root()
             .nodes()
@@ -581,6 +602,20 @@ impl Snapshot {
                 path: path.clone(),
             }))?;
         res.try_into()
+    }
+
+    pub fn get_node(&self, path: &Path) -> IcechunkResult<Arc<NodeSnapshot>> {
+        use GuardResult::*;
+        match self.node_cache.get_value_or_guard(path, None) {
+            Value(node) => Ok(node),
+            Timeout => Ok(Arc::new(self._get_node(path)?)),
+            Guard(guard) => {
+                let node = self._get_node(path)?;
+                let node = Arc::new(node);
+                let _ = guard.insert(Arc::clone(&node));
+                Ok(node)
+            }
+        }
     }
 
     pub fn get_node_index(&self, path: &Path) -> IcechunkResult<usize> {
@@ -910,27 +945,27 @@ mod tests {
         let node = st.get_node(&"/b/c".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            NodeSnapshot {
+            Arc::new(NodeSnapshot {
                 path: "/b/c".try_into().unwrap(),
                 id: node_ids[3].clone(),
                 user_data: Bytes::copy_from_slice(b"bye"),
                 node_data: NodeData::Group,
-            },
+            }),
         );
         let node = st.get_node(&Path::root()).unwrap();
         assert_eq!(
             node,
-            NodeSnapshot {
+            Arc::new(NodeSnapshot {
                 path: Path::root(),
                 id: node_ids[0].clone(),
                 user_data: Bytes::new(),
                 node_data: NodeData::Group,
-            },
+            }),
         );
         let node = st.get_node(&"/b/array1".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            NodeSnapshot {
+            Arc::new(NodeSnapshot {
                 path: "/b/array1".try_into().unwrap(),
                 id: node_ids[4].clone(),
                 user_data: Bytes::copy_from_slice(b"hello"),
@@ -939,12 +974,12 @@ mod tests {
                     dimension_names: dim_names1.clone(),
                     manifests: vec![man_ref1, man_ref2]
                 },
-            },
+            }),
         );
         let node = st.get_node(&"/array2".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            NodeSnapshot {
+            Arc::new(NodeSnapshot {
                 path: "/array2".try_into().unwrap(),
                 id: node_ids[5].clone(),
                 user_data: Bytes::new(),
@@ -953,12 +988,12 @@ mod tests {
                     dimension_names: dim_names2.clone(),
                     manifests: vec![]
                 },
-            },
+            }),
         );
         let node = st.get_node(&"/b/array3".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            NodeSnapshot {
+            Arc::new(NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
                 id: node_ids[6].clone(),
                 user_data: Bytes::new(),
@@ -967,7 +1002,7 @@ mod tests {
                     dimension_names: dim_names3.clone(),
                     manifests: vec![]
                 },
-            },
+            }),
         );
         Ok(())
     }

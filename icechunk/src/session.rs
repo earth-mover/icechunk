@@ -12,11 +12,7 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use futures::{
-    Stream, StreamExt, TryStreamExt,
-    future::Either,
-    stream::{self},
-};
+use futures::{Stream, StreamExt, TryStreamExt, future::Either, stream};
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
@@ -39,6 +35,7 @@ use crate::{
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
+    feature_flags::{MOVE_NODE_FLAG, raise_if_feature_flag_disabled},
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
@@ -209,11 +206,10 @@ impl From<RefError> for SessionError {
 
 pub type SessionResult<T> = Result<T, SessionError>;
 
-// Returns the index of split_range that includes ChunkIndices
-// This can be used at write time to split manifests based on the config
-// and at read time to choose which manifest to query for chunk payload
+// Returns the index of split_range that includes ChunkIndices using _linear search_.
+// This is used at read time to choose which manifest to query for chunk payload
 /// It is useful to have this act on an iterator (e.g. get_chunk_ref)
-/// The find method on ManifestSplits is simply a helper.
+#[inline(always)]
 pub fn find_coord<'a, I>(
     iter: I,
     coord: &'a ChunkIndices,
@@ -235,14 +231,22 @@ where
 }
 
 impl ManifestSplits {
-    pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<&'a ManifestExtents> {
-        debug_assert_eq!(coord.0.len(), self.0[0].len());
-        find_coord(self.iter(), coord).map(|x| x.1)
-    }
-
-    pub fn position(&self, coord: &ChunkIndices) -> Option<usize> {
-        debug_assert_eq!(coord.0.len(), self.0[0].len());
-        find_coord(self.iter(), coord).map(|x| x.0)
+    /// Binary search to locate ManifestExtents for a given chunk coordinate.
+    #[inline(always)]
+    pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<ManifestExtents> {
+        debug_assert_eq!(coord.0.len(), self.0.len());
+        let mut ranges = Vec::with_capacity(self.0.len());
+        for (edges, loc) in self.0.iter().zip(coord.0.iter()) {
+            // Find insertion point for axis chunk index in sorted vector of split edges.
+            let bin = edges.partition_point(|&e| e <= *loc);
+            // detected bin is out of range. This _should_ never happen
+            // note that if loc == 0, then bin = 1
+            if bin == 0 || bin >= edges.len() {
+                return None;
+            }
+            ranges.push(edges[bin - 1]..edges[bin]);
+        }
+        Some(ManifestExtents::from_ranges_iter(ranges))
     }
 }
 
@@ -580,6 +584,14 @@ impl Session {
     }
 
     #[instrument(skip(self, calculate_new_index))]
+    /// Reindex chunks in an array by applying a transformation function to each chunk's coordinates.
+    ///
+    /// The `calculate_new_index` function receives each chunk's current coordinates and returns:
+    /// - `Ok(Some(new_coords))` to move the chunk to new coordinates
+    /// - `Ok(None)` to discard the chunk
+    /// - `Err(...)` to abort the operation
+    ///
+    /// Source positions that are not also destinations retain their existing chunk refs.
     pub async fn reindex_array<F>(
         &mut self,
         array_path: &Path,
@@ -599,6 +611,7 @@ impl Session {
 
         let mut original_chunks = self.chunk_coordinates(array_path).await?.boxed();
         let mut change_set = ChangeSet::for_edits();
+
         // TODO: concurrency
         while let Some(old_chunk_index) = original_chunks.try_next().await? {
             if let Some(new_chunk_index) = calculate_new_index(&old_chunk_index)? {
@@ -625,13 +638,38 @@ impl Session {
         Ok(())
     }
 
+    /// Shift all chunks in an array by the given chunk offset.
+    ///
+    /// Out-of-bounds chunks are discarded. To preserve them, resize the array first
+    /// to make room. Vacated source positions retain stale references.
     #[instrument(skip(self))]
     pub async fn shift_array(
         &mut self,
         array_path: &Path,
-        offset: &[i64], // FIXME: overflow
+        chunk_offset: &[i64], // FIXME: overflow
     ) -> SessionResult<()> {
-        self.reindex_array(array_path, shift_by(offset)).await
+        let node = self.get_array(array_path).await?;
+        let num_chunks: Vec<u32> = match &node.node_data {
+            NodeData::Array { shape, .. } => shape.num_chunks().collect(),
+            _ => unreachable!("get_array returned non-array"),
+        };
+
+        let chunk_offset = chunk_offset.to_vec();
+        let num_chunks = num_chunks.to_vec();
+        self.reindex_array(array_path, move |index: &ChunkIndices| {
+            let new_indices: Option<Vec<u32>> = index
+                .0
+                .iter()
+                .enumerate()
+                .map(|(dim, &idx)| {
+                    let n = num_chunks[dim] as i64;
+                    let new_idx = idx as i64 + chunk_offset[dim];
+                    if new_idx < 0 || new_idx >= n { None } else { Some(new_idx as u32) }
+                })
+                .collect();
+            Ok(new_indices.map(ChunkIndices))
+        })
+        .await
     }
 
     #[instrument(skip(self, coords))]
@@ -684,7 +722,6 @@ impl Session {
 
     // Helper function that accepts a NodeSnapshot instead of a path,
     // this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
-    #[instrument(skip(self, node, data))]
     async fn set_node_chunk_ref(
         &mut self,
         node: NodeSnapshot,
@@ -1034,8 +1071,8 @@ impl Session {
         let res = try_stream! {
             let new_chunks = stream::iter(
                 self.change_set()
-                    .new_array_chunk_iterator(&node.id, array_path)
-                    .map(|chunk_info| Ok::<ChunkIndices, SessionError>(chunk_info.coord)),
+                    .array_chunks_iterator(&node.id, array_path)
+                    .map(|(coord, _)| Ok::<ChunkIndices, SessionError>(coord.clone())),
             );
 
             for await maybe_coords in updated_chunks.chain(new_chunks) {
@@ -1118,7 +1155,15 @@ impl Session {
         let update_type =
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
         let num_updates = self.config.num_updates_per_repo_info_file();
+        let is_rearrange = self.mode() == SessionMode::Rearrange;
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            if is_rearrange {
+                raise_if_feature_flag_disabled(
+                    repo_info.as_ref(),
+                    MOVE_NODE_FLAG,
+                    "flush rearrange session",
+                )?;
+            }
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
                 ..new_snap.as_ref().try_into()?
@@ -1274,6 +1319,7 @@ impl Session {
             let _ = self.change_set_mut()?;
         }
         let change_set = &mut self.change_set;
+        let is_rearrange = matches!(change_set, ChangeSet::Rearrange(_));
 
         let id = do_commit(
             Arc::clone(&self.asset_manager),
@@ -1286,6 +1332,7 @@ impl Session {
             commit_method,
             self.config.manifest().splitting(),
             allow_empty,
+            is_rearrange,
             self.config.repo_update_retries().retries(),
             num_updates,
         )
@@ -1823,6 +1870,7 @@ async fn get_existing_node(
         Some(renamed_path) => {
             match snapshot.get_node(renamed_path.as_ref()) {
                 Ok(node) => {
+                    let node = Arc::unwrap_or_clone(node);
                     let node = match node.node_data {
                         NodeData::Array { ref manifests, .. } => {
                             if let Some(new_data) = change_set.get_updated_array(&node.id)
@@ -1923,27 +1971,6 @@ pub fn construct_valid_byte_range(
     }
 }
 
-pub fn shift_by(offset: &[i64]) -> impl Fn(&ChunkIndices) -> ReindexOperationResult {
-    |index: &ChunkIndices| {
-        let res: Option<Vec<u32>> = index
-            .0
-            .iter()
-            .zip(offset.iter())
-            .map(|(index, offset)| {
-                let new_index = *index as i64 + offset;
-                if new_index < 0 {
-                    return Ok(None);
-                }
-                let new_index: u32 = new_index
-                    .try_into()
-                    .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
-                Ok::<_, SessionError>(Some(new_index))
-            })
-            .try_collect()?;
-        Ok(res.map(ChunkIndices))
-    }
-}
-
 struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
@@ -2010,10 +2037,22 @@ impl<'a> FlushProcess<'a> {
             if self.change_set.array_manifest(node_id).is_some() {
                 let chunks = stream::iter(
                     self.change_set
-                        .new_array_chunk_iterator(node_id, node_path)
+                        .array_chunks_iterator(node_id, node_path)
                         // FIXME: do we need to optimize this so we don't need multiple passes over all chunks calling
                         // contains?
-                        .filter(|chunk| extent.contains(&chunk.coord.0))
+                        .filter_map(|(coord, payload)| {
+                            if let Some(payload) = payload
+                                && extent.contains(&coord.0)
+                            {
+                                Some(ChunkInfo {
+                                    node: node_id.clone(),
+                                    coord: coord.clone(),
+                                    payload: payload.clone(),
+                                })
+                            } else {
+                                None
+                            }
+                        })
                         .map(Ok),
                 );
                 let new_ref = self.write_manifest_from_iterator(chunks).await?;
@@ -2032,47 +2071,57 @@ impl<'a> FlushProcess<'a> {
     async fn write_manifest_with_changes(
         &mut self,
         previous_manifests: impl Iterator<Item = &ManifestRef>,
-        modified_chunks: &ChunkTable,
+        modified_chunks: ChunkTable,
         extent: &ManifestExtents,
         node_id: &NodeId,
         old_snapshot: &SnapshotId,
     ) -> SessionResult<Option<ManifestRef>> {
         // Collect unmodified chunks from all intersecting manifests
-        let mut all_chunks_vec: Vec<Result<ChunkInfo, SessionError>> = Vec::new();
 
-        // add chunks from previous manifests that are not modified
-        for mref in previous_manifests {
-            let manifest =
+        // First add chunks from previous manifests that are not modified
+        let futs = previous_manifests
+            .map(|mref| {
                 fetch_manifest(&mref.object_id, old_snapshot, &self.asset_manager)
-                    .await?;
+            })
+            .collect::<Vec<_>>();
 
-            for item in manifest.iter(node_id.clone()) {
-                match item {
-                    Ok((idx, payload)) => {
-                        if !modified_chunks.contains_key(&idx) && extent.contains(&idx.0)
-                        {
-                            all_chunks_vec.push(Ok(ChunkInfo {
-                                node: node_id.clone(),
-                                coord: idx.clone(),
-                                payload: payload.clone(),
-                            }));
-                        }
-                    }
-                    Err(e) => all_chunks_vec.push(Err(e.into())),
-                }
-            }
-        }
+        // We could be more clever here by considering size of manifests and fetching more in parallel if they are small
+        // but for now we concurrently fetch one manifess as we iterate through another one.
+        let mut all_chunks_vec = stream::iter(futs)
+            .buffer_unordered(1)
+            .try_fold(
+                Vec::with_capacity(modified_chunks.len()),
+                |mut acc, manifest| async {
+                    acc.extend(manifest.iter(node_id.clone()).filter_map_ok(
+                        |(idx, payload)| {
+                            // we expect that most users have no splitting
+                            // and so the first condition here is most restrictive.
+                            if !modified_chunks.contains_key(&idx)
+                                && extent.contains(&idx.0)
+                            {
+                                Some(ChunkInfo {
+                                    node: node_id.clone(),
+                                    coord: idx,
+                                    payload,
+                                })
+                            } else {
+                                None
+                            }
+                        },
+                    ));
+                    Ok(acc)
+                },
+            )
+            .await?;
 
-        // add modified chunks
-        for (idx, maybe_payload) in modified_chunks.iter() {
-            if let Some(payload) = maybe_payload.as_ref() {
-                all_chunks_vec.push(Ok(ChunkInfo {
-                    node: node_id.clone(),
-                    coord: idx.clone(),
-                    payload: payload.clone(),
-                }));
-            }
-        }
+        // Then add modified chunks from ChangeSet
+        all_chunks_vec.extend(modified_chunks.into_iter().filter_map(
+            |(idx, maybe_payload)| {
+                maybe_payload.map(|payload| {
+                    Ok(ChunkInfo { node: node_id.clone(), coord: idx, payload })
+                })
+            },
+        ));
 
         self.write_manifest_from_iterator(stream::iter(all_chunks_vec).err_into()).await
     }
@@ -2117,12 +2166,12 @@ impl<'a> FlushProcess<'a> {
         //             elist of refs
         //             * else create a new manifest filtering out the chunks that are outside of
         //             the extent
-        let updated_chunks_by_extent: HashMap<ManifestExtents, ChunkTable> = self
+        let mut updated_chunks_by_extent: HashMap<ManifestExtents, ChunkTable> = self
             .change_set
             .array_chunks_iterator(&node.id, &node.path)
             .fold(HashMap::new(), |mut res, (idx, payload)| {
                 if let Some(extents) = splits.find(idx) {
-                    let entry = res.entry(extents.clone()).or_default();
+                    let entry = res.entry(extents).or_default();
                     entry.insert(idx.clone(), payload.clone());
                 }
                 res
@@ -2134,16 +2183,15 @@ impl<'a> FlushProcess<'a> {
                 .iter()
                 .filter_map(|mr| {
                     // order is critical here, `overlap_with` is not symmetric
-                    match mr.extents.overlap_with(extent) {
+                    match mr.extents.overlap_with(&extent) {
                         Overlap::None => None,
                         ov => Some((mr, ov)),
                     }
                 })
                 .collect();
 
-            let no_changes = Default::default();
             let modified_chunks =
-                updated_chunks_by_extent.get(extent).unwrap_or(&no_changes);
+                updated_chunks_by_extent.remove(&extent).unwrap_or_default();
 
             if !modified_chunks.is_empty() || rewrite_manifests {
                 // if we were ask to rewrite manifests, or there are modified chunks in this split
@@ -2152,7 +2200,7 @@ impl<'a> FlushProcess<'a> {
                     .write_manifest_with_changes(
                         intersecting_manifests.iter().map(|(mr, _)| *mr),
                         modified_chunks,
-                        extent,
+                        &extent,
                         &node.id,
                         snapshot_id,
                     )
@@ -2182,8 +2230,8 @@ impl<'a> FlushProcess<'a> {
                         // one that contains only the chunks we want
                         .write_manifest_with_changes(
                             std::iter::once(mref),
-                            &no_changes,
-                            extent,
+                            Default::default(),
+                            &extent,
                             &node.id,
                             snapshot_id,
                         )
@@ -2566,6 +2614,7 @@ async fn do_commit(
     commit_method: CommitMethod,
     split_config: &ManifestSplittingConfig,
     allow_empty: bool,
+    is_rearrange: bool,
     retry_settings: &storage::RetriesSettings,
     num_updates_per_repo_info_file: u16,
 ) -> SessionResult<SnapshotId> {
@@ -2614,6 +2663,7 @@ async fn do_commit(
                 snapshot_id,
                 new_snapshot,
                 commit_method,
+                is_rearrange,
                 retry_settings,
                 num_updates_per_repo_info_file,
             )
@@ -2675,18 +2725,27 @@ async fn do_commit_v1(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn do_commit_v2(
     asset_manager: Arc<AssetManager>,
     branch_name: &str,
     parent_snapshot_id: &SnapshotId,
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
+    is_rearrange: bool,
     retry_settings: &storage::RetriesSettings,
     num_updates_per_repo_info_file: u16,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+        if is_rearrange {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                MOVE_NODE_FLAG,
+                "commit rearrange session",
+            )?;
+        }
         attempt += 1;
         let actual_parent = repo_info.resolve_branch(branch_name)?;
         if &actual_parent != parent_snapshot_id {
@@ -2840,6 +2899,16 @@ mod tests {
     use async_trait::async_trait;
     use icechunk_macros::tokio_test;
     use itertools::{Itertools, assert_equal};
+    use rstest::rstest;
+    use rstest_reuse::{self, *};
+
+    use pretty_assertions::assert_eq;
+    use proptest::prelude::{prop_assert, prop_assert_eq};
+    use storage::logging::LoggingStorage;
+    use test_strategy::proptest;
+    use tokio::sync::Barrier;
+
+    use crate::test_utils::spec_version_cases;
 
     async fn assert_manifest_count(
         asset_manager: &Arc<AssetManager>,
@@ -2851,16 +2920,13 @@ mod tests {
             "Mismatch in manifest count: expected {expected}, but got {total_manifests}",
         );
     }
-    use pretty_assertions::assert_eq;
-    use proptest::prelude::{prop_assert, prop_assert_eq};
-    use storage::logging::LoggingStorage;
-    use test_strategy::proptest;
-    use tokio::sync::Barrier;
 
-    async fn create_memory_store_repository() -> Repository {
+    async fn create_memory_store_repository(spec_version: SpecVersionBin) -> Repository {
         let storage =
             new_in_memory_storage().await.expect("failed to create in-memory store");
-        Repository::create(None, storage, HashMap::new(), None, true).await.unwrap()
+        Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
+            .await
+            .unwrap()
     }
 
     #[proptest(async = "tokio")]
@@ -3047,24 +3113,43 @@ mod tests {
     async fn test_which_split() -> Result<(), Box<dyn Error>> {
         let splits = ManifestSplits::from_edges(vec![vec![0, 10, 20]]);
 
-        assert_eq!(splits.position(&ChunkIndices(vec![1])), Some(0));
-        assert_eq!(splits.position(&ChunkIndices(vec![11])), Some(1));
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1])),
+            Some(ManifestExtents::new(&[0], &[10]))
+        );
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![11])),
+            Some(ManifestExtents::new(&[10], &[20]))
+        );
 
         let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
 
         let splits = ManifestSplits::from_edges(edges);
-        assert_eq!(splits.position(&ChunkIndices(vec![1, 1])), Some(0));
-        assert_eq!(splits.position(&ChunkIndices(vec![1, 10])), Some(1));
-        assert_eq!(splits.position(&ChunkIndices(vec![1, 11])), Some(1));
-        assert!(splits.position(&ChunkIndices(vec![21, 21])).is_none());
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1, 1])),
+            Some(ManifestExtents::new(&[0, 0], &[10, 10]))
+        );
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1, 10])),
+            Some(ManifestExtents::new(&[0, 10], &[10, 20]))
+        );
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1, 11])),
+            Some(ManifestExtents::new(&[0, 10], &[10, 20]))
+        );
+        assert!(splits.find(&ChunkIndices(vec![21, 21])).is_none());
+        assert!(splits.find(&ChunkIndices(vec![0, 21])).is_none());
+        assert!(splits.find(&ChunkIndices(vec![21, 0])).is_none());
 
         Ok(())
     }
 
     #[tokio_test]
-    async fn test_repository_with_default_commit_metadata() -> Result<(), Box<dyn Error>>
-    {
-        let mut repo = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_repository_with_default_commit_metadata(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut repo = create_memory_store_repository(spec_version).await;
         let mut ds = repo.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::new()).await?;
         let snapshot = ds.commit("commit 1", None).await?;
@@ -3111,7 +3196,10 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_repository_with_splits_and_resizes() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_repository_with_splits_and_resizes(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let split_sizes = Some(vec![(
@@ -3135,7 +3223,7 @@ mod tests {
             }),
             storage,
             HashMap::new(),
-            None,
+            Some(spec_version),
             true,
         )
         .await?;
@@ -3532,7 +3620,10 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_repository_with_updates_and_writes() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_repository_with_updates_and_writes(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
@@ -3543,8 +3634,14 @@ mod tests {
             inline_chunk_threshold_bytes: Some(0),
             ..Default::default()
         };
-        let repository =
-            Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
+        let repository = Repository::create(
+            Some(config),
+            storage,
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -3851,27 +3948,32 @@ mod tests {
 
         repository.save_config().await?;
 
-        let overwritten = repository
-            .asset_manager()
-            .list_overwritten_objects()
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?;
+        if spec_version == SpecVersionBin::V2dot0 {
+            let overwritten = repository
+                .asset_manager()
+                .list_overwritten_objects()
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
 
-        // 6 commits + 1 config change recorded in ops log
-        assert_eq!(overwritten.iter().filter(|s| s.starts_with("repo")).count(), 7);
+            // 6 commits + 1 config change recorded in ops log
+            assert_eq!(overwritten.iter().filter(|s| s.starts_with("repo")).count(), 7);
 
-        // V2 repos don't write config.yaml — config is in repo info
-        assert_eq!(
-            overwritten.iter().filter(|s| s.starts_with("config.yaml")).count(),
-            0
-        );
+            // V2 repos don't write config.yaml — config is in repo info
+            assert_eq!(
+                overwritten.iter().filter(|s| s.starts_with("config.yaml")).count(),
+                0
+            );
+        }
         Ok(())
     }
 
     #[tokio_test]
-    async fn test_basic_delete_and_flush() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_basic_delete_and_flush(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         ds.add_group("/1".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
@@ -3889,8 +3991,11 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_basic_delete_after_flush() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_basic_delete_after_flush(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         ds.add_group("/1".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
@@ -3905,8 +4010,11 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_commit_after_deleting_old_node() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_commit_after_deleting_old_node(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         ds.commit("commit", None).await?;
@@ -3923,9 +4031,12 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_delete_children() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_delete_children(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let def = Bytes::copy_from_slice(b"");
-        let repository = create_memory_store_repository().await;
+        let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), def.clone()).await?;
         ds.commit("initialize", None).await?;
@@ -3951,8 +4062,11 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_delete_children_of_old_nodes() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_delete_children_of_old_nodes(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         let def = Bytes::copy_from_slice(b"");
         ds.add_group(Path::root(), def.clone()).await?;
@@ -3969,9 +4083,14 @@ mod tests {
     }
 
     #[tokio_test(flavor = "multi_thread")]
-    async fn test_all_chunks_iterator() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_all_chunks_iterator(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::create(None, storage, HashMap::new(), None, true).await?;
+        let repo =
+            Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
+                .await?;
         let mut ds = repo.writable_session("main").await?;
         let def = Bytes::copy_from_slice(b"");
 
@@ -4038,12 +4157,20 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_manifests_shrink() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_manifests_shrink(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let in_mem_storage = Arc::new(ObjectStorage::new_in_memory().await?);
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
         // there should be no manifests yet
         assert!(
@@ -4249,8 +4376,11 @@ mod tests {
     }
 
     #[tokio_test(flavor = "multi_thread")]
-    async fn test_commit_and_refs() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_commit_and_refs(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
         let mut ds = repo.writable_session("main").await?;
 
         let def = Bytes::copy_from_slice(b"");
@@ -4318,7 +4448,7 @@ mod tests {
 
     #[tokio_test]
     async fn test_amend() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+        let repo = create_memory_store_repository(SpecVersionBin::current()).await;
 
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
@@ -4430,7 +4560,7 @@ mod tests {
 
     #[tokio_test]
     async fn test_session_amending_with_move() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+        let repo = create_memory_store_repository(SpecVersionBin::current()).await;
 
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
@@ -4534,8 +4664,11 @@ mod tests {
 
     /// Integration test that fetch_snapshot_info correctly identifies initial vs non-initial.
     #[tokio_test]
-    async fn test_fetch_snapshot_info_is_initial() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_fetch_snapshot_info_is_initial(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
         let asset_manager = repo.asset_manager();
 
         // Look up the initial snapshot via the branch
@@ -4556,9 +4689,21 @@ mod tests {
 
     /// Test that the initial snapshot has an empty transaction log that can be fetched.
     #[tokio_test]
-    async fn test_initial_snapshot_has_empty_transaction_log()
-    -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_initial_snapshot_has_empty_transaction_log(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
+
+        if spec_version == SpecVersionBin::V1dot0 {
+            // Transaction logs for initial commit are a V2-only feature
+            let initial_snap_id = repo.lookup_branch("main").await?;
+            let result =
+                repo.asset_manager().fetch_transaction_log(&initial_snap_id).await;
+            assert!(result.is_err());
+            return Ok(());
+        }
+
         let asset_manager = repo.asset_manager();
 
         let initial_snap_id = repo.lookup_branch("main").await?;
@@ -4598,8 +4743,11 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_empty_commit() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_empty_commit(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         let snap1 = session.commit("make root", None).await?;
@@ -4637,8 +4785,11 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_no_double_commit() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_no_double_commit(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository(spec_version).await;
 
         let mut ds1 = repository.writable_session("main").await?;
         let mut ds2 = repository.writable_session("main").await?;
@@ -4706,9 +4857,14 @@ mod tests {
     async fn test_basic_move() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4767,9 +4923,14 @@ mod tests {
     async fn test_move_errors() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
         let mut session = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4796,12 +4957,20 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_setting_w_invalid_coords() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_setting_w_invalid_coords(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
         let mut ds = repo.writable_session("main").await?;
 
         let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
@@ -4859,12 +5028,20 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_array_shift() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_array_shift(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
         let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
         let mut session = repo.writable_session("main").await?;
         let shape = ArrayShape::new(vec![(20, 2)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;
@@ -4884,7 +5061,7 @@ mod tests {
         session.commit("first commit", None).await?;
 
         let mut session = repo.writable_session("main").await?;
-        session.reindex_array(&apath, shift_by(&[-1])).await?;
+        session.shift_array(&apath, &[-1]).await?;
         assert_eq!(
             session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?,
             Some(ChunkPayload::Inline("1".into()))
@@ -4906,8 +5083,11 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_flush() -> Result<(), Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_flush(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repository = create_memory_store_repository(spec_version).await;
         let mut session = repository.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
 
@@ -4965,7 +5145,7 @@ mod tests {
     /// Group: /foo/bar
     /// Array: /foo/bar/some-array
     async fn get_repo_for_conflict() -> Result<Repository, Box<dyn Error>> {
-        let repository = create_memory_store_repository().await;
+        let repository = create_memory_store_repository(SpecVersionBin::current()).await;
         let mut ds = repository.writable_session("main").await?;
 
         ds.add_group("/foo/bar".try_into().unwrap(), Bytes::new()).await?;
@@ -5173,8 +5353,11 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_rebase_without_fast_forward() -> Result<(), Box<dyn Error>> {
-        let repo = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_rebase_without_fast_forward(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
 
         let mut ds = repo.writable_session("main").await?;
 
@@ -5234,9 +5417,11 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_rebase_fast_forwarding_over_chunk_writes() -> Result<(), Box<dyn Error>>
-    {
-        let repo = create_memory_store_repository().await;
+    #[apply(spec_version_cases)]
+    async fn test_rebase_fast_forwarding_over_chunk_writes(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = create_memory_store_repository(spec_version).await;
 
         let mut ds = repo.writable_session("main").await?;
 
@@ -5671,9 +5856,12 @@ mod tests {
     }
 
     #[tokio_test]
+    #[apply(spec_version_cases)]
     /// Tests `commit_rebasing` retries the proper number of times when there are conflicts
-    async fn test_commit_rebasing_attempts() -> Result<(), Box<dyn Error>> {
-        let repo = Arc::new(create_memory_store_repository().await);
+    async fn test_commit_rebasing_attempts(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        let repo = Arc::new(create_memory_store_repository(spec_version).await);
         let mut session = repo.writable_session("main").await?;
         session
             .add_array("/array".try_into().unwrap(), basic_shape(), None, Bytes::new())
@@ -5815,6 +6003,7 @@ mod tests {
         use super::Session;
         use super::create_memory_store_repository;
         use super::{node_paths, shapes_and_dims};
+        use crate::format::format_constants::SpecVersionBin;
 
         #[derive(Clone, Debug)]
         enum RepositoryTransition {
@@ -6000,7 +6189,8 @@ mod tests {
                 _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
             ) -> Self::SystemUnderTest {
                 let session = tokio::runtime::Runtime::new().unwrap().block_on(async {
-                    let repo = create_memory_store_repository().await;
+                    let repo =
+                        create_memory_store_repository(SpecVersionBin::current()).await;
                     repo.writable_session("main").await.unwrap()
                 });
                 TestRepository { session, runtime: Runtime::new().unwrap() }

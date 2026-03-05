@@ -55,6 +55,7 @@ impl ManifestExtents {
         Self(ranges.into_iter().collect())
     }
 
+    #[inline(always)]
     pub fn contains(&self, coord: &[u32]) -> bool {
         self.iter().zip(coord.iter()).all(|(range, that)| range.contains(that))
     }
@@ -133,39 +134,26 @@ pub struct ManifestRef {
     pub extents: ManifestExtents,
 }
 
+// ManifestSplits can be constructed from a iterable of shard edges or boundaries
+// along each dimension.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManifestSplits(pub Vec<ManifestExtents>);
+pub struct ManifestSplits(pub Vec<Vec<u32>>);
 
 impl ManifestSplits {
-    /// Used at read-time
-    pub fn from_extents(extents: Vec<ManifestExtents>) -> Self {
-        assert!(!extents.is_empty());
-        Self(extents)
-    }
-
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    // Build up ManifestSplits from a iterable of shard edges or boundaries
-    // along each dimension.
-    /// # Examples
-    /// ```
-    /// use icechunk::format::manifest::{ManifestSplits, ManifestExtents};
-    /// let actual = ManifestSplits::from_edges(vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]);
-    /// let expected = ManifestSplits::from_extents(vec![
-    ///     ManifestExtents::new(&[0, 3], &[1, 4]),
-    ///     ManifestExtents::new(&[0, 4], &[1, 5]),
-    ///     ManifestExtents::new(&[1, 3], &[2, 4]),
-    ///     ManifestExtents::new(&[1, 4], &[2, 5]),
-    ///     ]
-    /// );
-    /// assert_eq!(actual, expected);
-    /// ```
     pub fn from_edges(iter: impl IntoIterator<Item = Vec<u32>>) -> Self {
-        // let iter = vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]
-        let res = iter
-            .into_iter()
+        Self(iter.into_iter().collect())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = ManifestExtents> {
+        self.0
+            .iter()
+            // assume
+            // vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]
+            .cloned()
             // vec![(0, 1), (1, 2)], vec![(3, 4), (4, 5)]
             .map(|x| x.into_iter().tuple_windows())
             // vec![((0, 1), (3, 4)), ((0, 1), (4, 5)),
@@ -176,12 +164,7 @@ impl ManifestSplits {
             .map(multiunzip)
             .map(|(from, to): (Vec<u32>, Vec<u32>)| {
                 ManifestExtents::new(from.as_slice(), to.as_slice())
-            });
-        Self(res.collect())
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &ManifestExtents> {
-        self.0.iter()
+            })
     }
 
     pub fn len(&self) -> usize {
@@ -194,8 +177,8 @@ impl ManifestSplits {
         // must be complete.
         for ours in self.iter() {
             if any(other.iter(), |theirs| {
-                ours.overlap_with(theirs) == Overlap::Partial
-                    || theirs.overlap_with(ours) == Overlap::Partial
+                ours.overlap_with(&theirs) == Overlap::Partial
+                    || theirs.overlap_with(&ours) == Overlap::Partial
             }) {
                 return false;
             }
@@ -205,12 +188,16 @@ impl ManifestSplits {
 }
 
 /// Helper function for constructing uniformly spaced manifest split edges
-pub fn uniform_manifest_split_edges(num_chunks: u32, split_size: &u32) -> Vec<u32> {
+pub(crate) fn uniform_manifest_split_edges(
+    num_chunks: u32,
+    split_size: &u32,
+) -> Vec<u32> {
     (0u32..=num_chunks)
         .step_by(*split_size as usize)
         .chain((!num_chunks.is_multiple_of(*split_size)).then_some(num_chunks))
         .collect()
 }
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum VirtualReferenceErrorKind {
@@ -380,12 +367,13 @@ impl Manifest {
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024 * 1024);
 
-        let mut all = sorted_chunks.iter().peekable();
+        let len = sorted_chunks.len();
+        let mut all = sorted_chunks.into_iter().peekable();
 
         let mut array_manifests = Vec::with_capacity(1);
         while let Some(current_node) = all.peek().map(|chunk| &chunk.node).cloned() {
-            // TODO: what is a good capacity
-            let mut refs = Vec::with_capacity(8_192);
+            // TODO: adjust capacity when multiple arrays have their manifests consolidated in to one.
+            let mut refs = Vec::with_capacity(len);
             while let Some(chunk) = all.next_if(|chunk| chunk.node == current_node) {
                 refs.push(mk_chunk_ref(&mut builder, chunk));
             }
@@ -584,10 +572,10 @@ fn checksum(payload: &generated::ChunkRef<'_>) -> Option<Checksum> {
 
 fn mk_chunk_ref<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
-    chunk: &ChunkInfo,
+    chunk: ChunkInfo,
 ) -> flatbuffers::WIPOffset<generated::ChunkRef<'bldr>> {
     let index = Some(builder.create_vector(chunk.coord.0.as_slice()));
-    match &chunk.payload {
+    match chunk.payload {
         ChunkPayload::Inline(bytes) => {
             let bytes = builder.create_vector(bytes.as_ref());
             let args = generated::ChunkRefArgs {
@@ -842,8 +830,8 @@ mod tests {
             vec![0, 21, 22],
         ]);
         for vec in splits.iter().combinations(2) {
-            assert_eq!(vec[0].overlap_with(vec[1]), Overlap::None);
-            assert_eq!(vec[1].overlap_with(vec[0]), Overlap::None);
+            assert_eq!(vec[0].overlap_with(&vec[1]), Overlap::None);
+            assert_eq!(vec[1].overlap_with(&vec[0]), Overlap::None);
         }
 
         Ok(())

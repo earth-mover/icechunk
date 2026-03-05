@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::panic)]
 use std::{collections::HashMap, env, future::Future, pin::Pin, sync::Arc};
 
 use bytes::Bytes;
@@ -27,6 +28,8 @@ use icechunk::{
 use icechunk_macros::tokio_test;
 use object_store::azure::AzureConfigKey;
 use pretty_assertions::{assert_eq, assert_ne};
+use rstest::rstest;
+use rstest_reuse::{self, *};
 use tempfile::tempdir;
 use tokio::{
     io::{AsyncRead, AsyncReadExt as _},
@@ -37,6 +40,12 @@ use zstd::zstd_safe::WriteBuf;
 
 mod common;
 use common::Permission;
+
+#[template]
+#[rstest]
+#[case::v1(SpecVersionBin::V1dot0)]
+#[case::v2(SpecVersionBin::V2dot0)]
+fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
 #[allow(clippy::expect_used)]
 async fn mk_s3_storage(
@@ -160,56 +169,50 @@ where
         .await
         .expect("Cannot create local Storage");
 
-    println!("Using in memory storage");
-    f("in_memory", s2).await?;
-    println!("Using local filesystem storage");
-    f("local_filesystem", s5).await?;
-    println!("Using s3 native storage on MinIO");
-    f("s3_native", s1).await?;
-    println!("Using s3 native storage on MinIO, slash prefix");
-    f("s3_native", s1slash).await?;
-    println!("Using s3 object_store storage on MinIO");
-    f("s3_object_store", s3).await?;
-    println!("Using s3 object_store storage on MinIO, slash prefix");
-    f("s3_object_store", s3slash).await?;
-    println!("Using azure_blob storage");
-    f("azure_blob", s4).await?;
-    println!("Using azure_blob storage, slash prefix");
-    f("azure_blob", s4slash).await?;
+    let mut storages: Vec<(&'static str, Arc<dyn Storage + Send + Sync>)> = vec![
+        ("in_memory", s2),
+        ("local_filesystem", s5),
+        ("s3_native", s1),
+        ("s3_native_slash", s1slash),
+        ("s3_object_store", s3),
+        ("s3_object_store_slash", s3slash),
+        ("azure_blob", s4),
+        ("azure_blob_slash", s4slash),
+    ];
 
     if env::var("AWS_BUCKET").is_ok() {
         let prefix = common::get_random_prefix("with_storage");
         let s = common::make_aws_integration_storage(prefix.clone())?;
-        println!("Using AWS storage");
-        f("AWS", s).await?;
+        storages.push(("AWS", s));
 
         let prefix = format!("{}/", common::get_random_prefix("with_storage"));
         let s = common::make_aws_integration_storage(prefix.clone())?;
-        println!("Using AWS storage, slashh prefix");
-        f("AWS", s).await?;
+        storages.push(("AWS_slash", s));
     }
     if env::var("R2_BUCKET").is_ok() {
         let prefix = common::get_random_prefix("with_storage");
         let s = common::make_r2_integration_storage(prefix.clone())?;
-        println!("Using R2 storage");
-        f("R2", s).await?;
+        storages.push(("R2", s));
 
         let prefix = format!("{}/", common::get_random_prefix("with_storage"));
         let s = common::make_r2_integration_storage(prefix.clone())?;
-        println!("Using R2 storage, slash prefix");
-        f("R2", s).await?;
+        storages.push(("R2_slash", s));
     }
     if env::var("TIGRIS_BUCKET").is_ok() {
         let prefix = common::get_random_prefix("with_storage");
         let s = common::make_tigris_integration_storage(prefix.clone())?;
-        println!("Using Tigris storage");
-        f("Tigris", s).await?;
+        storages.push(("Tigris", s));
 
         let prefix = format!("{}/", common::get_random_prefix("with_storage"));
         let s = common::make_tigris_integration_storage(prefix.clone())?;
-        println!("Using Tigris storage, slash prefix");
-        f("Tigris", s).await?;
+        storages.push(("Tigris_slash", s));
     }
+
+    let futures = storages.into_iter().map(|(name, storage)| {
+        println!("Using {name} storage");
+        f(name, storage)
+    });
+    futures::future::try_join_all(futures).await?;
 
     Ok(())
 }
@@ -278,10 +281,19 @@ pub async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[tokio_test]
-pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+pub async fn test_tag_write_get(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let repo =
-            Repository::create(None, storage, Default::default(), None, true).await?;
+        let repo = Repository::create(
+            None,
+            storage,
+            Default::default(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("mytag").await?;
         assert_eq!(Snapshot::INITIAL_SNAPSHOT_ID, back);
@@ -292,9 +304,13 @@ pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio_test]
-pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+pub async fn test_fetch_non_existing_tag(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let repo = Repository::create(None, storage, Default::default(), None, true).await?;
+        let repo =
+            Repository::create(None, storage, Default::default(), Some(spec_version), true).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("non-existing-tag").await;
         assert!(
@@ -311,9 +327,13 @@ pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Err
 }
 
 #[tokio_test]
-pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+pub async fn test_create_existing_tag(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let repo = Repository::create(None, storage, Default::default(), None, true).await?;
+        let repo =
+            Repository::create(None, storage, Default::default(), Some(spec_version), true).await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let res  = repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await;
         assert!(
@@ -564,9 +584,13 @@ pub async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio_test]
-pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+pub async fn test_fetch_non_existing_branch(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let repo = Repository::create(None, storage, Default::default(), None, true).await?;
+        let repo =
+            Repository::create(None, storage, Default::default(), Some(spec_version), true).await?;
         let back = repo.lookup_branch("non-existing-branch").await;
         assert!(
             matches!(
@@ -581,15 +605,18 @@ pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::
 }
 
 #[tokio_test]
+#[apply(spec_version_cases)]
 #[allow(clippy::panic)]
-pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn test_write_config_on_empty(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = storage.default_settings().await?;
 
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
             storage_settings,
-            SpecVersionBin::current(),
+            spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));
@@ -617,13 +644,16 @@ pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Erro
 }
 
 #[tokio_test]
+#[apply(spec_version_cases)]
 #[allow(clippy::panic, clippy::unwrap_used)]
-pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn test_write_config_on_existing(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let am = Arc::new(AssetManager::new_no_cache(
             Arc::clone(&storage),
             storage.default_settings().await?,
-            SpecVersionBin::current(),
+            spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));
@@ -655,8 +685,10 @@ pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::E
 }
 
 #[tokio_test]
-pub async fn test_write_config_fails_on_bad_version_when_non_existing()
--> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+pub async fn test_write_config_fails_on_bad_version_when_non_existing(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     // FIXME: this test fails in MinIO but seems to work on S3
     #[allow(clippy::unwrap_used)]
     let storage = new_in_memory_storage().await.unwrap();
@@ -664,7 +696,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing()
     let am = Arc::new(AssetManager::new_no_cache(
         storage,
         storage_settings,
-        SpecVersionBin::current(),
+        spec_version,
         1, // we are only reading, compression doesn't matter
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
@@ -687,15 +719,17 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing()
 }
 
 #[tokio_test]
+#[apply(spec_version_cases)]
 #[allow(clippy::panic, clippy::unwrap_used)]
-pub async fn test_write_config_fails_on_bad_version_when_existing()
--> Result<(), Box<dyn std::error::Error>> {
+pub async fn test_write_config_fails_on_bad_version_when_existing(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |storage_type, storage| async move {
         let storage_settings = storage.default_settings().await?;
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
             storage_settings,
-            SpecVersionBin::current(),
+            spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));
@@ -742,9 +776,11 @@ pub async fn test_write_config_fails_on_bad_version_when_existing()
 }
 
 #[tokio_test]
+#[apply(spec_version_cases)]
 #[allow(clippy::panic, clippy::unwrap_used)]
-pub async fn test_write_config_can_overwrite_with_unsafe_config()
--> Result<(), Box<dyn std::error::Error>> {
+pub async fn test_write_config_can_overwrite_with_unsafe_config(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = storage::Settings {
             unsafe_use_conditional_update: Some(false),
@@ -754,7 +790,7 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
             storage_settings,
-            SpecVersionBin::current(),
+            spec_version,
             1, // we are only reading, compression doesn't matter
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));

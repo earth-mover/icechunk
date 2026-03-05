@@ -68,7 +68,7 @@ pub const V1_REFS_FILE_PATH: &str = "refs";
 
 /// A normalized Zarr path: absolute (starts with `/`) and no trailing slash.
 #[serde_as]
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
 pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
 
 /// Marker trait for object ID type tags (sealed).
@@ -337,6 +337,12 @@ pub enum IcechunkFormatErrorKind {
         "update timestamp is invalid, please verify if the machine clock has drifted: update time: `{new_time}`, latest update time: `{latest_time}`"
     )]
     InvalidUpdateTimestamp { latest_time: DateTime<Utc>, new_time: DateTime<Utc> },
+    #[error("invalid feature flag name: {name}")]
+    InvalidFeatureFlagName { name: String },
+    #[error("invalid feature flag id: {id}")]
+    InvalidFeatureFlagId { id: u16 },
+    #[error("{feature_description} is disabled by a feature flag ({feature_flag})")]
+    FeatureFlagDisabled { feature_description: String, feature_flag: String },
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
@@ -497,6 +503,14 @@ pub mod format_constants {
     pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
 }
 
+// The impl of Debug for Utf8UnixPathBuf is expensive and triggered often by tracing Spans
+// This implemnetation is much cheaper, and removes formatting from our samply profiles.
+impl fmt::Debug for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 impl Display for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -516,6 +530,11 @@ pub enum PathError {
 impl Path {
     pub fn root() -> Path {
         Path(Utf8UnixPathBuf::from("/".to_string()))
+    }
+
+    // Fast-path unvalidated constructor for use when reading from Snapshots
+    pub fn from_trusted(path: &str) -> Path {
+        Path(Utf8UnixPathBuf::from(path))
     }
 
     pub fn new(path: &str) -> Result<Path, PathError> {

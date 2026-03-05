@@ -38,6 +38,10 @@ use crate::{
         RepositoryConfig,
     },
     error::ICError,
+    feature_flags::{
+        CREATE_TAG_FLAG, DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG,
+        find_feature_flag_id, raise_if_feature_flag_disabled,
+    },
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
@@ -736,6 +740,79 @@ impl Repository {
         Ok(())
     }
 
+    #[instrument(skip(self))]
+    pub async fn feature_flags(
+        &self,
+    ) -> RepositoryResult<impl Iterator<Item = FeatureFlag>> {
+        let (repo_info, _) = self.get_repo_info().await?;
+        let enabled_flags: HashSet<u16> =
+            if let Some(iter) = repo_info.enabled_feature_flags()? {
+                iter.collect()
+            } else {
+                HashSet::new()
+            };
+        let disabled_flags: HashSet<u16> =
+            if let Some(iter) = repo_info.disabled_feature_flags()? {
+                iter.collect()
+            } else {
+                HashSet::new()
+            };
+        let res = FEATURE_FLAGS.iter().map(move |(name, (id, default_enabled))| {
+            let setting = enabled_flags
+                .get(id)
+                .map(|_| true)
+                .or_else(|| disabled_flags.get(id).map(|_| false));
+            FeatureFlag::new(*id, name, *default_enabled, setting)
+        });
+
+        Ok(res)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn enabled_feature_flags(
+        &self,
+    ) -> RepositoryResult<impl Iterator<Item = FeatureFlag>> {
+        Ok(self.feature_flags().await?.filter(|ff| ff.enabled()))
+    }
+
+    #[instrument(skip(self))]
+    pub async fn disabled_feature_flags(
+        &self,
+    ) -> RepositoryResult<impl Iterator<Item = FeatureFlag>> {
+        Ok(self.feature_flags().await?.filter(|ff| !ff.enabled()))
+    }
+
+    #[instrument(skip(self))]
+    /// set_to = Some(true) will enable it
+    /// set_to = Some(false) will disable it
+    /// set_to = None will set it to default state by deleting from repo info object
+    pub async fn set_feature_flag(
+        &self,
+        feature_flag: &str,
+        set_to: Option<bool>,
+    ) -> RepositoryResult<()> {
+        // this feature is only available in IC2
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+
+        let num_updates = self.config.num_updates_per_repo_info_file();
+        let flag_id = find_feature_flag_id(feature_flag)?;
+
+        let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            Ok(Arc::new(repo_info.update_feature_flag(
+                self.spec_version(),
+                flag_id,
+                set_to,
+                backup_path,
+                num_updates,
+            )?))
+        };
+        let _ = self
+            .asset_manager
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .await?;
+        Ok(())
+    }
+
     #[instrument(skip(storage, config))]
     pub(crate) async fn store_config(
         storage: Arc<dyn Storage + Send + Sync>,
@@ -1264,6 +1341,11 @@ impl Repository {
     async fn delete_tag_v2(&self, tag: &str) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                DELETE_TAG_FLAG,
+                "tag delete",
+            )?;
             let new_repo = repo_info
                 .delete_tag(self.spec_version(), tag, backup_path, num_updates)
                 .map_err(|err| match err {
@@ -1331,6 +1413,11 @@ impl Repository {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                CREATE_TAG_FLAG,
+                "tag creation",
+            )?;
             let new_repo = repo_info
                 .add_tag(
                     self.spec_version(),
@@ -1657,6 +1744,15 @@ impl Repository {
 
         let snapshot_id = self.lookup_branch(branch).await?;
 
+        // TODO: inefficient, lookup branch already does this
+        let (ri, _) = self.asset_manager().fetch_repo_info().await?;
+
+        raise_if_feature_flag_disabled(
+            ri.as_ref(),
+            MOVE_NODE_FLAG,
+            "create rearrange session",
+        )?;
+
         let session = Session::create_rearrange_session(
             self.config.clone(),
             self.storage_settings.clone(),
@@ -1849,6 +1945,8 @@ mod tests {
     use bytes::Bytes;
     use icechunk_macros::tokio_test;
     use itertools::enumerate;
+    use rstest::rstest;
+    use rstest_reuse::{self, *};
     use storage::logging::LoggingStorage;
     use tempfile::TempDir;
 
@@ -1868,6 +1966,7 @@ mod tests {
         ops::manifests::rewrite_manifests,
         session::{CommitMethod, SessionError, get_chunk},
         storage::new_in_memory_storage,
+        test_utils::spec_version_cases,
     };
 
     use super::*;
@@ -1894,13 +1993,21 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_repository_persistent_config() -> Result<(), Box<dyn Error>> {
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    async fn test_repository_persistent_config(
+        spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
         // default config is not stored in repo info
         assert_eq!(repo.config(), &RepositoryConfig::default());
@@ -1955,7 +2062,7 @@ mod tests {
             Some(config),
             Arc::clone(&storage),
             HashMap::new(),
-            None,
+            Some(spec_version),
             true,
         )
         .await?;
@@ -1982,13 +2089,21 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_manage_refs() -> Result<(), Box<dyn Error>> {
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    async fn test_manage_refs(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
-        let repo =
-            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
-                .await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
         let initial_branches = repo.list_branches().await?;
         assert_eq!(initial_branches, BTreeSet::from(["main".into()]));
@@ -2103,6 +2218,7 @@ mod tests {
         dimension_names: &Option<Vec<DimensionName>>,
         split_config: &ManifestSplittingConfig,
         storage: Option<Arc<dyn Storage + Send + Sync>>,
+        spec_version: SpecVersionBin,
     ) -> Result<Repository, Box<dyn Error>> {
         let backend: Arc<dyn Storage + Send + Sync> =
             storage.unwrap_or(new_in_memory_storage().await?);
@@ -2120,8 +2236,14 @@ mod tests {
             manifest: Some(man_config),
             ..RepositoryConfig::default()
         };
-        let repository =
-            Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
+        let repository = Repository::create(
+            Some(config),
+            storage,
+            HashMap::new(),
+            Some(spec_version),
+            true,
+        )
+        .await?;
 
         let mut session = repository.writable_session("main").await?;
 
@@ -2136,7 +2258,10 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_resize_rewrites_manifests() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_resize_rewrites_manifests(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let repo = Repository::create(
             Some(RepositoryConfig {
@@ -2145,7 +2270,7 @@ mod tests {
             }),
             Arc::clone(&storage),
             HashMap::new(),
-            None,
+            Some(spec_version),
             true,
         )
         .await?;
@@ -2211,7 +2336,10 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_splits_change_in_session() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_splits_change_in_session(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let shape = ArrayShape::new(vec![(13, 1), (2, 1), (1, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "y".into(), "x".into()]);
         let new_dimension_names = Some(vec!["time".into(), "y".into(), "x".into()]);
@@ -2251,6 +2379,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(Arc::clone(&storage)),
+            spec_version,
         )
         .await?;
 
@@ -2314,7 +2443,10 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn tests_manifest_rewriting_simple() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn tests_manifest_rewriting_simple(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let split_size = 3u32;
         let dim_size = 10u32;
 
@@ -2330,6 +2462,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(Arc::clone(&storage)),
+            spec_version,
         )
         .await?;
 
@@ -2349,6 +2482,11 @@ mod tests {
         session.commit("first split", None).await?;
         total_manifests += 4;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
+
+        let commit_method = match spec_version {
+            SpecVersionBin::V1dot0 => CommitMethod::NewCommit,
+            SpecVersionBin::V2dot0 => CommitMethod::Amend,
+        };
 
         // make sure data is correct
         let validate_data = async || {
@@ -2394,7 +2532,7 @@ mod tests {
             "main",
             "rewrite_manifests with split-size=12",
             None,
-            CommitMethod::Amend,
+            commit_method.clone(),
         )
         .await?;
         total_manifests += 1;
@@ -2427,7 +2565,7 @@ mod tests {
             "main",
             "rewrite_manifests with split-size=4",
             None,
-            CommitMethod::Amend,
+            commit_method.clone(),
         )
         .await?;
         total_manifests += 3;
@@ -2447,7 +2585,10 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn tests_manifest_splitting_simple() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn tests_manifest_splitting_simple(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let dim_size = 25u32;
         let chunk_size = 1u32;
         let split_size = 3u32;
@@ -2468,6 +2609,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(Arc::clone(&storage)),
+            spec_version,
         )
         .await?;
 
@@ -2713,7 +2855,10 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_manifest_splitting_complex_writes() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_manifest_splitting_complex_writes(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let t_split_size = 12u32;
         let other_split_size = 9u32;
         let y_split_size = 2u32;
@@ -2758,6 +2903,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(logging_c),
+            spec_version,
         )
         .await?;
         let repo_clone = repository.reopen(None, None).await?;
@@ -2961,7 +3107,10 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_manifest_splits_merge_sessions() -> Result<(), Box<dyn Error>> {
+    #[apply(spec_version_cases)]
+    async fn test_manifest_splits_merge_sessions(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
@@ -2982,6 +3131,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(backend),
+            spec_version,
         )
         .await?;
 
@@ -3125,8 +3275,10 @@ mod tests {
     }
 
     #[tokio_test]
-    async fn test_commits_with_conflicting_manifest_splits() -> Result<(), Box<dyn Error>>
-    {
+    #[apply(spec_version_cases)]
+    async fn test_commits_with_conflicting_manifest_splits(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
@@ -3147,6 +3299,7 @@ mod tests {
             &dimension_names,
             &split_config,
             Some(backend),
+            spec_version,
         )
         .await?;
 
@@ -3237,14 +3390,17 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio_test]
+    #[apply(spec_version_cases)]
     /// Writes four arrays to a repo, checks preloading of the manifests
     ///
     /// Three of the arrays have a preload name. But on of them (time) is larger
     /// than what we allow for preload (via config).
     ///
     /// We verify only the correct two arrays are preloaded
-    async fn test_manifest_preload_known_manifests() -> Result<(), Box<dyn Error>> {
+    async fn test_manifest_preload_known_manifests(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
         //let backend: Arc<dyn Storage + Send + Sync> =
         //    new_local_filesystem_storage(&(std::path::Path::new("/tmp/testrepo2")))
         //        .await?;
@@ -3252,7 +3408,8 @@ mod tests {
         let storage = Arc::clone(&backend);
 
         let repository =
-            Repository::create(None, storage, HashMap::new(), None, true).await?;
+            Repository::create(None, storage, HashMap::new(), Some(spec_version), true)
+                .await?;
 
         let mut session = repository.writable_session("main").await?;
 

@@ -39,6 +39,7 @@ pub mod compat;
 pub mod config;
 pub mod conflicts;
 pub mod error;
+pub mod feature_flags;
 pub mod format;
 pub mod inspect;
 pub mod migrations;
@@ -63,6 +64,22 @@ pub use storage::new_s3_object_store_storage;
 pub use storage::new_s3_storage;
 pub use storage::{ObjectStorage, Storage, StorageError, new_in_memory_storage};
 pub use store::Store;
+
+#[cfg(test)]
+pub(crate) mod test_utils {
+    #[allow(unused_imports)]
+    use rstest::rstest;
+    use rstest_reuse::{self, *};
+
+    #[allow(unused_imports)]
+    use crate::format::format_constants::SpecVersionBin;
+
+    #[template]
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1dot0)]
+    #[case::v2(SpecVersionBin::V2dot0)]
+    pub fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
+}
 
 mod private {
     /// Used to seal traits we don't want user code to implement, to maintain compatibility.
