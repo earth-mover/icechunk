@@ -2,26 +2,27 @@
 
 # AI Usage Policy
 
-**Note:** Icechunk developers use AI tools as part of our development workflow.
-This policy's aim is not to restrict AI tool usage. Its goals are to ensure that
+**Note:** Some Icechunk developers use AI tools as part of our development workflow.
+
+As AI tools continue to develop we expect that most contributors will use them. We do
+not want to restrict the tools used by our contributors. With that in mind this policy
+does not aim to restrict AI tool usage. Its goals are to ensure that:
 
 - Reviewers are not overburdened
 - Contributions can be maintained
 - The submitter can vouch for and explain all changes
 
+To that end this policy applies regardless of whether the code was written by hand, with
+AI assistance, or generated entirely by an AI tool.
+
 ## Core Principle: Changes
 
 If you submit a pull request, you are responsible for understanding and having fully reviewed
 the changes. You must be able to explain why each change is correct[^1] and how it fits into
-the project. This applies regardless of whether the code was written by hand, with
-AI assistance, or generated entirely by an AI tool.
+the project.
 
-[^1]: You may also open a draft PR with changes in order to discuss and receive feedback on the best approach if you are not sure what the best way forward is.
-
-### Disclosure
-
-If AI tools were used to generate or modify code or tests in your contribution, you **must**
-say so in the PR description and note how they were used.
+[^1]: You may also open a draft PR with changes in order to discuss and receive feedback on the
+best approach if you are not sure what the best way forward is.
 
 ## Core Principle: Communication
 
