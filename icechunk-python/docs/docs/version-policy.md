@@ -40,9 +40,9 @@ Any major version of an Icechunk library can read data written with its own or a
 
 ### Writing
 
-An Icechunk library will be able to, at minimum, write to the current and previous major version of the Icechunk Spec.
+An Icechunk library of major version N will be able to write to, at minimum, Icechunk Spec versions N and N-1.
 
-For example, Icechunk 2.x.y can write to both Icechunk Spec version 2 and version 1, but Icechunk 3.x.y is not guaranteed to write to Icechunk Spec version 1.
+For example, this means that `icechunk` Python version 2 can write to Icechunk Spec version 1 format, but while `icechunk` Python 3 will be able to write to Icechunk Spec version 2, it is not guaranteed to be able to write to Icechunk Spec version 1.
 
 ### Forward compatibility
 
