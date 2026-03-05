@@ -325,6 +325,13 @@ pub async fn garbage_collect(
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
+    if !asset_manager.can_write_to_storage().await? {
+        return Err(GCError::Repository(
+            RepositoryErrorKind::ReadonlyStorage("Cannot garbage collect".to_string())
+                .into(),
+        ));
+    }
+
     let default_retry_config = RepoUpdateRetryConfig::default();
     let retry_config = repo_update_retries.unwrap_or(&default_retry_config).retries();
 
@@ -373,13 +380,6 @@ pub async fn garbage_collect_one_attempt(
     config: &GCConfig,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
-    if !asset_manager.can_write_to_storage().await? {
-        return Err(GCError::Repository(
-            RepositoryErrorKind::ReadonlyStorage("Cannot garbage collect".to_string())
-                .into(),
-        ));
-    }
-
     // TODO: this function could have much more parallelism
     if !config.action_needed() {
         info!("No action requested");
@@ -777,6 +777,12 @@ pub async fn expire(
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<ExpireResult> {
+    if !asset_manager.can_write_to_storage().await? {
+        return Err(GCError::Repository(
+            RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into(),
+        ));
+    }
+
     match asset_manager.spec_version() {
         SpecVersionBin::V1dot0 => {
             super::expiration_v1::expire(
@@ -865,11 +871,6 @@ pub async fn expire_v2_one_attempt(
     expired_tags: ExpiredRefAction,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<ExpireResult> {
-    if !asset_manager.can_write_to_storage().await? {
-        return Err(GCError::Repository(
-            RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into(),
-        ));
-    }
     info!("Expiration started");
     let (repo_info, repo_info_version_at_start) = asset_manager.fetch_repo_info().await?;
     let tags: Vec<(Ref, SnapshotId)> = repo_info
