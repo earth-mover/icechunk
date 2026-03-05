@@ -92,7 +92,7 @@ async fn set_chunks(
         ChunkKind::Virtual => {
             for idx in chunks {
                 let payload = ChunkPayload::Virtual(VirtualChunkRef {
-                    location: VirtualChunkLocation::from_absolute_path(&format!(
+                    location: VirtualChunkLocation::from_url(&format!(
                         "s3://bucket/chunk_{idx}"
                     ))?,
                     offset: 0,
