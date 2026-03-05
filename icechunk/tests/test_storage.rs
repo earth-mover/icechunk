@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::panic)]
 use std::{collections::HashMap, env, future::Future, pin::Pin, sync::Arc};
 
 use bytes::Bytes;

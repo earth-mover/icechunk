@@ -334,7 +334,6 @@ impl AssetManager {
         Ok(res)
     }
 
-    #[instrument(skip(self))]
     pub async fn fetch_manifest(
         &self,
         manifest_id: &ManifestId,
@@ -388,7 +387,6 @@ impl AssetManager {
         }
     }
 
-    #[instrument(skip(self,))]
     pub async fn fetch_manifest_unknown_size(
         &self,
         manifest_id: &ManifestId,
@@ -416,7 +414,6 @@ impl AssetManager {
         Ok(())
     }
 
-    #[instrument(skip(self))]
     pub async fn fetch_snapshot(
         &self,
         snapshot_id: &SnapshotId,
@@ -459,7 +456,6 @@ impl AssetManager {
         Ok(())
     }
 
-    #[instrument(skip(self))]
     pub async fn fetch_transaction_log(
         &self,
         transaction_id: &SnapshotId,
@@ -1085,6 +1081,7 @@ async fn write_new_manifest(
     Ok(len)
 }
 
+#[instrument(skip(storage, storage_settings, semaphore))]
 async fn fetch_manifest(
     manifest_id: &ManifestId,
     manifest_size: u64,
@@ -1184,6 +1181,7 @@ async fn write_new_snapshot(
     Ok(id)
 }
 
+#[instrument(skip(storage, storage_settings, semaphore))]
 async fn fetch_snapshot(
     snapshot_id: &SnapshotId,
     storage: &(dyn Storage + Send + Sync),
@@ -1264,6 +1262,7 @@ async fn write_new_tx_log(
     Ok(())
 }
 
+#[instrument(skip(storage, storage_settings, semaphore))]
 async fn fetch_transaction_log(
     transaction_id: &SnapshotId,
     storage: &(dyn Storage + Send + Sync),
