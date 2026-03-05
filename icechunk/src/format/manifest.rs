@@ -3,7 +3,6 @@
 use std::{
     borrow::Cow,
     cmp::{max, min},
-    convert::Infallible,
     iter::zip,
     ops::Range,
     string::FromUtf8Error,
@@ -15,10 +14,12 @@ use bytes::Bytes;
 use flatbuffers::VerifierOptions;
 use futures::{Stream, TryStreamExt};
 use itertools::{Itertools, any, multiunzip};
+use rand::{RngExt, rngs::SmallRng};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
+    config::ManifestVirtualChunkLocationCompressionConfig,
     error::ICError,
     format::{IcechunkFormatError, IcechunkFormatErrorKind},
     storage::ETag,
@@ -377,6 +378,10 @@ pub struct ChunkInfo {
     pub payload: ChunkPayload,
 }
 
+const COMPRESSION_ALG_NONE: u8 = 0;
+const COMPRESSION_ALG_ZSTD_DICT: u8 = 1;
+const MAX_DECOMPRESSED_LOCATION_SIZE: usize = 1_024;
+
 #[derive(PartialEq)]
 pub struct Manifest {
     buffer: Vec<u8>,
@@ -408,22 +413,56 @@ impl Manifest {
         Ok(Manifest { buffer })
     }
 
+    /// Create a zstd decompressor from the manifest's location dictionary, if present.
+    fn decompressor(
+        &self,
+    ) -> Result<Option<zstd::bulk::Decompressor<'static>>, IcechunkFormatError> {
+        let root = self.root();
+        if root.compression_algorithm() != COMPRESSION_ALG_ZSTD_DICT {
+            return Ok(None);
+        }
+        match root.location_dictionary() {
+            Some(dict_bytes) => {
+                let decompressor =
+                    zstd::bulk::Decompressor::with_dictionary(dict_bytes.bytes())
+                        .map_err(IcechunkFormatErrorKind::IO)?;
+                Ok(Some(decompressor))
+            }
+            None => Ok(None),
+        }
+    }
+
     pub fn from_sorted_vec(
         manifest_id: &ManifestId,
         sorted_chunks: Vec<ChunkInfo>,
-    ) -> Option<Self> {
+        virtual_chunks_compression_config: Option<
+            &ManifestVirtualChunkLocationCompressionConfig,
+        >,
+    ) -> IcechunkResult<Option<Self>> {
+        let location_compression_dict =
+            train_location_dictionary(&sorted_chunks, virtual_chunks_compression_config)?;
+        // we generate all compressed locations if needed
+        let compressed_locations =
+            match (&location_compression_dict, virtual_chunks_compression_config) {
+                (Some(d), Some(config)) => compress_locations(&sorted_chunks, d, config),
+                _ => vec![None; sorted_chunks.len()],
+            };
+
+        // Sequential FlatBuffer building using pre-compressed locations
         // TODO: what's a good capacity?
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1024 * 1024);
 
         let len = sorted_chunks.len();
-        let mut all = sorted_chunks.into_iter().peekable();
+        let mut all = sorted_chunks.into_iter().zip(compressed_locations).peekable();
 
         let mut array_manifests = Vec::with_capacity(1);
-        while let Some(current_node) = all.peek().map(|chunk| &chunk.node).cloned() {
+        while let Some(current_node) = all.peek().map(|(chunk, _)| chunk.node.clone()) {
             // TODO: adjust capacity when multiple arrays have their manifests consolidated in to one.
             let mut refs = Vec::with_capacity(len);
-            while let Some(chunk) = all.next_if(|chunk| chunk.node == current_node) {
-                refs.push(mk_chunk_ref(&mut builder, chunk));
+            while let Some((chunk, precompressed)) =
+                all.next_if(|(chunk, _)| chunk.node == current_node)
+            {
+                refs.push(mk_chunk_ref(&mut builder, chunk, precompressed));
             }
 
             let node_id = Some(generated::ObjectId8::new(&current_node.0));
@@ -437,40 +476,65 @@ impl Manifest {
 
         if array_manifests.is_empty() {
             // empty manifest
-            return None;
+            return Ok(None);
         }
 
         let arrays = builder.create_vector(array_manifests.as_slice());
         let bin_manifest_id = generated::ObjectId12::new(&manifest_id.0);
 
+        let (location_dictionary, compression_algorithm) =
+            if let Some(ref dict) = location_compression_dict {
+                (Some(builder.create_vector(dict.as_slice())), COMPRESSION_ALG_ZSTD_DICT)
+            } else {
+                (None, COMPRESSION_ALG_NONE)
+            };
+
         let manifest = generated::Manifest::create(
             &mut builder,
-            &generated::ManifestArgs { id: Some(&bin_manifest_id), arrays: Some(arrays) },
+            &generated::ManifestArgs {
+                id: Some(&bin_manifest_id),
+                arrays: Some(arrays),
+                location_dictionary,
+                compression_algorithm,
+            },
         );
 
         builder.finish(manifest, Some("Ichk"));
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Some(Manifest { buffer })
+        Ok(Some(Manifest { buffer }))
     }
 
     pub async fn from_stream<E>(
         manifest_id: &ManifestId,
         stream: impl Stream<Item = Result<ChunkInfo, E>>,
-    ) -> Result<Option<Self>, E> {
+        virtual_chunks_compression_config: Option<
+            &ManifestVirtualChunkLocationCompressionConfig,
+        >,
+    ) -> Result<Option<Self>, E>
+    where
+        E: From<IcechunkFormatError>,
+    {
         let mut all = stream.try_collect::<Vec<_>>().await?;
         all.sort_by(|a, b| (&a.node, &a.coord).cmp(&(&b.node, &b.coord)));
-        Ok(Self::from_sorted_vec(manifest_id, all))
+        Ok(Self::from_sorted_vec(manifest_id, all, virtual_chunks_compression_config)?)
     }
 
     /// Used for tests
     pub async fn from_iter<T: IntoIterator<Item = ChunkInfo>>(
         manifest_id: &ManifestId,
         iter: T,
-    ) -> Result<Option<Self>, Infallible> {
-        Self::from_stream(manifest_id, futures::stream::iter(iter.into_iter().map(Ok)))
-            .await
+        virtual_chunks_compression_config: Option<
+            &ManifestVirtualChunkLocationCompressionConfig,
+        >,
+    ) -> IcechunkResult<Option<Self>> {
+        Self::from_stream(
+            manifest_id,
+            futures::stream::iter(iter.into_iter().map(Ok::<_, IcechunkFormatError>)),
+            virtual_chunks_compression_config,
+        )
+        .await
     }
 
     pub fn len(&self) -> usize {
@@ -492,11 +556,29 @@ impl Manifest {
         self.root().arrays().iter().map(|am| NodeId::from(am.node_id().0))
     }
 
+    pub fn uses_location_compression(&self) -> bool {
+        self.root().compression_algorithm() == COMPRESSION_ALG_ZSTD_DICT
+    }
+
+    pub fn location_dictionary_size(&self) -> Option<usize> {
+        self.root().location_dictionary().map(|d| d.len())
+    }
+
+    pub fn num_compressed_refs(&self) -> usize {
+        self.root()
+            .arrays()
+            .iter()
+            .flat_map(|am| am.refs().iter())
+            .filter(|r| r.compressed_location().is_some())
+            .count()
+    }
+
     pub fn get_chunk_payload(
         &self,
         node: &NodeId,
         coord: &ChunkIndices,
     ) -> IcechunkResult<ChunkPayload> {
+        let mut decompressor = self.decompressor()?;
         let manifest = self.root();
         let chunk_ref = lookup_node(manifest, node)
             .and_then(|array_manifest| lookup_ref(array_manifest, coord))
@@ -507,23 +589,29 @@ impl Manifest {
                     },
                 )
             })?;
-        ref_to_payload(chunk_ref)
+        ref_to_payload(chunk_ref, decompressor.as_mut())
     }
 
     pub fn iter(
         self: Arc<Self>,
         node: NodeId,
-    ) -> impl Iterator<Item = Result<(ChunkIndices, ChunkPayload), IcechunkFormatError>>
-    {
+    ) -> Result<
+        impl Iterator<Item = Result<(ChunkIndices, ChunkPayload), IcechunkFormatError>>,
+        IcechunkFormatError,
+    > {
         PayloadIterator::new(self, node)
     }
 
     pub fn chunk_payloads(
         &self,
-    ) -> impl Iterator<Item = Result<ChunkPayload, IcechunkFormatError>> + '_ {
-        self.root().arrays().iter().flat_map(move |array_manifest| {
-            array_manifest.refs().iter().map(|r| ref_to_payload(r))
-        })
+    ) -> Result<
+        impl Iterator<Item = Result<ChunkPayload, IcechunkFormatError>> + '_,
+        IcechunkFormatError,
+    > {
+        let mut decompressor = self.decompressor()?;
+        let refs: Vec<_> =
+            self.root().arrays().iter().flat_map(|am| am.refs().iter()).collect();
+        Ok(refs.into_iter().map(move |r| ref_to_payload(r, decompressor.as_mut())))
     }
 }
 
@@ -547,11 +635,16 @@ pub struct PayloadIterator {
     manifest: Arc<Manifest>,
     node_id: NodeId,
     last_ref_index: usize,
+    decompressor: Option<zstd::bulk::Decompressor<'static>>,
 }
 
 impl PayloadIterator {
-    fn new(manifest: Arc<Manifest>, node_id: NodeId) -> Self {
-        Self { manifest, node_id, last_ref_index: 0 }
+    fn new(
+        manifest: Arc<Manifest>,
+        node_id: NodeId,
+    ) -> Result<Self, IcechunkFormatError> {
+        let decompressor = manifest.decompressor()?;
+        Ok(Self { manifest, node_id, last_ref_index: 0, decompressor })
     }
 }
 
@@ -569,7 +662,7 @@ impl Iterator for PayloadIterator {
             let chunk_ref = refs.get(self.last_ref_index);
             self.last_ref_index += 1;
             Some(
-                ref_to_payload(chunk_ref)
+                ref_to_payload(chunk_ref, self.decompressor.as_mut())
                     .map(|payl| (ChunkIndices(chunk_ref.index().iter().collect()), payl)),
             )
         })
@@ -578,11 +671,31 @@ impl Iterator for PayloadIterator {
 
 fn ref_to_payload(
     chunk_ref: generated::ChunkRef<'_>,
+    decompressor: Option<&mut zstd::bulk::Decompressor<'static>>,
 ) -> Result<ChunkPayload, IcechunkFormatError> {
     if let Some(chunk_id) = chunk_ref.chunk_id() {
         let id = ChunkId::new(chunk_id.0);
         Ok(ChunkPayload::Ref(ChunkRef {
             id,
+            offset: chunk_ref.offset(),
+            length: chunk_ref.length(),
+        }))
+    } else if let Some(compressed) = chunk_ref.compressed_location() {
+        let decompressor = decompressor
+            .ok_or(IcechunkFormatErrorKind::MissingLocationCompressionDictionary)?;
+        let decompressed = decompressor
+            .decompress(compressed.bytes(), MAX_DECOMPRESSED_LOCATION_SIZE)
+            .map_err(IcechunkFormatErrorKind::IO)?;
+        let location_str = std::str::from_utf8(&decompressed).map_err(|e| {
+            IcechunkFormatErrorKind::IO(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            ))
+        })?;
+        let location = VirtualChunkLocation::from_url(location_str)?;
+        Ok(ChunkPayload::Virtual(VirtualChunkRef {
+            location,
+            checksum: checksum(&chunk_ref),
             offset: chunk_ref.offset(),
             length: chunk_ref.length(),
         }))
@@ -618,9 +731,131 @@ fn checksum(payload: &generated::ChunkRef<'_>) -> Option<Checksum> {
     }
 }
 
+/// Sample virtual chunk URLs and train a zstd dictionary for compressing them.
+///
+/// Uses reservoir sampling (Algorithm R) to collect a uniform random sample in a single
+/// pass without knowing the total virtual chunk count in advance.
+/// See: https://en.wikipedia.org/wiki/Reservoir_sampling#Simple:_Algorithm_R
+///
+/// Returns `Some(dict_bytes)` if compression is enabled and there are enough virtual
+/// chunks, `None` otherwise.
+fn train_location_dictionary(
+    chunks: &[ChunkInfo],
+    virtual_chunks_compression_config: Option<
+        &ManifestVirtualChunkLocationCompressionConfig,
+    >,
+) -> IcechunkResult<Option<Vec<u8>>> {
+    let config = match virtual_chunks_compression_config {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let max_samples = config.dictionary_max_training_samples() as usize;
+    let min_chunks = config.min_virtual_chunks_to_compress() as usize;
+    let max_dict_size = config.dictionary_max_size_bytes() as usize;
+
+    let mut virtual_count: usize = 0;
+    let mut reservoir: Vec<&str> = Vec::with_capacity(max_samples);
+    let mut rng: SmallRng = rand::make_rng();
+
+    for chunk in chunks {
+        if let ChunkPayload::Virtual(vref) = &chunk.payload {
+            let loc = vref.location.url();
+            if virtual_count < max_samples {
+                // Fill phase: reservoir not yet full
+                reservoir.push(loc);
+            } else {
+                // Replace phase: include new item with decreasing probability
+                let j = rng.random_range(0..=virtual_count);
+                if j < max_samples {
+                    reservoir[j] = loc;
+                }
+            }
+            virtual_count += 1;
+        }
+    }
+
+    if virtual_count < min_chunks {
+        return Ok(None);
+    }
+
+    let sample_bytes: Vec<&[u8]> = reservoir.iter().map(|s| s.as_bytes()).collect();
+
+    // zstd doesn't like it if many samples are too small, in that case we don't compress
+    let small_count = sample_bytes.iter().filter(|s| s.len() < 8).count();
+    if small_count >= sample_bytes.len() / 2 {
+        tracing::warn!(
+            "Skipping zstd dictionary training: at least half of the {} samples are smaller than 8 bytes",
+            sample_bytes.len()
+        );
+        return Ok(None);
+    }
+
+    let mut sample_data: Vec<u8> =
+        sample_bytes.iter().flat_map(|s| s.iter().copied()).collect();
+    let mut sample_sizes: Vec<usize> = sample_bytes.iter().map(|s| s.len()).collect();
+    let total_sample_size = sample_data.len();
+
+    // zstd requires total sample data >= max_dict_size; repeat samples if needed
+    if total_sample_size > 0 && total_sample_size < max_dict_size {
+        let repeats = (max_dict_size / total_sample_size) + 1;
+        let original_data = sample_data.clone();
+        let original_sizes = sample_sizes.clone();
+        for _ in 0..repeats {
+            sample_data.extend_from_slice(&original_data);
+            sample_sizes.extend_from_slice(&original_sizes);
+        }
+    }
+
+    Ok(Some(zstd::dict::from_continuous(&sample_data, &sample_sizes, max_dict_size)?))
+}
+
+/// Compress virtual chunk locations in parallel using a pre-trained zstd dictionary.
+///
+/// Returns one entry per chunk: `Some(compressed_bytes)` for virtual chunks,
+/// `None` for inline/ref chunks.
+fn compress_locations(
+    chunks: &[ChunkInfo],
+    dict: &[u8],
+    config: &ManifestVirtualChunkLocationCompressionConfig,
+) -> Vec<Option<Vec<u8>>> {
+    let compression_level = config.compression_level();
+    let num_threads =
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);
+    let slice_size = chunks.len().div_ceil(num_threads);
+
+    std::thread::scope(|s| {
+        let handles: Vec<_> = chunks
+            .chunks(slice_size)
+            .map(|slice| {
+                s.spawn(|| {
+                    let mut comp =
+                        zstd::bulk::Compressor::with_dictionary(compression_level, dict)
+                            .ok();
+                    slice
+                        .iter()
+                        .map(|chunk| match (&chunk.payload, comp.as_mut()) {
+                            (ChunkPayload::Virtual(vref), Some(comp)) => {
+                                comp.compress(vref.location.url().as_bytes()).ok()
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        #[allow(clippy::expect_used)]
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("Cannot join threads compressing locations"))
+            .collect()
+    })
+}
+
 fn mk_chunk_ref<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
     chunk: ChunkInfo,
+    precompressed_location: Option<Vec<u8>>,
 ) -> flatbuffers::WIPOffset<generated::ChunkRef<'bldr>> {
     let index = Some(builder.create_vector(chunk.coord.0.as_slice()));
     match chunk.payload {
@@ -634,11 +869,17 @@ fn mk_chunk_ref<'bldr>(
             generated::ChunkRef::create(builder, &args)
         }
         ChunkPayload::Virtual(virtual_chunk_ref) => {
+            let location_str = virtual_chunk_ref.location.0.as_str();
+            let (location, compressed_location) =
+                if let Some(compressed) = precompressed_location {
+                    (None, Some(builder.create_vector(&compressed)))
+                } else {
+                    (Some(builder.create_string(location_str)), None)
+                };
             let args = generated::ChunkRefArgs {
                 index,
-                location: Some(
-                    builder.create_string(virtual_chunk_ref.location.0.as_str()),
-                ),
+                location,
+                compressed_location,
                 offset: virtual_chunk_ref.offset,
                 length: virtual_chunk_ref.length,
                 checksum_etag: match &virtual_chunk_ref.checksum {
@@ -686,12 +927,13 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::config::ManifestVirtualChunkLocationCompressionConfig;
     use crate::roundtrip_serialization_tests;
     use crate::strategies::{
         ShapeDim, limited_width_manifest_extents, manifest_extents, manifest_ref,
         manifest_splits, shapes_and_dims,
     };
-    use icechunk_macros;
+    use icechunk_macros::{self, tokio_test};
     use itertools::{all, multizip};
     use proptest::collection::vec;
     use proptest::prelude::*;
@@ -923,5 +1165,456 @@ mod tests {
             );
             prop_assert!(!is_equal);
         }
+    }
+
+    const COMPRESS_CONFIG: ManifestVirtualChunkLocationCompressionConfig =
+        ManifestVirtualChunkLocationCompressionConfig {
+            min_virtual_chunks_to_compress: Some(10),
+            dictionary_max_training_samples: Some(500),
+            dictionary_max_size_bytes: Some(16 * 1024),
+            compression_level: Some(3),
+        };
+
+    fn make_virtual_chunks(n: usize) -> Vec<ChunkInfo> {
+        let node = NodeId::random();
+        (0..n)
+            .map(|i| ChunkInfo {
+                node: node.clone(),
+                coord: ChunkIndices(vec![i as u32]),
+                payload: ChunkPayload::Virtual(VirtualChunkRef {
+                    location: VirtualChunkLocation::from_url(&format!(
+                        "s3://my-bucket/path/to/data/chunk_{i:06}"
+                    ))
+                    .unwrap(),
+                    offset: i as u64 * 1024,
+                    length: 1024,
+                    checksum: None,
+                }),
+            })
+            .collect()
+    }
+
+    #[tokio_test]
+    async fn test_compression_round_trip() -> Result<(), Box<dyn Error>> {
+        // >= threshold virtual chunks with compress=true should round-trip
+        let chunks = make_virtual_chunks(50);
+        let manifest = Manifest::from_iter(
+            &ManifestId::random(),
+            chunks.clone(),
+            Some(&COMPRESS_CONFIG),
+        )
+        .await?
+        .unwrap();
+
+        let root = manifest.root();
+        assert!(root.location_dictionary().is_some());
+        assert_eq!(root.compression_algorithm(), COMPRESSION_ALG_ZSTD_DICT);
+        for am in root.arrays().iter() {
+            for r in am.refs().iter() {
+                assert!(r.compressed_location().is_some());
+                assert!(r.location().is_none());
+            }
+        }
+
+        for chunk in &chunks {
+            let payload = manifest.get_chunk_payload(&chunk.node, &chunk.coord).unwrap();
+            assert_eq!(payload, chunk.payload);
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_compression_below_threshold() -> Result<(), Box<dyn Error>> {
+        // Below threshold: compress=true but few chunks → no compression, readback works
+        let chunks = make_virtual_chunks(5);
+        let manifest = Manifest::from_iter(
+            &ManifestId::random(),
+            chunks.clone(),
+            Some(&COMPRESS_CONFIG),
+        )
+        .await?
+        .unwrap();
+
+        let root = manifest.root();
+        assert!(root.location_dictionary().is_none());
+        assert_eq!(root.compression_algorithm(), COMPRESSION_ALG_NONE);
+        for am in root.arrays().iter() {
+            for r in am.refs().iter() {
+                assert!(r.compressed_location().is_none());
+                assert!(r.location().is_some());
+            }
+        }
+
+        for chunk in &chunks {
+            let payload = manifest.get_chunk_payload(&chunk.node, &chunk.coord).unwrap();
+            assert_eq!(payload, chunk.payload);
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_compression_mixed_payloads() -> Result<(), Box<dyn Error>> {
+        // Mix of virtual, inline, and ref payloads with compression
+        let node = NodeId::random();
+        let mut chunks: Vec<ChunkInfo> = (0..30)
+            .map(|i| ChunkInfo {
+                node: node.clone(),
+                coord: ChunkIndices(vec![i]),
+                payload: ChunkPayload::Virtual(VirtualChunkRef {
+                    location: VirtualChunkLocation::from_url(&format!(
+                        "s3://my-bucket/path/to/data/chunk_{i:06}"
+                    ))
+                    .unwrap(),
+                    offset: i as u64 * 1024,
+                    length: 1024,
+                    checksum: None,
+                }),
+            })
+            .collect();
+        chunks.push(ChunkInfo {
+            node: node.clone(),
+            coord: ChunkIndices(vec![100]),
+            payload: ChunkPayload::Inline(Bytes::from_static(b"inline data")),
+        });
+        chunks.push(ChunkInfo {
+            node: node.clone(),
+            coord: ChunkIndices(vec![101]),
+            payload: ChunkPayload::Ref(ChunkRef {
+                id: ChunkId::random(),
+                offset: 0,
+                length: 512,
+            }),
+        });
+
+        let manifest = Manifest::from_iter(
+            &ManifestId::random(),
+            chunks.clone(),
+            Some(&COMPRESS_CONFIG),
+        )
+        .await?
+        .unwrap();
+
+        for chunk in &chunks {
+            let payload = manifest.get_chunk_payload(&chunk.node, &chunk.coord).unwrap();
+            assert_eq!(payload, chunk.payload);
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_compression_buffer_round_trip() -> Result<(), Box<dyn Error>> {
+        // bytes() → from_buffer() round-trip
+        let chunks = make_virtual_chunks(50);
+        let manifest = Manifest::from_iter(
+            &ManifestId::random(),
+            chunks.clone(),
+            Some(&COMPRESS_CONFIG),
+        )
+        .await?
+        .unwrap();
+        let bytes = manifest.bytes().to_vec();
+        let manifest2 = Manifest::from_buffer(bytes)?;
+
+        for chunk in &chunks {
+            let payload = manifest2.get_chunk_payload(&chunk.node, &chunk.coord).unwrap();
+            assert_eq!(payload, chunk.payload);
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_compression_iterator_access() -> Result<(), Box<dyn Error>> {
+        // Iterator-based access with compression
+        let chunks = make_virtual_chunks(50);
+        let node = chunks[0].node.clone();
+        let manifest = Arc::new(
+            Manifest::from_iter(
+                &ManifestId::random(),
+                chunks.clone(),
+                Some(&COMPRESS_CONFIG),
+            )
+            .await?
+            .unwrap(),
+        );
+
+        let iter_results: Vec<_> = manifest.iter(node)?.collect::<Vec<_>>();
+        assert_eq!(iter_results.len(), 50);
+        for (i, result) in iter_results.into_iter().enumerate() {
+            let (coord, payload) = result?;
+            assert_eq!(coord, chunks[i].coord);
+            assert_eq!(payload, chunks[i].payload);
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_ic1_compat_no_compression() -> Result<(), Box<dyn Error>> {
+        // compress=false → locations in `location` field, no compressed_location, no dictionary
+        let chunks = make_virtual_chunks(50);
+        let manifest = Manifest::from_iter(&ManifestId::random(), chunks.clone(), None)
+            .await?
+            .unwrap();
+
+        let root = manifest.root();
+        assert!(root.location_dictionary().is_none());
+        assert_eq!(root.compression_algorithm(), COMPRESSION_ALG_NONE);
+
+        // Verify location field is populated (not compressed_location)
+        for am in root.arrays().iter() {
+            for r in am.refs().iter() {
+                if r.chunk_id().is_none() && r.inline().is_none() {
+                    assert!(r.location().is_some(), "location should be set");
+                    assert!(
+                        r.compressed_location().is_none(),
+                        "compressed_location should be None"
+                    );
+                }
+            }
+        }
+
+        // Readback still works
+        for chunk in &chunks {
+            let payload = manifest.get_chunk_payload(&chunk.node, &chunk.coord).unwrap();
+            assert_eq!(payload, chunk.payload);
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_ic2_compression_fields() -> Result<(), Box<dyn Error>> {
+        // compress=true with enough virtual chunks → compressed_location, dictionary present
+        let chunks = make_virtual_chunks(50);
+        let manifest = Manifest::from_iter(
+            &ManifestId::random(),
+            chunks.clone(),
+            Some(&COMPRESS_CONFIG),
+        )
+        .await?
+        .unwrap();
+
+        let root = manifest.root();
+        assert!(root.location_dictionary().is_some());
+        assert_eq!(root.compression_algorithm(), COMPRESSION_ALG_ZSTD_DICT);
+
+        // Verify compressed_location is populated and location is None
+        for am in root.arrays().iter() {
+            for r in am.refs().iter() {
+                if r.chunk_id().is_none() && r.inline().is_none() {
+                    assert!(
+                        r.compressed_location().is_some(),
+                        "compressed_location should be set"
+                    );
+                    assert!(
+                        r.location().is_none(),
+                        "location should be None for compressed chunks"
+                    );
+                }
+            }
+        }
+
+        // Readback still works
+        for chunk in &chunks {
+            let payload = manifest.get_chunk_payload(&chunk.node, &chunk.coord).unwrap();
+            assert_eq!(payload, chunk.payload);
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_compression_skipped_when_locations_too_short()
+    -> Result<(), Box<dyn Error>> {
+        // When most virtual chunk locations are < 8 bytes, dictionary training
+        // is skipped and the manifest falls back to uncompressed storage.
+        // With longer locations (>= 8 bytes), compression kicks in.
+        let config = ManifestVirtualChunkLocationCompressionConfig {
+            min_virtual_chunks_to_compress: Some(2),
+            dictionary_max_training_samples: Some(500),
+            dictionary_max_size_bytes: Some(256),
+            compression_level: Some(3),
+        };
+
+        let node = NodeId::random();
+        // "s3://a/" is 7 bytes, below the 8-byte threshold
+        let short_chunks: Vec<ChunkInfo> = (0..2)
+            .map(|i| ChunkInfo {
+                node: node.clone(),
+                coord: ChunkIndices(vec![i as u32]),
+                payload: ChunkPayload::Virtual(VirtualChunkRef {
+                    location: VirtualChunkLocation::from_url("s3://a/").unwrap(),
+                    offset: i as u64 * 1024,
+                    length: 1024,
+                    checksum: None,
+                }),
+            })
+            .collect();
+
+        let manifest = Manifest::from_iter(
+            &ManifestId::random(),
+            short_chunks.clone(),
+            Some(&config),
+        )
+        .await?
+        .unwrap();
+
+        let root = manifest.root();
+        assert!(root.location_dictionary().is_none());
+        assert_eq!(root.compression_algorithm(), COMPRESSION_ALG_NONE);
+        for am in root.arrays().iter() {
+            for r in am.refs().iter() {
+                assert!(r.compressed_location().is_none());
+                assert!(r.location().is_some());
+            }
+        }
+
+        for chunk in &short_chunks {
+            let payload = manifest.get_chunk_payload(&chunk.node, &chunk.coord).unwrap();
+            assert_eq!(payload, chunk.payload);
+        }
+
+        // "s3://abc/" is 9 bytes, above the 8-byte threshold — compression should apply
+        let long_chunks: Vec<ChunkInfo> = (0..2)
+            .map(|i| ChunkInfo {
+                node: node.clone(),
+                coord: ChunkIndices(vec![i as u32]),
+                payload: ChunkPayload::Virtual(VirtualChunkRef {
+                    location: VirtualChunkLocation::from_url("s3://abc/").unwrap(),
+                    offset: i as u64 * 1024,
+                    length: 1024,
+                    checksum: None,
+                }),
+            })
+            .collect();
+
+        let manifest = Manifest::from_iter(
+            &ManifestId::random(),
+            long_chunks.clone(),
+            Some(&config),
+        )
+        .await?
+        .unwrap();
+
+        let root = manifest.root();
+        assert!(root.location_dictionary().is_some());
+        assert_eq!(root.compression_algorithm(), COMPRESSION_ALG_ZSTD_DICT);
+        for am in root.arrays().iter() {
+            for r in am.refs().iter() {
+                assert!(r.compressed_location().is_some());
+                assert!(r.location().is_none());
+            }
+        }
+
+        for chunk in &long_chunks {
+            let payload = manifest.get_chunk_payload(&chunk.node, &chunk.coord).unwrap();
+            assert_eq!(payload, chunk.payload);
+        }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_compression_reduces_manifest_size() -> Result<(), Box<dyn Error>> {
+        // 100 virtual chunks with highly redundant, large location strings.
+        // Compression should produce a significantly smaller manifest.
+        let node = NodeId::random();
+        let chunks: Vec<ChunkInfo> = (0..100)
+            .map(|i| ChunkInfo {
+                node: node.clone(),
+                coord: ChunkIndices(vec![i as u32]),
+                payload: ChunkPayload::Virtual(VirtualChunkRef {
+                    location: VirtualChunkLocation::from_url(&format!(
+                        "s3://my-very-long-bucket-name/some/deeply/nested/path/to/dataset/v1.2.3/year=2024/month=01/day=15/chunk_{i:06}.parquet"
+                    ))
+                    .unwrap(),
+                    offset: i as u64 * 4096,
+                    length: 4096,
+                    checksum: None,
+                }),
+            })
+            .collect();
+
+        // Build without compression
+        let manifest_uncompressed =
+            Manifest::from_iter(&ManifestId::random(), chunks.clone(), None)
+                .await?
+                .unwrap();
+        let size_uncompressed = manifest_uncompressed.bytes().len();
+
+        assert!(!manifest_uncompressed.uses_location_compression());
+        assert_eq!(manifest_uncompressed.num_compressed_refs(), 0);
+
+        // Build with compression
+        let manifest_compressed = Manifest::from_iter(
+            &ManifestId::random(),
+            chunks.clone(),
+            Some(&COMPRESS_CONFIG),
+        )
+        .await?
+        .unwrap();
+        let size_compressed = manifest_compressed.bytes().len();
+
+        assert!(manifest_compressed.uses_location_compression());
+        assert_eq!(manifest_compressed.num_compressed_refs(), 100);
+        assert!(manifest_compressed.location_dictionary_size().unwrap() > 0);
+
+        // Each compressed_location should be much shorter than the raw URL (118 bytes)
+        let root = manifest_compressed.root();
+        for am in root.arrays().iter() {
+            for r in am.refs().iter() {
+                let compressed = r.compressed_location().unwrap();
+                assert!(
+                    compressed.len() < 40,
+                    "compressed_location ({} bytes) should be under 40 bytes \
+                     (raw location is 118 bytes)",
+                    compressed.len(),
+                );
+            }
+        }
+
+        // Compressed manifest should be meaningfully smaller
+        assert!(
+            size_compressed < size_uncompressed,
+            "compressed ({size_compressed}) should be smaller than uncompressed ({size_uncompressed})"
+        );
+
+        let saving_pct =
+            (1.0 - size_compressed as f64 / size_uncompressed as f64) * 100.0;
+        assert!(
+            saving_pct > 15.0,
+            "expected at least 15% size reduction with redundant locations, \
+             got {saving_pct:.1}% (compressed={size_compressed}, uncompressed={size_uncompressed})"
+        );
+
+        // Both manifests must round-trip correctly
+        for chunk in &chunks {
+            let p1 = manifest_uncompressed
+                .get_chunk_payload(&chunk.node, &chunk.coord)
+                .unwrap();
+            let p2 =
+                manifest_compressed.get_chunk_payload(&chunk.node, &chunk.coord).unwrap();
+            assert_eq!(p1, chunk.payload);
+            assert_eq!(p2, chunk.payload);
+        }
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_chunk_payloads_with_compression() -> Result<(), Box<dyn Error>> {
+        // chunk_payloads() works with compressed manifests
+        let chunks = make_virtual_chunks(50);
+        let manifest = Manifest::from_iter(
+            &ManifestId::random(),
+            chunks.clone(),
+            Some(&COMPRESS_CONFIG),
+        )
+        .await?
+        .unwrap();
+
+        let payloads: Vec<_> =
+            manifest.chunk_payloads()?.collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(payloads.len(), 50);
+        for (i, payload) in payloads.iter().enumerate() {
+            assert_eq!(payload, &chunks[i].payload);
+        }
+        Ok(())
     }
 }

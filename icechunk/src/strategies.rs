@@ -374,7 +374,7 @@ prop_compose! {
     pub fn manifest_config()
         (splitting in option::of(manifest_splitting_config()), preload in option::of(manifest_preload_config()))
     -> ManifestConfig {
-        ManifestConfig{preload, splitting}
+        ManifestConfig{preload, splitting, virtual_chunk_location_compression: None}
     }
 }
 

@@ -81,6 +81,7 @@ icechunk._icechunk_python.GcsStaticCredentials.ServiceAccountKey.__new__
 icechunk._icechunk_python.IcechunkError
 icechunk._icechunk_python.IcechunkError.__new__
 icechunk._icechunk_python.ManifestConfig
+icechunk._icechunk_python.ManifestVirtualChunkLocationCompressionConfig
 icechunk._icechunk_python.ManifestFileInfo
 icechunk._icechunk_python.ManifestPreloadCondition
 icechunk._icechunk_python.ManifestPreloadCondition.And
