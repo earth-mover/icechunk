@@ -145,7 +145,7 @@ pub async fn do_test_repo_chunks_storage(
     // we write 10 virtual chunks, 100 bytes each
     for idx in 60..70 {
         let payload = ChunkPayload::Virtual(VirtualChunkRef {
-            location: VirtualChunkLocation::from_absolute_path("s3://foo/bar").unwrap(),
+            location: VirtualChunkLocation::from_url("s3://foo/bar").unwrap(),
             offset: idx as u64,
             length: 100,
             checksum: None,
@@ -284,8 +284,7 @@ pub async fn test_virtual_chunk_deduplication(
     // Write virtual chunks with the same location but different offsets
     for idx in 0u32..10 {
         let payload = ChunkPayload::Virtual(VirtualChunkRef {
-            location: VirtualChunkLocation::from_absolute_path("s3://bucket/file.dat")
-                .unwrap(),
+            location: VirtualChunkLocation::from_url("s3://bucket/file.dat").unwrap(),
             offset: (idx * 100) as u64,
             length: 100,
             checksum: None,
@@ -298,8 +297,7 @@ pub async fn test_virtual_chunk_deduplication(
     // Write duplicate virtual chunks (same location AND offset AND length)
     for idx in 10u32..15 {
         let payload = ChunkPayload::Virtual(VirtualChunkRef {
-            location: VirtualChunkLocation::from_absolute_path("s3://bucket/file.dat")
-                .unwrap(),
+            location: VirtualChunkLocation::from_url("s3://bucket/file.dat").unwrap(),
             offset: 0, // Same offset as idx=0
             length: 100,
             checksum: None,
