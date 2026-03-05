@@ -63,7 +63,8 @@ and approach with maintainers. This helps us decide if the change is worthwhile,
 it should be structured, and any other important decisions.
 
 Maintainers reserve the right to close PRs where the scope makes meaningful review
-impractical, or to request that large changes be broken into smaller, reviewable pieces.
+impractical, or  when they suspect this policy has been violated. Similarly they may request
+that large changes be broken into smaller, reviewable pieces.
 
 ## Documentation
 
