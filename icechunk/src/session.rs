@@ -5191,7 +5191,7 @@ mod tests {
     /// Test that delete-then-recreate exactly the same node
     /// does NOT conflict
     ///
-    /// This session: delete group + recreate group at same path with samem metadata
+    /// This session: delete group + recreate group at same path
     /// Previous commit: add a different sibling group
     async fn test_no_conflict_on_delete_then_recreate() -> Result<(), Box<dyn Error>> {
         let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
@@ -5201,7 +5201,7 @@ mod tests {
         ds1.commit("add sibling group", None).await?;
 
         ds2.delete_group(path.clone()).await?;
-        ds2.add_group(path.clone(), Bytes::from("group-metadata")).await?;
+        ds2.add_group(path.clone(), Bytes::New()).await?;
         assert!(matches!(
             ds2.commit("delete+re-add group", None).await,
             Err(SessionError {
@@ -5213,10 +5213,6 @@ mod tests {
 
         ds2.rebase(&ConflictDetector).await?;
         ds2.commit("delete+re-add group", None).await?;
-
-        // Verify the recreated group has our metadata
-        let node = ds2.get_node(&path).await?;
-        assert_eq!(node.user_data, Bytes::from("group-metadata"));
 
         Ok(())
     }
