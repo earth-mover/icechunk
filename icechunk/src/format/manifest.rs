@@ -134,39 +134,26 @@ pub struct ManifestRef {
     pub extents: ManifestExtents,
 }
 
+// ManifestSplits can be constructed from a iterable of shard edges or boundaries
+// along each dimension.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManifestSplits(pub Vec<ManifestExtents>);
+pub struct ManifestSplits(pub Vec<Vec<u32>>);
 
 impl ManifestSplits {
-    /// Used at read-time
-    pub fn from_extents(extents: Vec<ManifestExtents>) -> Self {
-        assert!(!extents.is_empty());
-        Self(extents)
-    }
-
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    // Build up ManifestSplits from a iterable of shard edges or boundaries
-    // along each dimension.
-    /// # Examples
-    /// ```
-    /// use icechunk::format::manifest::{ManifestSplits, ManifestExtents};
-    /// let actual = ManifestSplits::from_edges(vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]);
-    /// let expected = ManifestSplits::from_extents(vec![
-    ///     ManifestExtents::new(&[0, 3], &[1, 4]),
-    ///     ManifestExtents::new(&[0, 4], &[1, 5]),
-    ///     ManifestExtents::new(&[1, 3], &[2, 4]),
-    ///     ManifestExtents::new(&[1, 4], &[2, 5]),
-    ///     ]
-    /// );
-    /// assert_eq!(actual, expected);
-    /// ```
     pub fn from_edges(iter: impl IntoIterator<Item = Vec<u32>>) -> Self {
-        // let iter = vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]
-        let res = iter
-            .into_iter()
+        Self(iter.into_iter().collect())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = ManifestExtents> {
+        self.0
+            .iter()
+            // assume
+            // vec![vec![0u32, 1, 2], vec![3u32, 4, 5]]
+            .cloned()
             // vec![(0, 1), (1, 2)], vec![(3, 4), (4, 5)]
             .map(|x| x.into_iter().tuple_windows())
             // vec![((0, 1), (3, 4)), ((0, 1), (4, 5)),
@@ -177,12 +164,7 @@ impl ManifestSplits {
             .map(multiunzip)
             .map(|(from, to): (Vec<u32>, Vec<u32>)| {
                 ManifestExtents::new(from.as_slice(), to.as_slice())
-            });
-        Self(res.collect())
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &ManifestExtents> {
-        self.0.iter()
+            })
     }
 
     pub fn len(&self) -> usize {
@@ -195,8 +177,8 @@ impl ManifestSplits {
         // must be complete.
         for ours in self.iter() {
             if any(other.iter(), |theirs| {
-                ours.overlap_with(theirs) == Overlap::Partial
-                    || theirs.overlap_with(ours) == Overlap::Partial
+                ours.overlap_with(&theirs) == Overlap::Partial
+                    || theirs.overlap_with(&ours) == Overlap::Partial
             }) {
                 return false;
             }
@@ -206,12 +188,16 @@ impl ManifestSplits {
 }
 
 /// Helper function for constructing uniformly spaced manifest split edges
-pub fn uniform_manifest_split_edges(num_chunks: u32, split_size: &u32) -> Vec<u32> {
+pub(crate) fn uniform_manifest_split_edges(
+    num_chunks: u32,
+    split_size: &u32,
+) -> Vec<u32> {
     (0u32..=num_chunks)
         .step_by(*split_size as usize)
         .chain((!num_chunks.is_multiple_of(*split_size)).then_some(num_chunks))
         .collect()
 }
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum VirtualReferenceErrorKind {
@@ -247,6 +233,10 @@ pub enum VirtualReferenceErrorKind {
     AzureConfigurationMustIncludeAccount,
     #[error("decoding virtual chunk url")]
     Decoding(#[from] FromUtf8Error),
+    #[error(
+        "no virtual chunk container named '{0}' found, check the repository configuration"
+    )]
+    NoContainerForName(String),
     #[error("unknown error")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -264,6 +254,8 @@ where
     }
 }
 
+pub const VCC_RELATIVE_URL_SCHEME: &str = "vcc://";
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct VirtualChunkLocation(String);
 
@@ -272,7 +264,47 @@ impl VirtualChunkLocation {
         self.0.as_str()
     }
 
-    pub fn from_absolute_path(
+    /// Returns true if this is a relative `vcc://` location.
+    pub fn is_relative(&self) -> bool {
+        self.0.starts_with(VCC_RELATIVE_URL_SCHEME)
+    }
+
+    /// If this is a `vcc://name/path` location, returns `(name, relative_path)`.
+    pub fn parse_vcc(&self) -> Option<(&str, &str)> {
+        let rest = self.0.strip_prefix(VCC_RELATIVE_URL_SCHEME)?;
+        let slash = rest.find('/')?;
+        Some((&rest[..slash], &rest[slash + 1..]))
+    }
+
+    /// Creates a relative location from a VCC name and a path relative to its prefix.
+    pub fn from_vcc_path(
+        container_name: &str,
+        relative_path: &str,
+    ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
+        if container_name.is_empty() || container_name.contains('/') {
+            return Err(VirtualReferenceErrorKind::NoContainerForName(
+                container_name.to_string(),
+            )
+            .into());
+        }
+        let path: String = relative_path
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("/");
+        Ok(VirtualChunkLocation(format!(
+            "{VCC_RELATIVE_URL_SCHEME}{container_name}/{path}"
+        )))
+    }
+
+    /// Parse a location that may be either `vcc://` relative or an absolute URL.
+    pub fn from_url(path: &str) -> Result<VirtualChunkLocation, VirtualReferenceError> {
+        // vcc:// URLs are valid URL scheme, so from_absolute_path handles both
+        // absolute (s3://, gcs://, file://) and relative (vcc://) URLs correctly.
+        Self::from_absolute_path(path)
+    }
+
+    fn from_absolute_path(
         path: &str,
     ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
         // make sure we can parse the provided URL before creating the enum
@@ -292,6 +324,8 @@ impl VirtualChunkLocation {
             host.to_string()
         } else if scheme == "file" {
             "".to_string()
+        } else if scheme == "vcc" {
+            return Err(VirtualReferenceErrorKind::NoContainerForName(path.into()).into());
         } else {
             return Err(
                 VirtualReferenceErrorKind::CannotParseBucketName(path.into()).into()
@@ -553,7 +587,7 @@ fn ref_to_payload(
             length: chunk_ref.length(),
         }))
     } else if let Some(location) = chunk_ref.location() {
-        let location = VirtualChunkLocation::from_absolute_path(location)?;
+        let location = VirtualChunkLocation::from_url(location)?;
         Ok(ChunkPayload::Virtual(VirtualChunkRef {
             location,
             checksum: checksum(&chunk_ref),
@@ -844,8 +878,8 @@ mod tests {
             vec![0, 21, 22],
         ]);
         for vec in splits.iter().combinations(2) {
-            assert_eq!(vec[0].overlap_with(vec[1]), Overlap::None);
-            assert_eq!(vec[1].overlap_with(vec[0]), Overlap::None);
+            assert_eq!(vec[0].overlap_with(&vec[1]), Overlap::None);
+            assert_eq!(vec[1].overlap_with(&vec[0]), Overlap::None);
         }
 
         Ok(())
