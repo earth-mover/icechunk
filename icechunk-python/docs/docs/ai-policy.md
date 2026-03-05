@@ -47,7 +47,7 @@ Do not leave it to reviewers to figure out what the code does and why.
 
 > I pointed an agent at the issue and here are the changes
 
-> This is what Claude came up with. 🤷 
+> This is what Claude came up with. 🤷
 
 #### Acceptable
 
