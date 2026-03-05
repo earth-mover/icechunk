@@ -47,7 +47,7 @@ impl ConflictSolver for ConflictDetector {
                 .new_nodes()
                 // Filter out new nodes that are delete+recreate (not a conflict).
                 // Content conflicts for these are detected lower down in this function.
-                .filter(|(path, _id)| !deleted_paths.contains(path))
+                .filter(|(path, _)| !deleted_paths.contains(path))
                 .map(Ok),
         )
         .try_filter_map(|(path, _)| async {
