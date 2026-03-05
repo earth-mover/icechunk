@@ -12,11 +12,7 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use futures::{
-    Stream, StreamExt, TryStreamExt,
-    future::Either,
-    stream::{self},
-};
+use futures::{Stream, StreamExt, TryStreamExt, future::Either, stream};
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
@@ -210,11 +206,9 @@ impl From<RefError> for SessionError {
 
 pub type SessionResult<T> = Result<T, SessionError>;
 
-// Returns the index of split_range that includes ChunkIndices
-// This can be used at write time to split manifests based on the config
-// and at read time to choose which manifest to query for chunk payload
+// Returns the index of split_range that includes ChunkIndices using _linear search_.
+// This is used at read time to choose which manifest to query for chunk payload
 /// It is useful to have this act on an iterator (e.g. get_chunk_ref)
-/// The find method on ManifestSplits is simply a helper.
 #[inline(always)]
 pub fn find_coord<'a, I>(
     iter: I,
@@ -237,16 +231,22 @@ where
 }
 
 impl ManifestSplits {
+    /// Binary search to locate ManifestExtents for a given chunk coordinate.
     #[inline(always)]
-    pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<&'a ManifestExtents> {
-        debug_assert_eq!(coord.0.len(), self.0[0].len());
-        find_coord(self.iter(), coord).map(|x| x.1)
-    }
-
-    #[inline(always)]
-    pub fn position(&self, coord: &ChunkIndices) -> Option<usize> {
-        debug_assert_eq!(coord.0.len(), self.0[0].len());
-        find_coord(self.iter(), coord).map(|x| x.0)
+    pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<ManifestExtents> {
+        debug_assert_eq!(coord.0.len(), self.0.len());
+        let mut ranges = Vec::with_capacity(self.0.len());
+        for (edges, loc) in self.0.iter().zip(coord.0.iter()) {
+            // Find insertion point for axis chunk index in sorted vector of split edges.
+            let bin = edges.partition_point(|&e| e <= *loc);
+            // detected bin is out of range. This _should_ never happen
+            // note that if loc == 0, then bin = 1
+            if bin == 0 || bin >= edges.len() {
+                return None;
+            }
+            ranges.push(edges[bin - 1]..edges[bin]);
+        }
+        Some(ManifestExtents::from_ranges_iter(ranges))
     }
 }
 
@@ -584,6 +584,14 @@ impl Session {
     }
 
     #[instrument(skip(self, calculate_new_index))]
+    /// Reindex chunks in an array by applying a transformation function to each chunk's coordinates.
+    ///
+    /// The `calculate_new_index` function receives each chunk's current coordinates and returns:
+    /// - `Ok(Some(new_coords))` to move the chunk to new coordinates
+    /// - `Ok(None)` to discard the chunk
+    /// - `Err(...)` to abort the operation
+    ///
+    /// Source positions that are not also destinations retain their existing chunk refs.
     pub async fn reindex_array<F>(
         &mut self,
         array_path: &Path,
@@ -603,6 +611,7 @@ impl Session {
 
         let mut original_chunks = self.chunk_coordinates(array_path).await?.boxed();
         let mut change_set = ChangeSet::for_edits();
+
         // TODO: concurrency
         while let Some(old_chunk_index) = original_chunks.try_next().await? {
             if let Some(new_chunk_index) = calculate_new_index(&old_chunk_index)? {
@@ -629,13 +638,38 @@ impl Session {
         Ok(())
     }
 
+    /// Shift all chunks in an array by the given chunk offset.
+    ///
+    /// Out-of-bounds chunks are discarded. To preserve them, resize the array first
+    /// to make room. Vacated source positions retain stale references.
     #[instrument(skip(self))]
     pub async fn shift_array(
         &mut self,
         array_path: &Path,
-        offset: &[i64], // FIXME: overflow
+        chunk_offset: &[i64], // FIXME: overflow
     ) -> SessionResult<()> {
-        self.reindex_array(array_path, shift_by(offset)).await
+        let node = self.get_array(array_path).await?;
+        let num_chunks: Vec<u32> = match &node.node_data {
+            NodeData::Array { shape, .. } => shape.num_chunks().collect(),
+            _ => unreachable!("get_array returned non-array"),
+        };
+
+        let chunk_offset = chunk_offset.to_vec();
+        let num_chunks = num_chunks.to_vec();
+        self.reindex_array(array_path, move |index: &ChunkIndices| {
+            let new_indices: Option<Vec<u32>> = index
+                .0
+                .iter()
+                .enumerate()
+                .map(|(dim, &idx)| {
+                    let n = num_chunks[dim] as i64;
+                    let new_idx = idx as i64 + chunk_offset[dim];
+                    if new_idx < 0 || new_idx >= n { None } else { Some(new_idx as u32) }
+                })
+                .collect();
+            Ok(new_indices.map(ChunkIndices))
+        })
+        .await
     }
 
     #[instrument(skip(self, coords))]
@@ -688,7 +722,6 @@ impl Session {
 
     // Helper function that accepts a NodeSnapshot instead of a path,
     // this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
-    #[instrument(skip(self, node, data))]
     async fn set_node_chunk_ref(
         &mut self,
         node: NodeSnapshot,
@@ -1944,27 +1977,6 @@ pub fn construct_valid_byte_range(
     }
 }
 
-pub fn shift_by(offset: &[i64]) -> impl Fn(&ChunkIndices) -> ReindexOperationResult {
-    |index: &ChunkIndices| {
-        let res: Option<Vec<u32>> = index
-            .0
-            .iter()
-            .zip(offset.iter())
-            .map(|(index, offset)| {
-                let new_index = *index as i64 + offset;
-                if new_index < 0 {
-                    return Ok(None);
-                }
-                let new_index: u32 = new_index
-                    .try_into()
-                    .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
-                Ok::<_, SessionError>(Some(new_index))
-            })
-            .try_collect()?;
-        Ok(res.map(ChunkIndices))
-    }
-}
-
 struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
@@ -2065,47 +2077,57 @@ impl<'a> FlushProcess<'a> {
     async fn write_manifest_with_changes(
         &mut self,
         previous_manifests: impl Iterator<Item = &ManifestRef>,
-        modified_chunks: &ChunkTable,
+        modified_chunks: ChunkTable,
         extent: &ManifestExtents,
         node_id: &NodeId,
         old_snapshot: &SnapshotId,
     ) -> SessionResult<Option<ManifestRef>> {
         // Collect unmodified chunks from all intersecting manifests
-        let mut all_chunks_vec: Vec<Result<ChunkInfo, SessionError>> = Vec::new();
 
-        // add chunks from previous manifests that are not modified
-        for mref in previous_manifests {
-            let manifest =
+        // First add chunks from previous manifests that are not modified
+        let futs = previous_manifests
+            .map(|mref| {
                 fetch_manifest(&mref.object_id, old_snapshot, &self.asset_manager)
-                    .await?;
+            })
+            .collect::<Vec<_>>();
 
-            for item in manifest.iter(node_id.clone()) {
-                match item {
-                    Ok((idx, payload)) => {
-                        if !modified_chunks.contains_key(&idx) && extent.contains(&idx.0)
-                        {
-                            all_chunks_vec.push(Ok(ChunkInfo {
-                                node: node_id.clone(),
-                                coord: idx,
-                                payload,
-                            }));
-                        }
-                    }
-                    Err(e) => all_chunks_vec.push(Err(e.into())),
-                }
-            }
-        }
+        // We could be more clever here by considering size of manifests and fetching more in parallel if they are small
+        // but for now we concurrently fetch one manifess as we iterate through another one.
+        let mut all_chunks_vec = stream::iter(futs)
+            .buffer_unordered(1)
+            .try_fold(
+                Vec::with_capacity(modified_chunks.len()),
+                |mut acc, manifest| async {
+                    acc.extend(manifest.iter(node_id.clone()).filter_map_ok(
+                        |(idx, payload)| {
+                            // we expect that most users have no splitting
+                            // and so the first condition here is most restrictive.
+                            if !modified_chunks.contains_key(&idx)
+                                && extent.contains(&idx.0)
+                            {
+                                Some(ChunkInfo {
+                                    node: node_id.clone(),
+                                    coord: idx,
+                                    payload,
+                                })
+                            } else {
+                                None
+                            }
+                        },
+                    ));
+                    Ok(acc)
+                },
+            )
+            .await?;
 
-        // add modified chunks
-        for (idx, maybe_payload) in modified_chunks.iter() {
-            if let Some(payload) = maybe_payload.as_ref() {
-                all_chunks_vec.push(Ok(ChunkInfo {
-                    node: node_id.clone(),
-                    coord: idx.clone(),
-                    payload: payload.clone(),
-                }));
-            }
-        }
+        // Then add modified chunks from ChangeSet
+        all_chunks_vec.extend(modified_chunks.into_iter().filter_map(
+            |(idx, maybe_payload)| {
+                maybe_payload.map(|payload| {
+                    Ok(ChunkInfo { node: node_id.clone(), coord: idx, payload })
+                })
+            },
+        ));
 
         self.write_manifest_from_iterator(stream::iter(all_chunks_vec).err_into()).await
     }
@@ -2150,12 +2172,12 @@ impl<'a> FlushProcess<'a> {
         //             elist of refs
         //             * else create a new manifest filtering out the chunks that are outside of
         //             the extent
-        let updated_chunks_by_extent: HashMap<ManifestExtents, ChunkTable> = self
+        let mut updated_chunks_by_extent: HashMap<ManifestExtents, ChunkTable> = self
             .change_set
             .array_chunks_iterator(&node.id, &node.path)
             .fold(HashMap::new(), |mut res, (idx, payload)| {
                 if let Some(extents) = splits.find(idx) {
-                    let entry = res.entry(extents.clone()).or_default();
+                    let entry = res.entry(extents).or_default();
                     entry.insert(idx.clone(), payload.clone());
                 }
                 res
@@ -2167,16 +2189,15 @@ impl<'a> FlushProcess<'a> {
                 .iter()
                 .filter_map(|mr| {
                     // order is critical here, `overlap_with` is not symmetric
-                    match mr.extents.overlap_with(extent) {
+                    match mr.extents.overlap_with(&extent) {
                         Overlap::None => None,
                         ov => Some((mr, ov)),
                     }
                 })
                 .collect();
 
-            let no_changes = Default::default();
             let modified_chunks =
-                updated_chunks_by_extent.get(extent).unwrap_or(&no_changes);
+                updated_chunks_by_extent.remove(&extent).unwrap_or_default();
 
             if !modified_chunks.is_empty() || rewrite_manifests {
                 // if we were ask to rewrite manifests, or there are modified chunks in this split
@@ -2185,7 +2206,7 @@ impl<'a> FlushProcess<'a> {
                     .write_manifest_with_changes(
                         intersecting_manifests.iter().map(|(mr, _)| *mr),
                         modified_chunks,
-                        extent,
+                        &extent,
                         &node.id,
                         snapshot_id,
                     )
@@ -2215,8 +2236,8 @@ impl<'a> FlushProcess<'a> {
                         // one that contains only the chunks we want
                         .write_manifest_with_changes(
                             std::iter::once(mref),
-                            &no_changes,
-                            extent,
+                            Default::default(),
+                            &extent,
                             &node.id,
                             snapshot_id,
                         )
@@ -3098,16 +3119,33 @@ mod tests {
     async fn test_which_split() -> Result<(), Box<dyn Error>> {
         let splits = ManifestSplits::from_edges(vec![vec![0, 10, 20]]);
 
-        assert_eq!(splits.position(&ChunkIndices(vec![1])), Some(0));
-        assert_eq!(splits.position(&ChunkIndices(vec![11])), Some(1));
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1])),
+            Some(ManifestExtents::new(&[0], &[10]))
+        );
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![11])),
+            Some(ManifestExtents::new(&[10], &[20]))
+        );
 
         let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
 
         let splits = ManifestSplits::from_edges(edges);
-        assert_eq!(splits.position(&ChunkIndices(vec![1, 1])), Some(0));
-        assert_eq!(splits.position(&ChunkIndices(vec![1, 10])), Some(1));
-        assert_eq!(splits.position(&ChunkIndices(vec![1, 11])), Some(1));
-        assert!(splits.position(&ChunkIndices(vec![21, 21])).is_none());
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1, 1])),
+            Some(ManifestExtents::new(&[0, 0], &[10, 10]))
+        );
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1, 10])),
+            Some(ManifestExtents::new(&[0, 10], &[10, 20]))
+        );
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1, 11])),
+            Some(ManifestExtents::new(&[0, 10], &[10, 20]))
+        );
+        assert!(splits.find(&ChunkIndices(vec![21, 21])).is_none());
+        assert!(splits.find(&ChunkIndices(vec![0, 21])).is_none());
+        assert!(splits.find(&ChunkIndices(vec![21, 0])).is_none());
 
         Ok(())
     }
@@ -5029,7 +5067,7 @@ mod tests {
         session.commit("first commit", None).await?;
 
         let mut session = repo.writable_session("main").await?;
-        session.reindex_array(&apath, shift_by(&[-1])).await?;
+        session.shift_array(&apath, &[-1]).await?;
         assert_eq!(
             session.get_chunk_ref(&apath, &ChunkIndices(vec![0])).await?,
             Some(ChunkPayload::Inline("1".into()))
