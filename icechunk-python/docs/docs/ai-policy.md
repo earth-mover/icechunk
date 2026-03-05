@@ -2,9 +2,9 @@
 
 # AI Usage Policy
 
-**Note:** Some Icechunk developers use AI tools as part of our development workflow. We
-assume this is now common. Tools, patterns, and norms are evolving fast — this policy aims to avoid
-restricting contributors' choice of tooling while ensuring that:
+**Note:** Some Icechunk developers use AI tools as part of our development workflow.
+We assume this is now common. Tools, patterns, and norms are evolving fast — this
+policy aims to avoid restricting contributors' choice of tooling while ensuring that:
 
 - Reviewers are not overburdened
 - Contributions can be maintained
@@ -38,9 +38,10 @@ acceptable. Be careful that it does not introduce inaccurate details in the proc
 
 You must have personally reviewed and understood all changes before submitting.
 
-If you used AI to generate code, you are expected to have read it critically and tested it.
-As with a hand-written PR, the description should explain the approach and reasoning behind the changes.
-Do not leave it to reviewers to figure out what the code does and why.
+If you used AI to generate code, you are expected to have read it critically and
+tested it. As with a hand-written PR, the description should explain the approach
+and reasoning behind the changes. Do not leave it to reviewers to figure out what
+the code does and why.
 
 #### Not Acceptable
 
