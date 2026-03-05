@@ -28,10 +28,9 @@ best approach if you are not sure what the best way forward is.
 
 PR descriptions, issue comments, and review responses must be your own words. The
 substance and reasoning must come from you. Do not paste AI-generated text as
-comments or review responses.
+comments or review responses. Please attempt to be concise.
 
-Using AI to polish grammar, spelling, or formatting is fine and does not require
-disclosure.
+Using AI to polish grammar, spelling, or formatting is acceptable
 
 ## Code and Tests
 
@@ -72,8 +71,7 @@ that large changes be broken into smaller, reviewable pieces.
 
 ## Documentation
 
-AI tools can be useful for drafting or restructuring documentation. The same core
-principles as with code apply to documentation as well. You must review the result
+The same core principles apply to both code and documentation You must review the result
 for accuracy and are ultimately responsible for all changes made. Icechunk has domain-specific
 semantics that AI tools frequently get wrong. Do not submit documentation that you
 haven't carefully read and verified.
