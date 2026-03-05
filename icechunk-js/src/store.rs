@@ -169,7 +169,7 @@ impl JsStore {
         last_modified: Option<DateTime<Utc>>,
         validate_container: bool,
     ) -> napi::Result<()> {
-        let location = VirtualChunkLocation::from_absolute_path(location.as_str())
+        let location = VirtualChunkLocation::from_url(location.as_str())
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         let checksum = create_checksum(etag_checksum, last_modified);
         let virtual_ref = VirtualChunkRef {
@@ -195,9 +195,8 @@ impl JsStore {
             .map(|spec| {
                 let checksum = create_checksum(spec.etag_checksum, spec.last_modified);
                 let index = ChunkIndices(spec.index);
-                let location =
-                    VirtualChunkLocation::from_absolute_path(spec.location.as_str())
-                        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+                let location = VirtualChunkLocation::from_url(spec.location.as_str())
+                    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
                 let vref = VirtualChunkRef {
                     offset: spec.offset as u64,
                     length: spec.length as u64,
