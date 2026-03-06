@@ -196,8 +196,14 @@ impl Repository {
             config.map(|c| RepositoryConfig::default().merge(c)).unwrap_or_default();
         let compression = config.compression().level();
         let storage_c = Arc::clone(&storage);
-        let storage_settings =
-            config.storage().cloned().unwrap_or_else(|| storage.default_settings());
+        // Merge two layers of storage config (in order of preference):
+        //   - User-provided config (passed to create())
+        //   - Backend storage defaults (e.g. S3 retry/concurrency settings)
+        let storage_defaults = storage.default_settings();
+        let storage_settings = match config.storage() {
+            Some(user_storage) => storage_defaults.merge(user_storage.clone()),
+            None => storage_defaults,
+        };
 
         if !storage.root_is_clean().await? {
             return Err(RepositoryErrorKind::ParentDirectoryNotClean.into());
@@ -322,8 +328,12 @@ impl Repository {
     ) -> RepositoryResult<Self> {
         let containers = config.virtual_chunk_containers().cloned();
         validate_credentials(&config, &authorized_virtual_containers)?;
-        let storage_settings =
-            config.storage().cloned().unwrap_or_else(|| storage.default_settings());
+        // Merge user storage config on top of backend defaults
+        let storage_defaults = storage.default_settings();
+        let storage_settings = match config.storage() {
+            Some(user_storage) => storage_defaults.merge(user_storage.clone()),
+            None => storage_defaults,
+        };
         let virtual_resolver = Arc::new(VirtualChunkResolver::new(
             containers,
             authorized_virtual_containers.clone(),
@@ -437,8 +447,11 @@ impl Repository {
         }
 
         let bytes = Bytes::from(serde_yaml_ng::to_string(config)?);
-        let storage_settings =
-            config.storage().cloned().unwrap_or_else(|| storage.default_settings());
+        let storage_defaults = storage.default_settings();
+        let storage_settings = match config.storage() {
+            Some(user_storage) => storage_defaults.merge(user_storage.clone()),
+            None => storage_defaults,
+        };
         match storage.update_config(&storage_settings, bytes, previous_version).await? {
             UpdateConfigResult::Updated { new_version } => Ok(new_version),
             UpdateConfigResult::NotOnLatestVersion => {
