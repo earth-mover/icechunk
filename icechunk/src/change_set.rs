@@ -102,14 +102,14 @@ pub struct Move {
 
 #[derive(Debug, PartialEq)]
 pub enum MovedTo<'a> {
-    Moved(Cow<'a, Path>),
+    To(Cow<'a, Path>),
     NotMoved(Cow<'a, Path>),
     Overwritten,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum MovedFrom<'a> {
-    Moved(Cow<'a, Path>),
+    From(Cow<'a, Path>),
     NotMoved(Cow<'a, Path>),
     Deleted,
 }
@@ -133,39 +133,43 @@ impl MoveTracker {
     }
 
     pub fn moved_to<'a>(&self, path: &'a Path) -> MovedTo<'a> {
-        let res = Cow::Borrowed(path);
+        let mut res = Cow::Borrowed(path);
+        let mut was_moved = false;
         for Move { from, to } in self.0.iter() {
             if let Ok(rest) = res.as_ref().buf().strip_prefix(from.buf()) {
                 // it's safe to join segments that already belonged to a Path
                 #[allow(clippy::expect_used)]
                 let new_path = Path::new(to.buf().join(rest).to_string().as_str())
                     .expect("Bug in moved_to, cannot create path");
-                return MovedTo::Moved(Cow::Owned(new_path));
+                res = Cow::Owned(new_path);
+                was_moved = true;
             } else if res.buf().starts_with(to.buf()) {
                 // the path has been overwritten by the moves
                 // calling code should check for overwrites before moving
                 return MovedTo::Overwritten;
             }
         }
-        MovedTo::NotMoved(res)
+        if was_moved { MovedTo::To(res) } else { MovedTo::NotMoved(res) }
     }
 
     pub fn moved_from<'a>(&self, path: &'a Path) -> MovedFrom<'a> {
-        let res = Cow::Borrowed(path);
+        let mut res = Cow::Borrowed(path);
+        let mut was_moved = false;
         for Move { from, to } in self.0.iter().rev() {
             if let Ok(rest) = res.as_ref().buf().strip_prefix(to.buf()) {
                 // it's safe to join segments that already belonged to a Path
                 #[allow(clippy::expect_used)]
                 let old_path = Path::new(from.buf().join(rest).to_string().as_str())
                     .expect("Bug in moved_from, cannot create path");
-                return MovedFrom::Moved(Cow::Owned(old_path));
+                res = Cow::Owned(old_path);
+                was_moved = true;
             } else if res.buf().starts_with(from.buf()) {
                 // the moves have deleted this path
                 // calling code should check for overwrites before moving
                 return MovedFrom::Deleted;
             }
         }
-        MovedFrom::NotMoved(res)
+        if was_moved { MovedFrom::From(res) } else { MovedFrom::NotMoved(res) }
     }
 }
 
@@ -636,7 +640,7 @@ impl ChangeSet {
             use MovedTo::*;
             match self.moved_to(&node.path) {
                 Overwritten => return None,
-                NotMoved(cow) | Moved(cow) => cow,
+                NotMoved(cow) | To(cow) => cow,
             }
         };
         if self.is_deleted(new_path.as_ref(), &node.id) {
@@ -814,15 +818,15 @@ mod tests {
         ));
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar/old").unwrap()),
-            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new").unwrap()
+            To(p) if p.as_ref() == &Path::new("/foo/bar/new").unwrap()
         ));
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar/old/more").unwrap()),
-            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new/more").unwrap()
+            To(p) if p.as_ref() == &Path::new("/foo/bar/new/more").unwrap()
         ));
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar/old/more/andmore").unwrap()),
-            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new/more/andmore").unwrap()
+            To(p) if p.as_ref() == &Path::new("/foo/bar/new/more/andmore").unwrap()
         ));
         assert!(matches!(
             mt.moved_to(&Path::new("/other").unwrap()),
@@ -854,15 +858,15 @@ mod tests {
         ));
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar/new").unwrap()),
-            Moved(p) if p.as_ref() == &Path::new("/foo/bar/old").unwrap()
+            From(p) if p.as_ref() == &Path::new("/foo/bar/old").unwrap()
         ));
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar/new/more").unwrap()),
-            Moved(p) if p.as_ref() == &Path::new("/foo/bar/old/more").unwrap()
+            From(p) if p.as_ref() == &Path::new("/foo/bar/old/more").unwrap()
         ));
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar/new/more/andmore").unwrap()),
-            Moved(p) if p.as_ref() == &Path::new("/foo/bar/old/more/andmore").unwrap()
+            From(p) if p.as_ref() == &Path::new("/foo/bar/old/more/andmore").unwrap()
         ));
         assert!(matches!(mt.moved_from(&Path::new("/foo/bar/old").unwrap()), Deleted));
         assert!(matches!(
@@ -876,11 +880,11 @@ mod tests {
 
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar/new/inner-new").unwrap()),
-            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new/inner-old1").unwrap()
+            From(p) if p.as_ref() == &Path::new("/foo/bar/old/inner-old1").unwrap()
         ));
         assert!(matches!(
             mt.moved_from(&Path::new("/inner-new2").unwrap()),
-            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new/inner-old2").unwrap()
+            From(p) if p.as_ref() == &Path::new("/foo/bar/old/inner-old2").unwrap()
         ));
     }
 
@@ -892,11 +896,11 @@ mod tests {
         mt.record(Path::new("/foo/bar/new").unwrap(), Path::new("/foo/bar/old").unwrap());
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar/old/inner").unwrap()),
-            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new/inner").unwrap()
+            To(p) if p.as_ref() == &Path::new("/foo/bar/old/inner").unwrap()
         ));
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar/old").unwrap()),
-            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new").unwrap()
+            To(p) if p.as_ref() == &Path::new("/foo/bar/old").unwrap()
         ));
         assert!(matches!(
             mt.moved_to(&Path::new("/other").unwrap()),
@@ -916,11 +920,11 @@ mod tests {
         mt.record(Path::new("/foo/bar/new").unwrap(), Path::new("/foo/bar/old").unwrap());
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar/old/inner").unwrap()),
-            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new/inner").unwrap()
+            From(p) if p.as_ref() == &Path::new("/foo/bar/old/inner").unwrap()
         ));
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar/old").unwrap()),
-            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new").unwrap()
+            From(p) if p.as_ref() == &Path::new("/foo/bar/old").unwrap()
         ));
         assert!(matches!(
             mt.moved_from(&Path::new("/other").unwrap()),

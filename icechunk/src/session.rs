@@ -1875,9 +1875,9 @@ async fn get_existing_node(
         }
         .into());
     }
-    let was_moved = matches!(moved_from, MovedFrom::Moved(_));
+    let was_moved = matches!(moved_from, MovedFrom::From(_));
     let renamed_path = match moved_from {
-        MovedFrom::Moved(p) | MovedFrom::NotMoved(p) => p,
+        MovedFrom::From(p) | MovedFrom::NotMoved(p) => p,
         MovedFrom::Deleted => unreachable!(),
     };
 
@@ -1918,6 +1918,8 @@ async fn get_existing_node(
                 }
             };
             let node = if was_moved {
+                // this is technically unnecessary for back-and-forth moves
+                // but we will ignore that rare case
                 NodeSnapshot { path: path.clone(), ..node }
             } else {
                 node
