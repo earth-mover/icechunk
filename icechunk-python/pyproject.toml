@@ -27,7 +27,6 @@ dependencies = ["zarr>=3.1.0"]
 dev = [
     { include-group = "test" },
     "mypy",
-    "typing-extensions>=4.15.0",
     "ruff==0.8.0",
     "maturin>=1.7,<2.0",
     "maturin-import-hook>=0.3.0",

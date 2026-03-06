@@ -97,7 +97,7 @@ mypy *args:
 
 [doc("Run mypy stub checking on type stubs")]
 stubtest *args:
-  cd icechunk-python && python -m mypy.stubtest icechunk._icechunk_python --allowlist stubtest_allowlist.txt "$@"
+  cd icechunk-python && python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt "$@"
 
 [doc("Run all Python pre-commit hooks (ruff, formatting, codespell, etc.)")]
 py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *args:
