@@ -9,7 +9,7 @@ use std::{
     cmp::Ordering,
     convert::Infallible,
     fmt::{Debug, Display},
-    hash::{Hash, Hasher},
+    hash::Hash,
     marker::PhantomData,
     ops::Range,
 };
@@ -68,7 +68,7 @@ pub const V1_REFS_FILE_PATH: &str = "refs";
 
 /// A normalized Zarr path: absolute (starts with `/`) and no trailing slash.
 #[serde_as]
-#[derive(Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
 pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
 
 /// Marker trait for object ID type tags (sealed).
@@ -514,26 +514,6 @@ impl fmt::Debug for Path {
 impl Display for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
-    }
-}
-
-// Derived PartialEq on Path is surprisingly expensive.
-// PartialEq on the inner Utf8UnixPathBuf splits the paths in to components
-// and then checks equality!
-// Because our paths are canonicalized and absolute, we can impl a fastpath.
-// This comparison is executed in `get_existing_node` so it makes sense to optimize it.
-impl PartialEq for Path {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.as_path().as_str() == other.0.as_path().as_str()
-    }
-}
-
-// Because we reimplement PartialEq, we must reimplement Hash
-// https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#derived_hash_with_manual_eq
-// This is consistent with the impl on Utf8UnixPathBuf: `self.as_path().hash(state)`
-impl Hash for Path {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.as_path().as_str().hash(state);
     }
 }
 
