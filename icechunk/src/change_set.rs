@@ -100,6 +100,13 @@ pub struct Move {
     pub to: Path,
 }
 
+#[derive(Debug, PartialEq)]
+pub enum WasMoved<'a> {
+    Moved(Cow<'a, Path>),
+    Unmoved(Cow<'a, Path>),
+    Deleted,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct MoveTracker(Vec<Move>);
 
@@ -118,40 +125,40 @@ impl MoveTracker {
         self.0.iter()
     }
 
-    pub fn moved_to<'a>(&self, path: &'a Path) -> Option<Cow<'a, Path>> {
-        let mut res = Cow::Borrowed(path);
+    pub fn moved_to<'a>(&self, path: &'a Path) -> WasMoved<'a> {
+        let res = Cow::Borrowed(path);
         for Move { from, to } in self.0.iter() {
             if let Ok(rest) = res.as_ref().buf().strip_prefix(from.buf()) {
                 // it's safe to join segments that already belonged to a Path
                 #[allow(clippy::expect_used)]
                 let new_path = Path::new(to.buf().join(rest).to_string().as_str())
                     .expect("Bug in moved_to, cannot create path");
-                res = Cow::Owned(new_path);
+                return WasMoved::Moved(Cow::Owned(new_path));
             } else if res.buf().starts_with(to.buf()) {
                 // the path has been overwritten by the moves
                 // calling code should check for overwrites before moving
-                return None;
+                return WasMoved::Deleted;
             }
         }
-        Some(res)
+        WasMoved::Unmoved(res)
     }
 
-    pub fn moved_from<'a>(&self, path: &'a Path) -> Option<Cow<'a, Path>> {
-        let mut res = Cow::Borrowed(path);
+    pub fn moved_from<'a>(&self, path: &'a Path) -> WasMoved<'a> {
+        let res = Cow::Borrowed(path);
         for Move { from, to } in self.0.iter().rev() {
             if let Ok(rest) = res.as_ref().buf().strip_prefix(to.buf()) {
                 // it's safe to join segments that already belonged to a Path
                 #[allow(clippy::expect_used)]
                 let old_path = Path::new(from.buf().join(rest).to_string().as_str())
                     .expect("Bug in moved_from, cannot create path");
-                res = Cow::Owned(old_path);
+                return WasMoved::Moved(Cow::Owned(old_path));
             } else if res.buf().starts_with(from.buf()) {
                 // the moves have deleted this path
                 // calling code should check for overwrites before moving
-                return None;
+                return WasMoved::Deleted;
             }
         }
-        Some(res)
+        WasMoved::Unmoved(res)
     }
 }
 
@@ -289,11 +296,11 @@ impl ChangeSet {
         Ok(())
     }
 
-    pub fn moved_to<'a>(&self, path: &'a Path) -> Option<Cow<'a, Path>> {
+    pub fn moved_to<'a>(&self, path: &'a Path) -> WasMoved<'a> {
         self.move_tracker().moved_to(path)
     }
 
-    pub fn moved_from<'a>(&self, path: &'a Path) -> Option<Cow<'a, Path>> {
+    pub fn moved_from<'a>(&self, path: &'a Path) -> WasMoved<'a> {
         self.move_tracker().moved_from(path)
     }
 
@@ -618,7 +625,13 @@ impl ChangeSet {
     // Applies the changeset to an existing node, yielding a new node if it hasn't been deleted
     pub fn update_existing_node(&self, node: NodeSnapshot) -> Option<NodeSnapshot> {
         // we need to take into account moves
-        let new_path = self.moved_to(&node.path)?;
+        let new_path = {
+            use WasMoved::*;
+            match self.moved_to(&node.path) {
+                Deleted => return None,
+                Unmoved(cow) | Moved(cow) => cow,
+            }
+        };
         if self.is_deleted(new_path.as_ref(), &node.id) {
             return None;
         }
@@ -663,7 +676,7 @@ mod tests {
     use super::ChangeSet;
 
     use crate::{
-        change_set::{ArrayData, EditChanges, MoveTracker},
+        change_set::{ArrayData, EditChanges, MoveTracker, WasMoved},
         format::{
             ChunkIndices, NodeId, Path,
             manifest::{ChunkInfo, ChunkPayload},
@@ -771,6 +784,8 @@ mod tests {
 
     #[icechunk_macros::test]
     fn test_new_path_for_simple() {
+        use WasMoved::*;
+
         let mut mt = MoveTracker::default();
         mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
         mt.record(
@@ -782,36 +797,35 @@ mod tests {
             Path::new("/inner-new2").unwrap(),
         );
 
-        assert_eq!(
-            mt.moved_to(&Path::new("/foo").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo").unwrap()
-        );
-        assert_eq!(
-            mt.moved_to(&Path::new("/foo/bar").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo/bar").unwrap()
-        );
-        assert_eq!(
-            mt.moved_to(&Path::new("/foo/bar/old").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo/bar/new").unwrap()
-        );
-        assert_eq!(
-            mt.moved_to(&Path::new("/foo/bar/old/more").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo/bar/new/more").unwrap()
-        );
-        assert_eq!(
-            mt.moved_to(&Path::new("/foo/bar/old/more/andmore").unwrap())
-                .unwrap()
-                .as_ref(),
-            &Path::new("/foo/bar/new/more/andmore").unwrap()
-        );
-        assert_eq!(
-            mt.moved_to(&Path::new("/other").unwrap()).unwrap().as_ref(),
-            &Path::new("/other").unwrap()
-        );
+        assert!(matches!(
+            mt.moved_to(&Path::new("/foo").unwrap()),
+            Unmoved(p) if p.as_ref() == &Path::new("/foo").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_to(&Path::new("/foo/bar").unwrap()),
+            Unmoved(p) if p.as_ref() == &Path::new("/foo/bar").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_to(&Path::new("/foo/bar/old").unwrap()),
+            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_to(&Path::new("/foo/bar/old/more").unwrap()),
+            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new/more").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_to(&Path::new("/foo/bar/old/more/andmore").unwrap()),
+            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new/more/andmore").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_to(&Path::new("/other").unwrap()),
+            Unmoved(p) if p.as_ref() == &Path::new("/other").unwrap()
+        ));
     }
 
     #[icechunk_macros::test]
     fn test_moved_from_simple() {
+        use WasMoved::*;
         let mut mt = MoveTracker::default();
         mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
         mt.record(
@@ -823,83 +837,88 @@ mod tests {
             Path::new("/inner-new2").unwrap(),
         );
 
-        assert_eq!(
-            mt.moved_from(&Path::new("/foo").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo").unwrap()
-        );
-        assert_eq!(
-            mt.moved_from(&Path::new("/foo/bar").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo/bar").unwrap()
-        );
-        assert_eq!(
-            mt.moved_from(&Path::new("/foo/bar/new").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo/bar/old").unwrap()
-        );
-        assert_eq!(
-            mt.moved_from(&Path::new("/foo/bar/new/more").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo/bar/old/more").unwrap()
-        );
-        assert_eq!(
-            mt.moved_from(&Path::new("/foo/bar/new/more/andmore").unwrap())
-                .unwrap()
-                .as_ref(),
-            &Path::new("/foo/bar/old/more/andmore").unwrap()
-        );
-        assert!(mt.moved_from(&Path::new("/foo/bar/old").unwrap()).is_none());
-        assert!(mt.moved_from(&Path::new("/foo/bar/old/more").unwrap()).is_none());
-        assert!(
-            mt.moved_from(&Path::new("/foo/bar/old/more/andmore").unwrap()).is_none()
-        );
+        assert!(matches!(
+            mt.moved_from(&Path::new("/foo").unwrap()),
+            Unmoved(p) if p.as_ref() == &Path::new("/foo").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_from(&Path::new("/foo/bar").unwrap()),
+            Unmoved(p) if p.as_ref() == &Path::new("/foo/bar").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_from(&Path::new("/foo/bar/new").unwrap()),
+            Moved(p) if p.as_ref() == &Path::new("/foo/bar/old").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_from(&Path::new("/foo/bar/new/more").unwrap()),
+            Moved(p) if p.as_ref() == &Path::new("/foo/bar/old/more").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_from(&Path::new("/foo/bar/new/more/andmore").unwrap()),
+            Moved(p) if p.as_ref() == &Path::new("/foo/bar/old/more/andmore").unwrap()
+        ));
+        assert!(matches!(mt.moved_from(&Path::new("/foo/bar/old").unwrap()), Deleted));
+        assert!(matches!(
+            mt.moved_from(&Path::new("/foo/bar/old/more").unwrap()),
+            Deleted
+        ));
+        assert!(matches!(
+            mt.moved_from(&Path::new("/foo/bar/old/more/andmore").unwrap()),
+            Deleted
+        ));
 
-        assert_eq!(
-            mt.moved_from(&Path::new("/foo/bar/new/inner-new").unwrap())
-                .unwrap()
-                .as_ref(),
-            &Path::new("/foo/bar/old/inner-old1").unwrap()
-        );
-        assert_eq!(
-            mt.moved_from(&Path::new("/inner-new2").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo/bar/old/inner-old2").unwrap()
-        );
+        assert!(matches!(
+            mt.moved_from(&Path::new("/foo/bar/new/inner-new").unwrap()),
+            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new/inner-old1").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_from(&Path::new("/inner-new2").unwrap()),
+            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new/inner-old2").unwrap()
+        ));
     }
 
     #[icechunk_macros::test]
     fn test_moved_to_back_and_forth() {
+        use WasMoved::*;
         let mut mt = MoveTracker::default();
         mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
         mt.record(Path::new("/foo/bar/new").unwrap(), Path::new("/foo/bar/old").unwrap());
-        assert_eq!(
-            mt.moved_to(&Path::new("/foo/bar/old/inner").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo/bar/old/inner").unwrap(),
-        );
-        assert_eq!(
-            mt.moved_to(&Path::new("/foo/bar/old").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo/bar/old").unwrap(),
-        );
-        assert_eq!(
-            mt.moved_to(&Path::new("/other").unwrap()).unwrap().as_ref(),
-            &Path::new("/other").unwrap(),
-        );
-        assert!(mt.moved_to(&Path::new("/foo/bar/new/other").unwrap()).is_none());
+        assert!(matches!(
+            mt.moved_to(&Path::new("/foo/bar/old/inner").unwrap()),
+            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new/inner").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_to(&Path::new("/foo/bar/old").unwrap()),
+            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_to(&Path::new("/other").unwrap()),
+            Unmoved(p) if p.as_ref() == &Path::new("/other").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_to(&Path::new("/foo/bar/new/other").unwrap()),
+            Deleted
+        ));
     }
 
     #[icechunk_macros::test]
     fn test_moved_from_back_and_forth() {
+        use WasMoved::*;
         let mut mt = MoveTracker::default();
         mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
         mt.record(Path::new("/foo/bar/new").unwrap(), Path::new("/foo/bar/old").unwrap());
-        assert_eq!(
-            mt.moved_from(&Path::new("/foo/bar/old/inner").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo/bar/old/inner").unwrap(),
-        );
-        assert_eq!(
-            mt.moved_from(&Path::new("/foo/bar/old").unwrap()).unwrap().as_ref(),
-            &Path::new("/foo/bar/old").unwrap(),
-        );
-        assert_eq!(
-            mt.moved_from(&Path::new("/other").unwrap()).unwrap().as_ref(),
-            &Path::new("/other").unwrap(),
-        );
+        assert!(matches!(
+            mt.moved_from(&Path::new("/foo/bar/old/inner").unwrap()),
+            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new/inner").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_from(&Path::new("/foo/bar/old").unwrap()),
+            Moved(p) if p.as_ref() == &Path::new("/foo/bar/new").unwrap()
+        ));
+        assert!(matches!(
+            mt.moved_from(&Path::new("/other").unwrap()),
+            Unmoved(p) if p.as_ref() == &Path::new("/other").unwrap()
+        ));
     }
 
     use crate::strategies::{
