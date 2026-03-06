@@ -19,6 +19,40 @@ use super::{
 use chrono::{DateTime, Utc};
 use flatbuffers::{VerifierOptions, WIPOffset};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RepoAvailability {
+    Online,
+    ReadOnly,
+    Offline,
+}
+
+impl From<generated::RepoAvailability> for RepoAvailability {
+    fn from(value: generated::RepoAvailability) -> Self {
+        match value {
+            generated::RepoAvailability::ReadOnly => RepoAvailability::ReadOnly,
+            generated::RepoAvailability::Offline => RepoAvailability::Offline,
+            _ => RepoAvailability::Online,
+        }
+    }
+}
+
+impl From<RepoAvailability> for generated::RepoAvailability {
+    fn from(value: RepoAvailability) -> Self {
+        match value {
+            RepoAvailability::Online => generated::RepoAvailability::Online,
+            RepoAvailability::ReadOnly => generated::RepoAvailability::ReadOnly,
+            RepoAvailability::Offline => generated::RepoAvailability::Offline,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoStatus {
+    pub availability: RepoAvailability,
+    pub set_at: u64,
+    pub limited_availability_reason: Option<String>,
+}
+
 // TODO: should we not implement serialize and let the session fetch the repo info?
 #[derive(PartialEq, Serialize, Deserialize)]
 pub struct RepoInfo {
@@ -140,6 +174,7 @@ impl RepoInfo {
         config_bytes: Option<&[u8]>,
         sorted_enabled_feature_flags: Option<EFFIt>,
         sorted_disabled_feature_flags: Option<DFFIt>,
+        status: &RepoStatus,
     ) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = snapshots.into_iter().collect();
         snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
@@ -161,6 +196,7 @@ impl RepoInfo {
             config_bytes,
             sorted_enabled_feature_flags,
             sorted_disabled_feature_flags,
+            status,
         )
     }
 
@@ -184,6 +220,7 @@ impl RepoInfo {
         config_bytes: Option<&[u8]>,
         sorted_enabled_feature_flags: Option<EFFIt>,
         sorted_disabled_feature_flags: Option<DFFIt>,
+        status: &RepoStatus,
     ) -> IcechunkResult<Self> {
         trace!("Creating new repo info from parts");
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
@@ -288,12 +325,16 @@ impl RepoInfo {
             .try_collect()?;
         let snapshots = builder.create_vector(&snapshots);
 
+        let limited_reason = status
+            .limited_availability_reason
+            .as_deref()
+            .map(|s| builder.create_string(s));
         let status = generated::RepoStatus::create(
             &mut builder,
             &generated::RepoStatusArgs {
-                availability: generated::RepoAvailability::Online, // TODO:
-                set_at: 0,
-                limited_availability_reason: None,
+                availability: status.availability.into(),
+                set_at: status.set_at,
+                limited_availability_reason: limited_reason,
             },
         );
 
@@ -486,6 +527,11 @@ impl RepoInfo {
             config_bytes.as_deref(),
             None::<std::iter::Empty<u16>>,
             None::<std::iter::Empty<u16>>,
+            &RepoStatus {
+                availability: RepoAvailability::Online,
+                set_at: 0,
+                limited_availability_reason: None,
+            },
         )
         .expect("Cannot generate initial snapshot")
     }
@@ -521,6 +567,18 @@ impl RepoInfo {
                 Ok((key, value))
             })
             .try_collect()
+    }
+
+    pub fn status(&self) -> IcechunkResult<RepoStatus> {
+        let root = self.root()?;
+        let fb_status = root.status();
+        Ok(RepoStatus {
+            availability: fb_status.availability().into(),
+            set_at: fb_status.set_at(),
+            limited_availability_reason: fb_status
+                .limited_availability_reason()
+                .map(|s| s.to_string()),
+        })
     }
 
     pub fn enabled_feature_flags(
@@ -647,6 +705,7 @@ impl RepoInfo {
             self.config_bytes_raw()?.as_deref(),
             eff.map(|it| it.into_iter()),
             dff.map(|it| it.into_iter()),
+            &self.status()?,
         )
     }
 
@@ -703,6 +762,7 @@ impl RepoInfo {
             self.config_bytes_raw()?.as_deref(),
             self.enabled_feature_flags()?,
             self.disabled_feature_flags()?,
+            &self.status()?,
         )?;
         Ok(res)
     }
@@ -749,6 +809,7 @@ impl RepoInfo {
                     self.config_bytes_raw()?.as_deref(),
                     self.enabled_feature_flags()?,
                     self.disabled_feature_flags()?,
+                    &self.status()?,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -792,6 +853,7 @@ impl RepoInfo {
                     self.config_bytes_raw()?.as_deref(),
                     self.enabled_feature_flags()?,
                     self.disabled_feature_flags()?,
+                    &self.status()?,
                 )
             }
             Err(IcechunkFormatError {
@@ -841,6 +903,7 @@ impl RepoInfo {
                     self.config_bytes_raw()?.as_deref(),
                     self.enabled_feature_flags()?,
                     self.disabled_feature_flags()?,
+                    &self.status()?,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -897,6 +960,7 @@ impl RepoInfo {
                     self.config_bytes_raw()?.as_deref(),
                     self.enabled_feature_flags()?,
                     self.disabled_feature_flags()?,
+                    &self.status()?,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -945,6 +1009,7 @@ impl RepoInfo {
                     self.config_bytes_raw()?.as_deref(),
                     self.enabled_feature_flags()?,
                     self.disabled_feature_flags()?,
+                    &self.status()?,
                 )
             }
             Err(IcechunkFormatError {
@@ -983,6 +1048,7 @@ impl RepoInfo {
             self.config_bytes_raw()?.as_deref(),
             self.enabled_feature_flags()?,
             self.disabled_feature_flags()?,
+            &self.status()?,
         )
     }
 
@@ -1014,6 +1080,37 @@ impl RepoInfo {
             Some(config_bytes.as_slice()),
             self.enabled_feature_flags()?,
             self.disabled_feature_flags()?,
+            &self.status()?,
+        )
+    }
+
+    pub fn set_status(
+        &self,
+        spec_version: SpecVersionBin,
+        status: &RepoStatus,
+        previous_file: &str,
+        num_updates_per_file: u16,
+    ) -> IcechunkResult<Self> {
+        let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+        Self::from_parts(
+            spec_version,
+            self.all_tags()?,
+            self.all_branches()?,
+            self.deleted_tags()?,
+            snaps,
+            &self.metadata()?,
+            UpdateInfo {
+                update_type: UpdateType::ConfigChangedUpdate,
+                update_time: Utc::now(),
+                previous_updates: self.latest_updates()?,
+            },
+            Some(previous_file),
+            num_updates_per_file,
+            self.repo_before_updates()?,
+            self.config_bytes_raw()?.as_deref(),
+            self.enabled_feature_flags()?,
+            self.disabled_feature_flags()?,
+            status,
         )
     }
 

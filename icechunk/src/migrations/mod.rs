@@ -23,7 +23,7 @@ use crate::{
         CONFIG_FILE_PATH, IcechunkFormatError, IcechunkFormatErrorKind,
         REPO_INFO_FILE_PATH, SnapshotId, V1_REFS_FILE_PATH,
         format_constants::SpecVersionBin,
-        repo_info::{RepoInfo, UpdateInfo, UpdateType},
+        repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateInfo, UpdateType},
         snapshot::SnapshotInfo,
     },
     refs::{
@@ -474,6 +474,11 @@ pub async fn migrate_1_to_2(
         Some(config_bytes.as_slice()),
         None::<std::iter::Empty<u16>>,
         None::<std::iter::Empty<u16>>,
+        &RepoStatus {
+            availability: RepoAvailability::Online,
+            set_at: 0,
+            limited_availability_reason: None,
+        },
     )?);
 
     if dry_run {

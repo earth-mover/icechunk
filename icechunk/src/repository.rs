@@ -46,7 +46,7 @@ use crate::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
         format_constants::SpecVersionBin,
-        repo_info::{RepoInfo, UpdateType},
+        repo_info::{RepoInfo, RepoStatus, UpdateType},
         snapshot::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
@@ -751,6 +751,40 @@ impl Repository {
             Ok(Arc::new(repo_info.set_metadata(
                 self.spec_version(),
                 metadata,
+                backup_path,
+                num_updates,
+            )?))
+        };
+
+        let _ = self
+            .asset_manager
+            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .await?;
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn get_status(&self) -> RepositoryResult<RepoStatus> {
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        let (repo, _) = self.asset_manager().fetch_repo_info().await?;
+        Ok(repo.status()?)
+    }
+
+    #[instrument(skip(self, status))]
+    pub async fn set_status(&self, status: &RepoStatus) -> RepositoryResult<()> {
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot set status".to_string(),
+            )
+            .into());
+        }
+
+        let num_updates = self.config().num_updates_per_repo_info_file();
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            Ok(Arc::new(repo_info.set_status(
+                self.spec_version(),
+                status,
                 backup_path,
                 num_updates,
             )?))
