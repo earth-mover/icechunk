@@ -11,4 +11,5 @@ build:
       - asdf global pixi latest
     build:
       html:
+        - pixi run -m icechunk-python/pyproject.toml just profile=ci develop
         - pixi run -m icechunk-python/pyproject.toml just docs-build --site-dir $READTHEDOCS_OUTPUT/html
