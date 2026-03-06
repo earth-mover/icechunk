@@ -12,7 +12,6 @@ use crate::{
     format::SnapshotId,
     ops::gc::{ExpireResult, ExpiredRefAction, GCError, GCResult},
     refs::{Ref, delete_branch, delete_tag, list_refs},
-    repository::RepositoryErrorKind,
 };
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -172,12 +171,6 @@ pub async fn expire(
     let storage = asset_manager.storage().as_ref();
     #[allow(deprecated)]
     let storage_settings = asset_manager.storage_settings();
-    if !storage.can_write().await? {
-        return Err(GCError::Repository(
-            RepositoryErrorKind::ReadonlyStorage("Cannot expire snapshots".to_string())
-                .into(),
-        ));
-    }
 
     let all_refs = stream::iter(list_refs(storage, storage_settings).await?);
     let asset_manager = Arc::clone(&asset_manager.clone());
