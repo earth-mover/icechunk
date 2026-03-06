@@ -52,8 +52,18 @@ impl ConflictSolver for ConflictDetector {
         )
         .try_filter_map(|(path, _)| async {
             match previous_repo.get_node(path).await {
-                Ok(_) => {
-                    Ok(Some(Conflict::NewNodeConflictsWithExistingNode(path.clone())))
+                Ok(existing_node) => {
+                    /*
+                    If the current changeset deletes then recreates a node
+                    at this path then that is ok, not a conflict
+                    unless they also modify the content. But that is detected
+                    lower down in this function
+                    */
+                    if current_changes.is_deleted(path, &existing_node.id) {
+                        Ok(None)
+                    } else {
+                        Ok(Some(Conflict::NewNodeConflictsWithExistingNode(path.clone())))
+                    }
                 }
                 Err(SessionError {
                     kind: SessionErrorKind::NodeNotFound { .. }, ..
