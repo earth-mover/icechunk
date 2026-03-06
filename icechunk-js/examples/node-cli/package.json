@@ -1,0 +1,15 @@
+{
+  "name": "chunk-rev-list",
+  "version": "1.0.0",
+  "description": "CLI tool for managing Icechunk repos on Minio",
+  "type": "module",
+  "main": "main.ts",
+  "scripts": {
+    "start": "node --experimental-strip-types main.ts"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@earthmover/icechunk": "^2.0.0-alpha.3"
+  }
+}
