@@ -199,9 +199,13 @@ pub async fn mk_client(
 
     s3_builder = s3_builder.identity_cache(id_cache);
 
-    // Add retry classifier for HTTP 408 (Request Timeout)
+    // Add retry classifier for HTTP 408 (Request Timeout) and 429 (Too Many Requests).
     // The default HttpStatusCodeClassifier only retries on 500, 502, 503, 504
-    static RETRY_CODES: &[u16] = &[408];
+    // Note R2 sends 429 for "slowdown" while S3 sends 503.
+    //   - R2: https://developers.cloudflare.com/r2/api/error-codes/
+    //   - S3: https://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html
+    // Tigris can occasionally respond with 499: "Client Closed Request"
+    static RETRY_CODES: &[u16] = &[408, 429, 499];
     // This confusingly named `retry_classifier` method ends up calling
     // `push_retry_classifier` after wrapping our custom classifier in `SharedRetryClassifier`.
     // Ultimately, this is a push on to a `Vec<SharedRetryClassifier>`, and is thus additive

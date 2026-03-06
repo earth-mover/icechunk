@@ -1776,10 +1776,7 @@ impl<'a> FlushProcess<'a> {
                         .new_array_chunk_iterator(node_id, node_path, extent.clone())
                         .map(Ok),
                 );
-                #[allow(clippy::expect_used)]
-                let new_ref = self.write_manifest_from_iterator(chunks).await.expect(
-                    "logic bug. for a new node, we must always write the manifest",
-                );
+                let new_ref = self.write_manifest_from_iterator(chunks).await?;
                 // new_ref is None if there were no chunks in the iterator
                 if let Some(new_ref) = new_ref {
                     self.manifest_refs.entry(node_id.clone()).or_default().push(new_ref);
@@ -3951,6 +3948,70 @@ mod tests {
             }
             other => panic!("test failed, expected conflict, got {other:?}"),
         }
+    }
+
+    #[tokio_test]
+    /// Test that delete-then-recreate exactly the same node
+    /// does NOT conflict
+    ///
+    /// This session: delete group + recreate group at same path
+    /// Previous commit: add a different sibling group
+    async fn test_no_conflict_on_delete_then_recreate() -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar".try_into().unwrap();
+        ds1.add_group("/foo/quux".try_into().unwrap(), user_data()).await?;
+        ds1.commit("add sibling group", None).await?;
+
+        ds2.delete_group(path.clone()).await?;
+        ds2.add_group(path.clone(), Bytes::new()).await?;
+        assert!(matches!(
+            ds2.commit("delete+re-add group", None).await,
+            Err(SessionError {
+                kind: SessionErrorKind::Conflict {
+                    expected_parent, actual_parent
+                }, ..
+            }) if expected_parent != actual_parent
+        ));
+
+        ds2.rebase(&ConflictDetector).await?;
+        ds2.commit("delete+re-add group", None).await?;
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    /// Test that delete-then-recreate DOES conflict when the previous commit
+    /// updated the group's metadata.
+    ///
+    /// This session: delete group + recreate group at same path
+    /// Previous commit: updated the group's metadata
+    async fn test_conflict_on_delete_then_recreate_when_group_updated()
+    -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar".try_into().unwrap();
+        ds1.update_group(&path, Bytes::from("updated")).await?;
+        ds1.commit("update group metadata", None).await?;
+
+        let node = ds2.get_node(&path).await.unwrap();
+        ds2.delete_group(path.clone()).await?;
+        ds2.add_group(path.clone(), user_data()).await?;
+        assert!(matches!(
+            ds2.commit("delete+re-add group", None).await,
+            Err(SessionError {
+                kind: SessionErrorKind::Conflict {
+                    expected_parent, actual_parent
+                }, ..
+            }) if expected_parent != actual_parent
+        ));
+
+        assert_has_conflict(
+            &Conflict::DeleteOfUpdatedGroup { path, node_id: node.id },
+            ds2.rebase(&ConflictDetector).await,
+        );
+
+        Ok(())
     }
 
     #[tokio_test]
