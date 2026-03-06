@@ -81,6 +81,7 @@ icechunk._icechunk_python.GcsStaticCredentials.ServiceAccountKey.__new__
 icechunk._icechunk_python.IcechunkError
 icechunk._icechunk_python.IcechunkError.__new__
 icechunk._icechunk_python.ManifestConfig
+icechunk._icechunk_python.ManifestVirtualChunkLocationCompressionConfig
 icechunk._icechunk_python.ManifestFileInfo
 icechunk._icechunk_python.ManifestPreloadCondition
 icechunk._icechunk_python.ManifestPreloadCondition.And
@@ -144,7 +145,6 @@ icechunk._icechunk_python.RebaseFailedError
 icechunk._icechunk_python.RepoUpdateRetryConfig
 icechunk._icechunk_python.RepositoryConfig
 icechunk._icechunk_python.RepositoryConfig.previous_file
-icechunk._icechunk_python.RepositoryConfig.repo_update_retries
 icechunk._icechunk_python.S3Credentials
 icechunk._icechunk_python.S3Credentials.Anonymous
 icechunk._icechunk_python.S3Credentials.Anonymous.__match_args__

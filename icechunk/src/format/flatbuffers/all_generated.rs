@@ -1101,6 +1101,7 @@ pub mod generated {
         pub const VT_LOCATION: ::flatbuffers::VOffsetT = 14;
         pub const VT_CHECKSUM_ETAG: ::flatbuffers::VOffsetT = 16;
         pub const VT_CHECKSUM_LAST_MODIFIED: ::flatbuffers::VOffsetT = 18;
+        pub const VT_COMPRESSED_LOCATION: ::flatbuffers::VOffsetT = 20;
 
         #[inline]
         pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -1119,6 +1120,9 @@ pub mod generated {
             let mut builder = ChunkRefBuilder::new(_fbb);
             builder.add_length(args.length);
             builder.add_offset(args.offset);
+            if let Some(x) = args.compressed_location {
+                builder.add_compressed_location(x);
+            }
             builder.add_checksum_last_modified(args.checksum_last_modified);
             if let Some(x) = args.checksum_etag {
                 builder.add_checksum_etag(x);
@@ -1216,6 +1220,19 @@ pub mod generated {
                     .unwrap()
             }
         }
+        #[inline]
+        pub fn compressed_location(&self) -> Option<::flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, u8>>>(
+                        ChunkRef::VT_COMPRESSED_LOCATION,
+                        None,
+                    )
+            }
+        }
     }
 
     impl ::flatbuffers::Verifiable for ChunkRef<'_> {
@@ -1233,6 +1250,7 @@ pub mod generated {
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("location", Self::VT_LOCATION, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("checksum_etag", Self::VT_CHECKSUM_ETAG, false)?
      .visit_field::<u32>("checksum_last_modified", Self::VT_CHECKSUM_LAST_MODIFIED, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, u8>>>("compressed_location", Self::VT_COMPRESSED_LOCATION, false)?
      .finish();
             Ok(())
         }
@@ -1246,6 +1264,8 @@ pub mod generated {
         pub location: Option<::flatbuffers::WIPOffset<&'a str>>,
         pub checksum_etag: Option<::flatbuffers::WIPOffset<&'a str>>,
         pub checksum_last_modified: u32,
+        pub compressed_location:
+            Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, u8>>>,
     }
     impl<'a> Default for ChunkRefArgs<'a> {
         #[inline]
@@ -1259,6 +1279,7 @@ pub mod generated {
                 location: None,
                 checksum_etag: None,
                 checksum_last_modified: 0,
+                compressed_location: None,
             }
         }
     }
@@ -1326,6 +1347,16 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_compressed_location(
+            &mut self,
+            compressed_location: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+                ChunkRef::VT_COMPRESSED_LOCATION,
+                compressed_location,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> ChunkRefBuilder<'a, 'b, A> {
@@ -1351,6 +1382,7 @@ pub mod generated {
             ds.field("location", &self.location());
             ds.field("checksum_etag", &self.checksum_etag());
             ds.field("checksum_last_modified", &self.checksum_last_modified());
+            ds.field("compressed_location", &self.compressed_location());
             ds.finish()
         }
     }
@@ -1523,6 +1555,8 @@ pub mod generated {
     impl<'a> Manifest<'a> {
         pub const VT_ID: ::flatbuffers::VOffsetT = 4;
         pub const VT_ARRAYS: ::flatbuffers::VOffsetT = 6;
+        pub const VT_LOCATION_DICTIONARY: ::flatbuffers::VOffsetT = 8;
+        pub const VT_COMPRESSION_ALGORITHM: ::flatbuffers::VOffsetT = 10;
 
         #[inline]
         pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -1539,12 +1573,16 @@ pub mod generated {
             args: &'args ManifestArgs<'args>,
         ) -> ::flatbuffers::WIPOffset<Manifest<'bldr>> {
             let mut builder = ManifestBuilder::new(_fbb);
+            if let Some(x) = args.location_dictionary {
+                builder.add_location_dictionary(x);
+            }
             if let Some(x) = args.arrays {
                 builder.add_arrays(x);
             }
             if let Some(x) = args.id {
                 builder.add_id(x);
             }
+            builder.add_compression_algorithm(args.compression_algorithm);
             builder.finish()
         }
 
@@ -1574,6 +1612,28 @@ pub mod generated {
                     .unwrap()
             }
         }
+        #[inline]
+        pub fn location_dictionary(&self) -> Option<::flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, u8>>>(
+                        Manifest::VT_LOCATION_DICTIONARY,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        pub fn compression_algorithm(&self) -> u8 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<u8>(Manifest::VT_COMPRESSION_ALGORITHM, Some(1)).unwrap()
+            }
+        }
     }
 
     impl ::flatbuffers::Verifiable for Manifest<'_> {
@@ -1583,14 +1643,11 @@ pub mod generated {
             pos: usize,
         ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
             v.visit_table(pos)?
-                .visit_field::<ObjectId12>("id", Self::VT_ID, true)?
-                .visit_field::<::flatbuffers::ForwardsUOffset<
-                    ::flatbuffers::Vector<
-                        '_,
-                        ::flatbuffers::ForwardsUOffset<ArrayManifest>,
-                    >,
-                >>("arrays", Self::VT_ARRAYS, true)?
-                .finish();
+     .visit_field::<ObjectId12>("id", Self::VT_ID, true)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<ArrayManifest>>>>("arrays", Self::VT_ARRAYS, true)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, u8>>>("location_dictionary", Self::VT_LOCATION_DICTIONARY, false)?
+     .visit_field::<u8>("compression_algorithm", Self::VT_COMPRESSION_ALGORITHM, false)?
+     .finish();
             Ok(())
         }
     }
@@ -1604,6 +1661,9 @@ pub mod generated {
                 >,
             >,
         >,
+        pub location_dictionary:
+            Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, u8>>>,
+        pub compression_algorithm: u8,
     }
     impl<'a> Default for ManifestArgs<'a> {
         #[inline]
@@ -1611,6 +1671,8 @@ pub mod generated {
             ManifestArgs {
                 id: None,     // required field
                 arrays: None, // required field
+                location_dictionary: None,
+                compression_algorithm: 1,
             }
         }
     }
@@ -1640,6 +1702,24 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_location_dictionary(
+            &mut self,
+            location_dictionary: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+                Manifest::VT_LOCATION_DICTIONARY,
+                location_dictionary,
+            );
+        }
+        #[inline]
+        pub fn add_compression_algorithm(&mut self, compression_algorithm: u8) {
+            self.fbb_.push_slot::<u8>(
+                Manifest::VT_COMPRESSION_ALGORITHM,
+                compression_algorithm,
+                1,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> ManifestBuilder<'a, 'b, A> {
@@ -1660,6 +1740,8 @@ pub mod generated {
             let mut ds = f.debug_struct("Manifest");
             ds.field("id", &self.id());
             ds.field("arrays", &self.arrays());
+            ds.field("location_dictionary", &self.location_dictionary());
+            ds.field("compression_algorithm", &self.compression_algorithm());
             ds.finish()
         }
     }

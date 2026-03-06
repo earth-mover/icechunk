@@ -57,6 +57,7 @@ async fn setup_repo(
             max_arrays_to_scan: None,
         }),
         splitting: split_config,
+        virtual_chunk_location_compression: None,
     };
     let config =
         RepositoryConfig { manifest: Some(man_config), ..RepositoryConfig::default() };
@@ -215,6 +216,7 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                     max_arrays_to_scan: None,
                 }),
                 splitting: Some(split_config),
+                virtual_chunk_location_compression: None,
             };
             let config = RepositoryConfig {
                 manifest: Some(man_config),
@@ -515,7 +517,7 @@ criterion_group!(
     benchmark_commit_split_manifests,
     benchmark_commit_rebase_split_manifests,
     benchmark_set_chunks,
-    benchmark_get_chunks
+    benchmark_get_chunks,
 );
 criterion_main!(benches);
 

@@ -320,22 +320,82 @@ static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
     OnceLock::new();
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+pub struct ManifestVirtualChunkLocationCompressionConfig {
+    #[serde(default)]
+    pub min_virtual_chunks_to_compress: Option<u16>,
+    #[serde(default)]
+    pub dictionary_max_training_samples: Option<u16>,
+    #[serde(default)]
+    pub dictionary_max_size_bytes: Option<u32>,
+    #[serde(default)]
+    pub compression_level: Option<i32>,
+}
+
+impl ManifestVirtualChunkLocationCompressionConfig {
+    pub fn min_virtual_chunks_to_compress(&self) -> u16 {
+        self.min_virtual_chunks_to_compress.unwrap_or(1000)
+    }
+
+    pub fn dictionary_max_training_samples(&self) -> u16 {
+        self.dictionary_max_training_samples.unwrap_or(100)
+    }
+
+    pub fn dictionary_max_size_bytes(&self) -> u32 {
+        self.dictionary_max_size_bytes.unwrap_or(2 * 1024)
+    }
+
+    pub fn compression_level(&self) -> i32 {
+        self.compression_level.unwrap_or(3)
+    }
+
+    pub fn merge(&self, other: Self) -> Self {
+        Self {
+            min_virtual_chunks_to_compress: other
+                .min_virtual_chunks_to_compress
+                .or(self.min_virtual_chunks_to_compress),
+            dictionary_max_training_samples: other
+                .dictionary_max_training_samples
+                .or(self.dictionary_max_training_samples),
+            dictionary_max_size_bytes: other
+                .dictionary_max_size_bytes
+                .or(self.dictionary_max_size_bytes),
+            compression_level: other.compression_level.or(self.compression_level),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ManifestConfig {
     #[serde(default)]
     pub preload: Option<ManifestPreloadConfig>,
     #[serde(default)]
     pub splitting: Option<ManifestSplittingConfig>,
+    #[serde(default)]
+    pub virtual_chunk_location_compression:
+        Option<ManifestVirtualChunkLocationCompressionConfig>,
 }
 
 static DEFAULT_MANIFEST_PRELOAD_CONFIG: OnceLock<ManifestPreloadConfig> = OnceLock::new();
 static DEFAULT_MANIFEST_SPLITTING_CONFIG: OnceLock<ManifestSplittingConfig> =
     OnceLock::new();
+static DEFAULT_MANIFEST_VIRTUAL_CHUNK_LOCATION_COMPRESSION_CONFIG: OnceLock<
+    ManifestVirtualChunkLocationCompressionConfig,
+> = OnceLock::new();
 
 impl ManifestConfig {
     pub fn merge(&self, other: Self) -> Self {
         Self {
             preload: other.preload.or(self.preload.clone()),
             splitting: other.splitting.or(self.splitting.clone()),
+            virtual_chunk_location_compression: match (
+                &self.virtual_chunk_location_compression,
+                other.virtual_chunk_location_compression,
+            ) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
         }
     }
 
@@ -351,6 +411,16 @@ impl ManifestConfig {
                 .get_or_init(ManifestSplittingConfig::default)
         })
     }
+
+    pub fn virtual_chunk_location_compression(
+        &self,
+    ) -> &ManifestVirtualChunkLocationCompressionConfig {
+        self.virtual_chunk_location_compression.as_ref().unwrap_or_else(|| {
+            DEFAULT_MANIFEST_VIRTUAL_CHUNK_LOCATION_COMPRESSION_CONFIG
+                .get_or_init(ManifestVirtualChunkLocationCompressionConfig::default)
+        })
+    }
+
     // for testing only, create a config with no preloading, no splitting, and no max_arrays to scan
     pub fn empty() -> Self {
         ManifestConfig {
@@ -360,6 +430,7 @@ impl ManifestConfig {
                 max_arrays_to_scan: None,
             }),
             splitting: None,
+            virtual_chunk_location_compression: None,
         }
     }
 }

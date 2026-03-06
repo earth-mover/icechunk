@@ -1508,6 +1508,7 @@ mod test {
 
     use super::*;
     use crate::{
+        config::ManifestVirtualChunkLocationCompressionConfig,
         format::{
             ChunkIndices, NodeId,
             manifest::{ChunkInfo, ChunkPayload},
@@ -1540,7 +1541,7 @@ mod test {
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
         };
         let pre_existing_manifest =
-            Manifest::from_iter(&ManifestId::random(), vec![ci1].into_iter())
+            Manifest::from_iter(&ManifestId::random(), vec![ci1].into_iter(), None)
                 .await?
                 .unwrap();
         let pre_existing_manifest = Arc::new(pre_existing_manifest);
@@ -1559,9 +1560,13 @@ mod test {
         );
 
         let manifest = Arc::new(
-            Manifest::from_iter(&ManifestId::random(), vec![ci2.clone()].into_iter())
-                .await?
-                .unwrap(),
+            Manifest::from_iter(
+                &ManifestId::random(),
+                vec![ci2.clone()].into_iter(),
+                Some(&ManifestVirtualChunkLocationCompressionConfig::default()),
+            )
+            .await?
+            .unwrap(),
         );
         let id = manifest.id();
         let size = caching.write_manifest(Arc::clone(&manifest)).await?;
@@ -1569,7 +1574,7 @@ mod test {
         let fetched = caching.fetch_manifest(&id, size).await?;
         assert_eq!(fetched.len(), 1);
         assert_equal(
-            fetched.iter(node2.clone()).map(|x| x.unwrap()),
+            fetched.iter(node2.clone()).unwrap().map(|x| x.unwrap()),
             [(ci2.coord.clone(), ci2.payload.clone())],
         );
 
@@ -1649,21 +1654,25 @@ mod test {
         let ci9 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
 
         let manifest1 = Arc::new(
-            Manifest::from_iter(&ManifestId::random(), vec![ci1, ci2, ci3])
+            Manifest::from_iter(&ManifestId::random(), vec![ci1, ci2, ci3], None)
                 .await?
                 .unwrap(),
         );
         let id1 = manifest1.id();
         let size1 = manager.write_manifest(Arc::clone(&manifest1)).await?;
         let manifest2 = Arc::new(
-            Manifest::from_iter(&ManifestId::random(), vec![ci4, ci5, ci6])
-                .await?
-                .unwrap(),
+            Manifest::from_iter(
+                &ManifestId::random(),
+                vec![ci4, ci5, ci6],
+                Some(&ManifestVirtualChunkLocationCompressionConfig::default()),
+            )
+            .await?
+            .unwrap(),
         );
         let id2 = manifest2.id();
         let size2 = manager.write_manifest(Arc::clone(&manifest2)).await?;
         let manifest3 = Arc::new(
-            Manifest::from_iter(&ManifestId::random(), vec![ci7, ci8, ci9])
+            Manifest::from_iter(&ManifestId::random(), vec![ci7, ci8, ci9], None)
                 .await?
                 .unwrap(),
         );
@@ -1722,6 +1731,7 @@ mod test {
                 coord: ChunkIndices(Vec::from([rand::random(), rand::random()])),
                 payload: ChunkPayload::Inline("hello".into()),
             }),
+            None,
         )
         .await
         .unwrap()

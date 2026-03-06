@@ -1981,14 +1981,17 @@ mod tests {
         config::{
             CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestSplitCondition,
             ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
-            RepositoryConfig,
+            ManifestVirtualChunkLocationCompressionConfig, RepositoryConfig,
         },
         conflicts::basic_solver::BasicConflictSolver,
         format::{
             ByteRange, ChunkIndices, MANIFESTS_FILE_PATH,
-            manifest::{ChunkPayload, ManifestSplits},
+            manifest::{
+                ChunkPayload, ManifestSplits, VirtualChunkLocation, VirtualChunkRef,
+            },
             snapshot::{ArrayShape, DimensionName},
         },
+        migrations::migrate_1_to_2,
         ops::manifests::rewrite_manifests,
         session::{CommitMethod, SessionError, get_chunk},
         storage::new_in_memory_storage,
@@ -2234,6 +2237,7 @@ mod tests {
                 max_arrays_to_scan: None,
             }),
             splitting: Some(split_config.clone()),
+            virtual_chunk_location_compression: None,
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
@@ -2261,6 +2265,7 @@ mod tests {
                 max_arrays_to_scan: None,
             }),
             splitting: Some(split_config.clone()),
+            virtual_chunk_location_compression: None,
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
@@ -2562,7 +2567,7 @@ mod tests {
             "main",
             "rewrite_manifests with split-size=12",
             None,
-            commit_method.clone(),
+            commit_method,
         )
         .await?;
         total_manifests += 1;
@@ -2595,7 +2600,7 @@ mod tests {
             "main",
             "rewrite_manifests with split-size=4",
             None,
-            commit_method.clone(),
+            commit_method,
         )
         .await?;
         total_manifests += 3;
@@ -3808,6 +3813,123 @@ mod tests {
         let ops: Vec<_> = stream.try_collect().await?;
         assert_eq!(ops.len(), 6);
         assert!(matches!(ops.last().unwrap().1, UpdateType::RepoInitializedUpdate));
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_virtual_chunk_location_compression_after_migration()
+    -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+
+        // Create a V1 repo with low compression threshold (would compress if IC2)
+        let config = RepositoryConfig {
+            manifest: Some(ManifestConfig {
+                virtual_chunk_location_compression: Some(
+                    ManifestVirtualChunkLocationCompressionConfig {
+                        min_virtual_chunks_to_compress: Some(1),
+                        ..Default::default()
+                    },
+                ),
+                ..ManifestConfig::empty()
+            }),
+            inline_chunk_threshold_bytes: Some(0),
+            ..Default::default()
+        };
+        let repo = Repository::create(
+            Some(config.clone()),
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::V1dot0),
+            true,
+        )
+        .await?;
+
+        // Write virtual chunks
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(10, 1)]).unwrap();
+        session
+            .add_array(
+                array_path.clone(),
+                shape,
+                Some(vec!["x".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+
+        for idx in 0..5u32 {
+            let location =
+                VirtualChunkLocation::from_url(&format!("s3://bucket/file_{idx}.dat"))
+                    .unwrap();
+            session
+                .set_chunk_ref(
+                    array_path.clone(),
+                    ChunkIndices(vec![idx]),
+                    Some(ChunkPayload::Virtual(VirtualChunkRef {
+                        location,
+                        offset: idx as u64 * 1000,
+                        length: 1000,
+                        checksum: None,
+                    })),
+                )
+                .await?;
+        }
+        session.commit("add virtual chunks", None).await?;
+
+        // Verify manifests are NOT compressed (V1 never compresses)
+        let snap_id =
+            repo.resolve_version(&VersionInfo::BranchTipRef("main".to_string())).await?;
+        let snapshot = repo.asset_manager().fetch_snapshot(&snap_id).await?;
+        for mf in snapshot.manifest_files() {
+            let manifest =
+                repo.asset_manager().fetch_manifest_unknown_size(&mf.id).await?;
+            assert!(
+                !manifest.uses_location_compression(),
+                "V1 manifests should not use location compression"
+            );
+            assert_eq!(
+                manifest.num_compressed_refs(),
+                0,
+                "V1 manifests should have no compressed refs"
+            );
+        }
+
+        // Migrate to IC2
+        migrate_1_to_2(repo, false, true).await.unwrap();
+        let repo =
+            Repository::open(Some(config), Arc::clone(&storage), HashMap::new()).await?;
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
+
+        // Rewrite manifests (now with IC2 compression enabled)
+        rewrite_manifests(
+            &repo,
+            "main",
+            "rewrite manifests",
+            None,
+            CommitMethod::NewCommit,
+        )
+        .await
+        .unwrap();
+
+        // Verify manifests ARE now compressed
+        let snap_id =
+            repo.resolve_version(&VersionInfo::BranchTipRef("main".to_string())).await?;
+        let snapshot = repo.asset_manager().fetch_snapshot(&snap_id).await?;
+        for mf in snapshot.manifest_files() {
+            let manifest =
+                repo.asset_manager().fetch_manifest_unknown_size(&mf.id).await?;
+            assert!(
+                manifest.uses_location_compression(),
+                "IC2 manifests should use location compression after rewrite"
+            );
+            assert!(
+                manifest.num_compressed_refs() > 0,
+                "IC2 manifests should have compressed refs after rewrite"
+            );
+        }
 
         Ok(())
     }
