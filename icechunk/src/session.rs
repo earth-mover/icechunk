@@ -1884,23 +1884,29 @@ async fn get_existing_node(
     match snapshot.get_node(renamed_path.as_ref()) {
         Ok(node) => {
             let node = Arc::unwrap_or_clone(node);
+
             let node = match node.node_data {
-                NodeData::Array { ref manifests, .. } => {
-                    if let Some(new_data) = change_set.get_updated_array(&node.id) {
-                        let node_data = NodeData::Array {
-                            shape: new_data.shape.clone(),
-                            dimension_names: new_data.dimension_names.clone(),
-                            manifests: manifests.clone(),
-                        };
-                        NodeSnapshot {
-                            user_data: new_data.user_data.clone(),
-                            node_data,
-                            ..node
+                // this overly verbose match arm allows us to avoid cloning `manifests`
+                // at all, by not holding a reference to `node`
+                NodeData::Array { .. } => match change_set.get_updated_array(&node.id) {
+                    Some(new_data) => {
+                        if let NodeData::Array { manifests, .. } = node.node_data {
+                            let node_data = NodeData::Array {
+                                shape: new_data.shape.clone(),
+                                dimension_names: new_data.dimension_names.clone(),
+                                manifests,
+                            };
+                            NodeSnapshot {
+                                user_data: new_data.user_data.clone(),
+                                node_data,
+                                ..node
+                            }
+                        } else {
+                            unreachable!()
                         }
-                    } else {
-                        node
                     }
-                }
+                    None => node,
+                },
                 NodeData::Group => {
                     if let Some(updated_definition) =
                         change_set.get_updated_group(&node.id)
