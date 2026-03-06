@@ -145,7 +145,6 @@ icechunk._icechunk_python.RebaseFailedError
 icechunk._icechunk_python.RepoUpdateRetryConfig
 icechunk._icechunk_python.RepositoryConfig
 icechunk._icechunk_python.RepositoryConfig.previous_file
-icechunk._icechunk_python.RepositoryConfig.repo_update_retries
 icechunk._icechunk_python.S3Credentials
 icechunk._icechunk_python.S3Credentials.Anonymous
 icechunk._icechunk_python.S3Credentials.Anonymous.__match_args__
