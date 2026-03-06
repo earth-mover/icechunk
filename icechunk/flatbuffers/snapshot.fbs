@@ -14,6 +14,22 @@ struct ManifestFileInfo {
     num_chunk_refs: uint32;
 }
 
+// table version of ManifestFileInfo, allowing optional extra data
+// introduced in spec V2
+table ManifestFileInfoV2 {
+    // id of the object in the repo's object store
+    id: ObjectId12;
+
+    // size in bytes of the whole manifest
+    size_bytes: uint64;
+
+    // number of chunk refs in the manifest
+    num_chunk_refs: uint32;
+
+    // Reserved for future use. Opaque byte vector for extensibility.
+    extra: [uint8];
+}
+
 // A range of chunk indexes
 struct ChunkIndexRange {
   // inclusive
@@ -76,6 +92,10 @@ table NodeSnapshot {
 
     // node's data
     node_data: NodeData (required);
+
+    // Reserved for future use. Opaque byte vector for extensibility.
+    // Introduced in spec version 2
+    extra: [uint8];
 }
 
 
@@ -103,6 +123,13 @@ table Snapshot {
   // the list of all manifest files this snapshot points to
   // sorted in ascending order of ManifestFileInfo.id
   manifest_files: [ManifestFileInfo] (required);
+
+  // Reserved for future use. Opaque byte vector for extensibility.
+  // Introduced in spec version 2
+  extra: [uint8];
+
+  // Introduced in spec version 2
+  manifest_files_v2: [ManifestFileInfoV2];
 }
 
 root_type Snapshot;

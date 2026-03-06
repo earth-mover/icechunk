@@ -469,7 +469,11 @@ impl Manifest {
             let refs = Some(builder.create_vector(refs.as_slice()));
             let array_manifest = generated::ArrayManifest::create(
                 &mut builder,
-                &generated::ArrayManifestArgs { node_id: node_id.as_ref(), refs },
+                &generated::ArrayManifestArgs {
+                    node_id: node_id.as_ref(),
+                    refs,
+                    ..Default::default()
+                },
             );
             array_manifests.push(array_manifest);
         }
@@ -496,6 +500,7 @@ impl Manifest {
                 arrays: Some(arrays),
                 location_dictionary,
                 compression_algorithm,
+                ..Default::default()
             },
         );
 
