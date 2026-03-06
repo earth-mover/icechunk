@@ -11,7 +11,7 @@ from collections.abc import (
 from enum import Enum
 from typing import Any, TypeAlias, final
 
-from typing_extensions import disjoint_base
+from typing_extensions import disjoint_base  # type: ignore[attr-defined]
 
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
@@ -1530,6 +1530,12 @@ class RepositoryConfig:
         Clear all virtual chunk containers from the repository.
         """
         ...
+    @property
+    def repo_update_retries(self) -> RepoUpdateRetryConfig | None:
+        """Retry configuration for repo info update operations."""
+        ...
+    @repo_update_retries.setter
+    def repo_update_retries(self, value: RepoUpdateRetryConfig | None) -> None: ...
     @property
     def num_updates_per_repo_info_file(self) -> int | None:
         """The number of updates per repo info file."""
