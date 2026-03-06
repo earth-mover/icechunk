@@ -233,6 +233,10 @@ pub enum VirtualReferenceErrorKind {
     AzureConfigurationMustIncludeAccount,
     #[error("decoding virtual chunk url")]
     Decoding(#[from] FromUtf8Error),
+    #[error(
+        "no virtual chunk container named '{0}' found, check the repository configuration"
+    )]
+    NoContainerForName(String),
     #[error("unknown error")]
     OtherError(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -250,6 +254,8 @@ where
     }
 }
 
+pub const VCC_RELATIVE_URL_SCHEME: &str = "vcc://";
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct VirtualChunkLocation(String);
 
@@ -258,7 +264,47 @@ impl VirtualChunkLocation {
         self.0.as_str()
     }
 
-    pub fn from_absolute_path(
+    /// Returns true if this is a relative `vcc://` location.
+    pub fn is_relative(&self) -> bool {
+        self.0.starts_with(VCC_RELATIVE_URL_SCHEME)
+    }
+
+    /// If this is a `vcc://name/path` location, returns `(name, relative_path)`.
+    pub fn parse_vcc(&self) -> Option<(&str, &str)> {
+        let rest = self.0.strip_prefix(VCC_RELATIVE_URL_SCHEME)?;
+        let slash = rest.find('/')?;
+        Some((&rest[..slash], &rest[slash + 1..]))
+    }
+
+    /// Creates a relative location from a VCC name and a path relative to its prefix.
+    pub fn from_vcc_path(
+        container_name: &str,
+        relative_path: &str,
+    ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
+        if container_name.is_empty() || container_name.contains('/') {
+            return Err(VirtualReferenceErrorKind::NoContainerForName(
+                container_name.to_string(),
+            )
+            .into());
+        }
+        let path: String = relative_path
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("/");
+        Ok(VirtualChunkLocation(format!(
+            "{VCC_RELATIVE_URL_SCHEME}{container_name}/{path}"
+        )))
+    }
+
+    /// Parse a location that may be either `vcc://` relative or an absolute URL.
+    pub fn from_url(path: &str) -> Result<VirtualChunkLocation, VirtualReferenceError> {
+        // vcc:// URLs are valid URL scheme, so from_absolute_path handles both
+        // absolute (s3://, gcs://, file://) and relative (vcc://) URLs correctly.
+        Self::from_absolute_path(path)
+    }
+
+    fn from_absolute_path(
         path: &str,
     ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
         // make sure we can parse the provided URL before creating the enum
@@ -278,6 +324,8 @@ impl VirtualChunkLocation {
             host.to_string()
         } else if scheme == "file" {
             "".to_string()
+        } else if scheme == "vcc" {
+            return Err(VirtualReferenceErrorKind::NoContainerForName(path.into()).into());
         } else {
             return Err(
                 VirtualReferenceErrorKind::CannotParseBucketName(path.into()).into()
@@ -539,7 +587,7 @@ fn ref_to_payload(
             length: chunk_ref.length(),
         }))
     } else if let Some(location) = chunk_ref.location() {
-        let location = VirtualChunkLocation::from_absolute_path(location)?;
+        let location = VirtualChunkLocation::from_url(location)?;
         Ok(ChunkPayload::Virtual(VirtualChunkRef {
             location,
             checksum: checksum(&chunk_ref),

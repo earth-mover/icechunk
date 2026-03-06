@@ -560,8 +560,13 @@ pub struct PyVirtualChunkContainer {
 #[pymethods]
 impl PyVirtualChunkContainer {
     #[new]
-    pub fn new(url_prefix: String, store: PyObjectStoreConfig) -> Self {
-        Self { name: None, url_prefix, store }
+    #[pyo3(signature = (url_prefix, store, name = None))]
+    pub fn new(
+        url_prefix: String,
+        store: PyObjectStoreConfig,
+        name: Option<String>,
+    ) -> Self {
+        Self { name, url_prefix, store }
     }
 }
 
@@ -569,9 +574,13 @@ impl TryFrom<&PyVirtualChunkContainer> for VirtualChunkContainer {
     type Error = String;
 
     fn try_from(value: &PyVirtualChunkContainer) -> Result<Self, Self::Error> {
-        let cont =
-            VirtualChunkContainer::new(value.url_prefix.clone(), (&value.store).into())?;
-        Ok(cont)
+        let store = (&value.store).into();
+        match value.name.clone() {
+            Some(name) => {
+                VirtualChunkContainer::new_named(name, value.url_prefix.clone(), store)
+            }
+            None => VirtualChunkContainer::new(value.url_prefix.clone(), store),
+        }
     }
 }
 
@@ -1658,7 +1667,8 @@ impl PyRepositoryConfig {
         // TODO: this is a very ugly way to do it but, it avoids duplicating logic
         let this: &PyRepositoryConfig = &*self;
         let mut c: RepositoryConfig = this.try_into().map_err(PyValueError::new_err)?;
-        c.set_virtual_chunk_container((&cont).try_into().map_err(PyValueError::new_err)?);
+        c.set_virtual_chunk_container((&cont).try_into().map_err(PyValueError::new_err)?)
+            .map_err(PyValueError::new_err)?;
         self.virtual_chunk_containers = c
             .virtual_chunk_containers
             .map(|c| c.into_iter().map(|(s, c)| (s, c.into())).collect());

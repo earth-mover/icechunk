@@ -660,9 +660,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # TODO: update changes made rule depending on result of
     # https://github.com/earth-mover/icechunk/issues/1532
     @precondition(
-        lambda self: (self.model.changes_made)
-        and (self.model.spec_version >= 2)
-        and len(self.model.commits) > 1
+        lambda self: (
+            (self.model.changes_made)
+            and (self.model.spec_version >= 2)
+            and len(self.model.commits) > 1
+        )
     )
     def amend(self, message: str) -> str:
         branch = self.session.branch

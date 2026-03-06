@@ -150,9 +150,11 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         super().init_store()
 
     @precondition(
-        lambda self: Version(self.ic.__version__).major >= 2
-        and not self.store.session.has_uncommitted_changes
-        and bool(self.all_arrays)
+        lambda self: (
+            Version(self.ic.__version__).major >= 2
+            and not self.store.session.has_uncommitted_changes
+            and bool(self.all_arrays)
+        )
     )
     @rule(data=st.data())
     def reopen_with_config(self, data: st.DataObject) -> None:
@@ -339,8 +341,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
     @rule(data=st.data())
     @precondition(
-        lambda self: Version(self.ic.__version__).major >= 2
-        and self.repo.spec_version >= 2
+        lambda self: (
+            Version(self.ic.__version__).major >= 2 and self.repo.spec_version >= 2
+        )
     )
     @precondition(lambda self: bool(self.all_arrays))
     def shift_array(self, data: st.DataObject) -> None:

@@ -5,6 +5,10 @@ title: Contributing
 
 👋 Hi! Thanks for your interest in contributing to Icechunk!
 
+!!! note
+    Check the [latest version of this page](https://icechunk.io/en/latest/contributing/)
+    for the most up-to-date development environment setup instructions.
+
 Icechunk is an open source (Apache 2.0) project and welcomes contributions in the form of:
 
 - Usage questions - [open a GitHub issue](https://github.com/earth-mover/icechunk/issues)

@@ -390,7 +390,7 @@ impl Session {
         &self,
         chunk_location: &VirtualChunkLocation,
     ) -> Option<&VirtualChunkContainer> {
-        self.virtual_resolver.matching_container(chunk_location.url())
+        self.virtual_resolver.matching_container(chunk_location)
     }
 
     /// Compute an overview of the current session changes
@@ -1089,13 +1089,19 @@ impl Session {
     pub async fn all_virtual_chunk_locations(
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<String>> + '_> {
-        let stream =
-            self.all_chunks().await?.try_filter_map(|(_, info)| match info.payload {
-                ChunkPayload::Virtual(reference) => {
-                    ready(Ok(Some(reference.location.url().to_string())))
-                }
-                _ => ready(Ok(None)),
-            });
+        let resolver = &self.virtual_resolver;
+        let stream = self.all_chunks().await?.try_filter_map(move |(_, info)| match info
+            .payload
+        {
+            ChunkPayload::Virtual(reference) => {
+                let expanded = match resolver.expand_location(reference.location.url()) {
+                    Ok(abs) => abs,
+                    Err(e) => return ready(Err(e.into())),
+                };
+                ready(Ok(Some(expanded)))
+            }
+            _ => ready(Ok(None)),
+        });
         Ok(stream)
     }
 
@@ -5208,6 +5214,70 @@ mod tests {
             &Conflict::NewNodeConflictsWithExistingNode(conflict_path),
             ds2.rebase(&ConflictDetector).await,
         );
+        Ok(())
+    }
+
+    #[tokio_test]
+    /// Test that delete-then-recreate exactly the same node
+    /// does NOT conflict
+    ///
+    /// This session: delete group + recreate group at same path
+    /// Previous commit: add a different sibling group
+    async fn test_no_conflict_on_delete_then_recreate() -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar".try_into().unwrap();
+        ds1.add_group("/foo/quux".try_into().unwrap(), user_data()).await?;
+        ds1.commit("add sibling group", None).await?;
+
+        ds2.delete_group(path.clone()).await?;
+        ds2.add_group(path.clone(), Bytes::new()).await?;
+        assert!(matches!(
+            ds2.commit("delete+re-add group", None).await,
+            Err(SessionError {
+                kind: SessionErrorKind::Conflict {
+                    expected_parent, actual_parent
+                }, ..
+            }) if expected_parent != actual_parent
+        ));
+
+        ds2.rebase(&ConflictDetector).await?;
+        ds2.commit("delete+re-add group", None).await?;
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    /// Test that delete-then-recreate DOES conflict when the previous commit
+    /// updated the group's metadata.
+    ///
+    /// This session: delete group + recreate group at same path
+    /// Previous commit: updated the group's metadata
+    async fn test_conflict_on_delete_then_recreate_when_group_updated()
+    -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar".try_into().unwrap();
+        ds1.update_group(&path, Bytes::from("updated")).await?;
+        ds1.commit("update group metadata", None).await?;
+
+        let node = ds2.get_node(&path).await.unwrap();
+        ds2.delete_group(path.clone()).await?;
+        ds2.add_group(path.clone(), user_data()).await?;
+        assert!(matches!(
+            ds2.commit("delete+re-add group", None).await,
+            Err(SessionError {
+                kind: SessionErrorKind::Conflict {
+                    expected_parent, actual_parent
+                }, ..
+            }) if expected_parent != actual_parent
+        ));
+
+        assert_has_conflict(
+            &Conflict::DeleteOfUpdatedGroup { path, node_id: node.id },
+            ds2.rebase(&ConflictDetector).await,
+        );
+
         Ok(())
     }
 
