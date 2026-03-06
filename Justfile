@@ -7,43 +7,43 @@ alias fmt := format
 alias pre := pre-commit
 
 [doc("Run all Rust tests via cargo-nextest")]
-test *args='':
+test *args:
   export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples "$@"
 
 [doc("Run Rust doc tests only")]
-doctest *args='':
+doctest *args:
   cargo test --workspace --profile {{profile}} --doc "$@"
 
 [doc("Run all Rust tests with RUST_LOG enabled (e.g. `just test-logs debug`)")]
-test-logs level *args='':
+test-logs level *args:
   shift && export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples --nocapture "$@"
 
 [doc("Compile tests without running them")]
-compile-tests *args='':
+compile-tests *args:
   export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-run --cargo-profile {{profile}} --workspace --all-targets "$@"
 
 [doc("Build the Rust workspace (debug by default, override with `just profile=ci build`)")]
-build *args='':
+build *args:
   cargo build --profile {{profile}} "$@"
 
 [doc("Build the Rust workspace in release mode")]
-build-release *args='':
+build-release *args:
   cargo build --release "$@"
 
 [doc("Run clippy lints on all features")]
-lint *args='':
+lint *args:
   cargo clippy --profile {{profile}} --all-features "$@"
 
 [doc("Format all Rust files (pass `--check` to verify only)")]
-format *args='':
+format *args:
   cargo fmt --all "$@"
 
 [doc("Format all Nix files with alejandra")]
-format-nix *args='':
+format-nix *args:
   alejandra .
 
 [doc("Check dependencies for security/license issues via cargo-deny")]
-check-deps *args='':
+check-deps *args:
   cargo deny --all-features check "$@"
 
 [doc("Run all Rust examples (skips limits_chunk_refs, large_manifests)")]
@@ -85,7 +85,7 @@ bench-compare *args:
 
 [doc("Run ruff formatter on Python code")]
 ruff-format *args:
-  ruff format
+  ruff format "$@"
 
 [doc("Run ruff linter on Python code (pass `--fix` for auto-fix)")]
 ruff *args:
