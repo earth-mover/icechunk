@@ -101,9 +101,16 @@ pub struct Move {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum WasMoved<'a> {
+pub enum MovedTo<'a> {
     Moved(Cow<'a, Path>),
-    Unmoved(Cow<'a, Path>),
+    NotMoved(Cow<'a, Path>),
+    Overwritten,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum MovedFrom<'a> {
+    Moved(Cow<'a, Path>),
+    NotMoved(Cow<'a, Path>),
     Deleted,
 }
 
@@ -125,7 +132,7 @@ impl MoveTracker {
         self.0.iter()
     }
 
-    pub fn moved_to<'a>(&self, path: &'a Path) -> WasMoved<'a> {
+    pub fn moved_to<'a>(&self, path: &'a Path) -> MovedTo<'a> {
         let res = Cow::Borrowed(path);
         for Move { from, to } in self.0.iter() {
             if let Ok(rest) = res.as_ref().buf().strip_prefix(from.buf()) {
@@ -133,17 +140,17 @@ impl MoveTracker {
                 #[allow(clippy::expect_used)]
                 let new_path = Path::new(to.buf().join(rest).to_string().as_str())
                     .expect("Bug in moved_to, cannot create path");
-                return WasMoved::Moved(Cow::Owned(new_path));
+                return MovedTo::Moved(Cow::Owned(new_path));
             } else if res.buf().starts_with(to.buf()) {
                 // the path has been overwritten by the moves
                 // calling code should check for overwrites before moving
-                return WasMoved::Deleted;
+                return MovedTo::Overwritten;
             }
         }
-        WasMoved::Unmoved(res)
+        MovedTo::NotMoved(res)
     }
 
-    pub fn moved_from<'a>(&self, path: &'a Path) -> WasMoved<'a> {
+    pub fn moved_from<'a>(&self, path: &'a Path) -> MovedFrom<'a> {
         let res = Cow::Borrowed(path);
         for Move { from, to } in self.0.iter().rev() {
             if let Ok(rest) = res.as_ref().buf().strip_prefix(to.buf()) {
@@ -151,14 +158,14 @@ impl MoveTracker {
                 #[allow(clippy::expect_used)]
                 let old_path = Path::new(from.buf().join(rest).to_string().as_str())
                     .expect("Bug in moved_from, cannot create path");
-                return WasMoved::Moved(Cow::Owned(old_path));
+                return MovedFrom::Moved(Cow::Owned(old_path));
             } else if res.buf().starts_with(from.buf()) {
                 // the moves have deleted this path
                 // calling code should check for overwrites before moving
-                return WasMoved::Deleted;
+                return MovedFrom::Deleted;
             }
         }
-        WasMoved::Unmoved(res)
+        MovedFrom::NotMoved(res)
     }
 }
 
@@ -296,11 +303,11 @@ impl ChangeSet {
         Ok(())
     }
 
-    pub fn moved_to<'a>(&self, path: &'a Path) -> WasMoved<'a> {
+    pub fn moved_to<'a>(&self, path: &'a Path) -> MovedTo<'a> {
         self.move_tracker().moved_to(path)
     }
 
-    pub fn moved_from<'a>(&self, path: &'a Path) -> WasMoved<'a> {
+    pub fn moved_from<'a>(&self, path: &'a Path) -> MovedFrom<'a> {
         self.move_tracker().moved_from(path)
     }
 
@@ -626,10 +633,10 @@ impl ChangeSet {
     pub fn update_existing_node(&self, node: NodeSnapshot) -> Option<NodeSnapshot> {
         // we need to take into account moves
         let new_path = {
-            use WasMoved::*;
+            use MovedTo::*;
             match self.moved_to(&node.path) {
-                Deleted => return None,
-                Unmoved(cow) | Moved(cow) => cow,
+                Overwritten => return None,
+                NotMoved(cow) | Moved(cow) => cow,
             }
         };
         if self.is_deleted(new_path.as_ref(), &node.id) {
@@ -676,7 +683,7 @@ mod tests {
     use super::ChangeSet;
 
     use crate::{
-        change_set::{ArrayData, EditChanges, MoveTracker, WasMoved},
+        change_set::{ArrayData, EditChanges, MoveTracker},
         format::{
             ChunkIndices, NodeId, Path,
             manifest::{ChunkInfo, ChunkPayload},
@@ -784,7 +791,7 @@ mod tests {
 
     #[icechunk_macros::test]
     fn test_new_path_for_simple() {
-        use WasMoved::*;
+        use super::MovedTo::*;
 
         let mut mt = MoveTracker::default();
         mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
@@ -799,11 +806,11 @@ mod tests {
 
         assert!(matches!(
             mt.moved_to(&Path::new("/foo").unwrap()),
-            Unmoved(p) if p.as_ref() == &Path::new("/foo").unwrap()
+            NotMoved(p) if p.as_ref() == &Path::new("/foo").unwrap()
         ));
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar").unwrap()),
-            Unmoved(p) if p.as_ref() == &Path::new("/foo/bar").unwrap()
+            NotMoved(p) if p.as_ref() == &Path::new("/foo/bar").unwrap()
         ));
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar/old").unwrap()),
@@ -819,13 +826,13 @@ mod tests {
         ));
         assert!(matches!(
             mt.moved_to(&Path::new("/other").unwrap()),
-            Unmoved(p) if p.as_ref() == &Path::new("/other").unwrap()
+            NotMoved(p) if p.as_ref() == &Path::new("/other").unwrap()
         ));
     }
 
     #[icechunk_macros::test]
     fn test_moved_from_simple() {
-        use WasMoved::*;
+        use super::MovedFrom::*;
         let mut mt = MoveTracker::default();
         mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
         mt.record(
@@ -839,11 +846,11 @@ mod tests {
 
         assert!(matches!(
             mt.moved_from(&Path::new("/foo").unwrap()),
-            Unmoved(p) if p.as_ref() == &Path::new("/foo").unwrap()
+            NotMoved(p) if p.as_ref() == &Path::new("/foo").unwrap()
         ));
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar").unwrap()),
-            Unmoved(p) if p.as_ref() == &Path::new("/foo/bar").unwrap()
+            NotMoved(p) if p.as_ref() == &Path::new("/foo/bar").unwrap()
         ));
         assert!(matches!(
             mt.moved_from(&Path::new("/foo/bar/new").unwrap()),
@@ -879,7 +886,7 @@ mod tests {
 
     #[icechunk_macros::test]
     fn test_moved_to_back_and_forth() {
-        use WasMoved::*;
+        use super::MovedTo::*;
         let mut mt = MoveTracker::default();
         mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
         mt.record(Path::new("/foo/bar/new").unwrap(), Path::new("/foo/bar/old").unwrap());
@@ -893,17 +900,17 @@ mod tests {
         ));
         assert!(matches!(
             mt.moved_to(&Path::new("/other").unwrap()),
-            Unmoved(p) if p.as_ref() == &Path::new("/other").unwrap()
+            NotMoved(p) if p.as_ref() == &Path::new("/other").unwrap()
         ));
         assert!(matches!(
             mt.moved_to(&Path::new("/foo/bar/new/other").unwrap()),
-            Deleted
+            Overwritten
         ));
     }
 
     #[icechunk_macros::test]
     fn test_moved_from_back_and_forth() {
-        use WasMoved::*;
+        use super::MovedFrom::*;
         let mut mt = MoveTracker::default();
         mt.record(Path::new("/foo/bar/old").unwrap(), Path::new("/foo/bar/new").unwrap());
         mt.record(Path::new("/foo/bar/new").unwrap(), Path::new("/foo/bar/old").unwrap());
@@ -917,7 +924,7 @@ mod tests {
         ));
         assert!(matches!(
             mt.moved_from(&Path::new("/other").unwrap()),
-            Unmoved(p) if p.as_ref() == &Path::new("/other").unwrap()
+            NotMoved(p) if p.as_ref() == &Path::new("/other").unwrap()
         ));
     }
 

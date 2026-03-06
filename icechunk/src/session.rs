@@ -31,7 +31,7 @@ use tracing::{Instrument, debug, info, instrument, trace, warn};
 use crate::{
     RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
-    change_set::{ArrayData, ChangeSet, ChunkTable, WasMoved},
+    change_set::{ArrayData, ChangeSet, ChunkTable, MovedFrom},
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
@@ -1868,17 +1868,17 @@ async fn get_existing_node(
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
 
     let moved_from = change_set.moved_from(path);
-    if matches!(moved_from, WasMoved::Deleted) {
+    if matches!(moved_from, MovedFrom::Deleted) {
         return Err(SessionErrorKind::NodeNotFound {
             path: path.clone(),
             message: "existing node not found".to_string(),
         }
         .into());
     }
-    let was_moved = matches!(moved_from, WasMoved::Moved(_));
+    let was_moved = matches!(moved_from, MovedFrom::Moved(_));
     let renamed_path = match moved_from {
-        WasMoved::Moved(p) | WasMoved::Unmoved(p) => p,
-        WasMoved::Deleted => unreachable!(),
+        MovedFrom::Moved(p) | MovedFrom::NotMoved(p) => p,
+        MovedFrom::Deleted => unreachable!(),
     };
 
     match snapshot.get_node(renamed_path.as_ref()) {
