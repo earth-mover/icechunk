@@ -11,7 +11,7 @@ from collections.abc import (
 from enum import Enum
 from typing import Any, TypeAlias, final
 
-from typing_extensions import disjoint_base  # type: ignore[attr-defined]
+from typing_extensions import disjoint_base
 
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
