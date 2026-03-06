@@ -26,7 +26,19 @@ lto = "thin"
 codegen-units = 1
 
 # Some settings for faster compiles when benchmarking
+# inherits from "release" by default
+# keep this in sync with `perf` below
 [profile.bench]
+opt-level = 2
+lto = "off"
+codegen-units = 8
+debug = 1
+
+# Optimized profile for benchmarking with maturin/PyO3 compatibility
+# maturin doesn't work well with --profile bench for ... reasons.
+# keep this in sync with `bench` above.
+[profile.perf]
+inherits = "release"
 opt-level = 2
 lto = "off"
 codegen-units = 8
@@ -68,4 +80,4 @@ opt-level = 1
 
 # For convenience with cargo-samply
 [profile.samply]
-inherits = "bench"
+inherits = "perf"
