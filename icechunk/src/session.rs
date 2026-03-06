@@ -1883,31 +1883,30 @@ async fn get_existing_node(
 
     match snapshot.get_node(renamed_path.as_ref()) {
         Ok(node) => {
-            let node = Arc::unwrap_or_clone(node);
-
             let node = match node.node_data {
-                // this overly verbose match arm allows us to avoid cloning `manifests`
-                // at all, by not holding a reference to `node`
+                // this overly verbose match arm allows us to minimize clones
                 NodeData::Array { .. } => match change_set.get_updated_array(&node.id) {
                     Some(new_data) => {
-                        if let NodeData::Array { manifests, .. } = node.node_data {
+                        if let NodeData::Array { manifests, .. } = &node.node_data {
                             let node_data = NodeData::Array {
                                 shape: new_data.shape.clone(),
                                 dimension_names: new_data.dimension_names.clone(),
-                                manifests,
+                                manifests: manifests.clone(),
                             };
                             NodeSnapshot {
                                 user_data: new_data.user_data.clone(),
                                 node_data,
-                                ..node
+                                id: node.id.clone(),
+                                path: node.path.clone(),
                             }
                         } else {
                             unreachable!()
                         }
                     }
-                    None => node,
+                    None => Arc::unwrap_or_clone(node),
                 },
                 NodeData::Group => {
+                    let node = Arc::unwrap_or_clone(node);
                     if let Some(updated_definition) =
                         change_set.get_updated_group(&node.id)
                     {
