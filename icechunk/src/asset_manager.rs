@@ -503,12 +503,9 @@ impl AssetManager {
         .await
         {
             Ok(Some((repo_info, version_info))) => {
-                if repo_cache.is_some() {
-                    trace!("Cached repo info wasn't latest");
-                }
                 if self.use_repo_info_cache {
                     trace!(
-                        "Updating repo info cache from {} to {}",
+                        "Repo info cache wasn't latest, updating from {} to {}",
                         repo_cache
                             .map(|(_, old)| old.to_string())
                             .unwrap_or_else(|| "none".to_string()),
