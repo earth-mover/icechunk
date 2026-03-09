@@ -10,6 +10,10 @@ alias pre := pre-commit
 test *args:
   export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples "$@"
 
+[doc("Run all Rust lib tests via cargo-nextest")]
+unit-test *args:
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --lib "$@"
+
 [doc("Run Rust doc tests only")]
 doctest *args:
   cargo test --workspace --profile {{profile}} --doc "$@"

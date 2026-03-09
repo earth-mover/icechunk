@@ -1815,6 +1815,7 @@ mod test {
             (&initial).try_into()?,
             100,
             None,
+            None,
         ));
         manager.create_repo_info(repo_info.clone()).await?;
 
@@ -1849,6 +1850,7 @@ mod test {
             SpecVersionBin::current(),
             (&initial).try_into()?,
             100,
+            None,
             None,
         ));
         let new_version = manager.create_repo_info(repo_info.clone()).await?;

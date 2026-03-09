@@ -462,6 +462,7 @@ impl RepoInfo {
         snapshot: SnapshotInfo,
         num_updates_per_file: u16,
         config: Option<&RepositoryConfig>,
+        update_time: Option<DateTime<Utc>>,
     ) -> Self {
         #[allow(clippy::expect_used)]
         let config_bytes =
@@ -477,7 +478,7 @@ impl RepoInfo {
             &Default::default(),
             UpdateInfo {
                 update_type: UpdateType::RepoInitializedUpdate,
-                update_time: Utc::now(),
+                update_time: update_time.unwrap_or(Utc::now()),
                 previous_updates: [],
             },
             None,
@@ -650,12 +651,14 @@ impl RepoInfo {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_snapshot(
         &self,
         spec_version: SpecVersionBin,
         snap: SnapshotInfo,
         branch: Option<&str>,
         update_type: UpdateType,
+        update_time: Option<DateTime<Utc>>, // for testing
         previous_file: &str,
         num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
@@ -693,7 +696,7 @@ impl RepoInfo {
             &self.metadata()?,
             UpdateInfo {
                 update_type,
-                update_time: Utc::now(),
+                update_time: update_time.unwrap_or(Utc::now()),
                 previous_updates: self.latest_updates()?,
             },
             Some(previous_file),
@@ -1547,7 +1550,8 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None);
+        let repo =
+            RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None, None);
         assert_eq!(repo.all_snapshots()?.next().unwrap().unwrap(), snap1);
 
         let id2 = SnapshotId::random();
@@ -1566,6 +1570,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: snap2.id.clone(),
             },
+            None,
             "foo/bar",
             100,
         )?;
@@ -1599,6 +1604,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: snap3.id.clone(),
             },
+            None,
             "foo",
             100,
         )?;
@@ -1631,7 +1637,8 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None);
+        let repo =
+            RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None, None);
         let repo = repo.add_branch(SpecVersionBin::current(), "foo", &id1, "foo", 100)?;
         let repo = repo.add_branch(SpecVersionBin::current(), "bar", &id1, "bar", 100)?;
         assert!(matches!(
@@ -1677,6 +1684,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: snap2.id.clone(),
             },
+            None,
             "foo",
             100,
         )?;
@@ -1769,6 +1777,7 @@ mod tests {
             snap1,
             num_updates_per_file,
             None,
+            None,
         );
         assert_eq!(repo.latest_updates()?.count(), 1);
         let (last_update, _, file) = repo.latest_updates()?.next().unwrap()?;
@@ -1852,15 +1861,22 @@ mod tests {
     #[test]
     fn test_update_timestamp_ordering_rejected() -> Result<(), Box<dyn std::error::Error>>
     {
+        let flushed_at = DateTime::from_timestamp_micros(1_000_000).unwrap();
         let id1 = SnapshotId::random();
         let snap1 = SnapshotInfo {
             id: id1.clone(),
             parent_id: None,
-            flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
+            flushed_at,
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1, 100, None);
+        let repo = RepoInfo::initial(
+            SpecVersionBin::current(),
+            snap1,
+            100,
+            None,
+            Some(flushed_at),
+        );
 
         // Attempting add_snapshot with a timestamp equal to the top of the ops log
         // should fail
@@ -1880,6 +1896,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: id2.clone(),
             },
+            Some(flushed_at),
             "backup",
             100,
         );
@@ -1893,11 +1910,12 @@ mod tests {
 
         // Attempting add_snapshot with a timestamp older than the top of the ops log
         // should also fail
+        let flushed_at = DateTime::from_timestamp_micros(500_000).unwrap();
         let id3 = SnapshotId::random();
         let snap3 = SnapshotInfo {
             id: id3.clone(),
             parent_id: Some(id1.clone()),
-            flushed_at: DateTime::from_timestamp_micros(500_000).unwrap(),
+            flushed_at,
             message: "snap 3".to_string(),
             metadata: Default::default(),
         };
@@ -1909,6 +1927,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: id3.clone(),
             },
+            Some(flushed_at),
             "backup",
             100,
         );
@@ -1921,11 +1940,12 @@ mod tests {
         ));
 
         // Attempting add_snapshot with a strictly newer timestamp should succeed
+        let flushed_at = DateTime::from_timestamp_micros(2_000_000).unwrap();
         let id4 = SnapshotId::random();
         let snap4 = SnapshotInfo {
             id: id4.clone(),
             parent_id: Some(id1.clone()),
-            flushed_at: DateTime::from_timestamp_micros(2_000_000).unwrap(),
+            flushed_at,
             message: "snap 4".to_string(),
             metadata: Default::default(),
         };
@@ -1937,6 +1957,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: id4.clone(),
             },
+            Some(flushed_at),
             "backup",
             100,
         );
