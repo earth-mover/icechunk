@@ -399,6 +399,20 @@ pre-commit run --all-files
 pre-commit run rust-pre-commit-ci --hook-stage manual
 ```
 
+#### Minimum supported Rust version
+
+The current MSRV is `1.91.1`.
+
+We maintain packages for [PyPI](https://pypi.org/project/icechunk)
+and [conda-forge](https://github.com/conda-forge/icechunk-feedstock)
+as part of the release process.
+As a rule of thumb we support an MSRV that can be installed from `conda-forge` (including the most recent Rust release),
+since we need it to build the package there.
+The latest official Rust release usually lags a couple of days before it is available in `conda-forge`.
+
+As Icechunk starts to be packaged for other distributions and package managers
+we might review this policy to include older Rust releases.
+
 ### Building Documentation
 
 #### Python Documentation
