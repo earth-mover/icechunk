@@ -158,6 +158,7 @@ icechunk._icechunk_python.Storage
 icechunk._icechunk_python.StorageConcurrencySettings
 icechunk._icechunk_python.StorageRetriesSettings
 icechunk._icechunk_python.StorageSettings
+icechunk._icechunk_python.StorageTimeoutSettings
 icechunk._icechunk_python.UpdateType.BranchCreated.__match_args__
 icechunk._icechunk_python.UpdateType.BranchCreated.__new__
 icechunk._icechunk_python.UpdateType.BranchDeleted.__match_args__

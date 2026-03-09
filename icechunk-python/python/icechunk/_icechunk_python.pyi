@@ -995,6 +995,7 @@ class StorageRetriesSettings:
         """
         ...
 
+@final
 class StorageTimeoutSettings:
     """Configuration for AWS SDK timeout settings.
 
