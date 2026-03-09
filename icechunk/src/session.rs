@@ -31,7 +31,7 @@ use tracing::{Instrument, debug, info, instrument, trace, warn};
 use crate::{
     RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
-    change_set::{ArrayData, ChangeSet, ChunkTable},
+    change_set::{ArrayData, ChangeSet, ChunkTable, MovedFrom},
     config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
@@ -1867,67 +1867,75 @@ async fn get_existing_node(
     // An existing node is one that is present in a Snapshot file on storage
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
 
-    match change_set.moved_from(path) {
-        None => Err(SessionErrorKind::NodeNotFound {
+    let moved_from = change_set.moved_from(path);
+    if matches!(moved_from, MovedFrom::Deleted) {
+        return Err(SessionErrorKind::NodeNotFound {
+            path: path.clone(),
+            message: "existing node not found".to_string(),
+        }
+        .into());
+    }
+    let was_moved = matches!(moved_from, MovedFrom::From(_));
+    let renamed_path = match moved_from {
+        MovedFrom::From(p) | MovedFrom::NotMoved(p) => p,
+        MovedFrom::Deleted => unreachable!(),
+    };
+
+    match snapshot.get_node(renamed_path.as_ref()) {
+        Ok(node) => {
+            let node = match node.node_data {
+                // this overly verbose match arm allows us to minimize clones
+                NodeData::Array { .. } => match change_set.get_updated_array(&node.id) {
+                    Some(new_data) => {
+                        if let NodeData::Array { manifests, .. } = &node.node_data {
+                            let node_data = NodeData::Array {
+                                shape: new_data.shape.clone(),
+                                dimension_names: new_data.dimension_names.clone(),
+                                manifests: manifests.clone(),
+                            };
+                            NodeSnapshot {
+                                user_data: new_data.user_data.clone(),
+                                node_data,
+                                id: node.id.clone(),
+                                path: node.path.clone(),
+                            }
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    None => Arc::unwrap_or_clone(node),
+                },
+                NodeData::Group => {
+                    let node = Arc::unwrap_or_clone(node);
+                    if let Some(updated_definition) =
+                        change_set.get_updated_group(&node.id)
+                    {
+                        NodeSnapshot { user_data: updated_definition.clone(), ..node }
+                    } else {
+                        node
+                    }
+                }
+            };
+            let node = if was_moved {
+                // this is technically unnecessary for back-and-forth moves
+                // but we will ignore that rare case
+                NodeSnapshot { path: path.clone(), ..node }
+            } else {
+                node
+            };
+            Ok(node)
+        }
+        // A missing node here is not really a format error, so we need to
+        // generate the correct error for repositories
+        Err(IcechunkFormatError {
+            kind: IcechunkFormatErrorKind::NodeNotFound { .. },
+            ..
+        }) => Err(SessionErrorKind::NodeNotFound {
             path: path.clone(),
             message: "existing node not found".to_string(),
         }
         .into()),
-        Some(renamed_path) => {
-            match snapshot.get_node(renamed_path.as_ref()) {
-                Ok(node) => {
-                    let node = Arc::unwrap_or_clone(node);
-                    let node = match node.node_data {
-                        NodeData::Array { ref manifests, .. } => {
-                            if let Some(new_data) = change_set.get_updated_array(&node.id)
-                            {
-                                let node_data = NodeData::Array {
-                                    shape: new_data.shape.clone(),
-                                    dimension_names: new_data.dimension_names.clone(),
-                                    manifests: manifests.clone(),
-                                };
-                                NodeSnapshot {
-                                    user_data: new_data.user_data.clone(),
-                                    node_data,
-                                    ..node
-                                }
-                            } else {
-                                node
-                            }
-                        }
-                        NodeData::Group => {
-                            if let Some(updated_definition) =
-                                change_set.get_updated_group(&node.id)
-                            {
-                                NodeSnapshot {
-                                    user_data: updated_definition.clone(),
-                                    ..node
-                                }
-                            } else {
-                                node
-                            }
-                        }
-                    };
-                    let node = if &node.path != path {
-                        NodeSnapshot { path: path.clone(), ..node }
-                    } else {
-                        node
-                    };
-                    Ok(node)
-                }
-                // A missing node here is not really a format error, so we need to
-                // generate the correct error for repositories
-                Err(IcechunkFormatError {
-                    kind: IcechunkFormatErrorKind::NodeNotFound { .. },
-                    ..
-                }) => Err(SessionErrorKind::NodeNotFound {
-                    path: path.clone(),
-                    message: "existing node not found".to_string(),
-                }
-                .into()),
-                Err(err) => Err(SessionError::from(err)),
-            }
-        }
+        Err(err) => Err(SessionError::from(err)),
     }
 }
 

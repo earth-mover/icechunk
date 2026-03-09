@@ -17,6 +17,8 @@ Icechunk is an open source (Apache 2.0) project and welcomes contributions in th
 - Documentation improvements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
 - Bug fixes and enhancements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
 
+🤖 Please review our [AI Usage Policy](ai-policy.md), which also serves as contribution guidelines, before submitting pull requests.
+
 ## Development
 
 This guide describes the local development workflow for:
@@ -35,7 +37,14 @@ We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rus
 
     ```bash
     pixi shell -m icechunk-python/pyproject.toml
+    just develop
     ```
+
+    `just develop` will set up the `maturin-import-hook` for fast incremental Rust compilation
+    and do the first build with `maturin develop --uv`. `just develop` can be skipped in future
+    developer shell activations, but should also run fast after the first invocation (and if
+    there no changes in the Rust code).
+
     !!! Usage without pixi shell
         You could run all commands below using this pattern:
         ```shell
