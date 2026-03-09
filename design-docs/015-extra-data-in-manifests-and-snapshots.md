@@ -9,12 +9,12 @@ having to change the format.
 
 ## Design
 
-We add extra information to the different objects using flexbuffers maps.
-Icechunk 2 already uses flexbuffers for serialization of repo and snapshot
-metadata.
+We add extra information to the different objects using opaque byte vectors
+reserved for future extensibility. The encoding of these bytes is intentionally
+left unspecified — consumers should not assume any particular format.
 
 This document doesn't dictate what data can or should be added in the
-flexbuffer map.
+extra fields.
 
 ### Manifest references
 
@@ -41,7 +41,7 @@ table ManifestFileInfoV2 {
     num_chunk_refs: uint32;
 
     // NEW FIELD
-    extra: [uint8] (flexbuffer);
+    extra: [uint8];
 }
 ```
 
@@ -73,7 +73,7 @@ table Manifest {
   arrays: [ArrayManifest] (required);
 
   // NEW FIELD
-  extra: [uint8] (flexbuffer);
+  extra: [uint8];
 }
 ```
 
@@ -96,7 +96,7 @@ table TransactionLog {
   moved_nodes: [MoveOperation];
 
   // NEW FIELD
-  extra: [uint8] (flexbuffer);
+  extra: [uint8];
 }
 ```
 
@@ -117,10 +117,10 @@ table Repo {
   metadata: [MetadataItem];
   latest_updates: [Update] (required);
   repo_before_updates: string;
-  config: [uint8];
+  config: [uint8] (flexbuffer);
 
   // NEW FIELD
-  extra: [uint8] (flexbuffer);
+  extra: [uint8];
 }
 ```
 
@@ -141,9 +141,86 @@ table Snapshot {
   manifest_files: [ManifestFileInfo] (required);
 
   // NEW FIELD
-  extra: [uint8] (flexbuffer);
+  extra: [uint8];
+
+  // NEW FIELD (spec version 2)
+  manifest_files_v2: [ManifestFileInfoV2];
 }
 ```
+
+### ArrayManifest (in manifest.fbs)
+
+Per-array extensibility point in manifests (e.g., per-array statistics).
+
+```flatbuffers
+table ArrayManifest {
+
+  // existing fields
+  node_id: ObjectId8 (required);
+  refs: [ChunkRef] (required);
+
+  // NEW FIELD
+  extra: [uint8];
+}
+```
+
+### ChunkRef (in manifest.fbs)
+
+Per-chunk extensibility point. There can be millions of ChunkRefs, but since
+`ChunkRef` is a FlatBuffers `table`, absent optional fields have zero
+per-instance overhead (only ~2 bytes in the shared vtable).
+
+```flatbuffers
+table ChunkRef {
+
+  // existing fields
+  index: [uint32] (required);
+  inline: [uint8];
+  offset: uint64 = 0;
+  length: uint64 = 0;
+  chunk_id: ObjectId12;
+  location: string;
+  checksum_etag: string;
+  checksum_last_modified: uint32 = 0;
+  compressed_location: [uint8];
+
+  // NEW FIELD
+  extra: [uint8];
+}
+```
+
+### NodeSnapshot (in snapshot.fbs)
+
+Per-node extensibility point in snapshots (e.g., computed node-level stats
+like total size, chunk count).
+
+```flatbuffers
+table NodeSnapshot {
+
+  // existing fields
+  id: ObjectId8 (required);
+  path: string (required);
+  user_data: [uint8] (required);
+  node_data: NodeData (required);
+
+  // NEW FIELD
+  extra: [uint8];
+}
+```
+
+## Size overhead analysis
+
+Since FlatBuffers tables only store offsets for fields that are actually
+present, the cost of adding an optional `extra` field depends on usage:
+
+| Scenario | Per-instance overhead |
+|---|---|
+| Field absent (not set) | 0 bytes (only ~2 bytes added to the shared vtable) |
+| Empty byte vector | ~6–10 bytes |
+| Small payload (e.g. 3 key-value pairs) | ~40–80 bytes depending on encoding |
+
+This means structures like `ChunkRef`, where millions of instances may exist,
+pay no per-instance cost when `extra` is not used.
 
 ## Other format changes
 

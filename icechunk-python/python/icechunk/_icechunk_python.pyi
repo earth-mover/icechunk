@@ -838,6 +838,50 @@ class ManifestSplittingConfig:
         """
         ...
 
+class ManifestVirtualChunkLocationCompressionConfig:
+    """Configuration for zstd dictionary-based compression of virtual chunk location URLs in manifests."""
+
+    def __new__(
+        cls,
+        min_num_chunks: int | None = None,
+        *,
+        dictionary_max_training_samples: int | None = None,
+        dictionary_max_size_bytes: int | None = None,
+        compression_level: int | None = None,
+    ) -> ManifestVirtualChunkLocationCompressionConfig:
+        """
+        Create a new `ManifestVirtualChunkLocationCompressionConfig` object
+
+        Parameters
+        ----------
+        num_chunks: int | None
+            Minimum number of virtual chunks required to enable compression. Default: 1000.
+        dictionary_max_training_samples: int | None
+            Maximum number of URL samples used to train the compression dictionary. Default: 100.
+        dictionary_max_size_bytes: int | None
+            Maximum size of the trained compression dictionary in bytes. Default: 2048.
+        compression_level: int | None
+            Zstd compression level. Default: 3.
+        """
+        ...
+
+    @property
+    def min_num_chunks(self) -> int | None: ...
+    @min_num_chunks.setter
+    def min_num_chunks(self, value: int | None) -> None: ...
+    @property
+    def dictionary_max_training_samples(self) -> int | None: ...
+    @dictionary_max_training_samples.setter
+    def dictionary_max_training_samples(self, value: int | None) -> None: ...
+    @property
+    def dictionary_max_size_bytes(self) -> int | None: ...
+    @dictionary_max_size_bytes.setter
+    def dictionary_max_size_bytes(self, value: int | None) -> None: ...
+    @property
+    def compression_level(self) -> int | None: ...
+    @compression_level.setter
+    def compression_level(self, value: int | None) -> None: ...
+
 class ManifestConfig:
     """Configuration for how Icechunk manifests"""
 
@@ -845,6 +889,8 @@ class ManifestConfig:
         cls,
         preload: ManifestPreloadConfig | None = None,
         splitting: ManifestSplittingConfig | None = None,
+        virtual_chunk_location_compression: ManifestVirtualChunkLocationCompressionConfig
+        | None = None,
     ) -> ManifestConfig:
         """
         Create a new `ManifestConfig` object
@@ -855,6 +901,8 @@ class ManifestConfig:
             The configuration for how Icechunk manifests will be preloaded.
         splitting: ManifestSplittingConfig | None
             The configuration for how Icechunk manifests will be split.
+        virtual_chunk_location_compression: ManifestVirtualChunkLocationCompressionConfig | None
+            The configuration for zstd compression of virtual chunk location URLs.
         """
         ...
     @property
@@ -901,6 +949,34 @@ class ManifestConfig:
         ----------
         value: ManifestSplittingConfig | None
             The configuration for how Icechunk manifests will be split.
+        """
+        ...
+
+    @property
+    def virtual_chunk_location_compression(
+        self,
+    ) -> ManifestVirtualChunkLocationCompressionConfig | None:
+        """
+        The configuration for zstd compression of virtual chunk location URLs.
+
+        Returns
+        -------
+        ManifestVirtualChunkLocationCompressionConfig | None
+            The compression configuration.
+        """
+        ...
+
+    @virtual_chunk_location_compression.setter
+    def virtual_chunk_location_compression(
+        self, value: ManifestVirtualChunkLocationCompressionConfig | None
+    ) -> None:
+        """
+        Set the configuration for zstd compression of virtual chunk location URLs.
+
+        Parameters
+        ----------
+        value: ManifestVirtualChunkLocationCompressionConfig | None
+            The compression configuration.
         """
         ...
 
@@ -1515,6 +1591,12 @@ class RepositoryConfig:
         Clear all virtual chunk containers from the repository.
         """
         ...
+    @property
+    def repo_update_retries(self) -> RepoUpdateRetryConfig | None:
+        """Retry configuration for repo info update operations."""
+        ...
+    @repo_update_retries.setter
+    def repo_update_retries(self, value: RepoUpdateRetryConfig | None) -> None: ...
     @property
     def num_updates_per_repo_info_file(self) -> int | None:
         """The number of updates per repo info file."""

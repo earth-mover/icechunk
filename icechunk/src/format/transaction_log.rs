@@ -105,6 +105,7 @@ impl TransactionLog {
                 updated_arrays,
                 updated_chunks,
                 moved_nodes,
+                ..Default::default()
             },
         );
 
@@ -203,6 +204,7 @@ impl TransactionLog {
                 updated_arrays,
                 updated_chunks,
                 moved_nodes,
+                ..Default::default()
             },
         );
 
@@ -468,6 +470,7 @@ impl TransactionLog {
                 updated_arrays,
                 updated_chunks,
                 moved_nodes,
+                ..Default::default()
             },
         );
 
