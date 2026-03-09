@@ -50,6 +50,13 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
+      - name: Check if MSRV is up to date
+        run: |
+          set -e
+          grep 'rust-version = "${{ env.RUST_CHANNEL }}"' Cargo.toml
+          # shellcheck disable=SC2016
+          grep 'The current MSRV is `${{ env.RUST_CHANNEL }}`' icechunk-python/docs/docs/contributing.md
+
       - name: Stand up docker services
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
         run: |
