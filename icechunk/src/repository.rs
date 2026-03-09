@@ -929,10 +929,24 @@ impl Repository {
         version: &VersionInfo,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
     {
+        self.ancestry_using(version, None).await
+    }
+
+    async fn ancestry_using(
+        &self,
+        version: &VersionInfo,
+        repo_info: Option<Arc<RepoInfo>>,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
+    {
         match self.spec_version {
             SpecVersionBin::V1dot0 => Ok(self.ancestry_v1(version).await?.left_stream()),
             SpecVersionBin::V2dot0 => {
-                let iter = self.ancestry_v2(version).await?;
+                let ri = match repo_info {
+                    Some(ri) => ri,
+                    None => self.get_repo_info().await?.0,
+                };
+                let snapshot_id = self.resolve_version_v2(&ri, version).await?;
+                let iter = AncestryIteratorV2::new(ri, &snapshot_id)?;
                 Ok(stream::iter(iter).right_stream())
             }
         }
@@ -947,18 +961,6 @@ impl Repository {
     {
         let snapshot_id = self.resolve_version(version).await?;
         self.snapshot_info_ancestry_v1(&snapshot_id).await
-    }
-
-    #[instrument(skip(self))]
-    async fn ancestry_v2(
-        &self,
-        version: &VersionInfo,
-    ) -> RepositoryResult<
-        impl Iterator<Item = RepositoryResult<SnapshotInfo>> + Send + use<>,
-    > {
-        let (repo_info, _) = self.get_repo_info().await?;
-        let snapshot_id = self.resolve_version_v2(&repo_info, version).await?;
-        AncestryIteratorV2::new(repo_info, &snapshot_id)
     }
 
     #[instrument(skip(self))]
@@ -1134,8 +1136,20 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    async fn lookup_branch_v2(&self, branch: &str) -> RepositoryResult<SnapshotId> {
-        let (ri, _) = self.get_repo_info().await?;
+    async fn lookup_branch_v2(
+        &self,
+        branch: &str,
+        repo_info: Option<&RepoInfo>,
+    ) -> RepositoryResult<SnapshotId> {
+        let fetched; // used to hold the temp ref
+        let ri = match repo_info {
+            Some(ri) => ri,
+            None => {
+                fetched = self.get_repo_info().await?.0;
+                &fetched
+            }
+        };
+
         match ri.resolve_branch(branch) {
             Ok(snap) => Ok(snap),
             Err(IcechunkFormatError {
@@ -1152,7 +1166,7 @@ impl Repository {
     pub async fn lookup_branch(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
             SpecVersionBin::V1dot0 => self.lookup_branch_v1(branch).await,
-            SpecVersionBin::V2dot0 => self.lookup_branch_v2(branch).await,
+            SpecVersionBin::V2dot0 => self.lookup_branch_v2(branch, None).await,
         }
     }
 
@@ -1498,8 +1512,19 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    async fn lookup_tag_v2(&self, tag: &str) -> RepositoryResult<SnapshotId> {
-        let (ri, _) = self.get_repo_info().await?;
+    async fn lookup_tag_v2(
+        &self,
+        tag: &str,
+        repo_info: Option<&RepoInfo>,
+    ) -> RepositoryResult<SnapshotId> {
+        let fetched; // used to hold the temp ref
+        let ri = match repo_info {
+            Some(ri) => ri,
+            None => {
+                fetched = self.get_repo_info().await?.0;
+                &fetched
+            }
+        };
         match ri.resolve_tag(tag) {
             Ok(snap) => Ok(snap),
             Err(IcechunkFormatError {
@@ -1516,7 +1541,7 @@ impl Repository {
     pub async fn lookup_tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
             SpecVersionBin::V1dot0 => self.lookup_tag_v1(tag).await,
-            SpecVersionBin::V2dot0 => self.lookup_tag_v2(tag).await,
+            SpecVersionBin::V2dot0 => self.lookup_tag_v2(tag, None).await,
         }
     }
 
@@ -1560,8 +1585,10 @@ impl Repository {
                 raise_if_invalid_snapshot_id_v2(repo_info, sid)?;
                 Ok(sid.clone())
             }
-            RefVersionInfo::TagRef(tag) => self.lookup_tag(tag).await,
-            RefVersionInfo::BranchTipRef(branch) => self.lookup_branch(branch).await,
+            RefVersionInfo::TagRef(tag) => self.lookup_tag_v2(tag, Some(repo_info)).await,
+            RefVersionInfo::BranchTipRef(branch) => {
+                self.lookup_branch_v2(branch, Some(repo_info)).await
+            }
         }
     }
 
@@ -1570,11 +1597,26 @@ impl Repository {
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<SnapshotId> {
+        self.resolve_version_using(version, None).await
+    }
+
+    async fn resolve_version_using(
+        &self,
+        version: &VersionInfo,
+        repo_info: Option<&RepoInfo>,
+    ) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
             SpecVersionBin::V1dot0 => self.resolve_version_v1(version).await,
             SpecVersionBin::V2dot0 => {
-                self.resolve_version_v2(self.get_repo_info().await?.0.as_ref(), version)
-                    .await
+                let fetched;
+                let ri = match repo_info {
+                    Some(ri) => ri,
+                    None => {
+                        fetched = self.get_repo_info().await?.0;
+                        &fetched
+                    }
+                };
+                self.resolve_version_v2(ri, version).await
             }
         }
     }
@@ -1661,10 +1703,15 @@ impl Repository {
         from: &VersionInfo,
         to: &VersionInfo,
     ) -> SessionResult<Diff> {
-        let from = self.resolve_version(from).await?;
-        let to = self.resolve_version(to).await?;
+        let repo_info = match self.spec_version {
+            SpecVersionBin::V1dot0 => None,
+            SpecVersionBin::V2dot0 => Some(self.get_repo_info().await?.0),
+        };
+
+        let from = self.resolve_version_using(from, repo_info.as_deref()).await?;
+        let to = self.resolve_version_using(to, repo_info.as_deref()).await?;
         let all_snaps = self
-            .ancestry(&VersionInfo::SnapshotId(to))
+            .ancestry_using(&VersionInfo::SnapshotId(to), repo_info.clone())
             .await?
             .try_take_while(|snap_info| ready(Ok(snap_info.id != from)))
             .try_collect::<Vec<_>>()
@@ -1699,10 +1746,18 @@ impl Repository {
             .await?;
 
         if let Some(to_snap) = all_snaps.first().as_ref().map(|snap| snap.id.clone()) {
-            let from_session =
-                self.readonly_session(&VersionInfo::SnapshotId(from)).await?;
-            let to_session =
-                self.readonly_session(&VersionInfo::SnapshotId(to_snap)).await?;
+            let from_session = self
+                .readonly_session_using(
+                    &VersionInfo::SnapshotId(from),
+                    repo_info.as_deref(),
+                )
+                .await?;
+            let to_session = self
+                .readonly_session_using(
+                    &VersionInfo::SnapshotId(to_snap),
+                    repo_info.as_deref(),
+                )
+                .await?;
             builder.to_diff(&from_session, &to_session).await
         } else {
             Err(SessionErrorKind::BadSnapshotChainForDiff.into())
@@ -1714,7 +1769,15 @@ impl Repository {
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<Session> {
-        let snapshot_id = self.resolve_version(version).await?;
+        self.readonly_session_using(version, None).await
+    }
+
+    async fn readonly_session_using(
+        &self,
+        version: &VersionInfo,
+        repo_info: Option<&RepoInfo>,
+    ) -> RepositoryResult<Session> {
+        let snapshot_id = self.resolve_version_using(version, repo_info).await?;
         let session = Session::create_readonly_session(
             self.config.clone(),
             self.storage_settings.clone(),
@@ -1765,10 +1828,8 @@ impl Repository {
         // this feature is only available in IC2
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        let snapshot_id = self.lookup_branch(branch).await?;
-
-        // TODO: inefficient, lookup branch already does this
         let (ri, _) = self.asset_manager().fetch_repo_info().await?;
+        let snapshot_id = self.lookup_branch_v2(branch, Some(&ri)).await?;
 
         raise_if_feature_flag_disabled(
             ri.as_ref(),
@@ -1981,14 +2042,17 @@ mod tests {
         config::{
             CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestSplitCondition,
             ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
-            RepositoryConfig,
+            ManifestVirtualChunkLocationCompressionConfig, RepositoryConfig,
         },
         conflicts::basic_solver::BasicConflictSolver,
         format::{
             ByteRange, ChunkIndices, MANIFESTS_FILE_PATH,
-            manifest::{ChunkPayload, ManifestSplits},
+            manifest::{
+                ChunkPayload, ManifestSplits, VirtualChunkLocation, VirtualChunkRef,
+            },
             snapshot::{ArrayShape, DimensionName},
         },
+        migrations::migrate_1_to_2,
         ops::manifests::rewrite_manifests,
         session::{CommitMethod, SessionError, get_chunk},
         storage::new_in_memory_storage,
@@ -2234,6 +2298,7 @@ mod tests {
                 max_arrays_to_scan: None,
             }),
             splitting: Some(split_config.clone()),
+            virtual_chunk_location_compression: None,
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
@@ -2261,6 +2326,7 @@ mod tests {
                 max_arrays_to_scan: None,
             }),
             splitting: Some(split_config.clone()),
+            virtual_chunk_location_compression: None,
         };
         let config = RepositoryConfig {
             manifest: Some(man_config),
@@ -2562,7 +2628,7 @@ mod tests {
             "main",
             "rewrite_manifests with split-size=12",
             None,
-            commit_method.clone(),
+            commit_method,
         )
         .await?;
         total_manifests += 1;
@@ -2595,7 +2661,7 @@ mod tests {
             "main",
             "rewrite_manifests with split-size=4",
             None,
-            commit_method.clone(),
+            commit_method,
         )
         .await?;
         total_manifests += 3;
@@ -3808,6 +3874,123 @@ mod tests {
         let ops: Vec<_> = stream.try_collect().await?;
         assert_eq!(ops.len(), 6);
         assert!(matches!(ops.last().unwrap().1, UpdateType::RepoInitializedUpdate));
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_virtual_chunk_location_compression_after_migration()
+    -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+
+        // Create a V1 repo with low compression threshold (would compress if IC2)
+        let config = RepositoryConfig {
+            manifest: Some(ManifestConfig {
+                virtual_chunk_location_compression: Some(
+                    ManifestVirtualChunkLocationCompressionConfig {
+                        min_num_chunks: Some(1),
+                        ..Default::default()
+                    },
+                ),
+                ..ManifestConfig::empty()
+            }),
+            inline_chunk_threshold_bytes: Some(0),
+            ..Default::default()
+        };
+        let repo = Repository::create(
+            Some(config.clone()),
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::V1dot0),
+            true,
+        )
+        .await?;
+
+        // Write virtual chunks
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(10, 1)]).unwrap();
+        session
+            .add_array(
+                array_path.clone(),
+                shape,
+                Some(vec!["x".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+
+        for idx in 0..5u32 {
+            let location =
+                VirtualChunkLocation::from_url(&format!("s3://bucket/file_{idx}.dat"))
+                    .unwrap();
+            session
+                .set_chunk_ref(
+                    array_path.clone(),
+                    ChunkIndices(vec![idx]),
+                    Some(ChunkPayload::Virtual(VirtualChunkRef {
+                        location,
+                        offset: idx as u64 * 1000,
+                        length: 1000,
+                        checksum: None,
+                    })),
+                )
+                .await?;
+        }
+        session.commit("add virtual chunks", None).await?;
+
+        // Verify manifests are NOT compressed (V1 never compresses)
+        let snap_id =
+            repo.resolve_version(&VersionInfo::BranchTipRef("main".to_string())).await?;
+        let snapshot = repo.asset_manager().fetch_snapshot(&snap_id).await?;
+        for mf in snapshot.manifest_files() {
+            let manifest =
+                repo.asset_manager().fetch_manifest_unknown_size(&mf.id).await?;
+            assert!(
+                !manifest.uses_location_compression(),
+                "V1 manifests should not use location compression"
+            );
+            assert_eq!(
+                manifest.num_compressed_refs(),
+                0,
+                "V1 manifests should have no compressed refs"
+            );
+        }
+
+        // Migrate to IC2
+        migrate_1_to_2(repo, false, true).await.unwrap();
+        let repo =
+            Repository::open(Some(config), Arc::clone(&storage), HashMap::new()).await?;
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
+
+        // Rewrite manifests (now with IC2 compression enabled)
+        rewrite_manifests(
+            &repo,
+            "main",
+            "rewrite manifests",
+            None,
+            CommitMethod::NewCommit,
+        )
+        .await
+        .unwrap();
+
+        // Verify manifests ARE now compressed
+        let snap_id =
+            repo.resolve_version(&VersionInfo::BranchTipRef("main".to_string())).await?;
+        let snapshot = repo.asset_manager().fetch_snapshot(&snap_id).await?;
+        for mf in snapshot.manifest_files() {
+            let manifest =
+                repo.asset_manager().fetch_manifest_unknown_size(&mf.id).await?;
+            assert!(
+                manifest.uses_location_compression(),
+                "IC2 manifests should use location compression after rewrite"
+            );
+            assert!(
+                manifest.num_compressed_refs() > 0,
+                "IC2 manifests should have compressed refs after rewrite"
+            );
+        }
 
         Ok(())
     }

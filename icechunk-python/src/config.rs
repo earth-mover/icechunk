@@ -23,8 +23,8 @@ use icechunk::{
         GcsCredentialsFetcher, GcsStaticCredentials, ManifestConfig,
         ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
         ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
-        RepoUpdateRetryConfig, S3Credentials, S3CredentialsFetcher, S3Options,
-        S3StaticCredentials,
+        ManifestVirtualChunkLocationCompressionConfig, RepoUpdateRetryConfig,
+        S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
@@ -1453,6 +1453,82 @@ impl From<&PyManifestSplittingConfig> for ManifestSplittingConfig {
     }
 }
 
+#[pyclass(name = "ManifestVirtualChunkLocationCompressionConfig", eq)]
+#[derive(Debug, Default)]
+pub struct PyManifestVirtualChunkLocationCompressionConfig {
+    #[pyo3(get, set)]
+    pub min_num_chunks: Option<u16>,
+    #[pyo3(get, set)]
+    pub dictionary_max_training_samples: Option<u16>,
+    #[pyo3(get, set)]
+    pub dictionary_max_size_bytes: Option<u32>,
+    #[pyo3(get, set)]
+    pub compression_level: Option<i32>,
+}
+
+#[pymethods]
+impl PyManifestVirtualChunkLocationCompressionConfig {
+    #[new]
+    #[pyo3(signature = (min_num_chunks=None, *, dictionary_max_training_samples=None, dictionary_max_size_bytes=None, compression_level=None))]
+    fn new(
+        min_num_chunks: Option<u16>,
+        dictionary_max_training_samples: Option<u16>,
+        dictionary_max_size_bytes: Option<u32>,
+        compression_level: Option<i32>,
+    ) -> Self {
+        Self {
+            min_num_chunks,
+            dictionary_max_training_samples,
+            dictionary_max_size_bytes,
+            compression_level,
+        }
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!(
+            "ManifestVirtualChunkLocationCompressionConfig(min_num_chunks={}, dictionary_max_training_samples={}, dictionary_max_size_bytes={}, compression_level={})",
+            format_option_to_string(self.min_num_chunks),
+            format_option_to_string(self.dictionary_max_training_samples),
+            format_option_to_string(self.dictionary_max_size_bytes),
+            format_option_to_string(self.compression_level),
+        )
+    }
+}
+
+impl PartialEq for PyManifestVirtualChunkLocationCompressionConfig {
+    fn eq(&self, other: &Self) -> bool {
+        let x: ManifestVirtualChunkLocationCompressionConfig = self.into();
+        let y: ManifestVirtualChunkLocationCompressionConfig = other.into();
+        x == y
+    }
+}
+
+impl From<&PyManifestVirtualChunkLocationCompressionConfig>
+    for ManifestVirtualChunkLocationCompressionConfig
+{
+    fn from(value: &PyManifestVirtualChunkLocationCompressionConfig) -> Self {
+        Self {
+            min_num_chunks: value.min_num_chunks,
+            dictionary_max_training_samples: value.dictionary_max_training_samples,
+            dictionary_max_size_bytes: value.dictionary_max_size_bytes,
+            compression_level: value.compression_level,
+        }
+    }
+}
+
+impl From<ManifestVirtualChunkLocationCompressionConfig>
+    for PyManifestVirtualChunkLocationCompressionConfig
+{
+    fn from(value: ManifestVirtualChunkLocationCompressionConfig) -> Self {
+        Self {
+            min_num_chunks: value.min_num_chunks,
+            dictionary_max_training_samples: value.dictionary_max_training_samples,
+            dictionary_max_size_bytes: value.dictionary_max_size_bytes,
+            compression_level: value.compression_level,
+        }
+    }
+}
+
 #[pyclass(name = "ManifestConfig", eq)]
 #[derive(Debug, Default)]
 pub struct PyManifestConfig {
@@ -1460,25 +1536,33 @@ pub struct PyManifestConfig {
     pub preload: Option<Py<PyManifestPreloadConfig>>,
     #[pyo3(get, set)]
     pub splitting: Option<Py<PyManifestSplittingConfig>>,
+    #[pyo3(get, set)]
+    pub virtual_chunk_location_compression:
+        Option<Py<PyManifestVirtualChunkLocationCompressionConfig>>,
 }
 
 #[pymethods]
 impl PyManifestConfig {
     #[new]
-    #[pyo3(signature = (preload=None, splitting=None))]
+    #[pyo3(signature = (preload=None, splitting=None, virtual_chunk_location_compression=None))]
     fn new(
         preload: Option<Py<PyManifestPreloadConfig>>,
         splitting: Option<Py<PyManifestSplittingConfig>>,
+        virtual_chunk_location_compression: Option<
+            Py<PyManifestVirtualChunkLocationCompressionConfig>,
+        >,
     ) -> Self {
-        Self { preload, splitting }
+        Self { preload, splitting, virtual_chunk_location_compression }
     }
 
     pub fn __repr__(&self) -> String {
-        // TODO: improve repr
         format!(
-            r#"ManifestConfig(preload={pre}, splitting={sha})"#,
+            r#"ManifestConfig(preload={pre}, splitting={spl}, virtual_chunk_location_compression={comp})"#,
             pre = format_option_to_string(self.preload.as_ref().map(|l| l.to_string())),
-            sha = format_option_to_string(self.splitting.as_ref().map(|l| l.to_string())),
+            spl = format_option_to_string(self.splitting.as_ref().map(|l| l.to_string())),
+            comp = format_option_to_string(
+                self.virtual_chunk_location_compression.as_ref().map(|l| l.to_string())
+            ),
         )
     }
 }
@@ -1496,6 +1580,10 @@ impl From<&PyManifestConfig> for ManifestConfig {
         Python::attach(|py| Self {
             preload: value.preload.as_ref().map(|c| (&*c.borrow(py)).into()),
             splitting: value.splitting.as_ref().map(|c| (&*c.borrow(py)).into()),
+            virtual_chunk_location_compression: value
+                .virtual_chunk_location_compression
+                .as_ref()
+                .map(|c| (&*c.borrow(py)).into()),
         })
     }
 }
@@ -1503,7 +1591,8 @@ impl From<&PyManifestConfig> for ManifestConfig {
 impl From<ManifestConfig> for PyManifestConfig {
     fn from(value: ManifestConfig) -> Self {
         #[allow(clippy::expect_used)]
-        Python::attach(|py| Self {
+        Python::attach(|py| {
+            Self {
             preload: value.preload.map(|c| {
                 Py::new(py, Into::<PyManifestPreloadConfig>::into(c))
                     .expect("Cannot create instance of ManifestPreloadConfig")
@@ -1512,6 +1601,18 @@ impl From<ManifestConfig> for PyManifestConfig {
                 Py::new(py, Into::<PyManifestSplittingConfig>::into(c))
                     .expect("Cannot create instance of ManifestSplittingConfig")
             }),
+            virtual_chunk_location_compression: value
+                .virtual_chunk_location_compression
+                .map(|c| {
+                    Py::new(
+                        py,
+                        Into::<PyManifestVirtualChunkLocationCompressionConfig>::into(c),
+                    )
+                    .expect(
+                        "Cannot create instance of ManifestVirtualChunkLocationCompressionConfig",
+                    )
+                }),
+        }
         })
     }
 }

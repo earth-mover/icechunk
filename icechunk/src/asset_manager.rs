@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
-use std::sync::RwLock;
+use std::sync::{LazyLock, RwLock};
 use std::{
     io::{BufReader, Read},
     ops::Range,
@@ -20,6 +20,14 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+
+#[allow(clippy::unwrap_used)]
+static RETRYABLE_ERROR: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        "(?i)StreamingError|DispatchFailure|ConnectorError|IncompleteMessage|connection reset",
+    )
+    .unwrap()
+});
 use tokio::{
     io::{AsyncBufRead, AsyncReadExt},
     sync::Semaphore,
@@ -503,12 +511,9 @@ impl AssetManager {
         .await
         {
             Ok(Some((repo_info, version_info))) => {
-                if repo_cache.is_some() {
-                    trace!("Cached repo info wasn't latest");
-                }
                 if self.use_repo_info_cache {
                     trace!(
-                        "Updating repo info cache from {} to {}",
+                        "Repo info cache wasn't latest, updating from {} to {}",
                         repo_cache
                             .map(|(_, old)| old.to_string())
                             .unwrap_or_else(|| "none".to_string()),
@@ -760,9 +765,12 @@ impl AssetManager {
                 #[cfg(feature = "napi-send-contract")]
                 let retry = retry.sleep(tokio::time::sleep);
                 let chunk = retry
-                    .when(|e| format!("{e:?}").contains("StreamingError"))
-                    .notify(|_err, duration| {
-                        debug!("retrying on stalled stream error after {:?}.", duration)
+                    .when(|e| RETRYABLE_ERROR.is_match(&format!("{e:?}")))
+                    .notify(|err, duration| {
+                        debug!(
+                            ?err,
+                            "retrying on streaming/connection error after {duration:?}"
+                        )
                     })
                     .await?;
                 let _fail_is_ok = guard.insert(chunk.clone());
@@ -1531,6 +1539,7 @@ mod test {
 
     use super::*;
     use crate::{
+        config::ManifestVirtualChunkLocationCompressionConfig,
         format::{
             ChunkIndices, NodeId,
             manifest::{ChunkInfo, ChunkPayload},
@@ -1563,7 +1572,7 @@ mod test {
             payload: ChunkPayload::Inline(Bytes::copy_from_slice(b"b")),
         };
         let pre_existing_manifest =
-            Manifest::from_iter(&ManifestId::random(), vec![ci1].into_iter())
+            Manifest::from_iter(&ManifestId::random(), vec![ci1].into_iter(), None)
                 .await?
                 .unwrap();
         let pre_existing_manifest = Arc::new(pre_existing_manifest);
@@ -1582,9 +1591,13 @@ mod test {
         );
 
         let manifest = Arc::new(
-            Manifest::from_iter(&ManifestId::random(), vec![ci2.clone()].into_iter())
-                .await?
-                .unwrap(),
+            Manifest::from_iter(
+                &ManifestId::random(),
+                vec![ci2.clone()].into_iter(),
+                Some(&ManifestVirtualChunkLocationCompressionConfig::default()),
+            )
+            .await?
+            .unwrap(),
         );
         let id = manifest.id();
         let size = caching.write_manifest(Arc::clone(&manifest)).await?;
@@ -1592,7 +1605,7 @@ mod test {
         let fetched = caching.fetch_manifest(&id, size).await?;
         assert_eq!(fetched.len(), 1);
         assert_equal(
-            fetched.iter(node2.clone()).map(|x| x.unwrap()),
+            fetched.iter(node2.clone()).unwrap().map(|x| x.unwrap()),
             [(ci2.coord.clone(), ci2.payload.clone())],
         );
 
@@ -1672,21 +1685,25 @@ mod test {
         let ci9 = ChunkInfo { node: NodeId::random(), ..ci1.clone() };
 
         let manifest1 = Arc::new(
-            Manifest::from_iter(&ManifestId::random(), vec![ci1, ci2, ci3])
+            Manifest::from_iter(&ManifestId::random(), vec![ci1, ci2, ci3], None)
                 .await?
                 .unwrap(),
         );
         let id1 = manifest1.id();
         let size1 = manager.write_manifest(Arc::clone(&manifest1)).await?;
         let manifest2 = Arc::new(
-            Manifest::from_iter(&ManifestId::random(), vec![ci4, ci5, ci6])
-                .await?
-                .unwrap(),
+            Manifest::from_iter(
+                &ManifestId::random(),
+                vec![ci4, ci5, ci6],
+                Some(&ManifestVirtualChunkLocationCompressionConfig::default()),
+            )
+            .await?
+            .unwrap(),
         );
         let id2 = manifest2.id();
         let size2 = manager.write_manifest(Arc::clone(&manifest2)).await?;
         let manifest3 = Arc::new(
-            Manifest::from_iter(&ManifestId::random(), vec![ci7, ci8, ci9])
+            Manifest::from_iter(&ManifestId::random(), vec![ci7, ci8, ci9], None)
                 .await?
                 .unwrap(),
         );
@@ -1745,6 +1762,7 @@ mod test {
                 coord: ChunkIndices(Vec::from([rand::random(), rand::random()])),
                 payload: ChunkPayload::Inline("hello".into()),
             }),
+            None,
         )
         .await
         .unwrap()
