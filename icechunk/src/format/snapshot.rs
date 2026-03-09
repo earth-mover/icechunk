@@ -481,6 +481,7 @@ impl Snapshot {
                 message: Some(message),
                 metadata: Some(metadata_items),
                 manifest_files: Some(manifest_files),
+                ..Default::default()
             },
         );
 
@@ -724,6 +725,7 @@ fn mk_node<'bldr>(
             node_data_type,
             node_data,
             user_data,
+            ..Default::default()
         },
     ))
 }

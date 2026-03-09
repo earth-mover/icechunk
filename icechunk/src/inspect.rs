@@ -331,6 +331,14 @@ struct ArrayManifestInspect {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct ManifestVirtualChunksCompressionInspect {
+    uses_location_compression: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dictionary_size_bytes: Option<usize>,
+    num_compressed_refs: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct ManifestInspect {
     id: String,
     size_bytes: usize,
@@ -340,6 +348,7 @@ struct ManifestInspect {
     total_native: usize,
     total_virtual: usize,
     arrays: Vec<ArrayManifestInspect>,
+    compression: ManifestVirtualChunksCompressionInspect,
 }
 
 async fn inspect_manifest(
@@ -352,7 +361,7 @@ async fn inspect_manifest(
     for node_id in node_ids {
         let (mut num_inline, mut num_native, mut num_virtual) = (0, 0, 0);
         let node_id_str = node_id.to_string();
-        for payload in Arc::clone(&manifest).iter(node_id) {
+        for payload in Arc::clone(&manifest).iter(node_id)? {
             match payload? {
                 (_, ChunkPayload::Inline(_)) => num_inline += 1,
                 (_, ChunkPayload::Ref(_)) => num_native += 1,
@@ -371,6 +380,11 @@ async fn inspect_manifest(
         arrays.iter().fold((0, 0, 0), |(i, n, v), a| {
             (i + a.num_inline, n + a.num_native, v + a.num_virtual)
         });
+    let compression = ManifestVirtualChunksCompressionInspect {
+        uses_location_compression: manifest.uses_location_compression(),
+        dictionary_size_bytes: manifest.location_dictionary_size(),
+        num_compressed_refs: manifest.num_compressed_refs(),
+    };
     Ok(ManifestInspect {
         id: manifest.id().to_string(),
         size_bytes: manifest.bytes().len(),
@@ -380,6 +394,7 @@ async fn inspect_manifest(
         total_native,
         total_virtual,
         arrays,
+        compression,
     })
 }
 
