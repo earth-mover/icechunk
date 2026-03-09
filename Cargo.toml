@@ -3,6 +3,10 @@ members = ["icechunk", "icechunk-python", "icechunk-macros"]
 default-members = ["icechunk"]
 resolver = "2"
 
+[workspace.package]
+rust-version = "1.91.1"
+edition = "2024"
+
 [workspace.lints.clippy]
 expect_used = "warn"
 unwrap_used = "warn"
