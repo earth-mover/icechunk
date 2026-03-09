@@ -348,7 +348,9 @@ pub async fn migrate_1_to_2(
     repo: Repository,
     dry_run: bool,
     delete_unused_v1_files: bool,
+    prefetch_concurrency: Option<usize>,
 ) -> MigrationResult<()> {
+    let prefetch_concurrency = prefetch_concurrency.unwrap_or(64);
     let start_time = Instant::now();
     validate_start(&repo).await?;
 
@@ -392,7 +394,7 @@ pub async fn migrate_1_to_2(
     let prefetch_handle = {
         let am = Arc::clone(&asset_manager);
         tokio::spawn(async move {
-            const PREFETCH_CONCURRENCY: usize = 10;
+            let concurrency = prefetch_concurrency;
             match am.list_snapshots().await {
                 Ok(snapshot_list) => {
                     let mut snap_infos: Vec<_> = match snapshot_list
@@ -411,7 +413,7 @@ pub async fn migrate_1_to_2(
                     info!(
                         "Snapshot prefetch: warming cache for {} snapshots with concurrency {}",
                         snap_infos.len(),
-                        PREFETCH_CONCURRENCY,
+                        concurrency,
                     );
                     let fetches = stream::iter(snap_infos.into_iter().map(|info| {
                         let am = Arc::clone(&am);
@@ -424,7 +426,7 @@ pub async fn migrate_1_to_2(
                             }
                         }
                     }))
-                    .buffer_unordered(PREFETCH_CONCURRENCY)
+                    .buffer_unordered(concurrency)
                     .count()
                     .await;
                     info!("Snapshot prefetch: completed {fetches} fetches");
@@ -697,7 +699,7 @@ mod tests {
             branch_ancestries_before.insert(branch, anc);
         }
 
-        migrate_1_to_2(repo, false, true).await.unwrap();
+        migrate_1_to_2(repo, false, true, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
 
         let mut tag_ancestries_after = HashMap::new();
@@ -838,11 +840,11 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = repo.storage().clone();
 
-        migrate_1_to_2(repo, false, true).await.unwrap();
+        migrate_1_to_2(repo, false, true, None).await.unwrap();
 
         // Reopen the now-V2 repo and try to migrate again
         let repo = Repository::open(None, storage, Default::default()).await?;
-        let result = migrate_1_to_2(repo, false, true).await;
+        let result = migrate_1_to_2(repo, false, true, None).await;
         assert!(result.is_err(), "migrating an already-V2 repo should return an error");
 
         Ok(())
@@ -854,7 +856,7 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = repo.storage().clone();
 
-        migrate_1_to_2(repo, true, true).await.unwrap();
+        migrate_1_to_2(repo, true, true, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V1dot0);
@@ -868,7 +870,7 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = repo.storage().clone();
 
-        migrate_1_to_2(repo, false, false).await.unwrap();
+        migrate_1_to_2(repo, false, false, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
