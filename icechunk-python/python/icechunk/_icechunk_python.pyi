@@ -11,8 +11,6 @@ from collections.abc import (
 from enum import Enum
 from typing import Any, TypeAlias, final
 
-from typing_extensions import disjoint_base
-
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
     def __new__(
@@ -1666,7 +1664,6 @@ class Update:
     @property
     def backup_path(self) -> str | None: ...
 
-@disjoint_base
 class UpdateType:
     @final
     class BranchCreated(UpdateType):

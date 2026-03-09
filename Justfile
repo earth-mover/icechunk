@@ -30,6 +30,10 @@ build *args:
 build-release *args:
   cargo build --release "$@"
 
+[doc("Prepare environment for development")]
+develop *args:
+  cd icechunk-python && uv run -m maturin_import_hook site install && maturin develop --uv --profile {{profile}} "$@"
+
 [doc("Run clippy lints on all features")]
 lint *args:
   cargo clippy --profile {{profile}} --all-features "$@"
@@ -94,6 +98,10 @@ ruff *args:
 [doc("Run mypy type checking on Python code")]
 mypy *args:
   cd icechunk-python && mypy python tests "$@"
+
+[doc("Run mypy stub checking on type stubs")]
+stubtest *args:
+  cd icechunk-python && python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt "$@"
 
 [doc("Run all Python pre-commit hooks (ruff, formatting, codespell, etc.)")]
 py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *args:

@@ -308,14 +308,19 @@ impl ManifestFileInfo {
     }
 }
 
+// It is _extremely_ common to set/get chunks in large batches sequentially.
+// Without a cache we incur the cost of repeatedly decoding the flatbuffer.
+// This cache is very small (size 2 currently), because we could cache a large number of
+// snapshots. The size of 2 is fine for typically workloads that iterate sequentially
+// through nodes.
+// We cannot choose 1 because of a bug in the `quick_cache` dependency
+// where a size-1 cache is effectively no cache
+// https://github.com/arthurprs/quick-cache/issues/105
+const SNAPSHOT_NODE_CACHE_SIZE: usize = 2;
+
 pub struct Snapshot {
     buffer: Vec<u8>,
     spec_version: SpecVersionBin,
-    // It is _extremely_ common to set/get chunks in large batches sequentially.
-    // Without a cache we incur the cost of repeatedly decoding the flatbuffer.
-    // This cache is very small (size 1 currently), because we could cache a large number of
-    // snapshots. The size of 1 is fine for typically workloads that iterate sequentially
-    // through nodes.
     node_cache: Cache<Path, Arc<NodeSnapshot>>,
 }
 
@@ -398,7 +403,7 @@ impl Snapshot {
             buffer,
             spec_version,
             // this number is low because we cache a very large number of snapshot nodes.
-            node_cache: Cache::new(1),
+            node_cache: Cache::new(SNAPSHOT_NODE_CACHE_SIZE),
         })
     }
 
@@ -488,7 +493,7 @@ impl Snapshot {
             buffer,
             spec_version,
             // this number is low because we cache a very large number of snapshot nodes.
-            node_cache: Cache::new(1),
+            node_cache: Cache::new(SNAPSHOT_NODE_CACHE_SIZE),
         })
     }
 

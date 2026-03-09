@@ -27,6 +27,7 @@ use std::{
     cmp::{max, min},
     collections::HashMap,
     ffi::OsString,
+    fmt::Display,
     iter,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
@@ -164,6 +165,19 @@ impl VersionInfo {
 
     pub fn generation(&self) -> Option<&String> {
         self.generation.as_ref().map(|e| &e.0)
+    }
+}
+
+impl Display for VersionInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (&self.etag, &self.generation) {
+            (Some(etag), Some(generation)) => {
+                write!(f, "etag={}, generation={}", etag.0, generation.0)
+            }
+            (Some(etag), None) => write!(f, "etag={}", etag.0),
+            (None, Some(generation)) => write!(f, "generation={}", generation.0),
+            (None, None) => write!(f, "new"),
+        }
     }
 }
 

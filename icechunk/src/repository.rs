@@ -929,10 +929,24 @@ impl Repository {
         version: &VersionInfo,
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
     {
+        self.ancestry_using(version, None).await
+    }
+
+    async fn ancestry_using(
+        &self,
+        version: &VersionInfo,
+        repo_info: Option<Arc<RepoInfo>>,
+    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
+    {
         match self.spec_version {
             SpecVersionBin::V1dot0 => Ok(self.ancestry_v1(version).await?.left_stream()),
             SpecVersionBin::V2dot0 => {
-                let iter = self.ancestry_v2(version).await?;
+                let ri = match repo_info {
+                    Some(ri) => ri,
+                    None => self.get_repo_info().await?.0,
+                };
+                let snapshot_id = self.resolve_version_v2(&ri, version).await?;
+                let iter = AncestryIteratorV2::new(ri, &snapshot_id)?;
                 Ok(stream::iter(iter).right_stream())
             }
         }
@@ -947,18 +961,6 @@ impl Repository {
     {
         let snapshot_id = self.resolve_version(version).await?;
         self.snapshot_info_ancestry_v1(&snapshot_id).await
-    }
-
-    #[instrument(skip(self))]
-    async fn ancestry_v2(
-        &self,
-        version: &VersionInfo,
-    ) -> RepositoryResult<
-        impl Iterator<Item = RepositoryResult<SnapshotInfo>> + Send + use<>,
-    > {
-        let (repo_info, _) = self.get_repo_info().await?;
-        let snapshot_id = self.resolve_version_v2(&repo_info, version).await?;
-        AncestryIteratorV2::new(repo_info, &snapshot_id)
     }
 
     #[instrument(skip(self))]
@@ -1134,8 +1136,20 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    async fn lookup_branch_v2(&self, branch: &str) -> RepositoryResult<SnapshotId> {
-        let (ri, _) = self.get_repo_info().await?;
+    async fn lookup_branch_v2(
+        &self,
+        branch: &str,
+        repo_info: Option<&RepoInfo>,
+    ) -> RepositoryResult<SnapshotId> {
+        let fetched; // used to hold the temp ref
+        let ri = match repo_info {
+            Some(ri) => ri,
+            None => {
+                fetched = self.get_repo_info().await?.0;
+                &fetched
+            }
+        };
+
         match ri.resolve_branch(branch) {
             Ok(snap) => Ok(snap),
             Err(IcechunkFormatError {
@@ -1152,7 +1166,7 @@ impl Repository {
     pub async fn lookup_branch(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
             SpecVersionBin::V1dot0 => self.lookup_branch_v1(branch).await,
-            SpecVersionBin::V2dot0 => self.lookup_branch_v2(branch).await,
+            SpecVersionBin::V2dot0 => self.lookup_branch_v2(branch, None).await,
         }
     }
 
@@ -1498,8 +1512,19 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    async fn lookup_tag_v2(&self, tag: &str) -> RepositoryResult<SnapshotId> {
-        let (ri, _) = self.get_repo_info().await?;
+    async fn lookup_tag_v2(
+        &self,
+        tag: &str,
+        repo_info: Option<&RepoInfo>,
+    ) -> RepositoryResult<SnapshotId> {
+        let fetched; // used to hold the temp ref
+        let ri = match repo_info {
+            Some(ri) => ri,
+            None => {
+                fetched = self.get_repo_info().await?.0;
+                &fetched
+            }
+        };
         match ri.resolve_tag(tag) {
             Ok(snap) => Ok(snap),
             Err(IcechunkFormatError {
@@ -1516,7 +1541,7 @@ impl Repository {
     pub async fn lookup_tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
             SpecVersionBin::V1dot0 => self.lookup_tag_v1(tag).await,
-            SpecVersionBin::V2dot0 => self.lookup_tag_v2(tag).await,
+            SpecVersionBin::V2dot0 => self.lookup_tag_v2(tag, None).await,
         }
     }
 
@@ -1560,8 +1585,10 @@ impl Repository {
                 raise_if_invalid_snapshot_id_v2(repo_info, sid)?;
                 Ok(sid.clone())
             }
-            RefVersionInfo::TagRef(tag) => self.lookup_tag(tag).await,
-            RefVersionInfo::BranchTipRef(branch) => self.lookup_branch(branch).await,
+            RefVersionInfo::TagRef(tag) => self.lookup_tag_v2(tag, Some(repo_info)).await,
+            RefVersionInfo::BranchTipRef(branch) => {
+                self.lookup_branch_v2(branch, Some(repo_info)).await
+            }
         }
     }
 
@@ -1570,11 +1597,26 @@ impl Repository {
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<SnapshotId> {
+        self.resolve_version_using(version, None).await
+    }
+
+    async fn resolve_version_using(
+        &self,
+        version: &VersionInfo,
+        repo_info: Option<&RepoInfo>,
+    ) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
             SpecVersionBin::V1dot0 => self.resolve_version_v1(version).await,
             SpecVersionBin::V2dot0 => {
-                self.resolve_version_v2(self.get_repo_info().await?.0.as_ref(), version)
-                    .await
+                let fetched;
+                let ri = match repo_info {
+                    Some(ri) => ri,
+                    None => {
+                        fetched = self.get_repo_info().await?.0;
+                        &fetched
+                    }
+                };
+                self.resolve_version_v2(ri, version).await
             }
         }
     }
@@ -1661,10 +1703,15 @@ impl Repository {
         from: &VersionInfo,
         to: &VersionInfo,
     ) -> SessionResult<Diff> {
-        let from = self.resolve_version(from).await?;
-        let to = self.resolve_version(to).await?;
+        let repo_info = match self.spec_version {
+            SpecVersionBin::V1dot0 => None,
+            SpecVersionBin::V2dot0 => Some(self.get_repo_info().await?.0),
+        };
+
+        let from = self.resolve_version_using(from, repo_info.as_deref()).await?;
+        let to = self.resolve_version_using(to, repo_info.as_deref()).await?;
         let all_snaps = self
-            .ancestry(&VersionInfo::SnapshotId(to))
+            .ancestry_using(&VersionInfo::SnapshotId(to), repo_info.clone())
             .await?
             .try_take_while(|snap_info| ready(Ok(snap_info.id != from)))
             .try_collect::<Vec<_>>()
@@ -1699,10 +1746,18 @@ impl Repository {
             .await?;
 
         if let Some(to_snap) = all_snaps.first().as_ref().map(|snap| snap.id.clone()) {
-            let from_session =
-                self.readonly_session(&VersionInfo::SnapshotId(from)).await?;
-            let to_session =
-                self.readonly_session(&VersionInfo::SnapshotId(to_snap)).await?;
+            let from_session = self
+                .readonly_session_using(
+                    &VersionInfo::SnapshotId(from),
+                    repo_info.as_deref(),
+                )
+                .await?;
+            let to_session = self
+                .readonly_session_using(
+                    &VersionInfo::SnapshotId(to_snap),
+                    repo_info.as_deref(),
+                )
+                .await?;
             builder.to_diff(&from_session, &to_session).await
         } else {
             Err(SessionErrorKind::BadSnapshotChainForDiff.into())
@@ -1714,7 +1769,15 @@ impl Repository {
         &self,
         version: &VersionInfo,
     ) -> RepositoryResult<Session> {
-        let snapshot_id = self.resolve_version(version).await?;
+        self.readonly_session_using(version, None).await
+    }
+
+    async fn readonly_session_using(
+        &self,
+        version: &VersionInfo,
+        repo_info: Option<&RepoInfo>,
+    ) -> RepositoryResult<Session> {
+        let snapshot_id = self.resolve_version_using(version, repo_info).await?;
         let session = Session::create_readonly_session(
             self.config.clone(),
             self.storage_settings.clone(),
@@ -1765,10 +1828,8 @@ impl Repository {
         // this feature is only available in IC2
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        let snapshot_id = self.lookup_branch(branch).await?;
-
-        // TODO: inefficient, lookup branch already does this
         let (ri, _) = self.asset_manager().fetch_repo_info().await?;
+        let snapshot_id = self.lookup_branch_v2(branch, Some(&ri)).await?;
 
         raise_if_feature_flag_disabled(
             ri.as_ref(),

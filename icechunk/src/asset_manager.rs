@@ -489,6 +489,11 @@ impl AssetManager {
             None
         };
 
+        trace!(
+            "Fetching repo info {} cache",
+            if repo_cache.is_some() { "with" } else { "without" }
+        );
+
         match fetch_repo_info_from_path(
             self.storage.as_ref(),
             &self.storage_settings,
@@ -499,6 +504,13 @@ impl AssetManager {
         {
             Ok(Some((repo_info, version_info))) => {
                 if self.use_repo_info_cache {
+                    trace!(
+                        "Repo info cache wasn't latest, updating from {} to {}",
+                        repo_cache
+                            .map(|(_, old)| old.to_string())
+                            .unwrap_or_else(|| "none".to_string()),
+                        version_info
+                    );
                     let mut repo_cache = self
                         .repo_cache
                         .write()
@@ -510,6 +522,7 @@ impl AssetManager {
             }
             Ok(None) => {
                 if self.use_repo_info_cache {
+                    trace!("Reusing cached repo info object since it's latest version");
                     #[allow(clippy::expect_used)]
                     return Ok(repo_cache.expect(
                         "Logic bug in fetch_repo_info, repo_cache should exist here",
@@ -633,9 +646,16 @@ impl AssetManager {
             )
             .await
             {
-                res @ Ok(_) => {
+                Ok(new_version) => {
                     debug!(attempts, "Repo info object updated successfully");
-                    return res;
+                    if self.use_repo_info_cache {
+                        *self
+                            .repo_cache
+                            .write()
+                            .map_err(|_| RepositoryErrorKind::PoisonLock)? =
+                            Some((new_repo, new_version.clone()));
+                    }
+                    return Ok(new_version);
                 }
                 Err(RepositoryError {
                     kind: RepositoryErrorKind::RepoInfoUpdated,
