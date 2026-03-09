@@ -710,6 +710,12 @@ impl AssetManager {
         bytes: Bytes,
     ) -> RepositoryResult<()> {
         trace!(%chunk_id, size_bytes=bytes.len(), "Writing chunk");
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot write chunk".to_string(),
+            )
+            .into());
+        }
 
         let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
         let _permit = self.request_semaphore.acquire().await?;

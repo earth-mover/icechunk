@@ -375,7 +375,7 @@ pub async fn garbage_collect(
         .await
 }
 
-pub async fn garbage_collect_one_attempt(
+async fn garbage_collect_one_attempt(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
     num_updates_per_repo_info_file: u16,
@@ -864,7 +864,7 @@ pub async fn expire_v2(
 }
 
 #[instrument(skip(asset_manager))]
-pub async fn expire_v2_one_attempt(
+async fn expire_v2_one_attempt(
     asset_manager: Arc<AssetManager>,
     older_than: DateTime<Utc>,
     expired_branches: ExpiredRefAction,
