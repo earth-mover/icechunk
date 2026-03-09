@@ -3888,7 +3888,7 @@ mod tests {
             manifest: Some(ManifestConfig {
                 virtual_chunk_location_compression: Some(
                     ManifestVirtualChunkLocationCompressionConfig {
-                        min_virtual_chunks_to_compress: Some(1),
+                        min_num_chunks: Some(1),
                         ..Default::default()
                     },
                 ),

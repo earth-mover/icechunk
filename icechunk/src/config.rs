@@ -322,7 +322,7 @@ static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ManifestVirtualChunkLocationCompressionConfig {
     #[serde(default)]
-    pub min_virtual_chunks_to_compress: Option<u16>,
+    pub min_num_chunks: Option<u16>,
     #[serde(default)]
     pub dictionary_max_training_samples: Option<u16>,
     #[serde(default)]
@@ -332,8 +332,8 @@ pub struct ManifestVirtualChunkLocationCompressionConfig {
 }
 
 impl ManifestVirtualChunkLocationCompressionConfig {
-    pub fn min_virtual_chunks_to_compress(&self) -> u16 {
-        self.min_virtual_chunks_to_compress.unwrap_or(1000)
+    pub fn min_num_chunks(&self) -> u16 {
+        self.min_num_chunks.unwrap_or(1000)
     }
 
     pub fn dictionary_max_training_samples(&self) -> u16 {
@@ -350,9 +350,7 @@ impl ManifestVirtualChunkLocationCompressionConfig {
 
     pub fn merge(&self, other: Self) -> Self {
         Self {
-            min_virtual_chunks_to_compress: other
-                .min_virtual_chunks_to_compress
-                .or(self.min_virtual_chunks_to_compress),
+            min_num_chunks: other.min_num_chunks.or(self.min_num_chunks),
             dictionary_max_training_samples: other
                 .dictionary_max_training_samples
                 .or(self.dictionary_max_training_samples),

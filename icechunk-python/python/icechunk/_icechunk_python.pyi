@@ -843,7 +843,8 @@ class ManifestVirtualChunkLocationCompressionConfig:
 
     def __new__(
         cls,
-        min_virtual_chunks_to_compress: int | None = None,
+        min_num_chunks: int | None = None,
+        *,
         dictionary_max_training_samples: int | None = None,
         dictionary_max_size_bytes: int | None = None,
         compression_level: int | None = None,
@@ -853,7 +854,7 @@ class ManifestVirtualChunkLocationCompressionConfig:
 
         Parameters
         ----------
-        min_virtual_chunks_to_compress: int | None
+        num_chunks: int | None
             Minimum number of virtual chunks required to enable compression. Default: 1000.
         dictionary_max_training_samples: int | None
             Maximum number of URL samples used to train the compression dictionary. Default: 100.
@@ -865,9 +866,9 @@ class ManifestVirtualChunkLocationCompressionConfig:
         ...
 
     @property
-    def min_virtual_chunks_to_compress(self) -> int | None: ...
-    @min_virtual_chunks_to_compress.setter
-    def min_virtual_chunks_to_compress(self, value: int | None) -> None: ...
+    def min_num_chunks(self) -> int | None: ...
+    @min_num_chunks.setter
+    def min_num_chunks(self, value: int | None) -> None: ...
     @property
     def dictionary_max_training_samples(self) -> int | None: ...
     @dictionary_max_training_samples.setter

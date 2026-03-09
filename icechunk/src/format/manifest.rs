@@ -380,6 +380,7 @@ pub struct ChunkInfo {
 
 const COMPRESSION_ALG_NONE: u8 = 0;
 const COMPRESSION_ALG_ZSTD_DICT: u8 = 1;
+// This is the maximum size we support for a virtual chunk url that will be compressed
 const MAX_DECOMPRESSED_LOCATION_SIZE: usize = 1_024;
 
 #[derive(PartialEq)]
@@ -562,7 +563,7 @@ impl Manifest {
     }
 
     pub fn uses_location_compression(&self) -> bool {
-        self.root().compression_algorithm() == COMPRESSION_ALG_ZSTD_DICT
+        self.root().compression_algorithm() != COMPRESSION_ALG_NONE
     }
 
     pub fn location_dictionary_size(&self) -> Option<usize> {
@@ -743,7 +744,7 @@ fn checksum(payload: &generated::ChunkRef<'_>) -> Option<Checksum> {
 /// See: https://en.wikipedia.org/wiki/Reservoir_sampling#Simple:_Algorithm_R
 ///
 /// Returns `Some(dict_bytes)` if compression is enabled and there are enough virtual
-/// chunks, `None` otherwise.
+/// chunks, `None` if compression is disabled or cannot be executed.
 fn train_location_dictionary(
     chunks: &[ChunkInfo],
     virtual_chunks_compression_config: Option<
@@ -755,12 +756,16 @@ fn train_location_dictionary(
         None => return Ok(None),
     };
     let max_samples = config.dictionary_max_training_samples() as usize;
-    let min_chunks = config.min_virtual_chunks_to_compress() as usize;
+    let min_chunks = config.min_num_chunks() as usize;
     let max_dict_size = config.dictionary_max_size_bytes() as usize;
 
     let mut virtual_count: usize = 0;
     let mut reservoir: Vec<&str> = Vec::with_capacity(max_samples);
     let mut rng: SmallRng = rand::make_rng();
+
+    if chunks.len() < min_chunks {
+        return Ok(None);
+    }
 
     for chunk in chunks {
         if let ChunkPayload::Virtual(vref) = &chunk.payload {
@@ -789,7 +794,7 @@ fn train_location_dictionary(
     let small_count = sample_bytes.iter().filter(|s| s.len() < 8).count();
     if small_count >= sample_bytes.len() / 2 {
         tracing::warn!(
-            "Skipping zstd dictionary training: at least half of the {} samples are smaller than 8 bytes",
+            "Skipping virtual chunk location compression: at least half of the {} samples are smaller than 8 bytes",
             sample_bytes.len()
         );
         return Ok(None);
@@ -852,7 +857,9 @@ fn compress_locations(
         #[allow(clippy::expect_used)]
         handles
             .into_iter()
-            .flat_map(|h| h.join().expect("Cannot join threads compressing locations"))
+            .flat_map(|h| {
+                h.join().expect("Cannot join threads compressing virtual chunk locations")
+            })
             .collect()
     })
 }
@@ -1174,7 +1181,7 @@ mod tests {
 
     const COMPRESS_CONFIG: ManifestVirtualChunkLocationCompressionConfig =
         ManifestVirtualChunkLocationCompressionConfig {
-            min_virtual_chunks_to_compress: Some(10),
+            min_num_chunks: Some(10),
             dictionary_max_training_samples: Some(500),
             dictionary_max_size_bytes: Some(16 * 1024),
             compression_level: Some(3),
@@ -1432,7 +1439,7 @@ mod tests {
         // is skipped and the manifest falls back to uncompressed storage.
         // With longer locations (>= 8 bytes), compression kicks in.
         let config = ManifestVirtualChunkLocationCompressionConfig {
-            min_virtual_chunks_to_compress: Some(2),
+            min_num_chunks: Some(2),
             dictionary_max_training_samples: Some(500),
             dictionary_max_size_bytes: Some(256),
             compression_level: Some(3),

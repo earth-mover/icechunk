@@ -1457,7 +1457,7 @@ impl From<&PyManifestSplittingConfig> for ManifestSplittingConfig {
 #[derive(Debug, Default)]
 pub struct PyManifestVirtualChunkLocationCompressionConfig {
     #[pyo3(get, set)]
-    pub min_virtual_chunks_to_compress: Option<u16>,
+    pub min_num_chunks: Option<u16>,
     #[pyo3(get, set)]
     pub dictionary_max_training_samples: Option<u16>,
     #[pyo3(get, set)]
@@ -1469,15 +1469,15 @@ pub struct PyManifestVirtualChunkLocationCompressionConfig {
 #[pymethods]
 impl PyManifestVirtualChunkLocationCompressionConfig {
     #[new]
-    #[pyo3(signature = (min_virtual_chunks_to_compress=None, dictionary_max_training_samples=None, dictionary_max_size_bytes=None, compression_level=None))]
+    #[pyo3(signature = (min_num_chunks=None, *, dictionary_max_training_samples=None, dictionary_max_size_bytes=None, compression_level=None))]
     fn new(
-        min_virtual_chunks_to_compress: Option<u16>,
+        min_num_chunks: Option<u16>,
         dictionary_max_training_samples: Option<u16>,
         dictionary_max_size_bytes: Option<u32>,
         compression_level: Option<i32>,
     ) -> Self {
         Self {
-            min_virtual_chunks_to_compress,
+            min_num_chunks,
             dictionary_max_training_samples,
             dictionary_max_size_bytes,
             compression_level,
@@ -1486,8 +1486,8 @@ impl PyManifestVirtualChunkLocationCompressionConfig {
 
     pub fn __repr__(&self) -> String {
         format!(
-            "ManifestVirtualChunkLocationCompressionConfig(min_virtual_chunks_to_compress={}, dictionary_max_training_samples={}, dictionary_max_size_bytes={}, compression_level={})",
-            format_option_to_string(self.min_virtual_chunks_to_compress),
+            "ManifestVirtualChunkLocationCompressionConfig(min_num_chunks={}, dictionary_max_training_samples={}, dictionary_max_size_bytes={}, compression_level={})",
+            format_option_to_string(self.min_num_chunks),
             format_option_to_string(self.dictionary_max_training_samples),
             format_option_to_string(self.dictionary_max_size_bytes),
             format_option_to_string(self.compression_level),
@@ -1508,7 +1508,7 @@ impl From<&PyManifestVirtualChunkLocationCompressionConfig>
 {
     fn from(value: &PyManifestVirtualChunkLocationCompressionConfig) -> Self {
         Self {
-            min_virtual_chunks_to_compress: value.min_virtual_chunks_to_compress,
+            min_num_chunks: value.min_num_chunks,
             dictionary_max_training_samples: value.dictionary_max_training_samples,
             dictionary_max_size_bytes: value.dictionary_max_size_bytes,
             compression_level: value.compression_level,
@@ -1521,7 +1521,7 @@ impl From<ManifestVirtualChunkLocationCompressionConfig>
 {
     fn from(value: ManifestVirtualChunkLocationCompressionConfig) -> Self {
         Self {
-            min_virtual_chunks_to_compress: value.min_virtual_chunks_to_compress,
+            min_num_chunks: value.min_num_chunks,
             dictionary_max_training_samples: value.dictionary_max_training_samples,
             dictionary_max_size_bytes: value.dictionary_max_size_bytes,
             compression_level: value.compression_level,

@@ -190,7 +190,7 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     )
     config.manifest.virtual_chunk_location_compression = (
         icechunk.ManifestVirtualChunkLocationCompressionConfig(
-            min_virtual_chunks_to_compress=500,
+            min_num_chunks=500,
             dictionary_max_training_samples=200,
             dictionary_max_size_bytes=4096,
             compression_level=5,
@@ -244,7 +244,7 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     )
     assert stored_config.manifest.virtual_chunk_location_compression
     vlc = stored_config.manifest.virtual_chunk_location_compression
-    assert vlc.min_virtual_chunks_to_compress == 500
+    assert vlc.min_num_chunks == 500
     assert vlc.dictionary_max_training_samples == 200
     assert vlc.dictionary_max_size_bytes == 4096
     assert vlc.compression_level == 5
