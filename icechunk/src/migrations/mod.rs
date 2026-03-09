@@ -348,7 +348,9 @@ pub async fn migrate_1_to_2(
     repo: Repository,
     dry_run: bool,
     delete_unused_v1_files: bool,
+    prefetch_concurrency: Option<usize>,
 ) -> MigrationResult<()> {
+    let prefetch_concurrency = prefetch_concurrency.unwrap_or(64);
     let start_time = Instant::now();
     validate_start(&repo).await?;
 
@@ -381,10 +383,68 @@ pub async fn migrate_1_to_2(
         })
         .collect();
 
-    info!("Collecting non-dangling snapshots, this make take a few minutes");
+    info!("Collecting non-dangling snapshots, this may take a few minutes");
+
+    // Prefetch snapshots concurrently to warm the asset manager cache.
+    // We list all snapshot objects, sort by creation time (latest first),
+    // and fetch them N-at-a-time in the background while the ancestry
+    // walk proceeds. This turns what would be sequential network
+    // round-trips into mostly cache hits.
+    let asset_manager = Arc::clone(repo.asset_manager());
+    let prefetch_handle = {
+        let am = Arc::clone(&asset_manager);
+        tokio::spawn(async move {
+            let concurrency = prefetch_concurrency;
+            match am.list_snapshots().await {
+                Ok(snapshot_list) => {
+                    let mut snap_infos: Vec<_> = match snapshot_list
+                        .try_collect::<Vec<_>>()
+                        .await
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!(
+                                "Snapshot prefetch: failed to collect snapshot list: {e}"
+                            );
+                            return;
+                        }
+                    };
+                    snap_infos.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                    info!(
+                        "Snapshot prefetch: warming cache for {} snapshots with concurrency {}",
+                        snap_infos.len(),
+                        concurrency,
+                    );
+                    let fetches = stream::iter(snap_infos.into_iter().map(|info| {
+                        let am = Arc::clone(&am);
+                        async move {
+                            if let Err(e) = am.fetch_snapshot(&info.id).await {
+                                debug!(
+                                    "Snapshot prefetch: failed to fetch {}: {e}",
+                                    info.id
+                                );
+                            }
+                        }
+                    }))
+                    .buffer_unordered(concurrency)
+                    .count()
+                    .await;
+                    info!("Snapshot prefetch: completed {fetches} fetches");
+                }
+                Err(e) => {
+                    warn!("Snapshot prefetch: failed to list snapshots: {e}");
+                }
+            }
+        })
+    };
+
     let snap_ids = refs.iter().map(|(_, id)| id);
     let all_snapshots =
         pointed_snapshots(&repo, snap_ids).await?.try_collect::<Vec<_>>().await?;
+
+    // Cancel the prefetch if it's still running — we have all the snapshots we need.
+    prefetch_handle.abort();
+
     info!("Found {} non-dangling snapshots", all_snapshots.len());
 
     info!("Generating migration ops log");
@@ -415,7 +475,6 @@ pub async fn migrate_1_to_2(
         .filter(|(name, _)| *name != Ref::DEFAULT_BRANCH)
         .map(|(name, snap_id)| (*name, ancestry_from(snap_id)))
         .collect();
-
     // Fetch snapshot IDs for deleted tags
     let mut deleted_tags_with_snap: Vec<(&str, SnapshotId)> = Vec::new();
     for name in &deleted_tag_names {
@@ -427,7 +486,6 @@ pub async fn migrate_1_to_2(
             );
         }
     }
-
     let ops_log = generate_migration_ops_log(
         &main_ancestry,
         &branch_ancestries,
@@ -641,7 +699,7 @@ mod tests {
             branch_ancestries_before.insert(branch, anc);
         }
 
-        migrate_1_to_2(repo, false, true).await.unwrap();
+        migrate_1_to_2(repo, false, true, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
 
         let mut tag_ancestries_after = HashMap::new();
@@ -782,11 +840,11 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = repo.storage().clone();
 
-        migrate_1_to_2(repo, false, true).await.unwrap();
+        migrate_1_to_2(repo, false, true, None).await.unwrap();
 
         // Reopen the now-V2 repo and try to migrate again
         let repo = Repository::open(None, storage, Default::default()).await?;
-        let result = migrate_1_to_2(repo, false, true).await;
+        let result = migrate_1_to_2(repo, false, true, None).await;
         assert!(result.is_err(), "migrating an already-V2 repo should return an error");
 
         Ok(())
@@ -798,7 +856,7 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = repo.storage().clone();
 
-        migrate_1_to_2(repo, true, true).await.unwrap();
+        migrate_1_to_2(repo, true, true, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V1dot0);
@@ -812,7 +870,7 @@ mod tests {
         let (repo, _tmp) = prepare_v1_repo().await?;
         let storage = repo.storage().clone();
 
-        migrate_1_to_2(repo, false, false).await.unwrap();
+        migrate_1_to_2(repo, false, false, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
 
         assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
