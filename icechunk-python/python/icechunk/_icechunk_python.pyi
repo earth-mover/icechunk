@@ -854,7 +854,7 @@ class ManifestVirtualChunkLocationCompressionConfig:
 
         Parameters
         ----------
-        num_chunks: int | None
+        min_num_chunks: int | None
             Minimum number of virtual chunks required to enable compression. Default: 1000.
         dictionary_max_training_samples: int | None
             Maximum number of URL samples used to train the compression dictionary. Default: 100.
@@ -1187,7 +1187,6 @@ class StorageSettings:
         cls,
         concurrency: StorageConcurrencySettings | None = None,
         retries: StorageRetriesSettings | None = None,
-        timeouts: StorageTimeoutSettings | None = None,
         unsafe_use_conditional_create: bool | None = None,
         unsafe_use_conditional_update: bool | None = None,
         unsafe_use_metadata: bool | None = None,
@@ -1195,6 +1194,7 @@ class StorageSettings:
         metadata_storage_class: str | None = None,
         chunks_storage_class: str | None = None,
         minimum_size_for_multipart_upload: int | None = None,
+        timeouts: StorageTimeoutSettings | None = None,
     ) -> StorageSettings:
         """
         Create a new `StorageSettings` object
@@ -1206,9 +1206,6 @@ class StorageSettings:
 
         retries: StorageRetriesSettings | None
             The configuration for how Icechunk retries failed requests.
-
-        timeouts: StorageTimeoutSettings | None
-            The configuration for AWS SDK timeout settings.
 
         unsafe_use_conditional_update: bool | None
             If set to False, Icechunk loses some of its consistency guarantees.
@@ -1244,6 +1241,9 @@ class StorageSettings:
         minimum_size_for_multipart_upload: int | None
             Use object store's multipart upload for objects larger than this size in bytes.
             Default: 100 MB if None is passed.
+
+        timeouts: StorageTimeoutSettings | None
+            The configuration for AWS SDK timeout settings.
         """
         ...
     @property

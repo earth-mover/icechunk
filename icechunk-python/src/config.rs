@@ -1062,13 +1062,12 @@ impl Eq for PyStorageSettings {}
 
 #[pymethods]
 impl PyStorageSettings {
-    #[pyo3(signature = ( concurrency=None, retries=None, timeouts=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None))]
+    #[pyo3(signature = ( concurrency=None, retries=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None, timeouts=None))]
     #[new]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         concurrency: Option<Py<PyStorageConcurrencySettings>>,
         retries: Option<Py<PyStorageRetriesSettings>>,
-        timeouts: Option<Py<PyStorageTimeoutSettings>>,
         unsafe_use_conditional_create: Option<bool>,
         unsafe_use_conditional_update: Option<bool>,
         unsafe_use_metadata: Option<bool>,
@@ -1076,6 +1075,7 @@ impl PyStorageSettings {
         metadata_storage_class: Option<String>,
         chunks_storage_class: Option<String>,
         minimum_size_for_multipart_upload: Option<u64>,
+        timeouts: Option<Py<PyStorageTimeoutSettings>>,
     ) -> Self {
         Self {
             concurrency,
