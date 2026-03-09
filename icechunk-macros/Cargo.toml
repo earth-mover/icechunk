@@ -11,6 +11,7 @@ categories = ["database", "science", "science::geo"]
 authors = ["Earthmover PBC"]
 edition = "2024"
 publish = true
+rust-version = "1.91.1"
 
 [dependencies]
 syn = { version = "2.0", features = ["full"] }
