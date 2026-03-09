@@ -343,6 +343,10 @@ pub enum IcechunkFormatErrorKind {
     InvalidFeatureFlagId { id: u16 },
     #[error("{feature_description} is disabled by a feature flag ({feature_flag})")]
     FeatureFlagDisabled { feature_description: String, feature_flag: String },
+    #[error(
+        "compressed chunk location present but no decompression dictionary available"
+    )]
+    MissingLocationCompressionDictionary,
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;

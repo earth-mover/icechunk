@@ -32,7 +32,10 @@ use crate::{
     RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
     change_set::{ArrayData, ChangeSet, ChunkTable, MovedFrom},
-    config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
+    config::{
+        ManifestConfig, ManifestSplitDim, ManifestSplitDimCondition,
+        ManifestSplittingConfig,
+    },
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
     feature_flags::{MOVE_NODE_FLAG, raise_if_feature_flag_disabled},
@@ -1220,6 +1223,7 @@ impl Session {
             Arc::clone(&self.asset_manager),
             &self.change_set,
             self.snapshot_id(),
+            self.config.manifest(),
         );
         let new_snap = do_flush(
             flush_data,
@@ -1336,7 +1340,7 @@ impl Session {
             Some(properties),
             rewrite_manifests,
             commit_method,
-            self.config.manifest().splitting(),
+            self.config.manifest(),
             allow_empty,
             is_rearrange,
             self.config.repo_update_retries().retries(),
@@ -1721,10 +1725,11 @@ async fn verified_node_chunk_iterator<'a>(
                                     asset_manager,
                                 )
                                 .await;
-                                match manifest {
-                                    Ok(manifest) => {
-                                        let old_chunks = manifest
-                                            .iter(node_id_c.clone())
+                                match manifest
+                                    .and_then(|m| m.iter(node_id_c.clone()).err_into())
+                                {
+                                    Ok(iter) => {
+                                        let old_chunks = iter
                                             .filter_ok(move |(coord, _)| {
                                                 !new_chunk_indices.contains(coord)
                                             })
@@ -1989,6 +1994,7 @@ struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
     parent_id: &'a SnapshotId,
+    manifest_config: &'a ManifestConfig,
     manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
     manifest_files: HashSet<ManifestFileInfo>,
 }
@@ -1998,11 +2004,13 @@ impl<'a> FlushProcess<'a> {
         asset_manager: Arc<AssetManager>,
         change_set: &'a ChangeSet,
         parent_id: &'a SnapshotId,
+        manifest_config: &'a ManifestConfig,
     ) -> Self {
         Self {
             asset_manager,
             change_set,
             parent_id,
+            manifest_config,
             manifest_refs: Default::default(),
             manifest_files: Default::default(),
         }
@@ -2016,9 +2024,16 @@ impl<'a> FlushProcess<'a> {
         let mut to = vec![];
         let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-        if let Some(new_manifest) = Manifest::from_stream(&ManifestId::random(), chunks)
-            .await
-            .map_err(|e| SessionErrorKind::ManifestCreationError(Box::new(e)))?
+        let compression_config =
+            if self.asset_manager.spec_version() >= SpecVersionBin::V2dot0 {
+                Some(self.manifest_config.virtual_chunk_location_compression())
+            } else {
+                None
+            };
+        if let Some(new_manifest) =
+            Manifest::from_stream(&ManifestId::random(), chunks, compression_config)
+                .await
+                .map_err(|e| SessionErrorKind::ManifestCreationError(Box::new(e)))?
         {
             let new_manifest = Arc::new(new_manifest);
             let new_manifest_size =
@@ -2106,7 +2121,7 @@ impl<'a> FlushProcess<'a> {
             .try_fold(
                 Vec::with_capacity(modified_chunks.len()),
                 |mut acc, manifest| async {
-                    acc.extend(manifest.iter(node_id.clone()).filter_map_ok(
+                    acc.extend(manifest.iter(node_id.clone())?.filter_map_ok(
                         |(idx, payload)| {
                             // we expect that most users have no splitting
                             // and so the first condition here is most restrictive.
@@ -2626,7 +2641,7 @@ async fn do_commit(
     properties: Option<SnapshotProperties>,
     rewrite_manifests: bool,
     commit_method: CommitMethod,
-    split_config: &ManifestSplittingConfig,
+    manifest_config: &ManifestConfig,
     allow_empty: bool,
     is_rearrange: bool,
     retry_settings: &storage::RetriesSettings,
@@ -2644,15 +2659,19 @@ async fn do_commit(
     }
 
     let properties = properties.unwrap_or_default();
-    let flush_data =
-        FlushProcess::new(Arc::clone(&asset_manager), change_set, snapshot_id);
+    let flush_data = FlushProcess::new(
+        Arc::clone(&asset_manager),
+        change_set,
+        snapshot_id,
+        manifest_config,
+    );
     let new_snapshot = do_flush(
         flush_data,
         message,
         properties,
         rewrite_manifests,
         commit_method,
-        split_config,
+        manifest_config.splitting(),
     )
     .await?;
     let new_snapshot_id = new_snapshot.id();
@@ -3376,6 +3395,7 @@ mod tests {
         let manifest = Manifest::from_iter(
             &ManifestId::random(),
             vec![chunk1.clone(), chunk2.clone()],
+            None,
         )
         .await?
         .unwrap();

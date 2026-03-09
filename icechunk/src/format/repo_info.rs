@@ -342,6 +342,7 @@ impl RepoInfo {
             config,
             enabled_feature_flags,
             disabled_feature_flags,
+            ..Default::default()
         };
         let repo = generated::Repo::create(&mut builder, &repo_args);
         builder.finish(repo, Some("Ichk"));
