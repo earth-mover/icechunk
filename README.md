@@ -1,6 +1,6 @@
 # Icechunk
 
-![Icechunk logo](https://raw.githubusercontent.com/earth-mover/icechunk/refs/heads/main/docs/docs/assets/logo.svg)
+![Icechunk logo](https://raw.githubusercontent.com/earth-mover/icechunk/refs/heads/main/icechunk-python/docs/docs/assets/logo.svg)
 
 <a href="https://pypi.org/project/icechunk" target="_blank"><img alt="PyPI" src="https://img.shields.io/pypi/v/icechunk?logo=pypi&logoColor=ffde57&label=pypi&style=for-the-badge"></a>
 <a href="https://anaconda.org/conda-forge/icechunk" target="_blank"><img alt="Conda Forge" src="https://img.shields.io/conda/vn/conda-forge/icechunk.svg?logo=conda-forge&style=for-the-badge"></a>

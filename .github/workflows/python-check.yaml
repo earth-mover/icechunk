@@ -41,7 +41,7 @@ jobs:
           manylinux: auto
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: test-wheels
           path: icechunk-python/dist
@@ -64,12 +64,12 @@ jobs:
             zarr: "latest-release"
     steps:
       - uses: actions/checkout@v6
-      - name: Stand up MinIO
+      - name: Stand up RustFS
         run: |
-          docker compose up -d minio
+          docker compose up -d rustfs_init
 
       - name: Download wheels
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: test-wheels
           path: icechunk-python/dist
@@ -110,17 +110,16 @@ jobs:
           echo "Installed package versions:"
           uv pip list | grep -E "(xarray|dask|distributed|zarr)"
 
-      # this is here instead of earlier to give minio more time to get up and running
+      # this is here instead of earlier to give RustFS more time to get up and running
       # checking and waiting only right before we need it
-      - name: Wait for MinIO to be ready
+      - name: Wait for RustFS to be ready
         run: |
           for _ in {1..30}; do
-              if curl --silent --fail http://localhost:9000/minio/health/live; then
+              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
               break
               fi
               sleep 1
           done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
 
       - name: Run pytest
         shell: bash
@@ -140,6 +139,49 @@ jobs:
           path: icechunk-python/.hypothesis/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}-${{ matrix.deps-version.name }}
 
+  compat-stateful:
+    runs-on: ubuntu-latest
+    needs: [build-wheels]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: test-wheels
+          path: icechunk-python/dist
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install icechunk + deps + icechunk_v1
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          uv venv
+          source .venv/bin/activate
+          PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
+          WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
+          uv pip install "$WHEEL" --group test
+          uvx --from "git+https://github.com/earth-mover/third-wheel" \
+            third-wheel download icechunk --version ">=1,<2" \
+            --rename icechunk_v1 \
+            --python-version ${{ env.PYTHON_VERSION }} \
+            -o ./dist-v1/
+          uv pip install dist-v1/icechunk_v1-*.whl
+
+      - name: Run cross-version stateful tests
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          source .venv/bin/activate
+          python -m pytest tests/test_stateful_compat.py -v
+
   xarray-backends:
     runs-on: ubuntu-latest
     needs: [build-wheels]
@@ -157,13 +199,13 @@ jobs:
         with:
           path: "icechunk"
 
-      - name: Stand up MinIO
+      - name: Stand up RustFS
         working-directory: icechunk
         run: |
-          docker compose up -d minio
+          docker compose up -d rustfs_init
 
       - name: Download wheels
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: test-wheels
           path: icechunk/icechunk-python/dist
@@ -221,16 +263,15 @@ jobs:
           cd ../../
           git clone --depth 1 --branch "${XARRAY_TAG}" https://github.com/pydata/xarray.git xarray
 
-      - name: Wait for MinIO to be ready
+      - name: Wait for RustFS to be ready
         working-directory: icechunk
         run: |
           for _ in {1..30}; do
-              if curl --silent --fail http://localhost:9000/minio/health/live; then
+              if docker compose ps --status exited --filter status==0 | grep rustfs ; then
               break
               fi
               sleep 1
           done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
       - name: Run xarray backends tests
         shell: bash
         working-directory: icechunk/icechunk-python
@@ -241,6 +282,36 @@ jobs:
           # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
           source .venv/bin/activate
           python -m pytest -c=../../xarray/pyproject.toml -W ignore --override-ini="strict_markers=false" tests/run_xarray_backends_tests.py
+
+  stubtest:
+    runs-on: ubuntu-latest
+    needs: [build-wheels]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: test-wheels
+          path: icechunk-python/dist
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run stubtest
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          uv venv
+          source .venv/bin/activate
+          PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
+          WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
+          uv pip install "$WHEEL" --group dev
+          python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt
 
   check-xarray-docs:
     runs-on: ubuntu-latest

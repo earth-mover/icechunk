@@ -16,6 +16,7 @@ use std::{
 
 use ::flatbuffers::InvalidFlatbuffer;
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use flatbuffers::generated;
 use format_constants::FileTypeBin;
 use manifest::{VirtualReferenceError, VirtualReferenceErrorKind};
@@ -67,7 +68,7 @@ pub const V1_REFS_FILE_PATH: &str = "refs";
 
 /// A normalized Zarr path: absolute (starts with `/`) and no trailing slash.
 #[serde_as]
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
 pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
 
 /// Marker trait for object ID type tags (sealed).
@@ -300,6 +301,8 @@ pub enum IcechunkFormatErrorKind {
     BranchNotFound { branch: String },
     #[error("tag already exists `{tag}`")]
     TagAlreadyExists { tag: String },
+    #[error("icechunk does not allow tag reuse and tag was already deleted `{tag}`")]
+    TagPreviouslyDeleted { tag: String },
     #[error("tag not found `{tag}`")]
     TagNotFound { tag: String },
     #[error("snapshot id is already present in the repository: `{snapshot_id}`")]
@@ -330,6 +333,20 @@ pub enum IcechunkFormatErrorKind {
     Path(#[from] PathError),
     #[error("invalid timestamp in file")]
     InvalidTimestamp,
+    #[error(
+        "update timestamp is invalid, please verify if the machine clock has drifted: update time: `{new_time}`, latest update time: `{latest_time}`"
+    )]
+    InvalidUpdateTimestamp { latest_time: DateTime<Utc>, new_time: DateTime<Utc> },
+    #[error("invalid feature flag name: {name}")]
+    InvalidFeatureFlagName { name: String },
+    #[error("invalid feature flag id: {id}")]
+    InvalidFeatureFlagId { id: u16 },
+    #[error("{feature_description} is disabled by a feature flag ({feature_flag})")]
+    FeatureFlagDisabled { feature_description: String, feature_flag: String },
+    #[error(
+        "compressed chunk location present but no decompression dictionary available"
+    )]
+    MissingLocationCompressionDictionary,
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
@@ -490,6 +507,14 @@ pub mod format_constants {
     pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
 }
 
+// The impl of Debug for Utf8UnixPathBuf is expensive and triggered often by tracing Spans
+// This implemnetation is much cheaper, and removes formatting from our samply profiles.
+impl fmt::Debug for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 impl Display for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -509,6 +534,11 @@ pub enum PathError {
 impl Path {
     pub fn root() -> Path {
         Path(Utf8UnixPathBuf::from("/".to_string()))
+    }
+
+    // Fast-path unvalidated constructor for use when reading from Snapshots
+    pub fn from_trusted(path: &str) -> Path {
+        Path(Utf8UnixPathBuf::from(path))
     }
 
     pub fn new(path: &str) -> Result<Path, PathError> {
@@ -599,7 +629,15 @@ pub fn lookup_index_by_key<'a, T: ::flatbuffers::Follow<'a> + 'a, K: Ord>(
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::roundtrip_serialization_tests;
+    use crate::strategies::{attributes_id, spec_version};
     use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
+
+    roundtrip_serialization_tests!(
+        serialize_and_deserialize_attribute_ids - attributes_id,
+        serialize_and_deserialize_spec_version_bin - spec_version
+    );
 
     #[icechunk_macros::test]
     fn test_object_id_serialization() {

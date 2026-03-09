@@ -6,7 +6,7 @@ from typing import Any, TypeVar
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import assume, note, settings
+from hypothesis import assume, note
 from hypothesis.stateful import (
     initialize,
     invariant,
@@ -14,6 +14,7 @@ from hypothesis.stateful import (
     rule,
     run_state_machine_as_test,
 )
+from packaging.version import Version
 
 import icechunk as ic
 import zarr
@@ -32,7 +33,43 @@ PROTOTYPE = default_buffer_prototype()
 
 
 class ModelStore(MemoryStore):
-    """MemoryStore with move and copy methods for testing."""
+    """MemoryStore with move, copy, and shift_array methods for testing."""
+
+    async def shift_array(
+        self,
+        array_path: str,
+        offset: tuple[int, ...],
+        num_chunks: tuple[int, ...],
+    ) -> None:
+        """Shift chunk indices for an array.
+
+        This simulates what shift_array does to the chunk store keys.
+        Out-of-bounds chunks are dropped, vacated positions retain stale data.
+        """
+        prefix = f"{array_path}/c/"
+
+        # Read all chunks keyed by their new indices, discarding out-of-bounds
+        chunk_data: dict[tuple[int, ...], Any] = {}
+        async for key in self.list_prefix(prefix):
+            parts = key.split("/")
+            idx_start = parts.index("c") + 1
+            old_idx = tuple(int(p) for p in parts[idx_start:])
+            new_idx = tuple(idx + off for idx, off in zip(old_idx, offset, strict=True))
+            if any(
+                idx < 0 or idx >= nchunks
+                for idx, nchunks in zip(new_idx, num_chunks, strict=True)
+            ):
+                continue
+            data = await self.get(key, prototype=PROTOTYPE)
+            if data:
+                chunk_data[new_idx] = data
+
+        # Write chunks at new positions
+        for new_idx, data in chunk_data.items():
+            new_key = f"{prefix}{'/'.join(str(idx) for idx in new_idx)}"
+            await self.set(new_key, data)
+
+    spec_version: int
 
     async def move(self, source: str, dest: str) -> None:
         """Move all keys from source to dest.
@@ -51,6 +88,7 @@ class ModelStore(MemoryStore):
     async def copy(self) -> "ModelStore":
         """Create a copy of this store."""
         new_store = ModelStore()
+        new_store.spec_version = self.spec_version
         async for key in self.list_prefix(""):
             data = await self.get(key, prototype=PROTOTYPE)
             if data is not None:
@@ -72,9 +110,16 @@ Frequency = TypeVar("Frequency", bound=Callable[..., Any])
 class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     store: ic.IcechunkStore  # Override parent class type annotation
     model: ModelStore  # Override to add move() method
+    storage: ic.Storage
 
     def __init__(self, storage: Storage) -> None:
         self.storage = storage
+        self.actor: type[Repository] = Repository
+        # keep a version of icechunk module
+        # this is necessary for subclasses that use multiple versions of icechunk
+        # to do things like construct config types correctly
+        self.ic = ic
+
         # Create a temporary repository with spec_version=1 in a separate storage
         # This will be replaced in init_store with the Hypothesis-sampled version
         # we need this in order to properly initialize the superclass MemoryStore
@@ -84,6 +129,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         super().__init__(temp_store)
         # Replace parent's MemoryStore with our ModelStore that has move()
         self.model = ModelStore()
+        self.model.spec_version = 1
         zarr.group(store=self.model)
 
     @initialize(spec_version=st.sampled_from([1, 2]))
@@ -91,17 +137,24 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         """Override parent's init_store to sample spec_version and create repository."""
         # necessary to control the order of calling. if multiple intiliazes they will be
         # called by hypothesis in a random order
-        note(f"Creating repository with spec_version={spec_version}")
+        note(f"Creating repository with spec_version={spec_version}, actor={self.actor}")
 
         # Create repository with the drawn spec version
-        self.repo = Repository.create(self.storage, spec_version=spec_version)
+        if Version(self.ic.__version__).major >= 2:
+            self.repo = self.actor.create(self.storage, spec_version=spec_version)
+        else:
+            self.repo = self.actor.create(self.storage)
         self.store = self.repo.writable_session("main").store
+        self.model.spec_version = spec_version
 
         super().init_store()
 
     @precondition(
-        lambda self: not self.store.session.has_uncommitted_changes
-        and bool(self.all_arrays)
+        lambda self: (
+            Version(self.ic.__version__).major >= 2
+            and not self.store.session.has_uncommitted_changes
+            and bool(self.all_arrays)
+        )
     )
     @rule(data=st.data())
     def reopen_with_config(self, data: st.DataObject) -> None:
@@ -109,12 +162,14 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             st.lists(st.sampled_from(sorted(self.all_arrays)), max_size=3, unique=True)
         )
         arrays = tuple(zarr.open_array(self.model, path=path) for path in array_paths)
-        sconfig = data.draw(icst.splitting_configs(arrays=arrays))
-        config = ic.RepositoryConfig(
-            inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)
+        config = data.draw(
+            icst.repository_configs(
+                inline_chunk_threshold_bytes=st.just(0),
+                splitting=icst.splitting_configs(arrays=arrays),
+            )
         )
-        note(f"reopening with splitting config {sconfig=!r}")
-        self.repo = Repository.open(self.storage, config=config)
+        note(f"reopening with config {config!r}")
+        self.repo = self.actor.open(self.storage, config=config)
         if data.draw(st.booleans()):
             self.repo.save_config()
         self.store = self.repo.writable_session("main").store
@@ -122,21 +177,22 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def rewrite_manifests(self, data: st.DataObject) -> None:
-        sconfig = ic.ManifestSplittingConfig.from_dict(
+        sconfig = self.ic.ManifestSplittingConfig.from_dict(
             {
-                ic.ManifestSplitCondition.AnyArray(): {
-                    ic.ManifestSplitDimCondition.Any(): data.draw(
+                self.ic.ManifestSplitCondition.AnyArray(): {
+                    self.ic.ManifestSplitDimCondition.Any(): data.draw(
                         st.integers(min_value=1, max_value=10)
                     )
                 }
             }
         )
 
-        config = ic.RepositoryConfig(
-            inline_chunk_threshold_bytes=0, manifest=ic.ManifestConfig(splitting=sconfig)
+        config = self.ic.RepositoryConfig(
+            inline_chunk_threshold_bytes=0,
+            manifest=self.ic.ManifestConfig(splitting=sconfig),
         )
         note(f"rewriting manifests with config {sconfig=!r}")
-        self.repo = Repository.open(self.storage, config=config)
+        self.repo = self.actor.open(self.storage, config=config)
         self.repo.rewrite_manifests(
             f"rewriting manifests with {sconfig!s}", branch="main"
         )
@@ -154,7 +210,10 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         assert get_before
 
         allow_empty = not self.store.session.has_uncommitted_changes
-        self.store.session.commit("foo", allow_empty=allow_empty)
+        if Version(self.ic.__version__).major >= 2:
+            self.store.session.commit("foo", allow_empty=allow_empty)
+        else:
+            self.store.session.commit("foo")
 
         self.store = self.repo.writable_session("main").store
 
@@ -189,19 +248,21 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
                 f"Expected: {get_expect.to_bytes()!r}"
             )
 
-    @rule()
-    @precondition(lambda self: self.repo.spec_version == 1)
+    @rule(dry_run=st.booleans(), delete_unused_v1_files=st.booleans())
+    @precondition(lambda self: self.model.spec_version == 1)
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
-    def upgrade_spec_version(self) -> None:
+    def upgrade_spec_version(self, dry_run: bool, delete_unused_v1_files: bool) -> None:
         """Upgrade repository from spec version 1 to version 2."""
-        note("upgrading spec version from 1 to 2")
-        ic.upgrade_icechunk_repository(self.repo)
-        # Reopen to pick up the upgraded spec version
-        self.repo = Repository.open(self.storage)
+        self.repo = self.ic.upgrade_icechunk_repository(
+            self.repo, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
+        )
         self.store = self.repo.writable_session("main").store
+        if not dry_run:
+            assert self.repo.spec_version == 2
+            self.model.spec_version = 2
 
-    @rule(data=st.data(), num_moves=st.integers(min_value=0, max_value=5))
-    @precondition(lambda self: self.repo.spec_version >= 2)
+    @rule(data=st.data(), num_moves=st.integers(min_value=1, max_value=5))
+    @precondition(lambda self: self.model.spec_version >= 2)
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @precondition(lambda self: bool(self.all_arrays) or bool(self.all_groups))
     def move_operations(self, data: st.DataObject, num_moves: int) -> None:
@@ -267,7 +328,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             #     pending_model, session.store, pending_arrays | pending_groups
             # )
 
-        # Prefer commit (75%) over discard (25%)
         if data.draw(st.sampled_from([True, True, True, False])):
             note(f"committing {num_moves} moves")
             self.model = pending_model
@@ -278,6 +338,45 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         else:
             note("discarding moves")
             self.store = self.repo.writable_session("main").store
+
+    @rule(data=st.data())
+    @precondition(
+        lambda self: (
+            Version(self.ic.__version__).major >= 2 and self.repo.spec_version >= 2
+        )
+    )
+    @precondition(lambda self: bool(self.all_arrays))
+    def shift_array(self, data: st.DataObject) -> None:
+        """Shift an array's chunks by a random offset."""
+        array_path = data.draw(st.sampled_from(sorted(self.all_arrays)))
+
+        arr_model = zarr.open_array(self.model, path=array_path)
+        arr_store = zarr.open_array(self.store, path=array_path)
+        num_chunks = arr_model.cdata_shape
+        chunks = arr_model.chunks
+
+        # Draw offset: negative shifts left, positive shifts right
+        offset = data.draw(
+            st.tuples(*[st.integers(min_value=-n, max_value=n) for n in num_chunks])
+        )
+
+        # Optionally resize before shift to make room (mimics real user behavior)
+        # - With resize: preserves data that would otherwise go out of bounds
+        # - Without resize: data shifting beyond bounds is lost
+        should_resize = data.draw(st.booleans())
+        if should_resize and any(o > 0 for o in offset):
+            new_shape = tuple(
+                arr_model.shape[i] + max(0, offset[i]) * chunks[i]
+                for i in range(len(chunks))
+            )
+            note(f"resizing array '{array_path}' from {arr_model.shape} to {new_shape}")
+            arr_model.resize(new_shape)
+            arr_store.resize(new_shape)
+            num_chunks = arr_model.cdata_shape
+
+        note(f"shifting array '{array_path}' by {offset}")
+        self.store.session.shift_array(f"/{array_path}", offset)
+        self._sync(self.model.shift_array(array_path, offset, num_chunks))
 
     @rule(
         data=st.data(),
@@ -350,6 +449,16 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             del group[group_name]
         self.all_groups.remove(group_path)
 
+    @rule(data=st.data())
+    def reopen_repository(self, data: st.DataObject) -> None:
+        # We use the Zarr's memory store as the model,
+        # Since we cannot `reset_branch` on the model; we must commit here.
+        if self.store.session.has_uncommitted_changes:
+            self.commit_with_check(data)
+
+        self.repo = self.actor.open(self.storage)
+        self.store = self.repo.writable_session("main").store
+
     @rule()
     def pickle_objects(self) -> None:
         if not self.store.session.has_uncommitted_changes:
@@ -363,9 +472,7 @@ def test_zarr_hierarchy() -> None:
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(in_memory_storage())
 
-    run_state_machine_as_test(  # type: ignore[no-untyped-call]
-        mk_test_instance_sync, settings=settings(report_multiple_bugs=False)
-    )
+    run_state_machine_as_test(mk_test_instance_sync)  # type: ignore[no-untyped-call]
 
 
 def test_zarr_store() -> None:

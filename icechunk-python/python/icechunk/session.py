@@ -170,9 +170,24 @@ class Session:
         return self._session.config
 
     def move(self, from_path: str, to_path: str) -> None:
+        """Move or rename a node (array or group) in the hierarchy.
+
+        This is a metadata-only operation—no data is copied. Requires a rearrange session:
+
+            session = repo.rearrange_session("main")
+            session.move("/data/raw", "/data/v1")
+
+        Parameters
+        ----------
+        from_path : str
+            The current path of the node (e.g., "/data/raw").
+        to_path : str
+            The new path for the node (e.g., "/data/v1").
+        """
         return self._session.move_node(from_path, to_path)
 
     async def move_async(self, from_path: str, to_path: str) -> None:
+        """Async version of :meth:`move`."""
         return await self._session.move_node_async(from_path, to_path)
 
     def all_virtual_chunk_locations(self) -> list[str]:
@@ -191,10 +206,42 @@ class Session:
         array_path: str,
         shift_chunk: Callable[[Iterable[int]], Iterable[int] | None],
     ) -> None:
+        """Reindex chunks in an array by applying a transformation function.
+
+        Parameters
+        ----------
+        array_path : str
+            Path to the array.
+        shift_chunk : Callable
+            Function that receives chunk coordinates and returns new coordinates,
+            or None to discard the chunk.
+        """
         return self._session.reindex_array(array_path, shift_chunk)
 
-    def shift_array(self, array_path: str, offset: Iterable[int]) -> None:
-        return self._session.shift_array(array_path, offset)
+    def shift_array(
+        self,
+        array_path: str,
+        chunk_offset: Iterable[int],
+    ) -> None:
+        """Shift all chunks in an array by the given chunk offset.
+
+        Out-of-bounds chunks are discarded. To preserve them, resize the array first
+        to make room. Vacated source positions retain stale references.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array to shift.
+        chunk_offset : Iterable[int]
+            The number of chunks to shift by in each dimension. Positive values
+            shift right/down, negative values shift left/up.
+
+        Notes
+        -----
+        To shift right while preserving all data, first resize the array using zarr's
+        array.resize(), then shift.
+        """
+        self._session.shift_array(array_path, list(chunk_offset))
 
     async def all_virtual_chunk_locations_async(self) -> list[str]:
         """

@@ -14,10 +14,11 @@ from icechunk import (
     s3_refreshable_credentials,
     s3_storage,
 )
+from tests.conftest import Permission
 
 
 def get_good_credentials() -> S3StaticCredentials:
-    return S3StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
+    return S3StaticCredentials(*Permission.MODIFY.keys())
 
 
 def get_bad_credentials() -> S3StaticCredentials:
@@ -143,9 +144,7 @@ class ExpirableCredentials:
 
         # The return an expired credential for 3 times, then we return credentials with no expiration
         expires = None if len(s) >= self.expired_times else datetime.now(UTC)
-        return S3StaticCredentials(
-            access_key_id="minio123", secret_access_key="minio123", expires_after=expires
-        )
+        return S3StaticCredentials(*Permission.MODIFY.keys(), expires_after=expires)
 
 
 @pytest.mark.parametrize(

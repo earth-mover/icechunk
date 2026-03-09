@@ -217,13 +217,13 @@ pub mod generated {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_UPDATE_TYPE: u8 = 14;
+    pub const ENUM_MAX_UPDATE_TYPE: u8 = 15;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 15] = [
+    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 16] = [
         UpdateType::NONE,
         UpdateType::RepoInitializedUpdate,
         UpdateType::RepoMigratedUpdate,
@@ -239,6 +239,7 @@ pub mod generated {
         UpdateType::NewDetachedSnapshotUpdate,
         UpdateType::GCRanUpdate,
         UpdateType::ExpirationRanUpdate,
+        UpdateType::FeatureFlagChangedUpdate,
     ];
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -261,9 +262,10 @@ pub mod generated {
         pub const NewDetachedSnapshotUpdate: Self = Self(12);
         pub const GCRanUpdate: Self = Self(13);
         pub const ExpirationRanUpdate: Self = Self(14);
+        pub const FeatureFlagChangedUpdate: Self = Self(15);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 14;
+        pub const ENUM_MAX: u8 = 15;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::NONE,
             Self::RepoInitializedUpdate,
@@ -280,6 +282,7 @@ pub mod generated {
             Self::NewDetachedSnapshotUpdate,
             Self::GCRanUpdate,
             Self::ExpirationRanUpdate,
+            Self::FeatureFlagChangedUpdate,
         ];
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
@@ -299,6 +302,7 @@ pub mod generated {
                 Self::NewDetachedSnapshotUpdate => Some("NewDetachedSnapshotUpdate"),
                 Self::GCRanUpdate => Some("GCRanUpdate"),
                 Self::ExpirationRanUpdate => Some("ExpirationRanUpdate"),
+                Self::FeatureFlagChangedUpdate => Some("FeatureFlagChangedUpdate"),
                 _ => None,
             }
         }
@@ -1112,6 +1116,8 @@ pub mod generated {
         pub const VT_LOCATION: flatbuffers::VOffsetT = 14;
         pub const VT_CHECKSUM_ETAG: flatbuffers::VOffsetT = 16;
         pub const VT_CHECKSUM_LAST_MODIFIED: flatbuffers::VOffsetT = 18;
+        pub const VT_COMPRESSED_LOCATION: flatbuffers::VOffsetT = 20;
+        pub const VT_EXTRA: flatbuffers::VOffsetT = 22;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -1130,6 +1136,12 @@ pub mod generated {
             let mut builder = ChunkRefBuilder::new(_fbb);
             builder.add_length(args.length);
             builder.add_offset(args.offset);
+            if let Some(x) = args.extra {
+                builder.add_extra(x);
+            }
+            if let Some(x) = args.compressed_location {
+                builder.add_compressed_location(x);
+            }
             builder.add_checksum_last_modified(args.checksum_last_modified);
             if let Some(x) = args.checksum_etag {
                 builder.add_checksum_etag(x);
@@ -1232,6 +1244,32 @@ pub mod generated {
                     .unwrap()
             }
         }
+        #[inline]
+        pub fn compressed_location(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        ChunkRef::VT_COMPRESSED_LOCATION,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        pub fn extra(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        ChunkRef::VT_EXTRA,
+                        None,
+                    )
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for ChunkRef<'_> {
@@ -1250,6 +1288,8 @@ pub mod generated {
      .visit_field::<flatbuffers::ForwardsUOffset<&str>>("location", Self::VT_LOCATION, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<&str>>("checksum_etag", Self::VT_CHECKSUM_ETAG, false)?
      .visit_field::<u32>("checksum_last_modified", Self::VT_CHECKSUM_LAST_MODIFIED, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("compressed_location", Self::VT_COMPRESSED_LOCATION, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("extra", Self::VT_EXTRA, false)?
      .finish();
             Ok(())
         }
@@ -1263,6 +1303,9 @@ pub mod generated {
         pub location: Option<flatbuffers::WIPOffset<&'a str>>,
         pub checksum_etag: Option<flatbuffers::WIPOffset<&'a str>>,
         pub checksum_last_modified: u32,
+        pub compressed_location:
+            Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+        pub extra: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
     }
     impl<'a> Default for ChunkRefArgs<'a> {
         #[inline]
@@ -1276,6 +1319,8 @@ pub mod generated {
                 location: None,
                 checksum_etag: None,
                 checksum_last_modified: 0,
+                compressed_location: None,
+                extra: None,
             }
         }
     }
@@ -1341,6 +1386,24 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_compressed_location(
+            &mut self,
+            compressed_location: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                ChunkRef::VT_COMPRESSED_LOCATION,
+                compressed_location,
+            );
+        }
+        #[inline]
+        pub fn add_extra(
+            &mut self,
+            extra: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(ChunkRef::VT_EXTRA, extra);
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> ChunkRefBuilder<'a, 'b, A> {
@@ -1366,6 +1429,8 @@ pub mod generated {
             ds.field("location", &self.location());
             ds.field("checksum_etag", &self.checksum_etag());
             ds.field("checksum_last_modified", &self.checksum_last_modified());
+            ds.field("compressed_location", &self.compressed_location());
+            ds.field("extra", &self.extra());
             ds.finish()
         }
     }
@@ -1387,6 +1452,7 @@ pub mod generated {
     impl<'a> ArrayManifest<'a> {
         pub const VT_NODE_ID: flatbuffers::VOffsetT = 4;
         pub const VT_REFS: flatbuffers::VOffsetT = 6;
+        pub const VT_EXTRA: flatbuffers::VOffsetT = 8;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -1403,6 +1469,9 @@ pub mod generated {
             args: &'args ArrayManifestArgs<'args>,
         ) -> flatbuffers::WIPOffset<ArrayManifest<'bldr>> {
             let mut builder = ArrayManifestBuilder::new(_fbb);
+            if let Some(x) = args.extra {
+                builder.add_extra(x);
+            }
             if let Some(x) = args.refs {
                 builder.add_refs(x);
             }
@@ -1436,6 +1505,19 @@ pub mod generated {
                     .unwrap()
             }
         }
+        #[inline]
+        pub fn extra(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        ArrayManifest::VT_EXTRA,
+                        None,
+                    )
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for ArrayManifest<'_> {
@@ -1450,6 +1532,11 @@ pub mod generated {
                 .visit_field::<flatbuffers::ForwardsUOffset<
                     flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ChunkRef>>,
                 >>("refs", Self::VT_REFS, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "extra",
+                    Self::VT_EXTRA,
+                    false,
+                )?
                 .finish();
             Ok(())
         }
@@ -1461,6 +1548,7 @@ pub mod generated {
                 flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ChunkRef<'a>>>,
             >,
         >,
+        pub extra: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
     }
     impl<'a> Default for ArrayManifestArgs<'a> {
         #[inline]
@@ -1468,6 +1556,7 @@ pub mod generated {
             ArrayManifestArgs {
                 node_id: None, // required field
                 refs: None,    // required field
+                extra: None,
             }
         }
     }
@@ -1494,6 +1583,16 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_extra(
+            &mut self,
+            extra: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                ArrayManifest::VT_EXTRA,
+                extra,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> ArrayManifestBuilder<'a, 'b, A> {
@@ -1514,6 +1613,7 @@ pub mod generated {
             let mut ds = f.debug_struct("ArrayManifest");
             ds.field("node_id", &self.node_id());
             ds.field("refs", &self.refs());
+            ds.field("extra", &self.extra());
             ds.finish()
         }
     }
@@ -1535,6 +1635,9 @@ pub mod generated {
     impl<'a> Manifest<'a> {
         pub const VT_ID: flatbuffers::VOffsetT = 4;
         pub const VT_ARRAYS: flatbuffers::VOffsetT = 6;
+        pub const VT_LOCATION_DICTIONARY: flatbuffers::VOffsetT = 8;
+        pub const VT_COMPRESSION_ALGORITHM: flatbuffers::VOffsetT = 10;
+        pub const VT_EXTRA: flatbuffers::VOffsetT = 12;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -1551,12 +1654,19 @@ pub mod generated {
             args: &'args ManifestArgs<'args>,
         ) -> flatbuffers::WIPOffset<Manifest<'bldr>> {
             let mut builder = ManifestBuilder::new(_fbb);
+            if let Some(x) = args.extra {
+                builder.add_extra(x);
+            }
+            if let Some(x) = args.location_dictionary {
+                builder.add_location_dictionary(x);
+            }
             if let Some(x) = args.arrays {
                 builder.add_arrays(x);
             }
             if let Some(x) = args.id {
                 builder.add_id(x);
             }
+            builder.add_compression_algorithm(args.compression_algorithm);
             builder.finish()
         }
 
@@ -1586,6 +1696,41 @@ pub mod generated {
                     .unwrap()
             }
         }
+        #[inline]
+        pub fn location_dictionary(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        Manifest::VT_LOCATION_DICTIONARY,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        pub fn compression_algorithm(&self) -> u8 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<u8>(Manifest::VT_COMPRESSION_ALGORITHM, Some(1)).unwrap()
+            }
+        }
+        #[inline]
+        pub fn extra(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        Manifest::VT_EXTRA,
+                        None,
+                    )
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for Manifest<'_> {
@@ -1600,6 +1745,21 @@ pub mod generated {
                 .visit_field::<flatbuffers::ForwardsUOffset<
                     flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ArrayManifest>>,
                 >>("arrays", Self::VT_ARRAYS, true)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "location_dictionary",
+                    Self::VT_LOCATION_DICTIONARY,
+                    false,
+                )?
+                .visit_field::<u8>(
+                    "compression_algorithm",
+                    Self::VT_COMPRESSION_ALGORITHM,
+                    false,
+                )?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "extra",
+                    Self::VT_EXTRA,
+                    false,
+                )?
                 .finish();
             Ok(())
         }
@@ -1611,6 +1771,10 @@ pub mod generated {
                 flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ArrayManifest<'a>>>,
             >,
         >,
+        pub location_dictionary:
+            Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+        pub compression_algorithm: u8,
+        pub extra: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
     }
     impl<'a> Default for ManifestArgs<'a> {
         #[inline]
@@ -1618,6 +1782,9 @@ pub mod generated {
             ManifestArgs {
                 id: None,     // required field
                 arrays: None, // required field
+                location_dictionary: None,
+                compression_algorithm: 1,
+                extra: None,
             }
         }
     }
@@ -1644,6 +1811,32 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_location_dictionary(
+            &mut self,
+            location_dictionary: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Manifest::VT_LOCATION_DICTIONARY,
+                location_dictionary,
+            );
+        }
+        #[inline]
+        pub fn add_compression_algorithm(&mut self, compression_algorithm: u8) {
+            self.fbb_.push_slot::<u8>(
+                Manifest::VT_COMPRESSION_ALGORITHM,
+                compression_algorithm,
+                1,
+            );
+        }
+        #[inline]
+        pub fn add_extra(
+            &mut self,
+            extra: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Manifest::VT_EXTRA, extra);
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> ManifestBuilder<'a, 'b, A> {
@@ -1664,6 +1857,191 @@ pub mod generated {
             let mut ds = f.debug_struct("Manifest");
             ds.field("id", &self.id());
             ds.field("arrays", &self.arrays());
+            ds.field("location_dictionary", &self.location_dictionary());
+            ds.field("compression_algorithm", &self.compression_algorithm());
+            ds.field("extra", &self.extra());
+            ds.finish()
+        }
+    }
+    pub enum ManifestFileInfoV2Offset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct ManifestFileInfoV2<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for ManifestFileInfoV2<'a> {
+        type Inner = ManifestFileInfoV2<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+        }
+    }
+
+    impl<'a> ManifestFileInfoV2<'a> {
+        pub const VT_ID: flatbuffers::VOffsetT = 4;
+        pub const VT_SIZE_BYTES: flatbuffers::VOffsetT = 6;
+        pub const VT_NUM_CHUNK_REFS: flatbuffers::VOffsetT = 8;
+        pub const VT_EXTRA: flatbuffers::VOffsetT = 10;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            ManifestFileInfoV2 { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args ManifestFileInfoV2Args<'args>,
+        ) -> flatbuffers::WIPOffset<ManifestFileInfoV2<'bldr>> {
+            let mut builder = ManifestFileInfoV2Builder::new(_fbb);
+            builder.add_size_bytes(args.size_bytes);
+            if let Some(x) = args.extra {
+                builder.add_extra(x);
+            }
+            builder.add_num_chunk_refs(args.num_chunk_refs);
+            if let Some(x) = args.id {
+                builder.add_id(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn id(&self) -> Option<&'a ObjectId12> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe { self._tab.get::<ObjectId12>(ManifestFileInfoV2::VT_ID, None) }
+        }
+        #[inline]
+        pub fn size_bytes(&self) -> u64 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<u64>(ManifestFileInfoV2::VT_SIZE_BYTES, Some(0)).unwrap()
+            }
+        }
+        #[inline]
+        pub fn num_chunk_refs(&self) -> u32 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<u32>(ManifestFileInfoV2::VT_NUM_CHUNK_REFS, Some(0))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn extra(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        ManifestFileInfoV2::VT_EXTRA,
+                        None,
+                    )
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for ManifestFileInfoV2<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<ObjectId12>("id", Self::VT_ID, false)?
+                .visit_field::<u64>("size_bytes", Self::VT_SIZE_BYTES, false)?
+                .visit_field::<u32>("num_chunk_refs", Self::VT_NUM_CHUNK_REFS, false)?
+                .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>(
+                    "extra",
+                    Self::VT_EXTRA,
+                    false,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct ManifestFileInfoV2Args<'a> {
+        pub id: Option<&'a ObjectId12>,
+        pub size_bytes: u64,
+        pub num_chunk_refs: u32,
+        pub extra: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+    }
+    impl<'a> Default for ManifestFileInfoV2Args<'a> {
+        #[inline]
+        fn default() -> Self {
+            ManifestFileInfoV2Args {
+                id: None,
+                size_bytes: 0,
+                num_chunk_refs: 0,
+                extra: None,
+            }
+        }
+    }
+
+    pub struct ManifestFileInfoV2Builder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ManifestFileInfoV2Builder<'a, 'b, A> {
+        #[inline]
+        pub fn add_id(&mut self, id: &ObjectId12) {
+            self.fbb_.push_slot_always::<&ObjectId12>(ManifestFileInfoV2::VT_ID, id);
+        }
+        #[inline]
+        pub fn add_size_bytes(&mut self, size_bytes: u64) {
+            self.fbb_.push_slot::<u64>(ManifestFileInfoV2::VT_SIZE_BYTES, size_bytes, 0);
+        }
+        #[inline]
+        pub fn add_num_chunk_refs(&mut self, num_chunk_refs: u32) {
+            self.fbb_.push_slot::<u32>(
+                ManifestFileInfoV2::VT_NUM_CHUNK_REFS,
+                num_chunk_refs,
+                0,
+            );
+        }
+        #[inline]
+        pub fn add_extra(
+            &mut self,
+            extra: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                ManifestFileInfoV2::VT_EXTRA,
+                extra,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> ManifestFileInfoV2Builder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            ManifestFileInfoV2Builder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<ManifestFileInfoV2<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for ManifestFileInfoV2<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("ManifestFileInfoV2");
+            ds.field("id", &self.id());
+            ds.field("size_bytes", &self.size_bytes());
+            ds.field("num_chunk_refs", &self.num_chunk_refs());
+            ds.field("extra", &self.extra());
             ds.finish()
         }
     }
@@ -2212,6 +2590,7 @@ pub mod generated {
         pub const VT_USER_DATA: flatbuffers::VOffsetT = 8;
         pub const VT_NODE_DATA_TYPE: flatbuffers::VOffsetT = 10;
         pub const VT_NODE_DATA: flatbuffers::VOffsetT = 12;
+        pub const VT_EXTRA: flatbuffers::VOffsetT = 14;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -2228,6 +2607,9 @@ pub mod generated {
             args: &'args NodeSnapshotArgs<'args>,
         ) -> flatbuffers::WIPOffset<NodeSnapshot<'bldr>> {
             let mut builder = NodeSnapshotBuilder::new(_fbb);
+            if let Some(x) = args.extra {
+                builder.add_extra(x);
+            }
             if let Some(x) = args.node_data {
                 builder.add_node_data(x);
             }
@@ -2308,6 +2690,19 @@ pub mod generated {
             }
         }
         #[inline]
+        pub fn extra(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        NodeSnapshot::VT_EXTRA,
+                        None,
+                    )
+            }
+        }
+        #[inline]
         #[allow(non_snake_case)]
         pub fn node_data_as_array(&self) -> Option<ArrayNodeData<'a>> {
             if self.node_data_type() == NodeData::Array {
@@ -2354,6 +2749,7 @@ pub mod generated {
           _ => Ok(()),
         }
      })?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("extra", Self::VT_EXTRA, false)?
      .finish();
             Ok(())
         }
@@ -2364,6 +2760,7 @@ pub mod generated {
         pub user_data: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
         pub node_data_type: NodeData,
         pub node_data: Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
+        pub extra: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
     }
     impl<'a> Default for NodeSnapshotArgs<'a> {
         #[inline]
@@ -2374,6 +2771,7 @@ pub mod generated {
                 user_data: None, // required field
                 node_data_type: NodeData::NONE,
                 node_data: None, // required field
+                extra: None,
             }
         }
     }
@@ -2423,6 +2821,16 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_extra(
+            &mut self,
+            extra: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                NodeSnapshot::VT_EXTRA,
+                extra,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> NodeSnapshotBuilder<'a, 'b, A> {
@@ -2467,6 +2875,7 @@ pub mod generated {
                     ds.field("node_data", &x)
                 }
             };
+            ds.field("extra", &self.extra());
             ds.finish()
         }
     }
@@ -2493,6 +2902,8 @@ pub mod generated {
         pub const VT_MESSAGE: flatbuffers::VOffsetT = 12;
         pub const VT_METADATA: flatbuffers::VOffsetT = 14;
         pub const VT_MANIFEST_FILES: flatbuffers::VOffsetT = 16;
+        pub const VT_EXTRA: flatbuffers::VOffsetT = 18;
+        pub const VT_MANIFEST_FILES_V2: flatbuffers::VOffsetT = 20;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -2510,6 +2921,12 @@ pub mod generated {
         ) -> flatbuffers::WIPOffset<Snapshot<'bldr>> {
             let mut builder = SnapshotBuilder::new(_fbb);
             builder.add_flushed_at(args.flushed_at);
+            if let Some(x) = args.manifest_files_v2 {
+                builder.add_manifest_files_v2(x);
+            }
+            if let Some(x) = args.extra {
+                builder.add_extra(x);
+            }
             if let Some(x) = args.manifest_files {
                 builder.add_manifest_files(x);
             }
@@ -2614,6 +3031,37 @@ pub mod generated {
                     .unwrap()
             }
         }
+        #[inline]
+        pub fn extra(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        Snapshot::VT_EXTRA,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        pub fn manifest_files_v2(
+            &self,
+        ) -> Option<
+            flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ManifestFileInfoV2<'a>>>,
+        > {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<
+                        'a,
+                        flatbuffers::ForwardsUOffset<ManifestFileInfoV2>,
+                    >,
+                >>(Snapshot::VT_MANIFEST_FILES_V2, None)
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for Snapshot<'_> {
@@ -2631,6 +3079,8 @@ pub mod generated {
      .visit_field::<flatbuffers::ForwardsUOffset<&str>>("message", Self::VT_MESSAGE, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MetadataItem>>>>("metadata", Self::VT_METADATA, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ManifestFileInfo>>>("manifest_files", Self::VT_MANIFEST_FILES, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("extra", Self::VT_EXTRA, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ManifestFileInfoV2>>>>("manifest_files_v2", Self::VT_MANIFEST_FILES_V2, false)?
      .finish();
             Ok(())
         }
@@ -2652,6 +3102,15 @@ pub mod generated {
         >,
         pub manifest_files:
             Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ManifestFileInfo>>>,
+        pub extra: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+        pub manifest_files_v2: Option<
+            flatbuffers::WIPOffset<
+                flatbuffers::Vector<
+                    'a,
+                    flatbuffers::ForwardsUOffset<ManifestFileInfoV2<'a>>,
+                >,
+            >,
+        >,
     }
     impl<'a> Default for SnapshotArgs<'a> {
         #[inline]
@@ -2664,6 +3123,8 @@ pub mod generated {
                 message: None,        // required field
                 metadata: None,       // required field
                 manifest_files: None, // required field
+                extra: None,
+                manifest_files_v2: None,
             }
         }
     }
@@ -2727,6 +3188,29 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_extra(
+            &mut self,
+            extra: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Snapshot::VT_EXTRA, extra);
+        }
+        #[inline]
+        pub fn add_manifest_files_v2(
+            &mut self,
+            manifest_files_v2: flatbuffers::WIPOffset<
+                flatbuffers::Vector<
+                    'b,
+                    flatbuffers::ForwardsUOffset<ManifestFileInfoV2<'b>>,
+                >,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Snapshot::VT_MANIFEST_FILES_V2,
+                manifest_files_v2,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> SnapshotBuilder<'a, 'b, A> {
@@ -2755,6 +3239,8 @@ pub mod generated {
             ds.field("message", &self.message());
             ds.field("metadata", &self.metadata());
             ds.field("manifest_files", &self.manifest_files());
+            ds.field("extra", &self.extra());
+            ds.field("manifest_files_v2", &self.manifest_files_v2());
             ds.finish()
         }
     }
@@ -3200,6 +3686,7 @@ pub mod generated {
         pub const VT_UPDATED_GROUPS: flatbuffers::VOffsetT = 16;
         pub const VT_UPDATED_CHUNKS: flatbuffers::VOffsetT = 18;
         pub const VT_MOVED_NODES: flatbuffers::VOffsetT = 20;
+        pub const VT_EXTRA: flatbuffers::VOffsetT = 22;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -3216,6 +3703,9 @@ pub mod generated {
             args: &'args TransactionLogArgs<'args>,
         ) -> flatbuffers::WIPOffset<TransactionLog<'bldr>> {
             let mut builder = TransactionLogBuilder::new(_fbb);
+            if let Some(x) = args.extra {
+                builder.add_extra(x);
+            }
             if let Some(x) = args.moved_nodes {
                 builder.add_moved_nodes(x);
             }
@@ -3341,6 +3831,19 @@ pub mod generated {
                 >>(TransactionLog::VT_MOVED_NODES, None)
             }
         }
+        #[inline]
+        pub fn extra(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        TransactionLog::VT_EXTRA,
+                        None,
+                    )
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for TransactionLog<'_> {
@@ -3360,6 +3863,7 @@ pub mod generated {
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ObjectId8>>>("updated_groups", Self::VT_UPDATED_GROUPS, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ArrayUpdatedChunks>>>>("updated_chunks", Self::VT_UPDATED_CHUNKS, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MoveOperation>>>>("moved_nodes", Self::VT_MOVED_NODES, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("extra", Self::VT_EXTRA, false)?
      .finish();
             Ok(())
         }
@@ -3391,6 +3895,7 @@ pub mod generated {
                 flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<MoveOperation<'a>>>,
             >,
         >,
+        pub extra: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
     }
     impl<'a> Default for TransactionLogArgs<'a> {
         #[inline]
@@ -3405,6 +3910,7 @@ pub mod generated {
                 updated_groups: None, // required field
                 updated_chunks: None, // required field
                 moved_nodes: None,
+                extra: None,
             }
         }
     }
@@ -3506,6 +4012,16 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_extra(
+            &mut self,
+            extra: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                TransactionLog::VT_EXTRA,
+                extra,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> TransactionLogBuilder<'a, 'b, A> {
@@ -3539,6 +4055,7 @@ pub mod generated {
             ds.field("updated_groups", &self.updated_groups());
             ds.field("updated_chunks", &self.updated_chunks());
             ds.field("moved_nodes", &self.moved_nodes());
+            ds.field("extra", &self.extra());
             ds.finish()
         }
     }
@@ -5711,6 +6228,157 @@ pub mod generated {
             ds.finish()
         }
     }
+    pub enum FeatureFlagChangedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct FeatureFlagChangedUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for FeatureFlagChangedUpdate<'a> {
+        type Inner = FeatureFlagChangedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+        }
+    }
+
+    impl<'a> FeatureFlagChangedUpdate<'a> {
+        pub const VT_ID: flatbuffers::VOffsetT = 4;
+        pub const VT_NEW_VALUE: flatbuffers::VOffsetT = 6;
+        pub const VT_IS_SET: flatbuffers::VOffsetT = 8;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            FeatureFlagChangedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args FeatureFlagChangedUpdateArgs,
+        ) -> flatbuffers::WIPOffset<FeatureFlagChangedUpdate<'bldr>> {
+            let mut builder = FeatureFlagChangedUpdateBuilder::new(_fbb);
+            builder.add_id(args.id);
+            builder.add_is_set(args.is_set);
+            builder.add_new_value(args.new_value);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn id(&self) -> u16 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<u16>(FeatureFlagChangedUpdate::VT_ID, Some(0)).unwrap()
+            }
+        }
+        #[inline]
+        pub fn new_value(&self) -> bool {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<bool>(FeatureFlagChangedUpdate::VT_NEW_VALUE, Some(false))
+                    .unwrap()
+            }
+        }
+        #[inline]
+        pub fn is_set(&self) -> bool {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<bool>(FeatureFlagChangedUpdate::VT_IS_SET, Some(false))
+                    .unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for FeatureFlagChangedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<u16>("id", Self::VT_ID, false)?
+                .visit_field::<bool>("new_value", Self::VT_NEW_VALUE, false)?
+                .visit_field::<bool>("is_set", Self::VT_IS_SET, false)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct FeatureFlagChangedUpdateArgs {
+        pub id: u16,
+        pub new_value: bool,
+        pub is_set: bool,
+    }
+    impl<'a> Default for FeatureFlagChangedUpdateArgs {
+        #[inline]
+        fn default() -> Self {
+            FeatureFlagChangedUpdateArgs { id: 0, new_value: false, is_set: false }
+        }
+    }
+
+    pub struct FeatureFlagChangedUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a>
+        FeatureFlagChangedUpdateBuilder<'a, 'b, A>
+    {
+        #[inline]
+        pub fn add_id(&mut self, id: u16) {
+            self.fbb_.push_slot::<u16>(FeatureFlagChangedUpdate::VT_ID, id, 0);
+        }
+        #[inline]
+        pub fn add_new_value(&mut self, new_value: bool) {
+            self.fbb_.push_slot::<bool>(
+                FeatureFlagChangedUpdate::VT_NEW_VALUE,
+                new_value,
+                false,
+            );
+        }
+        #[inline]
+        pub fn add_is_set(&mut self, is_set: bool) {
+            self.fbb_.push_slot::<bool>(
+                FeatureFlagChangedUpdate::VT_IS_SET,
+                is_set,
+                false,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> FeatureFlagChangedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            FeatureFlagChangedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<FeatureFlagChangedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for FeatureFlagChangedUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("FeatureFlagChangedUpdate");
+            ds.field("id", &self.id());
+            ds.field("new_value", &self.new_value());
+            ds.field("is_set", &self.is_set());
+            ds.finish()
+        }
+    }
     pub enum UpdateOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -6020,6 +6688,22 @@ pub mod generated {
                 None
             }
         }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_feature_flag_changed_update(
+            &self,
+        ) -> Option<FeatureFlagChangedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::FeatureFlagChangedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { FeatureFlagChangedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for Update<'_> {
@@ -6046,6 +6730,7 @@ pub mod generated {
           UpdateType::NewDetachedSnapshotUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<NewDetachedSnapshotUpdate>>("UpdateType::NewDetachedSnapshotUpdate", pos),
           UpdateType::GCRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<GCRanUpdate>>("UpdateType::GCRanUpdate", pos),
           UpdateType::ExpirationRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ExpirationRanUpdate>>("UpdateType::ExpirationRanUpdate", pos),
+          UpdateType::FeatureFlagChangedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<FeatureFlagChangedUpdate>>("UpdateType::FeatureFlagChangedUpdate", pos),
           _ => Ok(()),
         }
      })?
@@ -6225,6 +6910,13 @@ pub mod generated {
                         ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
                     }
                 }
+                UpdateType::FeatureFlagChangedUpdate => {
+                    if let Some(x) = self.update_type_as_feature_flag_changed_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
                 _ => {
                     let x: Option<()> = None;
                     ds.field("update_type", &x)
@@ -6260,6 +6952,10 @@ pub mod generated {
         pub const VT_METADATA: flatbuffers::VOffsetT = 16;
         pub const VT_LATEST_UPDATES: flatbuffers::VOffsetT = 18;
         pub const VT_REPO_BEFORE_UPDATES: flatbuffers::VOffsetT = 20;
+        pub const VT_CONFIG: flatbuffers::VOffsetT = 22;
+        pub const VT_ENABLED_FEATURE_FLAGS: flatbuffers::VOffsetT = 24;
+        pub const VT_DISABLED_FEATURE_FLAGS: flatbuffers::VOffsetT = 26;
+        pub const VT_EXTRA: flatbuffers::VOffsetT = 28;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -6276,6 +6972,18 @@ pub mod generated {
             args: &'args RepoArgs<'args>,
         ) -> flatbuffers::WIPOffset<Repo<'bldr>> {
             let mut builder = RepoBuilder::new(_fbb);
+            if let Some(x) = args.extra {
+                builder.add_extra(x);
+            }
+            if let Some(x) = args.disabled_feature_flags {
+                builder.add_disabled_feature_flags(x);
+            }
+            if let Some(x) = args.enabled_feature_flags {
+                builder.add_enabled_feature_flags(x);
+            }
+            if let Some(x) = args.config {
+                builder.add_config(x);
+            }
             if let Some(x) = args.repo_before_updates {
                 builder.add_repo_before_updates(x);
             }
@@ -6430,6 +7138,58 @@ pub mod generated {
                 )
             }
         }
+        #[inline]
+        pub fn config(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        Repo::VT_CONFIG,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        pub fn enabled_feature_flags(&self) -> Option<flatbuffers::Vector<'a, u16>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u16>>>(
+                        Repo::VT_ENABLED_FEATURE_FLAGS,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        pub fn disabled_feature_flags(&self) -> Option<flatbuffers::Vector<'a, u16>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u16>>>(
+                        Repo::VT_DISABLED_FEATURE_FLAGS,
+                        None,
+                    )
+            }
+        }
+        #[inline]
+        pub fn extra(&self) -> Option<flatbuffers::Vector<'a, u8>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab
+                    .get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(
+                        Repo::VT_EXTRA,
+                        None,
+                    )
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for Repo<'_> {
@@ -6440,36 +7200,20 @@ pub mod generated {
         ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
             use self::flatbuffers::Verifiable;
             v.visit_table(pos)?
-                .visit_field::<u8>("spec_version", Self::VT_SPEC_VERSION, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<
-                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>,
-                >>("tags", Self::VT_TAGS, true)?
-                .visit_field::<flatbuffers::ForwardsUOffset<
-                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>,
-                >>("branches", Self::VT_BRANCHES, true)?
-                .visit_field::<flatbuffers::ForwardsUOffset<
-                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<&'_ str>>,
-                >>("deleted_tags", Self::VT_DELETED_TAGS, true)?
-                .visit_field::<flatbuffers::ForwardsUOffset<
-                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SnapshotInfo>>,
-                >>("snapshots", Self::VT_SNAPSHOTS, true)?
-                .visit_field::<flatbuffers::ForwardsUOffset<RepoStatus>>(
-                    "status",
-                    Self::VT_STATUS,
-                    true,
-                )?
-                .visit_field::<flatbuffers::ForwardsUOffset<
-                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MetadataItem>>,
-                >>("metadata", Self::VT_METADATA, false)?
-                .visit_field::<flatbuffers::ForwardsUOffset<
-                    flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Update>>,
-                >>("latest_updates", Self::VT_LATEST_UPDATES, true)?
-                .visit_field::<flatbuffers::ForwardsUOffset<&str>>(
-                    "repo_before_updates",
-                    Self::VT_REPO_BEFORE_UPDATES,
-                    false,
-                )?
-                .finish();
+     .visit_field::<u8>("spec_version", Self::VT_SPEC_VERSION, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>>>("tags", Self::VT_TAGS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Ref>>>>("branches", Self::VT_BRANCHES, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<&'_ str>>>>("deleted_tags", Self::VT_DELETED_TAGS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SnapshotInfo>>>>("snapshots", Self::VT_SNAPSHOTS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<RepoStatus>>("status", Self::VT_STATUS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<MetadataItem>>>>("metadata", Self::VT_METADATA, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Update>>>>("latest_updates", Self::VT_LATEST_UPDATES, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("repo_before_updates", Self::VT_REPO_BEFORE_UPDATES, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("config", Self::VT_CONFIG, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u16>>>("enabled_feature_flags", Self::VT_ENABLED_FEATURE_FLAGS, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u16>>>("disabled_feature_flags", Self::VT_DISABLED_FEATURE_FLAGS, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u8>>>("extra", Self::VT_EXTRA, false)?
+     .finish();
             Ok(())
         }
     }
@@ -6507,6 +7251,12 @@ pub mod generated {
             >,
         >,
         pub repo_before_updates: Option<flatbuffers::WIPOffset<&'a str>>,
+        pub config: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
+        pub enabled_feature_flags:
+            Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u16>>>,
+        pub disabled_feature_flags:
+            Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u16>>>,
+        pub extra: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u8>>>,
     }
     impl<'a> Default for RepoArgs<'a> {
         #[inline]
@@ -6521,6 +7271,10 @@ pub mod generated {
                 metadata: None,
                 latest_updates: None, // required field
                 repo_before_updates: None,
+                config: None,
+                enabled_feature_flags: None,
+                disabled_feature_flags: None,
+                extra: None,
             }
         }
     }
@@ -6621,6 +7375,42 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_config(
+            &mut self,
+            config: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Repo::VT_CONFIG, config);
+        }
+        #[inline]
+        pub fn add_enabled_feature_flags(
+            &mut self,
+            enabled_feature_flags: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u16>>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Repo::VT_ENABLED_FEATURE_FLAGS,
+                enabled_feature_flags,
+            );
+        }
+        #[inline]
+        pub fn add_disabled_feature_flags(
+            &mut self,
+            disabled_feature_flags: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u16>>,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                Repo::VT_DISABLED_FEATURE_FLAGS,
+                disabled_feature_flags,
+            );
+        }
+        #[inline]
+        pub fn add_extra(
+            &mut self,
+            extra: flatbuffers::WIPOffset<flatbuffers::Vector<'b, u8>>,
+        ) {
+            self.fbb_
+                .push_slot_always::<flatbuffers::WIPOffset<_>>(Repo::VT_EXTRA, extra);
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> RepoBuilder<'a, 'b, A> {
@@ -6652,6 +7442,10 @@ pub mod generated {
             ds.field("metadata", &self.metadata());
             ds.field("latest_updates", &self.latest_updates());
             ds.field("repo_before_updates", &self.repo_before_updates());
+            ds.field("config", &self.config());
+            ds.field("enabled_feature_flags", &self.enabled_feature_flags());
+            ds.field("disabled_feature_flags", &self.disabled_feature_flags());
+            ds.field("extra", &self.extra());
             ds.finish()
         }
     }

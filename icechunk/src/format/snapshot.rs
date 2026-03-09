@@ -1,12 +1,15 @@
 //! Repository state at a point in time (arrays, groups, and manifest references).
 
-use std::{collections::BTreeMap, convert::Infallible, num::NonZeroU64, sync::Arc};
+use std::{
+    collections::BTreeMap, convert::Infallible, num::NonZeroU64, ops::Range, sync::Arc,
+};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
 use flatbuffers::{FlatBufferBuilder, VerifierOptions};
 use itertools::Itertools as _;
+use quick_cache::sync::{Cache, GuardResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -198,9 +201,12 @@ impl From<&generated::ObjectId12> for AttributesId {
 
 impl<'a> From<generated::ManifestRef<'a>> for ManifestRef {
     fn from(value: generated::ManifestRef<'a>) -> Self {
-        let from = value.extents().iter().map(|range| range.from()).collect::<Vec<_>>();
-        let to = value.extents().iter().map(|range| range.to()).collect::<Vec<_>>();
-        let extents = ManifestExtents::new(from.as_slice(), to.as_slice());
+        let extents = ManifestExtents::from_ranges_iter(
+            value
+                .extents()
+                .iter()
+                .map(|range| Range { start: range.from(), end: range.to() }),
+        );
         ManifestRef { object_id: value.object_id().into(), extents }
     }
 }
@@ -247,7 +253,7 @@ impl<'a> TryFrom<generated::NodeSnapshot<'a>> for NodeSnapshot {
         };
         let res = NodeSnapshot {
             id: value.id().into(),
-            path: value.path().to_string().try_into()?,
+            path: Path::from_trusted(value.path()),
             node_data,
             user_data: Bytes::copy_from_slice(value.user_data().bytes()),
         };
@@ -267,6 +273,24 @@ impl From<&generated::ManifestFileInfo> for ManifestFileInfo {
 
 pub type SnapshotProperties = BTreeMap<String, Value>;
 
+/// Insert a key-value pair into the `__icechunk` namespace object within snapshot properties.
+/// Creates the `__icechunk` object if it doesn't exist.
+pub fn inject_icechunk_metadata(
+    properties: &mut SnapshotProperties,
+    key: &str,
+    value: Value,
+) {
+    match properties.get_mut("__icechunk") {
+        Some(Value::Object(map)) => {
+            map.insert(key.to_string(), value);
+        }
+        _ => {
+            properties
+                .insert("__icechunk".to_string(), serde_json::json!({ key: value }));
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone, Eq, Hash)]
 pub struct ManifestFileInfo {
     pub id: ManifestId,
@@ -284,10 +308,20 @@ impl ManifestFileInfo {
     }
 }
 
-#[derive(PartialEq)]
+// It is _extremely_ common to set/get chunks in large batches sequentially.
+// Without a cache we incur the cost of repeatedly decoding the flatbuffer.
+// This cache is very small (size 2 currently), because we could cache a large number of
+// snapshots. The size of 2 is fine for typically workloads that iterate sequentially
+// through nodes.
+// We cannot choose 1 because of a bug in the `quick_cache` dependency
+// where a size-1 cache is effectively no cache
+// https://github.com/arthurprs/quick-cache/issues/105
+const SNAPSHOT_NODE_CACHE_SIZE: usize = 2;
+
 pub struct Snapshot {
     buffer: Vec<u8>,
     spec_version: SpecVersionBin,
+    node_cache: Cache<Path, Arc<NodeSnapshot>>,
 }
 
 impl std::fmt::Debug for Snapshot {
@@ -337,6 +371,12 @@ impl SnapshotInfo {
     }
 }
 
+impl SnapshotId {
+    pub fn is_initial(&self) -> bool {
+        *self == Snapshot::INITIAL_SNAPSHOT_ID
+    }
+}
+
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
     max_depth: 64,
     max_tables: 50_000_000,
@@ -359,7 +399,12 @@ impl Snapshot {
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;
-        Ok(Snapshot { buffer, spec_version })
+        Ok(Snapshot {
+            buffer,
+            spec_version,
+            // this number is low because we cache a very large number of snapshot nodes.
+            node_cache: Cache::new(SNAPSHOT_NODE_CACHE_SIZE),
+        })
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -436,6 +481,7 @@ impl Snapshot {
                 message: Some(message),
                 metadata: Some(metadata_items),
                 manifest_files: Some(manifest_files),
+                ..Default::default()
             },
         );
 
@@ -443,11 +489,21 @@ impl Snapshot {
         let (mut buffer, offset) = builder.collapse();
         buffer.drain(0..offset);
         buffer.shrink_to_fit();
-        Ok(Snapshot { buffer, spec_version })
+        Ok(Snapshot {
+            buffer,
+            spec_version,
+            // this number is low because we cache a very large number of snapshot nodes.
+            node_cache: Cache::new(SNAPSHOT_NODE_CACHE_SIZE),
+        })
     }
 
     pub fn initial(spec_version: SpecVersionBin) -> IcechunkResult<Self> {
-        let properties = [("__root".to_string(), serde_json::Value::from(true))].into();
+        let mut properties = SnapshotProperties::default();
+        inject_icechunk_metadata(
+            &mut properties,
+            "is_root",
+            serde_json::Value::from(true),
+        );
         let nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::new();
         Self::from_iter(
             Some(Self::INITIAL_SNAPSHOT_ID),
@@ -543,7 +599,7 @@ impl Snapshot {
         )
     }
 
-    pub fn get_node(&self, path: &Path) -> IcechunkResult<NodeSnapshot> {
+    fn _get_node(&self, path: &Path) -> IcechunkResult<NodeSnapshot> {
         let res = self
             .root()
             .nodes()
@@ -552,6 +608,20 @@ impl Snapshot {
                 path: path.clone(),
             }))?;
         res.try_into()
+    }
+
+    pub fn get_node(&self, path: &Path) -> IcechunkResult<Arc<NodeSnapshot>> {
+        use GuardResult::*;
+        match self.node_cache.get_value_or_guard(path, None) {
+            Value(node) => Ok(node),
+            Timeout => Ok(Arc::new(self._get_node(path)?)),
+            Guard(guard) => {
+                let node = self._get_node(path)?;
+                let node = Arc::new(node);
+                let _ = guard.insert(Arc::clone(&node));
+                Ok(node)
+            }
+        }
     }
 
     pub fn get_node_index(&self, path: &Path) -> IcechunkResult<usize> {
@@ -655,6 +725,7 @@ fn mk_node<'bldr>(
             node_data_type,
             node_data,
             user_data,
+            ..Default::default()
         },
     ))
 }
@@ -749,8 +820,18 @@ mod tests {
     use crate::format::{IcechunkFormatError, ObjectId};
 
     use super::*;
+    use crate::{
+        roundtrip_serialization_tests,
+        strategies::{manifest_file_info, node_snapshot},
+    };
     use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
     use std::iter::{self};
+
+    roundtrip_serialization_tests!(
+        serialize_and_deserialize_node_snapshot - node_snapshot,
+        serialize_and_deserialize_manifest_file_info - manifest_file_info
+    );
 
     #[icechunk_macros::test]
     fn test_get_node() -> Result<(), Box<dyn std::error::Error>> {
@@ -871,27 +952,27 @@ mod tests {
         let node = st.get_node(&"/b/c".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            NodeSnapshot {
+            Arc::new(NodeSnapshot {
                 path: "/b/c".try_into().unwrap(),
                 id: node_ids[3].clone(),
                 user_data: Bytes::copy_from_slice(b"bye"),
                 node_data: NodeData::Group,
-            },
+            }),
         );
         let node = st.get_node(&Path::root()).unwrap();
         assert_eq!(
             node,
-            NodeSnapshot {
+            Arc::new(NodeSnapshot {
                 path: Path::root(),
                 id: node_ids[0].clone(),
                 user_data: Bytes::new(),
                 node_data: NodeData::Group,
-            },
+            }),
         );
         let node = st.get_node(&"/b/array1".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            NodeSnapshot {
+            Arc::new(NodeSnapshot {
                 path: "/b/array1".try_into().unwrap(),
                 id: node_ids[4].clone(),
                 user_data: Bytes::copy_from_slice(b"hello"),
@@ -900,12 +981,12 @@ mod tests {
                     dimension_names: dim_names1.clone(),
                     manifests: vec![man_ref1, man_ref2]
                 },
-            },
+            }),
         );
         let node = st.get_node(&"/array2".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            NodeSnapshot {
+            Arc::new(NodeSnapshot {
                 path: "/array2".try_into().unwrap(),
                 id: node_ids[5].clone(),
                 user_data: Bytes::new(),
@@ -914,12 +995,12 @@ mod tests {
                     dimension_names: dim_names2.clone(),
                     manifests: vec![]
                 },
-            },
+            }),
         );
         let node = st.get_node(&"/b/array3".try_into().unwrap()).unwrap();
         assert_eq!(
             node,
-            NodeSnapshot {
+            Arc::new(NodeSnapshot {
                 path: "/b/array3".try_into().unwrap(),
                 id: node_ids[6].clone(),
                 user_data: Bytes::new(),
@@ -928,7 +1009,7 @@ mod tests {
                     dimension_names: dim_names3.clone(),
                     manifests: vec![]
                 },
-            },
+            }),
         );
         Ok(())
     }

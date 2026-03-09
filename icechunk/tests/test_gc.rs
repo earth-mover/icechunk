@@ -18,7 +18,7 @@ use icechunk::{
     },
     format::{
         ByteRange, ChunkIndices, Path, format_constants::SpecVersionBin,
-        snapshot::ArrayShape,
+        manifest::ChunkPayload, snapshot::ArrayShape,
     },
     new_in_memory_storage,
     ops::gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
@@ -29,18 +29,19 @@ use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 
 mod common;
+use common::Permission;
 
 #[tokio_test]
 pub async fn test_gc_in_minio_spec_v1() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_v1_{}", Utc::now().timestamp_millis());
-    let storage = common::make_minio_integration_storage(prefix)?;
+    let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_gc(storage, Some(SpecVersionBin::V1dot0)).await
 }
 
 #[tokio_test]
 pub async fn test_gc_in_minio_spec_v2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_v2_{}", Utc::now().timestamp_millis());
-    let storage = common::make_minio_integration_storage(prefix)?;
+    let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_gc(storage, Some(SpecVersionBin::V2dot0)).await
 }
 
@@ -99,6 +100,7 @@ pub async fn do_test_gc(
         Arc::clone(&storage),
         HashMap::new(),
         spec_version,
+        true,
     )
     .await?;
 
@@ -146,7 +148,8 @@ pub async fn do_test_gc(
         NonZeroU16::new(500).unwrap(),
         false,
     );
-    let summary = garbage_collect(repo.asset_manager().clone(), &gc_config).await?;
+    let summary =
+        garbage_collect(repo.asset_manager().clone(), &gc_config, None, 100).await?;
     assert_eq!(summary, GCSummary::default());
     assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);
     for idx in 0..10 {
@@ -166,7 +169,8 @@ pub async fn do_test_gc(
     assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);
     assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 111);
 
-    let summary = garbage_collect(repo.asset_manager().clone(), &gc_config).await?;
+    let summary =
+        garbage_collect(repo.asset_manager().clone(), &gc_config, None, 100).await?;
     assert_eq!(summary.chunks_deleted, 10);
     // only one manifest was re-created, so there is only one garbage manifest
     assert_eq!(summary.manifests_deleted, 1);
@@ -307,7 +311,7 @@ pub async fn test_expire_and_garbage_collect_in_minio()
     let prefix =
         format!("test_expire_and_garbage_collect_{}", Utc::now().timestamp_millis());
     let storage: Arc<dyn Storage + Send + Sync> =
-        common::make_minio_integration_storage(prefix)?;
+        common::make_minio_integration_storage(prefix, &Permission::Modify)?;
     do_test_expire_and_garbage_collect(storage).await
 }
 
@@ -353,7 +357,8 @@ pub async fn do_test_expire_and_garbage_collect(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings().await?;
     let mut repo =
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+            .await?;
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
@@ -370,6 +375,8 @@ pub async fn do_test_expire_and_garbage_collect(
         expire_older_than,
         ExpiredRefAction::Ignore,
         ExpiredRefAction::Ignore,
+        None,
+        100,
     )
     .await?;
 
@@ -424,7 +431,7 @@ pub async fn do_test_expire_and_garbage_collect(
         DEFAULT_MAX_CONCURRENT_REQUESTS,
     ));
 
-    let summary = garbage_collect(asset_manager.clone(), &gc_config).await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
     // other expired snapshots are pointed by tags
     assert_eq!(summary.snapshots_deleted, 5);
 
@@ -433,7 +440,7 @@ pub async fn do_test_expire_and_garbage_collect(
 
     repo.delete_tag("tag1").await?;
 
-    let summary = garbage_collect(asset_manager.clone(), &gc_config).await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
     // other expired snapshots are pointed by tag2
     assert_eq!(summary.snapshots_deleted, 1);
 
@@ -442,7 +449,7 @@ pub async fn do_test_expire_and_garbage_collect(
 
     repo.delete_tag("tag2").await?;
 
-    let summary = garbage_collect(asset_manager.clone(), &gc_config).await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
     // tag2 snapshosts are not released yet because it's in the path to root from main
     // this behavior changed in IC 2.0
     assert_eq!(summary.snapshots_deleted, 0);
@@ -463,7 +470,8 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
     let mut repo =
-        Repository::create(None, Arc::clone(&storage), HashMap::new(), None).await?;
+        Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+            .await?;
 
     let expire_older_than = make_design_doc_repo(&mut repo).await?;
 
@@ -481,6 +489,8 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
         // This is different compared to the previous test
         ExpiredRefAction::Delete,
         ExpiredRefAction::Delete,
+        None,
+        100,
     )
     .await?;
 
@@ -497,12 +507,101 @@ pub async fn test_expire_and_garbage_collect_deleting_expired_refs()
         NonZeroU16::new(500).unwrap(),
         false,
     );
-    let summary = garbage_collect(asset_manager.clone(), &gc_config).await?;
+    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
 
     assert_eq!(summary.snapshots_deleted, 7);
     assert_eq!(summary.transaction_logs_deleted, 7);
 
     // only the non expired snapshots left
     assert_eq!(repo.asset_manager().list_snapshots().await?.count().await, 8);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
+    // Replicates a bug detected by stateful testing.
+    // 1. Imagine a sequence of commits: 1, 2, 3, 4, 5
+    // 2. Reset branch from (5) to (2)
+    // 3. GC commits older than (4)
+    // 4. At this point (3) is deleted but (4) and (5) are preserved.
+    // 5. The parent of (4) has not been rewritten to None, but is still (3).
+    //    Any attempt to trace ancestry from (5) or (4) back will fail.
+    // 6. Next GC attempt will en up tracing that ancestry (in pointed_snapshots)
+
+    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let storage_settings = storage.default_settings().await?;
+    let asset_manager = Arc::new(AssetManager::new_no_cache(
+        storage.clone(),
+        storage_settings,
+        SpecVersionBin::current(),
+        1,
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
+    ));
+    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+        .await?;
+
+    let mut session = repo.writable_session("main").await?;
+    let array_path: Path = "/array".to_string().try_into().unwrap();
+    let shape = ArrayShape::new(vec![(4, 1)]).unwrap();
+    let dimension_names = Some(vec!["t".into()]);
+    let def = Bytes::from_static(br#"{"this":"other array"}"#);
+    session
+        .add_array(
+            array_path.clone(),
+            shape.clone(),
+            dimension_names.clone(),
+            def.clone(),
+        )
+        .await?;
+    session.commit("initialized", None).await?;
+
+    let mut snaps = vec![];
+    for i in 0..6 {
+        let mut session = repo.writable_session("main").await?;
+        session
+            .set_chunk_ref(
+                array_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline(Bytes::from(format!("{i}")))),
+            )
+            .await?;
+        let snap = session.commit(&format!("commit {i}"), None).await?;
+        snaps.push(snap);
+    }
+
+    repo.reset_branch("main", &snaps[1], None).await?;
+
+    let before = repo.lookup_snapshot(&snaps[3]).await?.flushed_at;
+    let gc_config = GCConfig::clean_all(
+        before,
+        before,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    let summary = garbage_collect(asset_manager.clone(), &gc_config, None, 100).await?;
+    assert_eq!(summary.snapshots_deleted, 1);
+
+    // make sure ancestry works
+    repo.create_tag("foo", &snaps[3]).await?;
+    let _anc =
+        repo.ancestry(&VersionInfo::TagRef("foo".into())).await?.try_collect::<Vec<_>>();
+
+    repo.create_branch("zoo", &snaps[5]).await?;
+    let _anc = repo
+        .ancestry(&VersionInfo::BranchTipRef("zoo".into()))
+        .await?
+        .try_collect::<Vec<_>>();
+
+    // garbage_collect also traces ancestry
+    let summary = garbage_collect(asset_manager, &gc_config, None, 100).await?;
+    assert_eq!(summary.snapshots_deleted, 0);
+
+    repo.readonly_session(&VersionInfo::SnapshotId(snaps[3].clone())).await?;
+    repo.readonly_session(&VersionInfo::SnapshotId(snaps[4].clone())).await?;
+    repo.readonly_session(&VersionInfo::SnapshotId(snaps[5].clone())).await?;
+
     Ok(())
 }

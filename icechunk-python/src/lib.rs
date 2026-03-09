@@ -14,10 +14,11 @@ use config::{
     PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
     PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsBearerCredential,
     PyGcsCredentials, PyGcsStaticCredentials, PyManifestConfig,
-    PyManifestPreloadCondition, PyManifestPreloadConfig, PyObjectStoreConfig,
-    PyRepositoryConfig, PyS3Credentials, PyS3Options, PyS3StaticCredentials, PyStorage,
-    PyStorageConcurrencySettings, PyStorageRetriesSettings, PyStorageSettings,
-    PyVirtualChunkContainer,
+    PyManifestPreloadCondition, PyManifestPreloadConfig,
+    PyManifestVirtualChunkLocationCompressionConfig, PyObjectStoreConfig,
+    PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials, PyS3Options,
+    PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings,
+    PyStorageRetriesSettings, PyStorageSettings, PyVirtualChunkContainer,
 };
 use config::{
     PyManifestSplitCondition, PyManifestSplitDimCondition, PyManifestSplittingConfig,
@@ -32,12 +33,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
 use repository::{
-    PyBranchCreatedUpdate, PyBranchDeletedUpdate, PyBranchResetUpdate,
-    PyCommitAmendedUpdate, PyConfigChangedUpdate, PyDiff, PyExpirationRanUpdate,
-    PyGCRanUpdate, PyGCSummary, PyManifestFileInfo, PyMetadataChangedUpdate,
-    PyNewCommitUpdate, PyNewDetachedSnapshotUpdate, PyRepoInitializedUpdate,
-    PyRepoMigratedUpdate, PyRepository, PySnapshotInfo, PyTagCreatedUpdate,
-    PyTagDeletedUpdate, PyUpdateType,
+    PyDiff, PyFeatureFlag, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo,
+    PyUpdate, PyUpdateType,
 };
 use session::{ChunkType, PySession, PySessionMode};
 use stats::PyChunkStorageStats;
@@ -150,7 +147,7 @@ fn _upgrade_icechunk_repository(
     repo: &PyRepository,
     dry_run: bool,
     delete_unused_v1_files: bool,
-) -> PyResult<()> {
+) -> PyResult<PyRepository> {
     repo.migrate_1_to_2(py, dry_run, delete_unused_v1_files)
 }
 
@@ -193,9 +190,11 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCachingConfig>()?;
     m.add_class::<PyStorageConcurrencySettings>()?;
     m.add_class::<PyStorageRetriesSettings>()?;
+    m.add_class::<PyRepoUpdateRetryConfig>()?;
     m.add_class::<PyManifestPreloadConfig>()?;
     m.add_class::<PyManifestPreloadCondition>()?;
     m.add_class::<PyManifestConfig>()?;
+    m.add_class::<PyManifestVirtualChunkLocationCompressionConfig>()?;
     m.add_class::<PyManifestSplitDimCondition>()?;
     m.add_class::<PyManifestSplitCondition>()?;
     m.add_class::<PyManifestSplittingConfig>()?;
@@ -203,20 +202,8 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGCSummary>()?;
     m.add_class::<PyDiff>()?;
     m.add_class::<PyUpdateType>()?;
-    m.add_class::<PyRepoInitializedUpdate>()?;
-    m.add_class::<PyRepoMigratedUpdate>()?;
-    m.add_class::<PyConfigChangedUpdate>()?;
-    m.add_class::<PyMetadataChangedUpdate>()?;
-    m.add_class::<PyTagCreatedUpdate>()?;
-    m.add_class::<PyTagDeletedUpdate>()?;
-    m.add_class::<PyBranchCreatedUpdate>()?;
-    m.add_class::<PyBranchDeletedUpdate>()?;
-    m.add_class::<PyBranchResetUpdate>()?;
-    m.add_class::<PyNewCommitUpdate>()?;
-    m.add_class::<PyNewDetachedSnapshotUpdate>()?;
-    m.add_class::<PyCommitAmendedUpdate>()?;
-    m.add_class::<PyGCRanUpdate>()?;
-    m.add_class::<PyExpirationRanUpdate>()?;
+    m.add_class::<PyUpdate>()?;
+    m.add_class::<PyFeatureFlag>()?;
     m.add_class::<VirtualChunkSpec>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;

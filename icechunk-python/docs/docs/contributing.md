@@ -5,6 +5,10 @@ title: Contributing
 
 👋 Hi! Thanks for your interest in contributing to Icechunk!
 
+!!! note
+    Check the [latest version of this page](https://icechunk.io/en/latest/contributing/)
+    for the most up-to-date development environment setup instructions.
+
 Icechunk is an open source (Apache 2.0) project and welcomes contributions in the form of:
 
 - Usage questions - [open a GitHub issue](https://github.com/earth-mover/icechunk/issues)
@@ -12,6 +16,8 @@ Icechunk is an open source (Apache 2.0) project and welcomes contributions in th
 - Feature requests - [open a GitHub issue](https://github.com/earth-mover/icechunk/issues)
 - Documentation improvements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
 - Bug fixes and enhancements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
+
+🤖 Please review our [AI Usage Policy](ai-policy.md), which also serves as contribution guidelines, before submitting pull requests.
 
 ## Development
 
@@ -22,19 +28,32 @@ This guide describes the local development workflow for:
 - Building the [Documentation](#building-documentation)
 - Setup instructions for additional resources (e.g. [Local Storage Docker Containers](#docker-setup-for-local-storage-testing))
 
-### Python Development Workflow
+### Setting up your development environment
 
-The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
+We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rust dependencies in the development workflow. This will ensure that your development workflow reflects the CI as closely as possible. If you do not want to use pixi we provide more manual alternatives in tabs.
 
-```bash
-cd icechunk-python
-```
+=== "pixi (Recommended)"
+    Activate the developer shell (all following commands should be run within)
 
-#### Prerequisites
+    ```bash
+    pixi shell -m icechunk-python/pyproject.toml
+    just develop
+    ```
 
-#### Setting up your development environment
+    `just develop` will set up the `maturin-import-hook` for fast incremental Rust compilation
+    and do the first build with `maturin develop --uv`. `just develop` can be skipped in future
+    developer shell activations, but should also run fast after the first invocation (and if
+    there no changes in the Rust code).
 
-=== "uv (Recommended)"
+    !!! Usage without pixi shell
+        You could run all commands below using this pattern:
+        ```shell
+        pixi run -m icechunk-python/pyproject.toml <your-command>
+        ```
+        This is used e.g. in the [Readthedocs build](https://github.com/earth-mover/icechunk/blob/main/.readthedocs.yaml).
+
+
+=== "uv"
 
     The easiest way to get started is with [uv](https://docs.astral.sh/uv/), which handles virtual environments and dependencies:
 
@@ -50,19 +69,6 @@ cd icechunk-python
     ```
 
     **Why these steps?** Icechunk is a mixed Python/Rust project. The `maturin-import-hook` enables incremental Rust compilation (7-20 seconds) instead of full rebuilds (5+ minutes) every time you run tests or import the module. This makes development significantly faster.
-
-    Now you can run tests and other commands:
-
-    ```bash
-    # Run tests (Rust changes will automatically trigger incremental rebuild)
-    uv run pytest
-
-    # Run type checking
-    uv run mypy python tests
-
-    # Run linting
-    uv run ruff check python
-    ```
 
 === "Venv"
 
@@ -92,16 +98,42 @@ cd icechunk-python
     maturin develop
     ```
 
+All build, test, and code quality tasks are managed with [`just`](https://github.com/casey/just). Run `just --list` to see all available recipes with descriptions.
+
+### Python Development Workflow
+
+
 #### Testing
 
-=== "uv"
+=== "pixi (Recommended)"
+    The Python code is developed in the `icechunk-python` subdirectory. When you use pixi all commands can be run from the repo root.
 
     ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
+    just pytest
+    ```
+
+=== "uv"
+    The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
+
+    ```bash
+    cd icechunk-python
+    ```
+
+    ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
     uv run pytest
     ```
 === "Venv/Conda"
 
+    The Python code is developed in the `icechunk-python` subdirectory. To make changes first enter that directory:
+
     ```bash
+    cd icechunk-python
+    ```
+
+    ```bash
+    # Run tests (Rust changes will automatically trigger incremental rebuild)
     pytest
     ```
 
@@ -111,7 +143,20 @@ cd icechunk-python
 
 !!! important
 
-    The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions.
+    The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions. If this is not set up some tests will fail
+
+
+#### Code Quality Checks
+
+=== "pixi (Recommended)"
+    The Python code is developed in the `icechunk-python` subdirectory. When you use pixi all commands can be run from the repo root.
+
+    ```bash
+    just ruff-format
+    just ruff # add --fix to automatically apply safe fixes
+    just mypy
+    just py-pre-commit
+    ```
 
 
 #### Testing with Upstream Dependencies
@@ -196,7 +241,12 @@ uv run scripts/check_xarray_docs_sync.py --update-known-diffs
 
 #### Prerequisites
 
-You need to have already created and activated a virtual environment ([see above](#python-development-workflow)), because the full rust build will also compile the python bindings.
+Make sure you have activated your [development environment](#setting-up-your-development-environment) before proceeding, because the full rust build will also compile the python bindings.
+
+##### just, cargo-nextest, cargo-deny
+
+!!! note
+    If you use pixi and have activated the shell per instructions [above](#setting-up-your-development-environment) you can skip to the next section!
 
 Install the `just` command runner (used for build tasks and pre-commit hooks):
 
@@ -210,6 +260,53 @@ Or using other package managers:
 - **Ubuntu**: `snap install --edge --classic just`
 
 Ensure you have navigated to the root directory of the cloned repo (i.e. not the `icechunk-python` subdirectory).
+
+For running the tests we also leverage [cargo-nextest](https://nexte.st/),
+for building it from source run
+```bash
+cargo install cargo-nextest
+```
+or check the [installation instructions](https://nexte.st/docs/installation/)
+for pre-built binaries or using package managers.
+
+To run all code quality checks you will also need `cargo-deny`:
+
+```bash
+cargo install cargo-deny
+```
+
+##### WASM Compiler Setup (macOS)
+
+To compile `icechunk` for `wasm32-wasip1-threads`, you need the Rust target and a C toolchain with WebAssembly support (needed by `zstd-sys`).
+
+1. Install the Rust target:
+
+    ```bash
+    rustup target add wasm32-wasip1-threads
+    ```
+
+2. Install a WASM-capable C toolchain. Apple CLT `clang` does not include WASM targets by default:
+
+    ```bash
+    brew install llvm
+    ```
+
+3. Configure Cargo to use LLVM tools for this target:
+
+    ```bash
+    export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+    export CC_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/clang
+    export CXX_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/clang++
+    export AR_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/llvm-ar
+    ```
+
+4. `tokio` on WASM currently requires the unstable cfg. This repository sets it automatically for `wasm32-wasip1-threads` in `.cargo/config.toml`.
+
+5. Verify the build:
+
+    ```bash
+    cargo check -p icechunk --no-default-features --target wasm32-wasip1-threads
+    ```
 
 #### Building
 
@@ -241,15 +338,9 @@ cargo test test_name
 
 !!! important
 
-    The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions.
+    The full Rust test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions.
 
 #### Code Quality
-
-To run all code quality checks you will also need `cargo-deny`:
-
-```bash
-cargo install cargo-deny
-```
 
 We use a tiered pre-commit system for fast development:
 
@@ -308,70 +399,48 @@ pre-commit run --all-files
 pre-commit run rust-pre-commit-ci --hook-stage manual
 ```
 
+#### Minimum supported Rust version
+
+The current MSRV is `1.91.1`.
+
+We maintain packages for [PyPI](https://pypi.org/project/icechunk)
+and [conda-forge](https://github.com/conda-forge/icechunk-feedstock)
+as part of the release process.
+As a rule of thumb we support an MSRV that can be installed from `conda-forge` (including the most recent Rust release),
+since we need it to build the package there.
+The latest official Rust release usually lags a couple of days before it is available in `conda-forge`.
+
+As Icechunk starts to be packaged for other distributions and package managers
+we might review this policy to include older Rust releases.
+
 ### Building Documentation
 
 #### Python Documentation
 
 The documentation is built with [MkDocs](https://www.mkdocs.org/) using [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/).
 
-**System dependencies**: Install Cairo graphics library for image processing:
-
-=== "macOS"
-
-    ```bash
-    brew install cairo
-    ```
-
-    If `mkdocs` fails to find Cairo, set the library path:
-
-    ```bash
-    export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
-    ```
-
-    You can add this to your `~/.zshrc` to make it permanent.
-
-=== "Ubuntu/Debian"
-
-    ```bash
-    sudo apt-get install libcairo2-dev
-    ```
-
-=== "Fedora/RHEL"
-
-    ```bash
-    sudo dnf install cairo-devel
-    ```
-
-From the `icechunk-python` directory:
+Make sure to [activate](#setting-up-your-development-environment) the pixi shell before running these commands.
 
 ```bash
-# Install icechunk with docs dependencies
-uv sync --group docs
-
 # Start the MkDocs development server
-cd docs
-uv run mkdocs serve
+just docs-serve
 ```
-
-!!! note "Use `--livereload` for file watching"
-    Due to a [Click 8.3.x bug](https://github.com/mkdocs/mkdocs/issues/4032), file watching may not work without the `--livereload` flag. Always use `mkdocs serve --livereload` to ensure automatic rebuilds when you edit files.
 
 The development server will start at `http://127.0.0.1:8000` with live reload enabled.
 
 **Build static site**:
 
 ```bash
-cd docs
-uv run mkdocs build
+just docs-build
 ```
 
 This builds the site to `docs/.site` directory.
 
 **Tips**:
 
-- Use `mkdocs serve --dirty` to only rebuild changed files (faster for iterative development)
+- Use `just docs-serve --dirty` to only rebuild changed files (faster for iterative development)
 - You may need to restart if you make changes to `mkdocs.yml`
-- For debugging the doc build logs, check out [docs-output-filter](https://github.com/ianhi/docs-output-filter) (you can run `uv run docs-output-filter -- mkdocs serve --livereload` once installed). *This also works to debug remote builds like RTD with the `--url` flag* 😍
+- For debugging the doc build logs, check out [docs-output-filter](https://github.com/ianhi/docs-output-filter) (you can run `docs-output-filter -- just docs-serve` once installed). *`docs-output-filter` also works to debug remote builds like RTD with the `--url` flag*
 
 ### Docker setup for local storage testing
 
@@ -380,6 +449,21 @@ We provide a docker compose `compose.yaml` file, which you can run with `docker 
 `docker ps` should show the `azurite` and `icechunk_minio` containers as running (you can also navigate to the GUI e.g. for the minIO container at `localhost:9001` and log in with the username and password from the `compose.yaml` file to navigate the buckets).
 
 After testing you can clean up with `docker compose down`. To verify that all containers are down use `docker ps` again.
+
+#### Faster linking for incremental builds with mold
+
+On Linux you can use the mold linker for
+significantly faster linking (~5-10x improvement on incremental builds).
+It can be installed with `apt install mold` or `dnf install mold`
+
+Then edit your `~/.cargo/config.toml` to include these configs:
+```toml
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+```
 
 ## Roadmap
 

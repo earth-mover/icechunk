@@ -33,6 +33,16 @@ table ChunkRef {
   // time, in seconds since the unix epoch, when the object containing the chunk
   // was last modified
   checksum_last_modified: uint32 = 0;
+
+  // zstd dictionary-compressed location bytes, as an alternative to the
+  // location field above. When present, the manifest's location_dictionary
+  // field is used for decompression.
+  // Introduced in spec version 2
+  compressed_location: [uint8];
+
+  // Reserved for future use. Opaque byte vector for extensibility.
+  // Introduced in spec version 2
+  extra: [uint8];
 }
 
 table ArrayManifest {
@@ -42,6 +52,10 @@ table ArrayManifest {
   // one element per chunk reference in the array
   // this array is sorted in ascending order of the index in the ChunkRef
   refs: [ChunkRef] (required);
+
+  // Reserved for future use. Opaque byte vector for extensibility.
+  // Introduced in spec version 2
+  extra: [uint8];
 }
 
 table Manifest {
@@ -51,6 +65,19 @@ table Manifest {
   // one element for each array that has chunk refs in this manifest
   // this array is sorted in ascending order of the node_id of the ArrayManifest
   arrays: [ArrayManifest] (required);
+
+  // zstd dictionary used to decompress compressed_location fields in ChunkRefs
+  // Introduced in spec version 2
+  location_dictionary: [uint8];
+
+  // compression algorithm used for compressed_location fields
+  // 0 = none, 1 = zstd dictionary compression
+  // Introduced in spec version 2
+  compression_algorithm: uint8 = 1;
+
+  // Reserved for future use. Opaque byte vector for extensibility.
+  // Introduced in spec version 2
+  extra: [uint8];
 }
 
 root_type Manifest;
