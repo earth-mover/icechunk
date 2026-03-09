@@ -11,6 +11,7 @@ categories = ["database", "science", "science::geo"]
 authors = ["Earthmover PBC"]
 edition = "2024"
 publish = true
+rust-version = "1.91.1"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
