@@ -463,7 +463,6 @@ impl RepoInfo {
         num_updates_per_file: u16,
         config: Option<&RepositoryConfig>,
     ) -> Self {
-        let last_updated_at = snapshot.flushed_at;
         #[allow(clippy::expect_used)]
         let config_bytes =
             config.map(|c| flexbuffers::to_vec(c).expect("Cannot serialize config"));
@@ -478,7 +477,7 @@ impl RepoInfo {
             &Default::default(),
             UpdateInfo {
                 update_type: UpdateType::RepoInitializedUpdate,
-                update_time: last_updated_at,
+                update_time: Utc::now(),
                 previous_updates: [],
             },
             None,
@@ -660,7 +659,6 @@ impl RepoInfo {
         previous_file: &str,
         num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
-        let flushed_at = snap.flushed_at;
         let mut snapshots: Vec<_> = self.all_snapshots()?.try_collect()?;
         let new_index = match snapshots.binary_search_by_key(&&snap.id, |snap| &snap.id) {
             Ok(_) => Err(IcechunkFormatError::from(
@@ -695,7 +693,7 @@ impl RepoInfo {
             &self.metadata()?,
             UpdateInfo {
                 update_type,
-                update_time: flushed_at,
+                update_time: Utc::now(),
                 previous_updates: self.latest_updates()?,
             },
             Some(previous_file),
