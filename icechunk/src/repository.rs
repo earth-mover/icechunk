@@ -277,6 +277,7 @@ impl Repository {
                     snap_info,
                     num_updates,
                     config_to_store,
+                    None,
                 ));
 
                 // Write snapshot and transaction log concurrently first
