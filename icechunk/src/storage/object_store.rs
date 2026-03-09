@@ -3,10 +3,12 @@ use crate::{
         AzureCredentials, AzureStaticCredentials, GcsBearerCredential, GcsCredentials,
         GcsCredentialsFetcher, GcsStaticCredentials, S3Credentials, S3Options,
     },
+    error::ICError,
     format::{ChunkId, ChunkOffset, FileTypeTag, ManifestId, ObjectId, SnapshotId},
     private,
 };
 use async_trait::async_trait;
+use backon::{ExponentialBuilder, Retryable};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::{
@@ -27,6 +29,7 @@ use object_store::{
     path::Path as ObjectPath,
 };
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use std::{
     collections::HashMap,
     fmt::{self, Debug, Display},
@@ -35,14 +38,14 @@ use std::{
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
     path::{Path as StdPath, PathBuf},
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 use tokio::{
     io::AsyncRead,
     sync::{OnceCell, RwLock},
 };
 use tokio_util::compat::FuturesAsyncReadCompatExt;
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use super::{
     CHUNK_PREFIX, CONFIG_PATH, ConcurrencySettings, DeleteObjectsResult, ETag,
@@ -51,6 +54,14 @@ use super::{
     StorageErrorKind, StorageResult, TRANSACTION_PREFIX, UpdateConfigResult, VersionInfo,
     WriteRefResult,
 };
+
+#[allow(clippy::unwrap_used)]
+static RETRYABLE_ERROR: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        "(?i)StreamingError|DispatchFailure|ConnectorError|IncompleteMessage|connection reset",
+    )
+    .unwrap()
+});
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ObjectStorage {
@@ -463,10 +474,27 @@ impl Storage for ObjectStorage {
         range: &Range<ChunkOffset>,
     ) -> Result<Bytes, StorageError> {
         let path = self.get_chunk_path(id);
-        self.get_object_concurrently(settings, path.as_ref(), range)
-            .await?
-            .to_bytes((range.end - range.start + 16) as usize)
-            .await
+        (|| async {
+            self.get_object_concurrently(settings, path.as_ref(), range)
+                .await?
+                .to_bytes((range.end - range.start + 16) as usize)
+                .await
+        })
+        .retry(
+            ExponentialBuilder::new()
+                .with_max_times(settings.retries().max_tries().get().into())
+                .with_min_delay(Duration::from_millis(
+                    settings.retries().initial_backoff_ms().into(),
+                ))
+                .with_max_delay(Duration::from_millis(
+                    settings.retries().max_backoff_ms().into(),
+                )),
+        )
+        .when(|e: &ICError<StorageErrorKind>| RETRYABLE_ERROR.is_match(&format!("{e:?}")))
+        .notify(|_err, duration| {
+            debug!("retrying on streaming/connection error after {:?}.", duration)
+        })
+        .await
     }
 
     #[instrument(skip(self, settings, bytes))]

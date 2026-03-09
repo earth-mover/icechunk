@@ -5,7 +5,7 @@ use std::{
     future::ready,
     ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
@@ -53,6 +53,14 @@ use super::{
     StorageErrorKind, StorageResult, TRANSACTION_PREFIX, UpdateConfigResult, VersionInfo,
     WriteRefResult, split_in_multiple_equal_requests,
 };
+
+#[allow(clippy::unwrap_used)]
+static RETRYABLE_ERROR: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        "(?i)StreamingError|DispatchFailure|ConnectorError|IncompleteMessage|connection reset",
+    )
+    .unwrap()
+});
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct S3Storage {
@@ -710,14 +718,9 @@ impl Storage for S3Storage {
                     settings.retries().max_backoff_ms().into(),
                 )),
         )
-        .when(|e: &ICError<StorageErrorKind>|
-              // Sadly ThroughputBelowMinimum is buried inside a boxed error,
-              // so check the debug output (yuck!)
-              // We actually check for StreamingError to catch more generic errors too
-              // For example, the integration test raises UnexpectedEof when toxics are removed.
-              format!("{e:?}").contains("StreamingError"))
+        .when(|e: &ICError<StorageErrorKind>| RETRYABLE_ERROR.is_match(&format!("{e:?}")))
         .notify(|_err, duration| {
-            debug!("retrying on stalled stream error after {:?}.", duration)
+            debug!("retrying on streaming/connection error after {:?}.", duration)
         })
         .await
     }
