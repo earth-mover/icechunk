@@ -102,7 +102,7 @@ fn calculate_manifest_storage(
     let mut native_bytes: u64 = 0;
     let mut virtual_bytes: u64 = 0;
     let mut inlined_bytes: u64 = 0;
-    for payload in manifest.chunk_payloads() {
+    for payload in manifest.chunk_payloads()? {
         match payload {
             Ok(ChunkPayload::Ref(chunk_ref)) => {
                 // Deduplicate native chunks by ChunkId

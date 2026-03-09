@@ -7,6 +7,7 @@ import pytest
 
 import icechunk
 import zarr
+from icechunk._icechunk_python import RepoUpdateRetryConfig
 
 
 @pytest.fixture(scope="function")
@@ -175,11 +176,25 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     config.manifest = icechunk.ManifestConfig()
     config.manifest.preload = icechunk.ManifestPreloadConfig(max_total_refs=42)
     config.max_concurrent_requests = 10
+    config.num_updates_per_repo_info_file = 50
+    config.repo_update_retries = RepoUpdateRetryConfig(
+        default=icechunk.StorageRetriesSettings(
+            max_tries=200, initial_backoff_ms=100, max_backoff_ms=60_000
+        )
+    )
     config.manifest.preload.preload_if = icechunk.ManifestPreloadCondition.and_conditions(
         [
             icechunk.ManifestPreloadCondition.true(),
             icechunk.ManifestPreloadCondition.name_matches("foo"),
         ]
+    )
+    config.manifest.virtual_chunk_location_compression = (
+        icechunk.ManifestVirtualChunkLocationCompressionConfig(
+            min_num_chunks=500,
+            dictionary_max_training_samples=200,
+            dictionary_max_size_bytes=4096,
+            compression_level=5,
+        )
     )
 
     assert re.match(
@@ -195,9 +210,11 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     stored_config = icechunk.Repository.fetch_config(storage)
     assert stored_config
     assert stored_config.inline_chunk_threshold_bytes == 5
+    assert stored_config.get_partial_values_concurrency == 42
     assert stored_config.compression
     assert stored_config.compression.level == 2
     assert stored_config.max_concurrent_requests == 10
+    assert stored_config.num_updates_per_repo_info_file == 50
     assert stored_config.caching
     assert stored_config.caching.num_chunk_refs == 8
     assert stored_config.storage
@@ -207,11 +224,17 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     assert stored_config.storage.retries.max_tries == 42
     assert stored_config.storage.retries.initial_backoff_ms == 500
     assert stored_config.storage.retries.max_backoff_ms == 600
+    assert stored_config.storage.storage_class == "STANDARD_IA"
+    assert stored_config.repo_update_retries
+    assert stored_config.repo_update_retries.default
+    assert stored_config.repo_update_retries.default.max_tries == 200
+    assert stored_config.repo_update_retries.default.initial_backoff_ms == 100
+    assert stored_config.repo_update_retries.default.max_backoff_ms == 60_000
     assert stored_config.manifest
     assert stored_config.manifest.preload
-    assert config.manifest.preload.max_total_refs == 42
+    assert stored_config.manifest.preload.max_total_refs == 42
     assert (
-        config.manifest.preload.preload_if
+        stored_config.manifest.preload.preload_if
         == icechunk.ManifestPreloadCondition.and_conditions(
             [
                 icechunk.ManifestPreloadCondition.true(),
@@ -219,6 +242,12 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
             ]
         )
     )
+    assert stored_config.manifest.virtual_chunk_location_compression
+    vlc = stored_config.manifest.virtual_chunk_location_compression
+    assert vlc.min_num_chunks == 500
+    assert vlc.dictionary_max_training_samples == 200
+    assert vlc.dictionary_max_size_bytes == 4096
+    assert vlc.compression_level == 5
 
 
 def test_manifest_preload_magic_methods() -> None:

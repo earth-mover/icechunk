@@ -232,7 +232,7 @@ async fn chunks_retained(
     minfo: ManifestFileInfo,
 ) -> RepositoryResult<ManifestFileInfo> {
     task::spawn_blocking(move || {
-        let chunk_ids = manifest.chunk_payloads().filter_map(|payload| match payload {
+        let chunk_ids = manifest.chunk_payloads()?.filter_map(|payload| match payload {
             Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
             Ok(_) => None,
             Err(err) => {
