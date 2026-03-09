@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
-use std::sync::RwLock;
+use std::sync::{LazyLock, RwLock};
 use std::{
     io::{BufReader, Read},
     ops::Range,
@@ -20,6 +20,14 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+
+#[allow(clippy::unwrap_used)]
+static RETRYABLE_ERROR: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        "(?i)StreamingError|DispatchFailure|ConnectorError|IncompleteMessage|connection reset",
+    )
+    .unwrap()
+});
 use tokio::{
     io::{AsyncBufRead, AsyncReadExt},
     sync::Semaphore,
@@ -757,9 +765,12 @@ impl AssetManager {
                 #[cfg(feature = "napi-send-contract")]
                 let retry = retry.sleep(tokio::time::sleep);
                 let chunk = retry
-                    .when(|e| format!("{e:?}").contains("StreamingError"))
-                    .notify(|_err, duration| {
-                        debug!("retrying on stalled stream error after {:?}.", duration)
+                    .when(|e| RETRYABLE_ERROR.is_match(&format!("{e:?}")))
+                    .notify(|err, duration| {
+                        debug!(
+                            ?err,
+                            "retrying on streaming/connection error after {duration:?}"
+                        )
                     })
                     .await?;
                 let _fail_is_ok = guard.insert(chunk.clone());
