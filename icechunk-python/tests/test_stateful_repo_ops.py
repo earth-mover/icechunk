@@ -1117,3 +1117,9 @@ VersionControlStateMachine.TestCase.settings = settings(
     # report_multiple_bugs=False,
 )
 VersionControlTest = VersionControlStateMachine.TestCase
+
+
+@pytest.mark.parametrize("run", range(10))
+def test_version_control_repeated(run):
+    """Run the stateful test multiple times to catch flaky failures."""
+    VersionControlTest().runTest()
