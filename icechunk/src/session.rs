@@ -1182,6 +1182,7 @@ impl Session {
                 new_snapshot_info,
                 None,
                 update_type.clone(),
+                None,
                 backup_path,
                 num_updates,
             )?))
@@ -2820,6 +2821,7 @@ async fn do_commit_v2(
             new_snapshot_info,
             Some(branch_name),
             update_type,
+            None,
             backup_path,
             num_updates_per_repo_info_file,
         )?))
@@ -3468,6 +3470,7 @@ mod tests {
             (&initial).try_into()?,
             100,
             None,
+            None,
         )
         .add_snapshot(
             SpecVersionBin::current(),
@@ -3477,6 +3480,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: snapshot.id().clone(),
             },
+            None,
             "backup_path",
             100,
         )?;
