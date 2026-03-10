@@ -1,11 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Features
-
-### Fixes
-
 ## Python Icechunk Library 1.1.20
 
 ### Fixes
