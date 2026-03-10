@@ -113,7 +113,6 @@ async fn set_chunks(
 fn benchmark_set_chunks(c: &mut Criterion) {
     let mut group = c.benchmark_group("set_chunks");
 
-    let chunk_size = 1u32;
     let path: Path = "/temperature".try_into().unwrap();
 
     let rt = Runtime::new().unwrap();
@@ -130,7 +129,7 @@ fn benchmark_set_chunks(c: &mut Criterion) {
                             let path = path.clone();
                             let shape = ArrayShape::new(vec![(
                                 num_chunks.into(),
-                                chunk_size.into(),
+                                num_chunks.into(),
                             )])
                             .unwrap();
                             rt.block_on(async move {
@@ -168,7 +167,6 @@ fn benchmark_set_chunks(c: &mut Criterion) {
 fn benchmark_get_chunks(c: &mut Criterion) {
     let mut group = c.benchmark_group("get_chunks");
 
-    let chunk_size = 1u32;
     let path: Path = "/temperature".try_into().unwrap();
     let rt = Runtime::new().unwrap();
 
@@ -190,7 +188,7 @@ fn benchmark_get_chunks(c: &mut Criterion) {
         // Lazy init: write chunks once, then rewrite manifests for each split config.
         let storage = storage_cache.get_or_insert_with(|| {
             rt.block_on(async {
-                let shape = ArrayShape::new(vec![(num_chunks.into(), chunk_size.into())])
+                let shape = ArrayShape::new(vec![(num_chunks.into(), num_chunks.into())])
                     .unwrap();
                 let repo = setup_repo(path.clone(), shape, None, None).await.unwrap();
                 let mut write_session = repo.writable_session("main").await.unwrap();
@@ -299,8 +297,6 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
     let mut group = c.benchmark_group("commit_split_manifests");
     group.sample_size(20).sampling_mode(criterion::SamplingMode::Flat);
 
-    let chunk_size = 1u32;
-
     let path: Path = "/temperature".try_into().unwrap();
 
     let rt = Runtime::new().unwrap();
@@ -320,7 +316,7 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
                             let path = path.clone();
                             let shape = ArrayShape::new(vec![(
                                 num_chunks.into(),
-                                chunk_size.into(),
+                                num_chunks.into(),
                             )])
                             .unwrap();
                             let split_config = split_config.clone();
@@ -382,7 +378,7 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
                     b.iter_custom(|_iters| {
                         // Fresh repo per sample
                         let shape =
-                            ArrayShape::new(vec![(num_chunks.into(), chunk_size.into())])
+                            ArrayShape::new(vec![(num_chunks.into(), num_chunks.into())])
                                 .unwrap();
                         let repo = rt.block_on(async {
                             setup_repo(
@@ -443,7 +439,6 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
 
     let path: Path = "/temperature".try_into().unwrap();
-    let chunk_size = 1u32;
     let num_chunks = 1_000_000u32;
     let num_manifests = 50u32;
 
@@ -458,7 +453,7 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
                 b.iter_custom(|_iters| {
                     // Fresh repo per sample
                     let shape =
-                        ArrayShape::new(vec![(num_chunks.into(), chunk_size.into())])
+                        ArrayShape::new(vec![(num_chunks.into(), num_chunks.into())])
                             .unwrap();
                     let repo = rt.block_on(async {
                         setup_repo(path.clone(), shape, None, Some(split_config.clone()))
