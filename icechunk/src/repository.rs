@@ -46,7 +46,7 @@ use crate::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
         format_constants::SpecVersionBin,
-        repo_info::{RepoInfo, RepoStatus, UpdateType},
+        repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateType},
         snapshot::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
@@ -137,6 +137,8 @@ pub enum RepositoryErrorKind {
     CannotDeleteMain,
     #[error("the storage used by this Icechunk repository is read-only: {0}")]
     ReadonlyStorage(String),
+    #[error("the repository status is read-only: {0}")]
+    ReadonlyRepository(String),
     #[error(
         "the first commit in the repository cannot be an amend, create a new commit instead"
     )]
@@ -1815,6 +1817,15 @@ impl Repository {
                 "Cannot create writable session".to_string(),
             )
             .into());
+        }
+        if self.spec_version() >= SpecVersionBin::V2dot0 {
+            let status = self.get_status().await?;
+            if status.availability == RepoAvailability::ReadOnly {
+                return Err(RepositoryErrorKind::ReadonlyRepository(
+                    "Cannot create writable session".to_string(),
+                )
+                .into());
+            }
         }
         let snapshot_id = self.lookup_branch(branch).await?;
 
