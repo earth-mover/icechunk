@@ -1,42 +1,5 @@
 # Changelog
 
-## Icechunk 2.0.0-alpha.3
-
-### Features
-
-- New `inspect_manifest` and `inspect_repo_info` functionality ([#1770](https://github.com/earth-mover/icechunk/pull/1770), [#1686](https://github.com/earth-mover/icechunk/pull/1686))
-- Allow relative virtual chunks ([#1765](https://github.com/earth-mover/icechunk/pull/1765))
-- WASM build of icechunk core ([#1628](https://github.com/earth-mover/icechunk/pull/1628))
-- Log config changes in ops log ([#1676](https://github.com/earth-mover/icechunk/pull/1676))
-- Track rebase attempts in snapshot metadata ([#1713](https://github.com/earth-mover/icechunk/pull/1713))
-- Add feature flags ([#1755](https://github.com/earth-mover/icechunk/pull/1755))
-- Configurable retries for `update_repo_info` ([#1659](https://github.com/earth-mover/icechunk/pull/1659))
-- `Repository.fetch_spec_version` Python API ([#1618](https://github.com/earth-mover/icechunk/pull/1618))
-- Expose session type as an enum ([#1602](https://github.com/earth-mover/icechunk/pull/1602))
-- Support empty commits and `allow_empty` for amend ([#1603](https://github.com/earth-mover/icechunk/pull/1603), [#1613](https://github.com/earth-mover/icechunk/pull/1613))
-- More consistent move behavior and options on reindex ([#1621](https://github.com/earth-mover/icechunk/pull/1621))
-
-### Fixes
-
-- Fix snapshot node cache ([#1784](https://github.com/earth-mover/icechunk/pull/1784))
-- Fix inconsistencies in Repository's diff and rearrange_session ([#1791](https://github.com/earth-mover/icechunk/pull/1791))
-- Fix ancestry using two different versions of repo info ([#1788](https://github.com/earth-mover/icechunk/pull/1788))
-- Fix S3 client ignoring user specified settings ([#1700](https://github.com/earth-mover/icechunk/pull/1700))
-- Don't override all storage defaults when user passes a config ([#1699](https://github.com/earth-mover/icechunk/pull/1699))
-- Allow delete + recreate in rebase ([#1742](https://github.com/earth-mover/icechunk/pull/1742))
-- Fix migration of deleted tags ([#1718](https://github.com/earth-mover/icechunk/pull/1718))
-- Correctly identify initial snapshots ([#1615](https://github.com/earth-mover/icechunk/pull/1615))
-- Don't panic when writing manifest fails ([#1609](https://github.com/earth-mover/icechunk/pull/1609))
-
-### Performance
-
-- Compress virtual chunk locations ([#1776](https://github.com/earth-mover/icechunk/pull/1776))
-- Optimize `get_existing_node`: avoid cloning `Vec<ManifestRef>` ([#1775](https://github.com/earth-mover/icechunk/pull/1775))
-- Optimize manifest writes ([#1753](https://github.com/earth-mover/icechunk/pull/1753))
-- Add NodeSnapshot cache on Snapshot ([#1756](https://github.com/earth-mover/icechunk/pull/1756))
-- Optimize fetch of repo object ([#1638](https://github.com/earth-mover/icechunk/pull/1638))
-- Retry on Connection Reset errors, 429, and 499 status codes ([#1795](https://github.com/earth-mover/icechunk/pull/1795), [#1768](https://github.com/earth-mover/icechunk/pull/1768))
-
 ## Python Icechunk Library 1.1.11
 
 ### Features
