@@ -293,6 +293,48 @@ def test_config_from_store() -> None:
     assert store.session.config.virtual_chunk_containers.keys() == {"s3://example/"}
 
 
+def test_storage_defaults_not_overridden() -> None:
+    """Test that passing partial storage config doesn't override backend defaults.
+
+    Regression test for: https://github.com/earth-mover/icechunk/issues/1689
+
+    Before the fix, passing any storage config (e.g. just storage_class) would
+    discard all backend defaults (concurrency, retries, etc.), which could cause
+    failures or degraded behavior.
+    """
+    storage = icechunk.in_memory_storage()
+
+    # Pass a config that only sets storage_class — other defaults should survive
+    config = icechunk.RepositoryConfig.default()
+    config.storage = icechunk.StorageSettings()
+    config.storage.storage_class = "STANDARD_IA"
+
+    # Create and do a basic write/read — this exercises the storage settings
+    repo = icechunk.Repository.create(storage=storage, config=config)
+    session = repo.writable_session("main")
+    store = session.store
+    array = zarr.create_array(store=store, shape=(10,), dtype="int64", zarr_format=3)
+    array[:] = 42
+    session.commit("test write with partial storage config")
+
+    # Open with a different partial storage config
+    config2 = icechunk.RepositoryConfig.default()
+    config2.storage = icechunk.StorageSettings()
+    config2.storage.storage_class = "GLACIER"
+    repo2 = icechunk.Repository.open(storage=storage, config=config2)
+    session2 = repo2.readonly_session(branch="main")
+    store2 = session2.store
+    result = zarr.open_array(store=store2, path="")
+    assert (result[:] == 42).all()
+
+    # Reopen with partial storage config
+    repo3 = repo2.reopen(config=config2)
+    session3 = repo3.readonly_session(branch="main")
+    store3 = session3.store
+    result3 = zarr.open_array(store=store3, path="")
+    assert (result3[:] == 42).all()
+
+
 def test_s3_storage_options() -> None:
     _storage = icechunk.s3_storage(
         region="us-east-1",
