@@ -9,7 +9,15 @@ pytest.importorskip("hypothesis")
 import hypothesis.strategies as st
 from hypothesis import assume, given, settings
 
-from zarr.testing.strategies import arrays, complex_chunked_arrays, numpy_arrays
+from zarr.testing.strategies import arrays, numpy_arrays
+
+try:
+    from zarr.testing.strategies import complex_chunked_arrays
+
+    supports_rectilinear_chunk_grids = True
+
+except ImportError:
+    supports_rectilinear_chunk_grids = False
 
 
 def create(spec_version: int | None) -> IcechunkStore:
@@ -44,17 +52,17 @@ def test_roundtrip(data: st.DataObject, nparray: Any, spec_version: int | None) 
 # FIXME: add indexing property tests too
 
 
+@pytest.mark.skipif(
+    not supports_rectilinear_chunk_grids, reason="rectilinear chunk grids are unsupported"
+)
 @settings(report_multiple_bugs=True, deadline=None, max_examples=300)
-@given(data=st.data(), nparray=numpy_arrays(), spec_version=st.sampled_from([None, 1, 2]))
+@given(data=st.data(), spec_version=st.sampled_from([None, 1, 2]))
 def test_roundtrip_complex_chunk_grids(
-    data: st.DataObject, nparray: Any, spec_version: int | None
+    data: st.DataObject, spec_version: int | None
 ) -> None:
-    # FIXME: support return nparray too so we can do equality comparisons?
-    # FIXME: Or... figure out a way to pass in arrays.
-    zarray = data.draw(
+    nparray, zarray = data.draw(
         complex_chunked_arrays(
             stores=icechunk_stores(spec_version=st.just(spec_version)),
         )
     )
-
     assert_array_equal(nparray, zarray[:])
