@@ -4,12 +4,12 @@
 
 ### Fixes
 
-- Throw a clear error when attempting to open a v2 repository from v1 icechunk ([#1749](https://github.com/earth-mover/icechunk/pull/1749)).
 - Don't override all storage defaults when user passes a config ([#1699](https://github.com/earth-mover/icechunk/pull/1699)).
 - Allow delete + recreate in rebase ([#1742](https://github.com/earth-mover/icechunk/pull/1742)).
 - Don't panic when writing manifest fails ([#1609](https://github.com/earth-mover/icechunk/pull/1609)).
 - Retry on HTTP 429 and 499 status codes ([#1768](https://github.com/earth-mover/icechunk/pull/1768)).
 - Retry on Connection Reset errors while streaming bytes ([#1795](https://github.com/earth-mover/icechunk/pull/1795)).
+- Throw a clear error when attempting to open a v2 repository from v1 icechunk ([#1749](https://github.com/earth-mover/icechunk/pull/1749)).
 
 ## Python Icechunk Library 1.1.19
 
