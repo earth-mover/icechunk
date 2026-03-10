@@ -319,16 +319,19 @@ impl Store {
 
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
-                if let Ok(array_meta) = serde_json::from_slice(value.as_ref()) {
-                    self.set_array_meta(node_path, value, array_meta, locked_session)
-                        .await
-                } else {
-                    match serde_json::from_slice::<GroupMetadata>(value.as_ref()) {
-                        Ok(_) => {
-                            self.set_group_meta(node_path, value, locked_session).await
-                        }
-                        Err(err) => Err(StoreErrorKind::BadMetadata(err).into()),
+                let node_meta = serde_json::from_slice::<NodeMetadata>(value.as_ref())
+                    .map_err(|err| StoreErrorKind::BadMetadata(err))?;
+                match node_meta.node_type.as_str() {
+                    "array" => {
+                        let array_meta = serde_json::from_slice(value.as_ref())
+                            .map_err(|err| StoreErrorKind::BadMetadata(err))?;
+                        self.set_array_meta(node_path, value, array_meta, locked_session)
+                            .await
                     }
+                    "group" => {
+                        self.set_group_meta(node_path, value, locked_session).await
+                    }
+                    _ => unreachable!(),
                 }
             }
             Key::Chunk { node_path, coords } => {
@@ -1213,28 +1216,6 @@ impl ArrayMetadata {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct GroupMetadata {
-    #[serde(deserialize_with = "validate_group_node_type")]
-    node_type: String,
-}
-
-fn validate_group_node_type<'de, D>(d: D) -> Result<String, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    let value = String::deserialize(d)?;
-
-    if value != "group" {
-        return Err(de::Error::invalid_value(
-            de::Unexpected::Str(value.as_str()),
-            &"the word 'group'",
-        ));
-    }
-
-    Ok(value)
-}
-
 fn validate_array_node_type<'de, D>(d: D) -> Result<String, D::Error>
 where
     D: de::Deserializer<'de>,
@@ -1245,6 +1226,28 @@ where
         return Err(de::Error::invalid_value(
             de::Unexpected::Str(value.as_str()),
             &"the word 'array'",
+        ));
+    }
+
+    Ok(value)
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeMetadata {
+    #[serde(deserialize_with = "validate_node_type")]
+    node_type: String,
+}
+
+fn validate_node_type<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let value = String::deserialize(d)?;
+
+    if value != "array" && value != "group" {
+        return Err(de::Error::invalid_value(
+            de::Unexpected::Str(value.as_str()),
+            &"'array' or 'group'",
         ));
     }
 
@@ -1533,14 +1536,20 @@ mod tests {
     #[icechunk_macros::test]
     fn test_metadata_serialization() {
         assert!(
-            serde_json::from_str::<GroupMetadata>(
+            serde_json::from_str::<NodeMetadata>(
                 r#"{"zarr_format":3, "node_type":"group"}"#
             )
             .is_ok()
         );
         assert!(
-            serde_json::from_str::<GroupMetadata>(
+            serde_json::from_str::<NodeMetadata>(
                 r#"{"zarr_format":3, "node_type":"array"}"#
+            )
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_str::<NodeMetadata>(
+                r#"{"zarr_format":3, "node_type":"zarr"}"#
             )
             .is_err()
         );
