@@ -119,9 +119,11 @@ pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDi
             (Just(shape), chunk_shape, option::of(vec(option::of(any::<String>()), ndim)))
         })
         .prop_map(|(shape, chunk_shape, dimension_names)| ShapeDim {
-            shape: ArrayShape::new(
-                shape.into_iter().zip(chunk_shape.iter().map(|n| n.get())),
-            )
+            shape: ArrayShape::new(shape.into_iter().zip(chunk_shape.iter()).map(
+                |(dim_length, chunk_size)| {
+                    (dim_length, dim_length.div_ceil(chunk_size.get()) as u32)
+                },
+            ))
             .expect("Invalid array shape"),
             dimension_names: dimension_names.map(|ds| {
                 ds.iter().map(|s| From::from(s.as_ref().map(|s| s.as_str()))).collect()
@@ -548,11 +550,11 @@ pub fn path() -> impl Strategy<Value = Path> {
     })
 }
 
-type DimensionShapeInfo = (u64, u64);
+type DimensionShapeInfo = (u64, u32);
 
 prop_compose! {
-    fn dimension_shape_info()(dim_length in any::<u64>(), chunk_length in any::<NonZeroU64>()) -> DimensionShapeInfo {
-        (dim_length, chunk_length.get())
+    fn dimension_shape_info()(dim_length in any::<u64>(), chunk_length in any::<u64>()) -> DimensionShapeInfo {
+        (dim_length, dim_length.div_ceil(chunk_length) as u32)
     }
 }
 

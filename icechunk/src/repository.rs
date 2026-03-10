@@ -2375,7 +2375,7 @@ mod tests {
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
 
         let array_path: Path = "/array".to_string().try_into().unwrap();
-        let shape = ArrayShape::new(vec![(4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let array_def = Bytes::from_static(br#"{"this":"other array"}"#);
 
@@ -2402,7 +2402,7 @@ mod tests {
         // Note we are still rewriting the manifest even without chunk changes
         // GH604
         let mut session = repo.writable_session("main").await?;
-        let shape2 = ArrayShape::new(vec![(2, 1)]).unwrap();
+        let shape2 = ArrayShape::new(vec![(2, 2)]).unwrap();
         session
             .update_array(
                 &array_path,
@@ -2417,7 +2417,7 @@ mod tests {
         // Now we expand the size, but don't write chunks.
         // No new manifests need to be written
         let mut session = repo.writable_session("main").await?;
-        let shape3 = ArrayShape::new(vec![(6, 1)]).unwrap();
+        let shape3 = ArrayShape::new(vec![(6, 6)]).unwrap();
         session
             .update_array(
                 &array_path,
@@ -2437,7 +2437,7 @@ mod tests {
     async fn test_splits_change_in_session(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
-        let shape = ArrayShape::new(vec![(13, 1), (2, 1), (1, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(13, 13), (2, 2), (1, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "y".into(), "x".into()]);
         let new_dimension_names = Some(vec!["time".into(), "y".into(), "x".into()]);
         let array_path: Path = "/temperature".try_into().unwrap();
@@ -2547,7 +2547,7 @@ mod tests {
         let split_size = 3u32;
         let dim_size = 10u32;
 
-        let shape = ArrayShape::new(vec![(dim_size as u64, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(dim_size as u64, dim_size)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
         let split_config = ManifestSplittingConfig::with_size(split_size);
@@ -2687,12 +2687,10 @@ mod tests {
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let dim_size = 25u32;
-        let chunk_size = 1u32;
         let split_size = 3u32;
 
         let shape =
-            ArrayShape::new(vec![(dim_size.into(), chunk_size.into()), (2, 1), (1, 1)])
-                .unwrap();
+            ArrayShape::new(vec![(dim_size.into(), dim_size), (2, 2), (1, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
         let split_config = ManifestSplittingConfig::with_size(split_size);
@@ -2894,7 +2892,7 @@ mod tests {
 
     #[tokio_test]
     async fn test_manifest_splitting_complex_config() -> Result<(), Box<dyn Error>> {
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(25, 25), (10, 10), (3, 3), (4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
@@ -2966,7 +2964,7 @@ mod tests {
         let other_split_size = 9u32;
         let y_split_size = 2u32;
 
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(25, 25), (10, 10), (3, 3), (4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
@@ -3214,7 +3212,7 @@ mod tests {
     async fn test_manifest_splits_merge_sessions(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(25, 25), (10, 10), (3, 3), (4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
@@ -3382,7 +3380,7 @@ mod tests {
     async fn test_commits_with_conflicting_manifest_splits(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(25, 25), (10, 10), (3, 3), (4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
@@ -3519,7 +3517,7 @@ mod tests {
         let def = Bytes::from_static(br#"{"this":"array"}"#);
         session.add_group(Path::root(), def.clone()).await?;
 
-        let shape = ArrayShape::new(vec![(1_000, 1), (1, 1), (1, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(1_000, 1_000), (1, 1), (1, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
 
         let time_path: Path = "/time".try_into().unwrap();
@@ -3912,7 +3910,7 @@ mod tests {
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
 
         let array_path: Path = "/array".to_string().try_into().unwrap();
-        let shape = ArrayShape::new(vec![(10, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(10, 10)]).unwrap();
         session
             .add_array(
                 array_path.clone(),

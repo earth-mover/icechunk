@@ -1,8 +1,6 @@
 //! Repository state at a point in time (arrays, groups, and manifest references).
 
-use std::{
-    collections::BTreeMap, convert::Infallible, num::NonZeroU64, ops::Range, sync::Arc,
-};
+use std::{collections::BTreeMap, convert::Infallible, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -26,18 +24,18 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DimensionShape {
     dim_length: u64,
-    chunk_length: u64,
+    num_chunks: u32,
 }
 
 impl DimensionShape {
-    pub fn new(array_length: u64, chunk_length: NonZeroU64) -> Self {
-        Self { dim_length: array_length, chunk_length: chunk_length.get() }
+    pub fn new(array_length: u64, num_chunks: u32) -> Self {
+        Self { dim_length: array_length, num_chunks }
     }
     pub fn array_length(&self) -> u64 {
         self.dim_length
     }
-    pub fn chunk_length(&self) -> u64 {
-        self.chunk_length
+    pub fn num_chunks(&self) -> u32 {
+        self.num_chunks
     }
 }
 
@@ -61,17 +59,14 @@ impl ArrayShape {
     }
 
     pub fn num_chunks(&self) -> impl Iterator<Item = u32> {
-        self.max_chunk_indices_permitted().map(|x| x + 1)
+        self.0.iter().map(|x| x.num_chunks())
     }
 
     pub fn new<I>(it: I) -> Option<Self>
     where
-        I: IntoIterator<Item = (u64, u64)>,
+        I: IntoIterator<Item = (u64, u32)>,
     {
-        let v = it.into_iter().map(|(al, cl)| {
-            let cl = NonZeroU64::new(cl)?;
-            Some(DimensionShape::new(al, cl))
-        });
+        let v = it.into_iter().map(|(al, nc)| Some(DimensionShape::new(al, nc)));
         v.collect::<Option<Vec<_>>>().map(Self)
     }
 
@@ -94,23 +89,8 @@ impl ArrayShape {
         coord
             .0
             .iter()
-            .zip(self.max_chunk_indices_permitted())
-            .all(|(index, index_permitted)| *index <= index_permitted)
-    }
-
-    /// Returns an iterator over the maximum permitted chunk indices for the array.
-    ///
-    /// This function calculates the maximum chunk indices based on the shape of the array
-    /// and the chunk shape, using (shape - 1) / chunk_shape. Given integer division is truncating,
-    /// this will always result in proper indices at the boundaries.
-    fn max_chunk_indices_permitted(&self) -> impl Iterator<Item = u32> + '_ {
-        self.0.iter().map(|dim_shape| {
-            if dim_shape.chunk_length == 0 || dim_shape.dim_length == 0 {
-                0
-            } else {
-                ((dim_shape.dim_length - 1) / dim_shape.chunk_length) as u32
-            }
-        })
+            .zip(self.num_chunks())
+            .all(|(index, index_permitted)| *index <= (index_permitted - 1).max(0))
     }
 }
 
@@ -215,7 +195,16 @@ impl From<&generated::DimensionShape> for DimensionShape {
     fn from(value: &generated::DimensionShape) -> Self {
         DimensionShape {
             dim_length: value.array_length(),
-            chunk_length: value.chunk_length(),
+            num_chunks: value.array_length().div_ceil(value.chunk_length()) as u32,
+        }
+    }
+}
+
+impl<'a> From<&generated::DimensionShapeV2<'a>> for DimensionShape {
+    fn from(value: &generated::DimensionShapeV2<'a>) -> Self {
+        DimensionShape {
+            dim_length: value.array_length(),
+            num_chunks: value.num_chunks(),
         }
     }
 }
@@ -225,7 +214,10 @@ impl<'a> From<generated::ArrayNodeData<'a>> for NodeData {
         let dimension_names = value
             .dimension_names()
             .map(|dn| dn.iter().map(|name| name.name().into()).collect());
-        let shape = ArrayShape(value.shape().iter().map(|dim| dim.into()).collect());
+        let shape = ArrayShape(value.shape_v2().map_or_else(
+            || value.shape().iter().map(|dim| dim.into()).collect(),
+            |x| x.iter().map(|dim| (&dim).into()).collect(),
+        ));
         let manifests = value.manifests().iter().map(|m| m.into()).collect();
         Self::Array { shape, dimension_names, manifests }
     }
@@ -467,7 +459,10 @@ impl Snapshot {
 
         let nodes: Vec<_> = sorted_iter
             .into_iter()
-            .map(|node| node.err_into().and_then(|node| mk_node(&mut builder, &node)))
+            .map(|node| {
+                node.err_into()
+                    .and_then(|node| mk_node(&mut builder, &node, spec_version))
+            })
             .try_collect()?;
         let nodes = builder.create_vector(&nodes);
 
@@ -712,10 +707,12 @@ impl Iterator for NodeIterator {
 fn mk_node<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
     node: &NodeSnapshot,
+    spec_version: SpecVersionBin,
 ) -> IcechunkResult<flatbuffers::WIPOffset<generated::NodeSnapshot<'bldr>>> {
     let id = generated::ObjectId8::new(&node.id.0);
     let path = builder.create_string(node.path.to_string().as_str());
-    let (node_data_type, node_data) = mk_node_data(builder, &node.node_data)?;
+    let (node_data_type, node_data) =
+        mk_node_data(builder, &node.node_data, spec_version)?;
     let user_data = Some(builder.create_vector(&node.user_data));
     Ok(generated::NodeSnapshot::create(
         builder,
@@ -733,10 +730,12 @@ fn mk_node<'bldr>(
 fn mk_node_data(
     builder: &mut FlatBufferBuilder<'_>,
     node_data: &NodeData,
+    spec_version: SpecVersionBin,
 ) -> IcechunkResult<(
     generated::NodeData,
     Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
 )> {
+    use SpecVersionBin::*;
     match node_data {
         NodeData::Array { manifests, dimension_names, shape } => {
             let manifests = manifests
@@ -780,26 +779,63 @@ fn mk_node_data(
                     .collect::<Vec<_>>();
                 builder.create_vector(names.as_slice())
             });
-            let shape = shape
-                .0
-                .iter()
-                .map(|ds| generated::DimensionShape::new(ds.dim_length, ds.chunk_length))
-                .collect::<Vec<_>>();
-            let shape = builder.create_vector(shape.as_slice());
-            Ok((
-                generated::NodeData::Array,
-                Some(
+            let node_data = match spec_version {
+                V1dot0 => {
+                    let shape = shape
+                        .0
+                        .iter()
+                        .map(|ds| {
+                            generated::DimensionShape::new(
+                                ds.dim_length,
+                                // FIXME: this can be *very* wrong, but I'm not sure it really matters
+                                //        we still preserve num_chunks, and return the proper Zarr JSON metadata
+                                //        which is stored in NodeData::user_data which stores the zarr.json exactly
+                                //        as provided by Zarr
+                                ds.dim_length.div_ceil(ds.num_chunks as u64),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let shape = builder.create_vector(shape.as_slice());
                     generated::ArrayNodeData::create(
                         builder,
                         &generated::ArrayNodeDataArgs {
                             manifests: Some(manifests),
                             shape: Some(shape),
+                            shape_v2: None,
                             dimension_names: dimensions,
                         },
                     )
-                    .as_union_value(),
-                ),
-            ))
+                }
+                V2dot0 => {
+                    let shape = shape
+                        .0
+                        .iter()
+                        .map(|ds| {
+                            generated::DimensionShapeV2::create(
+                                builder,
+                                &generated::DimensionShapeV2Args {
+                                    array_length: ds.dim_length,
+                                    num_chunks: ds.num_chunks,
+                                },
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let shape = builder.create_vector(shape.as_slice());
+                    let empty_shape =
+                        builder.create_vector(&[] as &[generated::DimensionShape]);
+                    generated::ArrayNodeData::create(
+                        builder,
+                        &generated::ArrayNodeDataArgs {
+                            manifests: Some(manifests),
+                            shape: Some(empty_shape),
+                            shape_v2: Some(shape),
+                            dimension_names: dimensions,
+                        },
+                    )
+                }
+            };
+
+            Ok((generated::NodeData::Array, Some(node_data.as_union_value())))
         }
         NodeData::Group => Ok((
             generated::NodeData::Group,
@@ -1017,8 +1053,7 @@ mod tests {
     #[icechunk_macros::test]
     fn test_valid_chunk_coord() {
         let shape1 =
-            ArrayShape::new(vec![(10_000, 1_000), (10_001, 1_000), (9_999, 1_000)])
-                .unwrap();
+            ArrayShape::new(vec![(10_000, 10), (10_001, 11), (9_999, 10)]).unwrap();
         let shape2 = ArrayShape::new(vec![(0, 1_000), (0, 1_000), (0, 1_000)]).unwrap();
         let coord1 = ChunkIndices(vec![9, 10, 9]);
         let coord2 = ChunkIndices(vec![10, 11, 10]);
@@ -1026,7 +1061,6 @@ mod tests {
 
         assert!(shape1.valid_chunk_coord(&coord1));
         assert!(!shape1.valid_chunk_coord(&coord2));
-
         assert!(shape2.valid_chunk_coord(&coord3));
     }
 }

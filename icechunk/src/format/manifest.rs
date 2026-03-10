@@ -1146,14 +1146,17 @@ mod tests {
         // Note: using the shape, chunks strategy to generate chunk_shape, split_shape
         let ShapeDim { shape, .. } = shape_dim;
 
-        let num_chunks = shape.iter().map(|x| x.array_length()).collect::<Vec<_>>();
-        let split_shape = shape.iter().map(|x| x.chunk_length()).collect::<Vec<_>>();
+        let num_chunks: Vec<u32> = shape.iter().map(|x| x.num_chunks()).collect();
+        let split_shape: Vec<u64> = shape
+            .iter()
+            .map(|x| x.array_length().div_ceil(x.num_chunks() as u64))
+            .collect();
 
         let ndim = shape.len();
         let edges: Vec<Vec<u32>> = (0usize..ndim)
             .map(|axis| {
                 uniform_manifest_split_edges(
-                    num_chunks[axis] as u32,
+                    num_chunks[axis],
                     &(split_shape[axis] as u32),
                 )
             })

@@ -359,7 +359,7 @@ async fn test_repository_with_local_virtual_refs(
             .await;
     let mut ds = repo.writable_session("main").await.unwrap();
 
-    let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
+    let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 2)]).unwrap();
     let user_data = Bytes::new();
     let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
         location: VirtualChunkLocation::from_url(&format!(
@@ -456,7 +456,7 @@ async fn test_repository_with_minio_virtual_refs(
     let repo = create_minio_repository(spec_version).await;
     let mut ds = repo.writable_session("main").await.unwrap();
 
-    let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
+    let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 2)]).unwrap();
     let user_data = Bytes::new();
     let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
         location: VirtualChunkLocation::from_url(&format!(

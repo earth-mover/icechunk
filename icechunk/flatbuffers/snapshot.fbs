@@ -50,8 +50,13 @@ table ManifestRef {
 
 // the shape of the array along a given dimension
 struct DimensionShape {
+ array_length: uint64;
+ chunk_length: uint64;
+}
+
+table DimensionShapeV2 {
     array_length: uint64;
-    chunk_length: uint64;
+    num_chunks: uint32;
 }
 
 table DimensionName {
@@ -64,12 +69,15 @@ table GroupNodeData {}
 
 // data for an array node
 table ArrayNodeData {
-  shape: [DimensionShape] (required);
+ shape: [DimensionShape] (required);
 
-  dimension_names: [DimensionName];
+ dimension_names: [DimensionName];
 
-  // pointers to all the manifests where this array has chunk references
-  manifests: [ManifestRef] (required);
+ // pointers to all the manifests where this array has chunk references
+ manifests: [ManifestRef] (required);
+
+ // introduced in V2
+ shape_v2: [DimensionShapeV2];
 }
 
 // the node contents, that can be either a group or an array

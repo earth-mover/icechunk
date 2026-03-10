@@ -76,7 +76,7 @@ pub async fn do_test_gc(
     storage: Arc<dyn Storage + Send + Sync>,
     spec_version: Option<SpecVersionBin>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let shape = ArrayShape::new(vec![(1100, 1)]).unwrap();
+    let shape = ArrayShape::new(vec![(1100, 1100)]).unwrap();
     // intentionally small to create garbage
     let manifest_split_size = 10;
     let split_sizes = Some(vec![(
@@ -542,7 +542,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut session = repo.writable_session("main").await?;
     let array_path: Path = "/array".to_string().try_into().unwrap();
-    let shape = ArrayShape::new(vec![(4, 1)]).unwrap();
+    let shape = ArrayShape::new(vec![(4, 4)]).unwrap();
     let dimension_names = Some(vec!["t".into()]);
     let def = Bytes::from_static(br#"{"this":"other array"}"#);
     session

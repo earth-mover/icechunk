@@ -701,7 +701,7 @@ mod tests {
         let mut change_set = ChangeSet::Edit(Default::default());
         assert_eq!(None, change_set.new_arrays_chunk_iterator().next());
 
-        let shape = ArrayShape::new(vec![(2, 1), (2, 1), (2, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(2, 2), (2, 2), (2, 2)]).unwrap();
         let dimension_names = Some(vec!["x".into(), "y".into(), "t".into()]);
 
         let node_id1 = NodeId::random();
