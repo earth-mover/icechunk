@@ -277,6 +277,7 @@ impl Repository {
                     snap_info,
                     num_updates,
                     config_to_store,
+                    None,
                 ));
 
                 // Write snapshot and transaction log concurrently first
@@ -3959,7 +3960,7 @@ mod tests {
         }
 
         // Migrate to IC2
-        migrate_1_to_2(repo, false, true).await.unwrap();
+        migrate_1_to_2(repo, false, true, None).await.unwrap();
         let repo =
             Repository::open(Some(config), Arc::clone(&storage), HashMap::new()).await?;
         assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);

@@ -141,14 +141,15 @@ fn spec_version() -> u8 {
 }
 
 #[pyfunction]
-#[pyo3(signature = (repo, *, dry_run = true, delete_unused_v1_files = true))]
+#[pyo3(signature = (repo, *, dry_run = true, delete_unused_v1_files = true, prefetch_concurrency = None))]
 fn _upgrade_icechunk_repository(
     py: Python,
     repo: &PyRepository,
     dry_run: bool,
     delete_unused_v1_files: bool,
+    prefetch_concurrency: Option<usize>,
 ) -> PyResult<PyRepository> {
-    repo.migrate_1_to_2(py, dry_run, delete_unused_v1_files)
+    repo.migrate_1_to_2(py, dry_run, delete_unused_v1_files, prefetch_concurrency)
 }
 
 fn pep440_version() -> String {
