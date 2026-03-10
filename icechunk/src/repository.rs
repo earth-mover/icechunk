@@ -1853,6 +1853,15 @@ impl Repository {
             )
             .into());
         }
+
+        let status = self.get_status().await?;
+        if status.availability == RepoAvailability::ReadOnly {
+            return Err(RepositoryErrorKind::ReadonlyRepository(
+                "Cannot create rearrange session".to_string(),
+            )
+            .into());
+        }
+
         // this feature is only available in IC2
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
