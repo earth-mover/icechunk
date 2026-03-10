@@ -517,7 +517,7 @@ impl Store {
             .filter(|&i| !locations.is_null(i))
             .map(|i| {
                 let indices = flat_to_nd_indices(i, chunk_grid_shape, arr_offset);
-                let location = VirtualChunkLocation::from_absolute_path(locations.value(i))
+                let location = VirtualChunkLocation::from_url(locations.value(i))
                     .map_err(|e| StoreErrorKind::Other(e.to_string()))?;
                 let vref = VirtualChunkRef {
                     location,

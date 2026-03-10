@@ -732,9 +732,9 @@ impl Session {
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
-        if let NodeData::Array { shape, .. } = node.node_data {
+        if let NodeData::Array { ref shape, .. } = node.node_data {
             if shape.valid_chunk_coord(&coord) {
-                self.change_set_mut()?.set_chunk_ref(node.id, coord, data)?;
+                self.change_set_mut()?.set_chunk_ref(node.id.clone(), coord, data)?;
                 Ok(())
             } else {
                 Err(SessionErrorKind::InvalidIndex {
@@ -763,11 +763,8 @@ impl Session {
     where
         I: IntoIterator<Item = (ChunkIndices, Option<ChunkPayload>)>,
     {
-        if let NodeData::Array { shape, dimension_names, .. } = &node.node_data {
-            let splits = self
-                .get_splits(&node.id, &node.path, shape, dimension_names)
-                .clone();
-            self.change_set_mut()?.set_chunk_refs(node.id.clone(), chunks, &splits)?;
+        if let NodeData::Array { .. } = &node.node_data {
+            self.change_set_mut()?.set_chunk_refs(node.id.clone(), chunks)?;
             Ok(())
         } else {
             Err(SessionErrorKind::NotAnArray {

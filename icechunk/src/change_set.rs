@@ -463,7 +463,6 @@ impl ChangeSet {
         &mut self,
         node_id: NodeId,
         chunks: I,
-        splits: &ManifestSplits,
     ) -> SessionResult<()>
     where
         I: IntoIterator<Item = (ChunkIndices, Option<ChunkPayload>)>,
@@ -473,21 +472,10 @@ impl ChangeSet {
         let node_chunks = edits
             .set_chunks
             .entry(node_id)
-            .or_insert_with(|| {
-                HashMap::<
-                    ManifestExtents,
-                    BTreeMap<ChunkIndices, Option<ChunkPayload>>,
-                >::with_capacity(splits.len())
-            });
+            .or_default();
 
         for (coord, data) in chunks {
-            #[allow(clippy::expect_used)]
-            let extent = splits.find(&coord).expect("logic bug. Trying to set chunk ref but can't find the appropriate split manifest.");
-
-            let old = node_chunks
-                .entry(extent.clone())
-                .or_default()
-                .insert(coord, data);
+            let old = node_chunks.insert(coord, data);
 
             if old.is_none() {
                 edits.num_chunks += 1;
