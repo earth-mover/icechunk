@@ -1108,6 +1108,10 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         )
 
 
+import os
+
+os.environ["HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY"] = "1"
+
 VersionControlStateMachine.TestCase.settings = settings(
     deadline=None,
     # report_multiple_bugs=False,
