@@ -11,6 +11,8 @@ from icechunk import (
     ChunkType,
     ForkSession,
     IcechunkError,
+    RepoAvailability,
+    RepoStatus,
     Repository,
     RepositoryConfig,
     SessionMode,
@@ -274,3 +276,52 @@ def test_repository_open_no_list_bucket(any_spec_version: int | None) -> None:
         assert repo.list_branches() == set(["main", "new_branch"])
         assert list(repo.list_tags()) == ["new_tag"]
         assert len(list(repo.ops_log())) == 5
+
+
+def test_readonly_repo_status_blocks_writable_session() -> None:
+    repo = Repository.create(
+        storage=in_memory_storage(),
+        spec_version=2,
+    )
+
+    session = repo.writable_session("main")
+    session.commit("initial commit", allow_empty=True)
+
+    # Writable session works before setting ReadOnly
+    session = repo.writable_session("main")
+    assert not session.read_only
+
+    repo.set_status(RepoStatus(availability=RepoAvailability.ReadOnly))
+    assert repo.status.availability == RepoAvailability.ReadOnly
+
+    # Writable session should fail when repo is ReadOnly
+    with pytest.raises(IcechunkError):
+        repo.writable_session("main")
+
+    # Read-only sessions should still work
+    session = repo.readonly_session("main")
+    assert session.read_only
+
+    # Set back to Online and verify writable session works again
+    repo.set_status(RepoStatus(availability=RepoAvailability.Online))
+    assert repo.status.availability == RepoAvailability.Online
+
+    session = repo.writable_session("main")
+    assert not session.read_only
+
+
+async def test_readonly_repo_status_blocks_writable_session_async() -> None:
+    repo = await Repository.create_async(
+        storage=in_memory_storage(),
+        spec_version=2,
+    )
+
+    session = await repo.writable_session_async("main")
+    await session.commit_async("initial commit", allow_empty=True)
+
+    await repo.set_status_async(RepoStatus(availability=RepoAvailability.ReadOnly))
+    status = await repo.get_status_async()
+    assert status.availability == RepoAvailability.ReadOnly
+
+    with pytest.raises(IcechunkError):
+        await repo.writable_session_async("main")
