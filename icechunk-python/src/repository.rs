@@ -463,7 +463,6 @@ impl_pickle!(PyGCSummary);
 pub(crate) enum PyRepoAvailability {
     Online,
     ReadOnly,
-    Offline,
 }
 
 impl From<RepoAvailability> for PyRepoAvailability {
@@ -471,7 +470,6 @@ impl From<RepoAvailability> for PyRepoAvailability {
         match value {
             RepoAvailability::Online => PyRepoAvailability::Online,
             RepoAvailability::ReadOnly => PyRepoAvailability::ReadOnly,
-            RepoAvailability::Offline => PyRepoAvailability::Offline,
         }
     }
 }
@@ -481,7 +479,6 @@ impl From<PyRepoAvailability> for RepoAvailability {
         match value {
             PyRepoAvailability::Online => RepoAvailability::Online,
             PyRepoAvailability::ReadOnly => RepoAvailability::ReadOnly,
-            PyRepoAvailability::Offline => RepoAvailability::Offline,
         }
     }
 }
@@ -490,7 +487,7 @@ impl From<PyRepoAvailability> for RepoAvailability {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PyRepoStatus {
     availability: PyRepoAvailability,
-    set_at: u64,
+    set_at: DateTime<Utc>,
     limited_availability_reason: Option<String>,
 }
 
@@ -517,12 +514,13 @@ impl From<PyRepoStatus> for RepoStatus {
 #[pymethods]
 impl PyRepoStatus {
     #[new]
-    #[pyo3(signature = (availability, set_at = 0, limited_availability_reason = None))]
+    #[pyo3(signature = (availability, set_at = None, limited_availability_reason = None))]
     fn new(
         availability: PyRepoAvailability,
-        set_at: u64,
+        set_at: Option<DateTime<Utc>>,
         limited_availability_reason: Option<String>,
     ) -> Self {
+        let set_at = set_at.unwrap_or_else(Utc::now);
         Self { availability, set_at, limited_availability_reason }
     }
 

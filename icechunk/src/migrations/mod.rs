@@ -534,7 +534,7 @@ pub async fn migrate_1_to_2(
         None::<std::iter::Empty<u16>>,
         &RepoStatus {
             availability: RepoAvailability::Online,
-            set_at: 0,
+            set_at: Utc::now(),
             limited_availability_reason: None,
         },
     )?);

@@ -24,14 +24,15 @@ use flatbuffers::{VerifierOptions, WIPOffset};
 pub enum RepoAvailability {
     Online,
     ReadOnly,
-    Offline,
+    // Offline is defined in the flatbuffers, but we won't support it
+    // before better specs on how we want to use it
 }
 
 impl From<generated::RepoAvailability> for RepoAvailability {
     fn from(value: generated::RepoAvailability) -> Self {
         match value {
+            generated::RepoAvailability::Online => RepoAvailability::Online,
             generated::RepoAvailability::ReadOnly => RepoAvailability::ReadOnly,
-            generated::RepoAvailability::Offline => RepoAvailability::Offline,
             _ => RepoAvailability::Online,
         }
     }
@@ -42,7 +43,6 @@ impl From<RepoAvailability> for generated::RepoAvailability {
         match value {
             RepoAvailability::Online => generated::RepoAvailability::Online,
             RepoAvailability::ReadOnly => generated::RepoAvailability::ReadOnly,
-            RepoAvailability::Offline => generated::RepoAvailability::Offline,
         }
     }
 }
@@ -50,7 +50,7 @@ impl From<RepoAvailability> for generated::RepoAvailability {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoStatus {
     pub availability: RepoAvailability,
-    pub set_at: u64,
+    pub set_at: DateTime<Utc>,
     pub limited_availability_reason: Option<String>,
 }
 
@@ -334,7 +334,7 @@ impl RepoInfo {
             &mut builder,
             &generated::RepoStatusArgs {
                 availability: status.availability.into(),
-                set_at: status.set_at,
+                set_at: status.set_at.timestamp_micros() as u64,
                 limited_availability_reason: limited_reason,
             },
         );
@@ -520,7 +520,7 @@ impl RepoInfo {
             &Default::default(),
             UpdateInfo {
                 update_type: UpdateType::RepoInitializedUpdate,
-                update_time: update_time.unwrap_or(Utc::now()),
+                update_time: update_time.unwrap_or_else(Utc::now),
                 previous_updates: [],
             },
             None,
@@ -531,7 +531,7 @@ impl RepoInfo {
             None::<std::iter::Empty<u16>>,
             &RepoStatus {
                 availability: RepoAvailability::Online,
-                set_at: 0,
+                set_at: update_time.unwrap_or_else(Utc::now),
                 limited_availability_reason: None,
             },
         )
@@ -574,9 +574,14 @@ impl RepoInfo {
     pub fn status(&self) -> IcechunkResult<RepoStatus> {
         let root = self.root()?;
         let fb_status = root.status();
+        let ts: i64 = fb_status.set_at().try_into().map_err(|_| {
+            IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidTimestamp)
+        })?;
+        let set_at = DateTime::from_timestamp_micros(ts)
+            .ok_or_else(|| IcechunkFormatErrorKind::InvalidTimestamp)?;
         Ok(RepoStatus {
             availability: fb_status.availability().into(),
-            set_at: fb_status.set_at(),
+            set_at,
             limited_availability_reason: fb_status
                 .limited_availability_reason()
                 .map(|s| s.to_string()),
@@ -756,7 +761,7 @@ impl RepoInfo {
             &self.metadata()?,
             UpdateInfo {
                 update_type,
-                update_time: update_time.unwrap_or(Utc::now()),
+                update_time: update_time.unwrap_or_else(Utc::now),
                 previous_updates: self.latest_updates()?,
             },
             Some(previous_file),
