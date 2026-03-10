@@ -854,7 +854,7 @@ class ManifestVirtualChunkLocationCompressionConfig:
 
         Parameters
         ----------
-        num_chunks: int | None
+        min_num_chunks: int | None
             Minimum number of virtual chunks required to enable compression. Default: 1000.
         dictionary_max_training_samples: int | None
             Maximum number of URL samples used to train the compression dictionary. Default: 100.
