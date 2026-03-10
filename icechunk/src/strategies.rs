@@ -1,18 +1,27 @@
+//! Proptest strategies for property-based testing.
+
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[cfg(feature = "object-store-azure")]
+use crate::config::{AzureCredentials, AzureStaticCredentials};
 use crate::config::{
-    AzureCredentials, AzureStaticCredentials, CachingConfig, CompressionAlgorithm,
-    CompressionConfig, GcsBearerCredential, GcsStaticCredentials, ManifestConfig,
+    CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig,
     ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
-    ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig, S3Options,
-    S3StaticCredentials,
+    ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
+    RepoUpdateRetryConfig, S3Options, S3StaticCredentials,
 };
+#[cfg(feature = "object-store-gcs")]
+use crate::config::{GcsBearerCredential, GcsStaticCredentials};
 use crate::format::format_constants::SpecVersionBin;
 use crate::format::manifest::{
-    ChunkPayload, ChunkRef, ManifestExtents, SecondsSinceEpoch, VirtualChunkLocation,
-    VirtualChunkRef,
+    ChunkPayload, ChunkRef, ManifestExtents, ManifestRef, ManifestSplits,
+    SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef,
 };
-use crate::format::snapshot::{ArrayShape, DimensionName};
-use crate::format::{ChunkId, ChunkIndices, NodeId, Path, manifest};
+use crate::format::snapshot::{
+    ArrayShape, DimensionName, ManifestFileInfo, NodeData, NodeSnapshot,
+};
+use crate::format::{
+    AttributesId, ChunkId, ChunkIndices, ManifestId, NodeId, Path, SnapshotId, manifest,
+};
 use crate::session::Session;
 use crate::storage::{
     ConcurrencySettings, ETag, RetriesSettings, Settings, new_in_memory_storage,
@@ -35,6 +44,7 @@ use std::ops::{Bound, Range};
 use std::path::PathBuf;
 
 use crate::change_set::{ArrayData, Move};
+use crate::refs::RefData;
 
 const MAX_NDIM: usize = 4;
 
@@ -56,7 +66,7 @@ prop_compose! {
 
         runtime.block_on(async {
             let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
-            Repository::create(None, storage, HashMap::new(), Some(version))
+            Repository::create(None, storage, HashMap::new(), Some(version), true)
                 .await
                 .expect("Failed to initialize repository")
         })
@@ -74,7 +84,7 @@ prop_compose! {
 
     runtime.block_on(async {
         let storage = new_in_memory_storage().await.expect("Cannot create in memory storage");
-        let repository = Repository::create(None, storage, HashMap::new(), Some(version))
+        let repository = Repository::create(None, storage, HashMap::new(), Some(version), true)
             .await
             .expect("Failed to initialize repository");
         repository.writable_session("main").await.expect("Failed to create session")
@@ -184,6 +194,7 @@ prop_compose! {
     }
 }
 
+#[cfg(feature = "object-store-azure")]
 prop_compose! {
     pub fn azure_options()
     (account in string_regex("[a-zA-Z0-9\\-_]+").unwrap(),
@@ -230,33 +241,45 @@ prop_compose! {
         use ObjectStoreConfig::*;
         match &store {
             InMemory => panic!("assumed not to be in memory"),
+            #[cfg(feature = "object-store-fs")]
             LocalFileSystem(path_buf) => {
                 VirtualChunkContainer::new(format!("file:///{}/", path_buf.to_string_lossy()),store).unwrap()
             }
+            #[cfg(feature = "object-store-http")]
             Http(_) => VirtualChunkContainer::new("http://example.com/".to_string(),store).unwrap(),
             S3Compatible(_) => VirtualChunkContainer::new("s3://somebucket/".to_string(),store).unwrap(),
             S3(_) => VirtualChunkContainer::new("s3://somebucket/".to_string(),store).unwrap(),
+            #[cfg(feature = "object-store-gcs")]
             Gcs(_) => VirtualChunkContainer::new("gcs://somebucket/".to_string(),store).unwrap(),
+            #[cfg(feature = "object-store-azure")]
             Azure(_) => VirtualChunkContainer::new("az://somebucket/".to_string(),store).unwrap(),
             Tigris(_) => VirtualChunkContainer::new("tigris://somebucket/".to_string(),store).unwrap(),
+            #[allow(unreachable_patterns)]
+            _ => panic!("unsupported store config for this feature set"),
         }
     }
 }
 
 pub fn object_store_config() -> BoxedStrategy<ObjectStoreConfig> {
     use ObjectStoreConfig::*;
-    prop_oneof![
-        Just(InMemory),
+    let mut strategies: Vec<BoxedStrategy<ObjectStoreConfig>> =
+        vec![Just(InMemory).boxed()];
+    #[cfg(feature = "object-store-fs")]
+    strategies.push(
         vec(string_regex("[a-zA-Z0-9\\-_]+").unwrap(), 1..4)
-            .prop_map(|s| LocalFileSystem(PathBuf::from(s.join("/")))),
-        s3_options().prop_map(S3),
-        s3_options().prop_map(S3Compatible),
-        s3_options().prop_map(Tigris),
-        any::<HashMap<String, String>>().prop_map(Gcs),
-        any::<HashMap<String, String>>().prop_map(Http),
-        azure_options().prop_map(Azure),
-    ]
-    .boxed()
+            .prop_map(|s| LocalFileSystem(PathBuf::from(s.join("/"))))
+            .boxed(),
+    );
+    strategies.push(s3_options().prop_map(S3).boxed());
+    strategies.push(s3_options().prop_map(S3Compatible).boxed());
+    strategies.push(s3_options().prop_map(Tigris).boxed());
+    #[cfg(feature = "object-store-gcs")]
+    strategies.push(any::<HashMap<String, String>>().prop_map(Gcs).boxed());
+    #[cfg(feature = "object-store-http")]
+    strategies.push(any::<HashMap<String, String>>().prop_map(Http).boxed());
+    #[cfg(feature = "object-store-azure")]
+    strategies.push(azure_options().prop_map(Azure).boxed());
+    proptest::strategy::Union::new(strategies).boxed()
 }
 
 pub fn bound<T>(inner: impl Strategy<Value = T>) -> impl Strategy<Value = Bound<T>>
@@ -351,7 +374,7 @@ prop_compose! {
     pub fn manifest_config()
         (splitting in option::of(manifest_splitting_config()), preload in option::of(manifest_preload_config()))
     -> ManifestConfig {
-        ManifestConfig{preload, splitting}
+        ManifestConfig{preload, splitting, virtual_chunk_location_compression: None}
     }
 }
 
@@ -379,6 +402,14 @@ prop_compose! {
         max_backoff_ms in option::of(any::<u32>()),
     ) -> RetriesSettings  {
         RetriesSettings {initial_backoff_ms,max_backoff_ms, max_tries }
+    }
+}
+
+prop_compose! {
+    pub fn repo_update_retry_config()
+        (default in option::of(retries_settings()),
+    ) -> RepoUpdateRetryConfig {
+        RepoUpdateRetryConfig { default }
     }
 }
 
@@ -420,6 +451,7 @@ prop_compose! {
         manifest in option::of(manifest_config()),
         storage in option::of(storage_settings()),
         previous_file in option::of(any::<PathBuf>().prop_map(|path| path.to_string_lossy().to_string())),
+        repo_update_retries in option::of(repo_update_retry_config()),
         )
     -> RepositoryConfig {
         RepositoryConfig{
@@ -432,6 +464,8 @@ prop_compose! {
             virtual_chunk_containers,
             storage,
             previous_file,
+            repo_update_retries,
+            num_updates_per_repo_info_file: None,
         }
     }
 }
@@ -452,6 +486,7 @@ prop_compose! {
     }
 }
 
+#[cfg(feature = "object-store-gcs")]
 prop_compose! {
 pub fn gcs_bearer_credential()
     (bearer in any::<String>(),expires_after in  expiration_date()) -> GcsBearerCredential {
@@ -459,6 +494,7 @@ pub fn gcs_bearer_credential()
     }
 }
 
+#[cfg(feature = "object-store-gcs")]
 pub fn gcs_static_credentials() -> BoxedStrategy<GcsStaticCredentials> {
     use GcsStaticCredentials::*;
     prop_oneof![
@@ -470,6 +506,7 @@ pub fn gcs_static_credentials() -> BoxedStrategy<GcsStaticCredentials> {
     .boxed()
 }
 
+#[cfg(feature = "object-store-azure")]
 pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
     use AzureStaticCredentials::*;
     prop_oneof![
@@ -480,6 +517,7 @@ pub fn azure_static_credentials() -> BoxedStrategy<AzureStaticCredentials> {
     .boxed()
 }
 
+#[cfg(feature = "object-store-azure")]
 pub fn azure_credentials() -> BoxedStrategy<AzureCredentials> {
     use AzureCredentials::*;
     prop_oneof![Just(FromEnv), azure_static_credentials().prop_map(Static)].boxed()
@@ -584,7 +622,7 @@ prop_compose! {
 fn virtual_chunk_location() -> impl Strategy<Value = VirtualChunkLocation> {
     url_with_host_and_path()
         .prop_filter_map("Could not generate url with valid host and path", |url| {
-            VirtualChunkLocation::from_absolute_path(&url).ok()
+            VirtualChunkLocation::from_url(&url).ok()
         })
 }
 
@@ -621,4 +659,81 @@ prop_compose! {
     pub fn gen_move()(to in path(), from in path()) -> Move {
         Move{to, from}
     }
+}
+
+fn snapshot_id() -> impl Strategy<Value = SnapshotId> {
+    uniform12(any::<u8>()).prop_map(SnapshotId::new)
+}
+pub fn ref_data() -> impl Strategy<Value = RefData> {
+    snapshot_id().prop_map(|snapshot| RefData { snapshot })
+}
+
+fn manifest_id() -> impl Strategy<Value = ManifestId> {
+    uniform12(any::<u8>()).prop_map(ManifestId::new)
+}
+
+prop_compose! {
+    pub fn manifest_ref()
+    (ndim in any::<u8>().prop_map(usize::from))
+    (object_id in manifest_id(),
+     extents in manifest_extents(ndim),
+    ) -> ManifestRef {
+        ManifestRef{ object_id, extents }
+    }
+}
+
+pub fn manifest_splits() -> impl Strategy<Value = ManifestSplits> {
+    // Generate 1..10 axes, each with 2..6 sorted unique edges (so 1..5 bins per axis)
+    (1..10usize)
+        .prop_flat_map(|ndim| {
+            vec(
+                proptest::collection::hash_set(0u32..1000, 2..6usize).prop_map(|s| {
+                    let mut v: Vec<u32> = s.into_iter().collect();
+                    v.sort();
+                    v
+                }),
+                ndim,
+            )
+        })
+        .prop_map(ManifestSplits::from_edges)
+}
+
+type ArrayInfo = (ArrayShape, Option<Vec<DimensionName>>, Vec<ManifestRef>);
+fn array_info() -> impl Strategy<Value = ArrayInfo> {
+    (array_shape(), option::of(vec(dimension_name(), 5..10)), vec(manifest_ref(), 1..8))
+}
+
+fn node_data() -> impl Strategy<Value = NodeData> {
+    use NodeData::*;
+    prop_oneof![
+        Just(Group),
+        array_info().prop_map(|(shape, dimension_names, manifests)| Array {
+            shape,
+            dimension_names,
+            manifests
+        }),
+    ]
+}
+
+prop_compose! {
+   pub fn node_snapshot()
+    (id in node_id(),
+        path in path(),
+        user_data in bytes(),
+        node_data in node_data()) -> NodeSnapshot {
+        NodeSnapshot{id, path, user_data, node_data}
+    }
+}
+
+prop_compose! {
+pub fn manifest_file_info()
+(id in manifest_id(),
+size_bytes in any::<u64>(),
+num_chunk_refs in any::<u32>()) -> ManifestFileInfo  {
+    ManifestFileInfo{id, size_bytes, num_chunk_refs}
+}
+}
+
+pub fn attributes_id() -> impl Strategy<Value = AttributesId> {
+    uniform12(any::<u8>()).prop_map(AttributesId::new)
 }

@@ -1,3 +1,5 @@
+//! Version info, branches, and tags for a repository.
+
 use err_into::ErrorInto;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
@@ -5,8 +7,9 @@ use std::{
     borrow::Cow,
     collections::{BTreeSet, HashMap},
 };
+use tracing::trace;
 
-use crate::{format::snapshot::SnapshotProperties, refs::Ref};
+use crate::{config::RepositoryConfig, format::snapshot::SnapshotProperties, refs::Ref};
 
 use super::{
     IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
@@ -21,9 +24,6 @@ use flatbuffers::{VerifierOptions, WIPOffset};
 pub struct RepoInfo {
     buffer: Vec<u8>,
 }
-
-// FIXME: make configurable
-const UPDATES_PER_FILE: usize = 100;
 
 impl std::fmt::Debug for RepoInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -59,19 +59,48 @@ impl std::fmt::Debug for RepoInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateType {
     RepoInitializedUpdate,
-    RepoMigratedUpdate { from_version: SpecVersionBin, to_version: SpecVersionBin },
-    ConfigChangedUpdate, // FIXME: implement
+    RepoMigratedUpdate {
+        from_version: SpecVersionBin,
+        to_version: SpecVersionBin,
+    },
+    ConfigChangedUpdate,
     MetadataChangedUpdate,
-    TagCreatedUpdate { name: String },
-    TagDeletedUpdate { name: String, previous_snap_id: SnapshotId },
-    BranchCreatedUpdate { name: String },
-    BranchDeletedUpdate { name: String, previous_snap_id: SnapshotId },
-    BranchResetUpdate { name: String, previous_snap_id: SnapshotId },
-    NewCommitUpdate { branch: String },
-    CommitAmendedUpdate { branch: String, previous_snap_id: SnapshotId },
-    NewDetachedSnapshotUpdate { new_snap_id: SnapshotId },
+    TagCreatedUpdate {
+        name: String,
+    },
+    TagDeletedUpdate {
+        name: String,
+        previous_snap_id: SnapshotId,
+    },
+    BranchCreatedUpdate {
+        name: String,
+    },
+    BranchDeletedUpdate {
+        name: String,
+        previous_snap_id: SnapshotId,
+    },
+    BranchResetUpdate {
+        name: String,
+        previous_snap_id: SnapshotId,
+    },
+    NewCommitUpdate {
+        branch: String,
+        new_snap_id: SnapshotId,
+    },
+    CommitAmendedUpdate {
+        branch: String,
+        previous_snap_id: SnapshotId,
+        new_snap_id: SnapshotId,
+    },
+    NewDetachedSnapshotUpdate {
+        new_snap_id: SnapshotId,
+    },
     GCRanUpdate,
     ExpirationRanUpdate,
+    FeatureFlagChanged {
+        id: u16,
+        new_value: Option<bool>,
+    },
 }
 
 static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
@@ -95,6 +124,8 @@ impl RepoInfo {
     pub fn new<
         'a,
         I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
+        EFFIt: DoubleEndedIterator<Item = u16> + ExactSizeIterator,
+        DFFIt: DoubleEndedIterator<Item = u16> + ExactSizeIterator,
     >(
         spec_version: SpecVersionBin,
         tags: impl IntoIterator<Item = (&'a str, SnapshotId)>,
@@ -104,6 +135,11 @@ impl RepoInfo {
         metadata: &SnapshotProperties,
         update: UpdateInfo<I>,
         backup_path: Option<&'a str>,
+        num_updates_per_file: u16,
+        previous_info: Option<&'a str>,
+        config_bytes: Option<&[u8]>,
+        sorted_enabled_feature_flags: Option<EFFIt>,
+        sorted_disabled_feature_flags: Option<DFFIt>,
     ) -> IcechunkResult<Self> {
         let mut snapshots: Vec<_> = snapshots.into_iter().collect();
         snapshots.sort_by(|a, b| a.id.0.cmp(&b.id.0));
@@ -120,6 +156,11 @@ impl RepoInfo {
             metadata,
             update,
             backup_path,
+            num_updates_per_file,
+            previous_info,
+            config_bytes,
+            sorted_enabled_feature_flags,
+            sorted_disabled_feature_flags,
         )
     }
 
@@ -127,6 +168,8 @@ impl RepoInfo {
     fn from_parts<
         'a,
         I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
+        EFFIt: DoubleEndedIterator<Item = u16> + ExactSizeIterator,
+        DFFIt: DoubleEndedIterator<Item = u16> + ExactSizeIterator,
     >(
         spec_version: SpecVersionBin,
         sorted_tags: impl IntoIterator<Item = (&'a str, u32)>,
@@ -136,7 +179,13 @@ impl RepoInfo {
         metadata: &SnapshotProperties,
         update: UpdateInfo<I>,
         backup_path: Option<&'a str>,
+        num_updates_per_file: u16,
+        previous_info: Option<&'a str>,
+        config_bytes: Option<&[u8]>,
+        sorted_enabled_feature_flags: Option<EFFIt>,
+        sorted_disabled_feature_flags: Option<DFFIt>,
     ) -> IcechunkResult<Self> {
+        trace!("Creating new repo info from parts");
         let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
         let tags = sorted_tags
             .into_iter()
@@ -164,8 +213,13 @@ impl RepoInfo {
                 generated::Ref::create(&mut builder, &args)
             })
             .collect::<Vec<_>>();
-        // FIXME: shouldn't be assert
-        assert!(main_found);
+        if !main_found {
+            return Err(IcechunkFormatErrorKind::BranchNotFound {
+                branch: Ref::DEFAULT_BRANCH.to_string(),
+            }
+            .into());
+        }
+
         let branches = builder.create_vector(&branches);
 
         let deleted_tags = sorted_deleted_tags
@@ -259,8 +313,20 @@ impl RepoInfo {
 
         let metadata = builder.create_vector(metadata_items.as_slice());
 
-        let (latest_updates, repo_before_updates) =
-            Self::mk_latest_updates(&mut builder, update, backup_path)?;
+        let enabled_feature_flags =
+            sorted_enabled_feature_flags.map(|it| builder.create_vector_from_iter(it));
+        let disabled_feature_flags =
+            sorted_disabled_feature_flags.map(|it| builder.create_vector_from_iter(it));
+
+        let (latest_updates, repo_before_updates) = Self::mk_latest_updates(
+            &mut builder,
+            update,
+            backup_path,
+            num_updates_per_file,
+            previous_info,
+        )?;
+
+        let config = config_bytes.map(|bytes| builder.create_vector(bytes));
 
         // TODO: provide accessors for last_updated_at, status, metadata, etc.
         let repo_args = generated::RepoArgs {
@@ -273,6 +339,10 @@ impl RepoInfo {
             metadata: Some(metadata),
             latest_updates: Some(latest_updates),
             repo_before_updates,
+            config,
+            enabled_feature_flags,
+            disabled_feature_flags,
+            ..Default::default()
         };
         let repo = generated::Repo::create(&mut builder, &repo_args);
         builder.finish(repo, Some("Ichk"));
@@ -291,6 +361,8 @@ impl RepoInfo {
         builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
         update: UpdateInfo<I>,
         backup_path: Option<&'a str>,
+        num_updates_per_file: u16,
+        previous_info: Option<&'a str>,
     ) -> IcechunkResult<(
         WIPOffset<
             flatbuffers::Vector<
@@ -311,12 +383,27 @@ impl RepoInfo {
                 (ut, dt, backup_path)
             })
         });
-        // assert backup path is only present when there are previous updates
+        // A backup_path points to the previous repo info file. It is only meaningful
+        // when there are previous updates (you can't back up what doesn't exist).
+        // However, previous updates CAN exist without a backup_path: during migration,
+        // synthetic ops log entries are generated with no prior repo info file to
+        // reference. (This differs from RepoInitializedUpdate, which has neither
+        // previous updates nor a backup path.)
         assert!(
-            last_update.is_none() && backup_path.is_none()
-                || last_update.is_some() && backup_path.is_some(),
-            "A backup path must be provided if and only if there are previous updates"
+            backup_path.is_none() || last_update.is_some(),
+            "A backup path must not be provided without previous updates"
         );
+
+        // Reject updates whose timestamp is not strictly newer than the top of the ops log
+        if let Some(Ok((_, latest_time, _))) = &last_update
+            && update.update_time <= *latest_time
+        {
+            return Err(IcechunkFormatErrorKind::InvalidUpdateTimestamp {
+                latest_time: *latest_time,
+                new_time: update.update_time,
+            }
+            .into());
+        }
 
         let new_updates: Box<dyn Iterator<Item = _>> =
             if let Some(last_update) = last_update {
@@ -329,15 +416,18 @@ impl RepoInfo {
             };
 
         let all_updates = new_updates.into_iter().chain(previous_updates);
-        let mut repo_before_updates = None;
+        // If we didn't overflow (all previous updates fit in the new file),
+        // preserve the old file's chain pointer so older history remains reachable.
+        let mut repo_before_updates = previous_info;
 
+        let num_updates = num_updates_per_file as usize;
         let updates: Vec<_> = all_updates
-            .take(UPDATES_PER_FILE + 1)
+            .take(num_updates + 1)
             .enumerate()
             .map(|(idx, maybe_data)| maybe_data.map(|(d1, d2, d3)| (idx, d1, d2, d3)))
             .map(|maybe_data| {
                 let (idx, u_type, u_time, file) = maybe_data?;
-                if idx == UPDATES_PER_FILE {
+                if idx == num_updates {
                     repo_before_updates = file;
                 }
                 let (update_type_type, update_type) =
@@ -357,20 +447,28 @@ impl RepoInfo {
             .try_collect()?;
 
         debug_assert!(
-            updates.len() <= UPDATES_PER_FILE + 1,
+            updates.len() <= num_updates + 1,
             "Too many latest updates in repo file"
         );
 
-        let size = (UPDATES_PER_FILE - 1).min(updates.len() - 1);
+        let size = (num_updates - 1).min(updates.len() - 1);
         let updates = builder.create_vector(&updates[0..=size]);
         let repo_before_updates = repo_before_updates.map(|s| builder.create_string(s));
         Ok((updates, repo_before_updates))
     }
 
-    pub fn initial(spec_version: SpecVersionBin, snapshot: SnapshotInfo) -> Self {
-        let last_updated_at = snapshot.flushed_at;
+    pub fn initial(
+        spec_version: SpecVersionBin,
+        snapshot: SnapshotInfo,
+        num_updates_per_file: u16,
+        config: Option<&RepositoryConfig>,
+        update_time: Option<DateTime<Utc>>,
+    ) -> Self {
         #[allow(clippy::expect_used)]
+        let config_bytes =
+            config.map(|c| flexbuffers::to_vec(c).expect("Cannot serialize config"));
         // This method is basically constant, so it's OK to unwrap in it
+        #[allow(clippy::expect_used)]
         Self::from_parts(
             spec_version,
             [],
@@ -380,12 +478,36 @@ impl RepoInfo {
             &Default::default(),
             UpdateInfo {
                 update_type: UpdateType::RepoInitializedUpdate,
-                update_time: last_updated_at,
+                update_time: update_time.unwrap_or(Utc::now()),
                 previous_updates: [],
             },
             None,
+            num_updates_per_file,
+            None,
+            config_bytes.as_deref(),
+            None::<std::iter::Empty<u16>>,
+            None::<std::iter::Empty<u16>>,
         )
         .expect("Cannot generate initial snapshot")
+    }
+
+    /// Read the raw config bytes from the FlatBuffer (for pass-through in mutations).
+    pub(crate) fn config_bytes_raw(&self) -> IcechunkResult<Option<Vec<u8>>> {
+        Ok(self.root()?.config().map(|v| v.bytes().to_vec()))
+    }
+
+    /// Read the repository configuration from the repo info.
+    /// Returns `None` for repos created before config was embedded,
+    /// or for repos using the default configuration.
+    pub fn config(&self) -> IcechunkResult<Option<RepositoryConfig>> {
+        match self.root()?.config() {
+            None => Ok(None),
+            Some(config_fb) => {
+                let config: RepositoryConfig =
+                    flexbuffers::from_slice(config_fb.bytes()).map_err(Box::new)?;
+                Ok(Some(config))
+            }
+        }
     }
 
     pub fn metadata(&self) -> IcechunkResult<SnapshotProperties> {
@@ -400,6 +522,42 @@ impl RepoInfo {
                 Ok((key, value))
             })
             .try_collect()
+    }
+
+    pub fn enabled_feature_flags(
+        &self,
+    ) -> IcechunkResult<Option<impl DoubleEndedIterator<Item = u16> + ExactSizeIterator>>
+    {
+        Ok(self.root()?.enabled_feature_flags().map(|v| v.iter()))
+    }
+
+    pub fn disabled_feature_flags(
+        &self,
+    ) -> IcechunkResult<Option<impl DoubleEndedIterator<Item = u16> + ExactSizeIterator>>
+    {
+        Ok(self.root()?.disabled_feature_flags().map(|v| v.iter()))
+    }
+
+    /// None means not set, use the default value
+    /// Some(true) means enabled
+    /// Some(false) means disabled
+    pub fn feature_flag_enabled(&self, id: u16) -> IcechunkResult<Option<bool>> {
+        let root = self.root()?;
+        if root
+            .enabled_feature_flags()
+            .and_then(|v| v.lookup_by_key(id, |this, key| this.cmp(key)))
+            .is_some()
+        {
+            return Ok(Some(true));
+        }
+        if root
+            .disabled_feature_flags()
+            .and_then(|v| v.lookup_by_key(id, |this, key| this.cmp(key)))
+            .is_some()
+        {
+            return Ok(Some(false));
+        }
+        Ok(None)
     }
 
     fn all_tags(&self) -> IcechunkResult<impl Iterator<Item = (&str, u32)>> {
@@ -421,15 +579,89 @@ impl RepoInfo {
         Ok(root.snapshots().iter().map(move |snap| mk_snapshot_info(&root, &snap)))
     }
 
+    /// Doesn't check the validity of flag_id
+    pub fn update_feature_flag(
+        &self,
+        spec_version: SpecVersionBin,
+        flag_id: u16,
+        enabled: Option<bool>,
+        previous_file: &str,
+        num_updates_per_file: u16,
+    ) -> IcechunkResult<Self> {
+        let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+        let (eff, dff): (Option<Vec<_>>, Option<Vec<_>>) = match enabled {
+            Some(false) => {
+                let e = self
+                    .enabled_feature_flags()?
+                    .map(|it| it.filter(|x| *x != flag_id).collect());
+
+                let mut d: BTreeSet<_> = self
+                    .disabled_feature_flags()?
+                    .map(|it| it.collect())
+                    .unwrap_or_default();
+                d.insert(flag_id);
+                let d = d.into_iter().collect();
+                (e, Some(d))
+            }
+            Some(true) => {
+                let d = self
+                    .disabled_feature_flags()?
+                    .map(|it| it.filter(|x| *x != flag_id).collect());
+
+                let mut e: BTreeSet<_> = self
+                    .enabled_feature_flags()?
+                    .map(|it| it.collect())
+                    .unwrap_or_default();
+                e.insert(flag_id);
+                let e = e.into_iter().collect();
+                (Some(e), d)
+            }
+            None => {
+                let e = self
+                    .enabled_feature_flags()?
+                    .map(|it| it.filter(|x| *x != flag_id).collect());
+                let d = self
+                    .disabled_feature_flags()?
+                    .map(|it| it.filter(|x| *x != flag_id).collect());
+                (e, d)
+            }
+        };
+
+        Self::from_parts(
+            spec_version,
+            self.all_tags()?,
+            self.all_branches()?,
+            self.deleted_tags()?,
+            snaps,
+            &self.metadata()?,
+            UpdateInfo {
+                update_type: UpdateType::FeatureFlagChanged {
+                    id: flag_id,
+                    new_value: enabled,
+                },
+                update_time: Utc::now(),
+                previous_updates: self.latest_updates()?,
+            },
+            Some(previous_file),
+            num_updates_per_file,
+            self.repo_before_updates()?,
+            self.config_bytes_raw()?.as_deref(),
+            eff.map(|it| it.into_iter()),
+            dff.map(|it| it.into_iter()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn add_snapshot(
         &self,
         spec_version: SpecVersionBin,
         snap: SnapshotInfo,
         branch: Option<&str>,
         update_type: UpdateType,
+        update_time: Option<DateTime<Utc>>, // for testing
         previous_file: &str,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
-        let flushed_at = snap.flushed_at;
         let mut snapshots: Vec<_> = self.all_snapshots()?.try_collect()?;
         let new_index = match snapshots.binary_search_by_key(&&snap.id, |snap| &snap.id) {
             Ok(_) => Err(IcechunkFormatError::from(
@@ -464,10 +696,15 @@ impl RepoInfo {
             &self.metadata()?,
             UpdateInfo {
                 update_type,
-                update_time: flushed_at,
+                update_time: update_time.unwrap_or(Utc::now()),
                 previous_updates: self.latest_updates()?,
             },
             Some(previous_file),
+            num_updates_per_file,
+            self.repo_before_updates()?,
+            self.config_bytes_raw()?.as_deref(),
+            self.enabled_feature_flags()?,
+            self.disabled_feature_flags()?,
         )?;
         Ok(res)
     }
@@ -478,6 +715,7 @@ impl RepoInfo {
         name: &str,
         snap: &SnapshotId,
         previous_file: &str,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         if let Ok(snapshot_id) = self.resolve_branch(name) {
             return Err(IcechunkFormatErrorKind::BranchAlreadyExists {
@@ -508,6 +746,11 @@ impl RepoInfo {
                         previous_updates: self.latest_updates()?,
                     },
                     Some(previous_file),
+                    num_updates_per_file,
+                    self.repo_before_updates()?,
+                    self.config_bytes_raw()?.as_deref(),
+                    self.enabled_feature_flags()?,
+                    self.disabled_feature_flags()?,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -522,6 +765,7 @@ impl RepoInfo {
         spec_version: SpecVersionBin,
         name: &str,
         previous_file: &str,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         match self.resolve_branch(name) {
             Ok(previous_snap_id) => {
@@ -545,6 +789,11 @@ impl RepoInfo {
                         previous_updates: self.latest_updates()?,
                     },
                     Some(previous_file),
+                    num_updates_per_file,
+                    self.repo_before_updates()?,
+                    self.config_bytes_raw()?.as_deref(),
+                    self.enabled_feature_flags()?,
+                    self.disabled_feature_flags()?,
                 )
             }
             Err(IcechunkFormatError {
@@ -564,6 +813,7 @@ impl RepoInfo {
         name: &str,
         new_snap: &SnapshotId,
         previous_file: &str,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         let previous_snap_id = self.resolve_branch(name)?;
         match self.resolve_snapshot_index(new_snap)? {
@@ -588,6 +838,11 @@ impl RepoInfo {
                         previous_updates: self.latest_updates()?,
                     },
                     Some(previous_file),
+                    num_updates_per_file,
+                    self.repo_before_updates()?,
+                    self.config_bytes_raw()?.as_deref(),
+                    self.enabled_feature_flags()?,
+                    self.disabled_feature_flags()?,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -603,10 +858,16 @@ impl RepoInfo {
         name: &str,
         snap: &SnapshotId,
         previous_file: &str,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
-        if self.resolve_tag(name).is_ok() || self.tag_was_deleted(name)? {
-            // TODO: better error on tag already deleted
+        if self.resolve_tag(name).is_ok() {
             return Err(IcechunkFormatErrorKind::TagAlreadyExists {
+                tag: name.to_string(),
+            }
+            .into());
+        }
+        if self.tag_was_deleted(name)? {
+            return Err(IcechunkFormatErrorKind::TagPreviouslyDeleted {
                 tag: name.to_string(),
             }
             .into());
@@ -633,6 +894,11 @@ impl RepoInfo {
                         previous_updates: self.latest_updates()?,
                     },
                     Some(previous_file),
+                    num_updates_per_file,
+                    self.repo_before_updates()?,
+                    self.config_bytes_raw()?.as_deref(),
+                    self.enabled_feature_flags()?,
+                    self.disabled_feature_flags()?,
                 )?)
             }
             None => Err(IcechunkFormatErrorKind::SnapshotIdNotFound {
@@ -647,6 +913,7 @@ impl RepoInfo {
         spec_version: SpecVersionBin,
         name: &str,
         previous_file: &str,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         match self.resolve_tag(name) {
             Ok(previous_snap_id) => {
@@ -655,6 +922,7 @@ impl RepoInfo {
                 tags.retain(|(n, _)| n != &name);
 
                 let mut deleted_tags: BTreeSet<_> = self.deleted_tags()?.collect();
+                debug_assert!(!deleted_tags.contains(name));
                 deleted_tags.insert(name);
 
                 let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
@@ -674,6 +942,11 @@ impl RepoInfo {
                         previous_updates: self.latest_updates()?,
                     },
                     Some(previous_file),
+                    num_updates_per_file,
+                    self.repo_before_updates()?,
+                    self.config_bytes_raw()?.as_deref(),
+                    self.enabled_feature_flags()?,
+                    self.disabled_feature_flags()?,
                 )
             }
             Err(IcechunkFormatError {
@@ -691,6 +964,7 @@ impl RepoInfo {
         spec_version: SpecVersionBin,
         metadata: &SnapshotProperties,
         previous_file: &str,
+        num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
         let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
         Self::from_parts(
@@ -706,6 +980,42 @@ impl RepoInfo {
                 previous_updates: self.latest_updates()?,
             },
             Some(previous_file),
+            num_updates_per_file,
+            self.repo_before_updates()?,
+            self.config_bytes_raw()?.as_deref(),
+            self.enabled_feature_flags()?,
+            self.disabled_feature_flags()?,
+        )
+    }
+
+    /// Update the embedded configuration and record a ConfigChangedUpdate in the op log.
+    pub fn set_config(
+        &self,
+        spec_version: SpecVersionBin,
+        config: &RepositoryConfig,
+        previous_file: &str,
+        num_updates_per_file: u16,
+    ) -> IcechunkResult<Self> {
+        let config_bytes = flexbuffers::to_vec(config).map_err(Box::new)?;
+        let snaps: Vec<_> = self.all_snapshots()?.try_collect()?;
+        Self::from_parts(
+            spec_version,
+            self.all_tags()?,
+            self.all_branches()?,
+            self.deleted_tags()?,
+            snaps,
+            &self.metadata()?,
+            UpdateInfo {
+                update_type: UpdateType::ConfigChangedUpdate,
+                update_time: Utc::now(),
+                previous_updates: self.latest_updates()?,
+            },
+            Some(previous_file),
+            num_updates_per_file,
+            self.repo_before_updates()?,
+            Some(config_bytes.as_slice()),
+            self.enabled_feature_flags()?,
+            self.disabled_feature_flags()?,
         )
     }
 
@@ -872,14 +1182,20 @@ impl RepoInfo {
             }
             generated::UpdateType::NewCommitUpdate => {
                 let up = update.update_type_as_new_commit_update().unwrap();
-                Ok(UpdateType::NewCommitUpdate { branch: up.branch().to_string() })
+                let new_snap_id = SnapshotId::new(up.new_snap_id().0);
+                Ok(UpdateType::NewCommitUpdate {
+                    branch: up.branch().to_string(),
+                    new_snap_id,
+                })
             }
             generated::UpdateType::CommitAmendedUpdate => {
                 let up = update.update_type_as_commit_amended_update().unwrap();
                 let previous_snap_id = SnapshotId::new(up.previous_snap_id().0);
+                let new_snap_id = SnapshotId::new(up.new_snap_id().0);
                 Ok(UpdateType::CommitAmendedUpdate {
                     branch: up.branch().to_string(),
                     previous_snap_id,
+                    new_snap_id,
                 })
             }
             generated::UpdateType::NewDetachedSnapshotUpdate => {
@@ -890,6 +1206,13 @@ impl RepoInfo {
             generated::UpdateType::GCRanUpdate => Ok(UpdateType::GCRanUpdate),
             generated::UpdateType::ExpirationRanUpdate => {
                 Ok(UpdateType::ExpirationRanUpdate)
+            }
+            generated::UpdateType::FeatureFlagChangedUpdate => {
+                let up = update.update_type_as_feature_flag_changed_update().unwrap();
+                Ok(UpdateType::FeatureFlagChanged {
+                    id: up.id(),
+                    new_value: if up.is_set() { Some(up.new_value()) } else { None },
+                })
             }
             _ => Err(IcechunkFormatErrorKind::InvalidFlatBuffer(
                 flatbuffers::InvalidFlatbuffer::InconsistentUnion {
@@ -1126,26 +1449,34 @@ fn update_type_to_fb<'bldr>(
                 .as_union_value(),
             ))
         }
-        UpdateType::NewCommitUpdate { branch } => {
+        UpdateType::NewCommitUpdate { branch, new_snap_id } => {
             let branch = Some(builder.create_string(branch));
+            let object_id12 = generated::ObjectId12::new(&new_snap_id.0);
+            let new_snap_id = Some(&object_id12);
             Ok((
                 generated::UpdateType::NewCommitUpdate,
                 generated::NewCommitUpdate::create(
                     builder,
-                    &generated::NewCommitUpdateArgs { branch },
+                    &generated::NewCommitUpdateArgs { branch, new_snap_id },
                 )
                 .as_union_value(),
             ))
         }
-        UpdateType::CommitAmendedUpdate { branch, previous_snap_id } => {
+        UpdateType::CommitAmendedUpdate { branch, previous_snap_id, new_snap_id } => {
             let branch = Some(builder.create_string(branch));
             let object_id12 = generated::ObjectId12::new(&previous_snap_id.0);
             let previous_snap_id = Some(&object_id12);
+            let object_id12 = generated::ObjectId12::new(&new_snap_id.0);
+            let new_snap_id = Some(&object_id12);
             Ok((
                 generated::UpdateType::CommitAmendedUpdate,
                 generated::CommitAmendedUpdate::create(
                     builder,
-                    &generated::CommitAmendedUpdateArgs { branch, previous_snap_id },
+                    &generated::CommitAmendedUpdateArgs {
+                        branch,
+                        previous_snap_id,
+                        new_snap_id,
+                    },
                 )
                 .as_union_value(),
             ))
@@ -1175,6 +1506,18 @@ fn update_type_to_fb<'bldr>(
             )
             .as_union_value(),
         )),
+        UpdateType::FeatureFlagChanged { id, new_value } => Ok((
+            generated::UpdateType::FeatureFlagChangedUpdate,
+            generated::FeatureFlagChangedUpdate::create(
+                builder,
+                &generated::FeatureFlagChangedUpdateArgs {
+                    id: *id,
+                    new_value: new_value.unwrap_or_default(),
+                    is_set: new_value.is_some(),
+                },
+            )
+            .as_union_value(),
+        )),
     }
 }
 
@@ -1183,7 +1526,18 @@ fn update_type_to_fb<'bldr>(
 mod tests {
 
     use super::*;
+    use crate::roundtrip_serialization_tests;
+    use proptest::prelude::*;
     use std::collections::HashSet;
+
+    // Generates an instance of RepoInfo which may not deserialize to a valid repository
+    fn potentially_invalid_repo_info() -> impl Strategy<Value = RepoInfo> {
+        any::<Vec<u8>>().prop_map(|buffer| RepoInfo { buffer })
+    }
+
+    roundtrip_serialization_tests!(
+        serialize_and_deserialize_repo_info - potentially_invalid_repo_info
+    );
 
     #[test]
     fn test_add_snapshot() -> Result<(), Box<dyn std::error::Error>> {
@@ -1196,13 +1550,15 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1.clone());
+        let repo =
+            RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None, None);
         assert_eq!(repo.all_snapshots()?.next().unwrap().unwrap(), snap1);
 
         let id2 = SnapshotId::random();
         let snap2 = SnapshotInfo {
             id: id2.clone(),
             parent_id: Some(id1.clone()),
+            flushed_at: DateTime::from_timestamp_micros(2_000_000).unwrap(),
             message: "snap 2".to_string(),
             ..snap1.clone()
         };
@@ -1210,8 +1566,13 @@ mod tests {
             SpecVersionBin::current(),
             snap2.clone(),
             Some("main"),
-            UpdateType::NewCommitUpdate { branch: "main".to_string() },
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: snap2.id.clone(),
+            },
+            None,
             "foo/bar",
+            100,
         )?;
         assert_eq!(&repo.resolve_branch("main")?, &snap2.id);
         assert_eq!(repo.repo_before_updates()?, None);
@@ -1231,6 +1592,7 @@ mod tests {
         let snap3 = SnapshotInfo {
             id: id3.clone(),
             parent_id: Some(id2.clone()),
+            flushed_at: DateTime::from_timestamp_micros(3_000_000).unwrap(),
             message: "snap 3".to_string(),
             ..snap2.clone()
         };
@@ -1238,8 +1600,13 @@ mod tests {
             SpecVersionBin::current(),
             snap3.clone(),
             Some("main"),
-            UpdateType::NewCommitUpdate { branch: "main".to_string() },
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: snap3.id.clone(),
+            },
+            None,
             "foo",
+            100,
         )?;
         assert_eq!(&repo.resolve_branch("main")?, &snap3.id);
         let all: HashSet<_> = repo.all_snapshots()?.try_collect()?;
@@ -1270,15 +1637,17 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1.clone());
-        let repo = repo.add_branch(SpecVersionBin::current(), "foo", &id1, "foo")?;
-        let repo = repo.add_branch(SpecVersionBin::current(), "bar", &id1, "bar")?;
+        let repo =
+            RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None, None);
+        let repo = repo.add_branch(SpecVersionBin::current(), "foo", &id1, "foo", 100)?;
+        let repo = repo.add_branch(SpecVersionBin::current(), "bar", &id1, "bar", 100)?;
         assert!(matches!(
             repo.add_branch(
                 SpecVersionBin::current(),
                 "bad-snap",
                 &SnapshotId::random(),
-                "bad"
+                "bad",
+                100
             ),
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::SnapshotIdNotFound { .. },
@@ -1287,7 +1656,7 @@ mod tests {
         ));
         // cannot add existing
         assert!(matches!(
-            repo.add_branch(SpecVersionBin::current(), "bar", &id1, "/foo/bar"),
+            repo.add_branch(SpecVersionBin::current(), "bar", &id1, "/foo/bar", 100),
             Err(IcechunkFormatError {
                 kind: IcechunkFormatErrorKind::BranchAlreadyExists { .. },
                 ..
@@ -1303,23 +1672,30 @@ mod tests {
         let snap2 = SnapshotInfo {
             id: id2.clone(),
             parent_id: Some(id1.clone()),
+            flushed_at: Utc::now(),
             message: "snap 2".to_string(),
             ..snap1.clone()
         };
         let repo = repo.add_snapshot(
             SpecVersionBin::current(),
-            snap2,
+            snap2.clone(),
             Some("main"),
-            UpdateType::NewCommitUpdate { branch: "main".to_string() },
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: snap2.id.clone(),
+            },
+            None,
             "foo",
+            100,
         )?;
-        let repo = repo.add_branch(SpecVersionBin::current(), "baz", &id2, "/foo/bar")?;
+        let repo =
+            repo.add_branch(SpecVersionBin::current(), "baz", &id2, "/foo/bar", 100)?;
         assert_eq!(repo.resolve_branch("main")?, id2.clone());
         assert_eq!(repo.resolve_branch("foo")?, id1.clone());
         assert_eq!(repo.resolve_branch("bar")?, id1.clone());
         assert_eq!(repo.resolve_branch("baz")?, id2.clone());
 
-        let repo = repo.delete_branch(SpecVersionBin::current(), "bar", "bar")?;
+        let repo = repo.delete_branch(SpecVersionBin::current(), "bar", "bar", 100)?;
         assert!(repo.resolve_branch("bar").is_err());
         assert_eq!(
             repo.all_branches()?.map(|(n, _)| n).collect::<HashSet<_>>(),
@@ -1327,23 +1703,26 @@ mod tests {
         );
 
         assert!(
-            repo.delete_branch(SpecVersionBin::current(), "bad-branch", "bad").is_err()
+            repo.delete_branch(SpecVersionBin::current(), "bad-branch", "bad", 100)
+                .is_err()
         );
 
         // tags
-        let repo = repo.add_tag(SpecVersionBin::current(), "tag1", &id1, "tag1")?;
-        let repo = repo.add_tag(SpecVersionBin::current(), "tag2", &id2, "tag2")?;
+        let repo = repo.add_tag(SpecVersionBin::current(), "tag1", &id1, "tag1", 100)?;
+        let repo = repo.add_tag(SpecVersionBin::current(), "tag2", &id2, "tag2", 100)?;
         assert!(
             repo.add_tag(
                 SpecVersionBin::current(),
                 "bad-snap",
                 &SnapshotId::random(),
-                "bad"
+                "bad",
+                100
             )
             .is_err()
         );
         assert!(
-            repo.add_tag(SpecVersionBin::current(), "tag1", &id1, "tag1-again").is_err()
+            repo.add_tag(SpecVersionBin::current(), "tag1", &id1, "tag1-again", 100)
+                .is_err()
         );
         assert_eq!(repo.resolve_tag("tag1")?, id1.clone());
         assert_eq!(repo.resolve_tag("tag2")?, id2.clone());
@@ -1353,19 +1732,21 @@ mod tests {
         );
 
         // delete tags
-        let repo = repo.add_tag(SpecVersionBin::current(), "tag3", &id1, "tag3")?;
-        let repo = repo.delete_tag(SpecVersionBin::current(), "tag3", "delete-tag3")?;
+        let repo = repo.add_tag(SpecVersionBin::current(), "tag3", &id1, "tag3", 100)?;
+        let repo =
+            repo.delete_tag(SpecVersionBin::current(), "tag3", "delete-tag3", 100)?;
         assert_eq!(
             repo.all_tags()?.map(|(n, _)| n).collect::<HashSet<_>>(),
             ["tag1", "tag2"].into()
         );
         // cannot add deleted
         assert!(
-            repo.add_tag(SpecVersionBin::current(), "tag3", &id1, "tag3-again").is_err()
+            repo.add_tag(SpecVersionBin::current(), "tag3", &id1, "tag3-again", 100)
+                .is_err()
         );
         // cannot delete deleted
         assert!(
-            repo.delete_tag(SpecVersionBin::current(), "tag3", "delete-tag3-again")
+            repo.delete_tag(SpecVersionBin::current(), "tag3", "delete-tag3-again", 100)
                 .is_err()
         );
         assert_eq!(
@@ -1387,57 +1768,67 @@ mod tests {
             metadata: Default::default(),
         };
 
+        let num_updates_per_file: u16 = 10;
+        let n = num_updates_per_file as usize;
+
         // check updates for a new repo
-        let mut repo = RepoInfo::initial(SpecVersionBin::current(), snap1);
+        let mut repo = RepoInfo::initial(
+            SpecVersionBin::current(),
+            snap1,
+            num_updates_per_file,
+            None,
+            None,
+        );
         assert_eq!(repo.latest_updates()?.count(), 1);
         let (last_update, _, file) = repo.latest_updates()?.next().unwrap()?;
         assert!(file.is_none());
         assert_eq!(last_update, UpdateType::RepoInitializedUpdate);
         assert!(repo.repo_before_updates()?.is_none());
-
-        // check updates after UPDATES_PER_FILE changes
+        // check updates after num_updates_per_file changes
         // fill the first page of updates by adding branches
-        for i in 1..=(UPDATES_PER_FILE - 1) {
+        for i in 1..=(n - 1) {
             repo = repo.add_branch(
                 SpecVersionBin::current(),
                 i.to_string().as_str(),
                 &id1,
                 (i - 1).to_string().as_str(),
+                num_updates_per_file,
             )?
         }
 
-        assert_eq!(repo.latest_updates()?.count(), UPDATES_PER_FILE);
+        assert_eq!(repo.latest_updates()?.count(), n);
         let updates = repo.latest_updates()?;
 
         // check all other updates
         for (idx, update) in updates.enumerate() {
             let (update, _, file) = update?;
-            if idx == UPDATES_PER_FILE - 1 {
+            if idx == n - 1 {
                 assert_eq!(update, UpdateType::RepoInitializedUpdate);
                 assert_eq!(file, Some("0"));
             } else {
                 assert_eq!(
                     update,
-                    UpdateType::BranchCreatedUpdate {
-                        name: (UPDATES_PER_FILE - 1 - idx).to_string()
-                    }
+                    UpdateType::BranchCreatedUpdate { name: (n - 1 - idx).to_string() }
                 );
                 if idx == 0 {
                     assert!(file.is_none())
                 } else {
-                    assert_eq!(
-                        file,
-                        Some((UPDATES_PER_FILE - 1 - idx).to_string().as_str())
-                    );
+                    assert_eq!(file, Some((n - 1 - idx).to_string().as_str()));
                 }
             }
         }
         assert!(repo.repo_before_updates()?.is_none());
 
         // Now, if we add another change, it won't fit in the first "page" of repo updates
-        repo = repo.add_tag(SpecVersionBin::current(), "tag", &id1, "first-branches")?;
+        repo = repo.add_tag(
+            SpecVersionBin::current(),
+            "tag",
+            &id1,
+            "first-branches",
+            num_updates_per_file,
+        )?;
         // the file only contains the first "page" worth of updates
-        assert_eq!(repo.latest_updates()?.count(), UPDATES_PER_FILE);
+        assert_eq!(repo.latest_updates()?.count(), n);
         // next file is the oldest change
         assert_eq!(repo.repo_before_updates()?, Some("0"));
         let mut updates = repo.latest_updates()?;
@@ -1450,21 +1841,127 @@ mod tests {
         let (last_update, _, file) = updates.next().unwrap()?;
         assert_eq!(
             last_update,
-            UpdateType::BranchCreatedUpdate { name: "99".to_string() }
+            UpdateType::BranchCreatedUpdate { name: (n - 1).to_string() }
         );
         assert_eq!(file, Some("first-branches"));
 
         // all other changes are branch creation (repo creation is in the next page)
         for (idx, update) in updates.enumerate() {
             let (update, _, file) = update?;
-            assert_eq!(file, Some((UPDATES_PER_FILE - 2 - idx).to_string().as_str()));
+            assert_eq!(file, Some((n - 2 - idx).to_string().as_str()));
             assert_eq!(
                 update,
-                UpdateType::BranchCreatedUpdate {
-                    name: (UPDATES_PER_FILE - 2 - idx).to_string()
-                }
+                UpdateType::BranchCreatedUpdate { name: (n - 2 - idx).to_string() }
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_timestamp_ordering_rejected() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let flushed_at = DateTime::from_timestamp_micros(1_000_000).unwrap();
+        let id1 = SnapshotId::random();
+        let snap1 = SnapshotInfo {
+            id: id1.clone(),
+            parent_id: None,
+            flushed_at,
+            message: "snap 1".to_string(),
+            metadata: Default::default(),
+        };
+        let repo = RepoInfo::initial(
+            SpecVersionBin::current(),
+            snap1,
+            100,
+            None,
+            Some(flushed_at),
+        );
+
+        // Attempting add_snapshot with a timestamp equal to the top of the ops log
+        // should fail
+        let id2 = SnapshotId::random();
+        let snap2 = SnapshotInfo {
+            id: id2.clone(),
+            parent_id: Some(id1.clone()),
+            flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
+            message: "snap 2".to_string(),
+            metadata: Default::default(),
+        };
+        let result = repo.add_snapshot(
+            SpecVersionBin::current(),
+            snap2,
+            Some("main"),
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: id2.clone(),
+            },
+            Some(flushed_at),
+            "backup",
+            100,
+        );
+        assert!(matches!(
+            result,
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::InvalidUpdateTimestamp { .. },
+                ..
+            })
+        ));
+
+        // Attempting add_snapshot with a timestamp older than the top of the ops log
+        // should also fail
+        let flushed_at = DateTime::from_timestamp_micros(500_000).unwrap();
+        let id3 = SnapshotId::random();
+        let snap3 = SnapshotInfo {
+            id: id3.clone(),
+            parent_id: Some(id1.clone()),
+            flushed_at,
+            message: "snap 3".to_string(),
+            metadata: Default::default(),
+        };
+        let result = repo.add_snapshot(
+            SpecVersionBin::current(),
+            snap3,
+            Some("main"),
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: id3.clone(),
+            },
+            Some(flushed_at),
+            "backup",
+            100,
+        );
+        assert!(matches!(
+            result,
+            Err(IcechunkFormatError {
+                kind: IcechunkFormatErrorKind::InvalidUpdateTimestamp { .. },
+                ..
+            })
+        ));
+
+        // Attempting add_snapshot with a strictly newer timestamp should succeed
+        let flushed_at = DateTime::from_timestamp_micros(2_000_000).unwrap();
+        let id4 = SnapshotId::random();
+        let snap4 = SnapshotInfo {
+            id: id4.clone(),
+            parent_id: Some(id1.clone()),
+            flushed_at,
+            message: "snap 4".to_string(),
+            metadata: Default::default(),
+        };
+        let result = repo.add_snapshot(
+            SpecVersionBin::current(),
+            snap4,
+            Some("main"),
+            UpdateType::NewCommitUpdate {
+                branch: "main".to_string(),
+                new_snap_id: id4.clone(),
+            },
+            Some(flushed_at),
+            "backup",
+            100,
+        );
+        assert!(result.is_ok());
 
         Ok(())
     }

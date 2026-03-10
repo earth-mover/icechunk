@@ -141,7 +141,6 @@ impl PyStore {
     fn as_bytes(&self, py: Python<'_>) -> PyResult<Cow<'_, [u8]>> {
         // This is blocking function, we need to release the Gil
         py.detach(move || {
-            // FIXME: Use rmp_serde instead of serde_json to optimize performance
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let serialized =
                     self.0.as_bytes().await.map_err(PyIcechunkStoreError::from)?;
@@ -322,9 +321,8 @@ impl PyStore {
             let store = Arc::clone(&self.0);
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let location =
-                    VirtualChunkLocation::from_absolute_path(location.as_str())
-                        .map_err(PyIcechunkStoreError::from)?;
+                let location = VirtualChunkLocation::from_url(location.as_str())
+                    .map_err(PyIcechunkStoreError::from)?;
                 let virtual_ref = VirtualChunkRef {
                     location,
                     offset,
@@ -353,7 +351,7 @@ impl PyStore {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let location = VirtualChunkLocation::from_absolute_path(location.as_str())
+            let location = VirtualChunkLocation::from_url(location.as_str())
                 .map_err(PyIcechunkStoreError::from)?;
             let virtual_ref = VirtualChunkRef {
                 location,
@@ -385,10 +383,9 @@ impl PyStore {
                     .map(|vcs| {
                         let checksum = vcs.checksum();
                         let index = ChunkIndices(vcs.index);
-                        let location = VirtualChunkLocation::from_absolute_path(
-                            vcs.location.as_str(),
-                        )
-                        .map_err(PyIcechunkStoreError::from)?;
+                        let location =
+                            VirtualChunkLocation::from_url(vcs.location.as_str())
+                                .map_err(PyIcechunkStoreError::from)?;
                         let vref = VirtualChunkRef {
                             offset: vcs.offset,
                             length: vcs.length,
@@ -446,10 +443,9 @@ impl PyStore {
                     .map(|vcs| {
                         let checksum = vcs.checksum();
                         let index = ChunkIndices(vcs.index);
-                        let location = VirtualChunkLocation::from_absolute_path(
-                            vcs.location.as_str(),
-                        )
-                        .map_err(PyIcechunkStoreError::from)?;
+                        let location =
+                            VirtualChunkLocation::from_url(vcs.location.as_str())
+                                .map_err(PyIcechunkStoreError::from)?;
                         let vref = VirtualChunkRef {
                             offset: vcs.offset,
                             length: vcs.length,

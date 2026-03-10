@@ -1,3 +1,7 @@
+//! Branch and tag management.
+//!
+//! This module handles named references (branches and tags) that point to snapshots.
+
 use std::{collections::BTreeSet, future::ready, pin::Pin};
 
 use async_recursion::async_recursion;
@@ -68,9 +72,12 @@ impl From<StorageError> for RefError {
 
 pub type RefResult<A> = Result<A, RefError>;
 
+/// A named reference to a snapshot: either a branch or a tag.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum Ref {
+    /// Immutable reference to a specific snapshot.
     Tag(String),
+    /// Mutable reference that advances with new commits.
     Branch(String),
 }
 
@@ -120,6 +127,7 @@ impl Ref {
     }
 }
 
+/// Data stored for a reference: the snapshot ID it points to.
 #[serde_as]
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RefData {
@@ -481,7 +489,7 @@ pub async fn fetch_branch_tip(
     Ok(fetch_branch(storage, storage_settings, name).await?.0)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "object-store-fs"))]
 #[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::sync::Arc;
@@ -491,9 +499,12 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tempfile::{TempDir, tempdir};
 
-    use crate::storage::{new_in_memory_storage, new_local_filesystem_storage};
-
     use super::*;
+    use crate::storage::{new_in_memory_storage, new_local_filesystem_storage};
+    use crate::{roundtrip_serialization_tests, strategies::ref_data};
+    use proptest::prelude::*;
+
+    roundtrip_serialization_tests!(serialize_and_deserialize_ref_data - ref_data);
 
     /// Execute the passed block with all test implementations of Storage.
     ///
@@ -648,18 +659,12 @@ mod tests {
             delete_tag(storage.as_ref(), &storage_settings, "tag1").await?;
 
             // cannot delete twice
-            assert!(delete_tag(storage.as_ref(), &storage_settings, "tag1")
-                .await
-                .is_err());
+            assert!(delete_tag(storage.as_ref(), &storage_settings, "tag1").await.is_err());
 
             // we cannot delete non-existent tag
-            assert!(delete_tag(
-                storage.as_ref(),
-                &storage_settings,
-                "doesnt_exist",
-            )
-            .await
-            .is_err());
+            assert!(
+                delete_tag(storage.as_ref(), &storage_settings, "doesnt_exist",).await.is_err()
+            );
 
             // cannot recreate same tag
             matches!(create_tag(

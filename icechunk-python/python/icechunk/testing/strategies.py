@@ -1,7 +1,9 @@
 from collections.abc import Iterable
+from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 import hypothesis.strategies as st
+from packaging.version import Version
 
 import icechunk as ic
 import zarr
@@ -54,3 +56,29 @@ def splitting_configs(
                 key: draw(st.integers(min_value=1, max_value=size + 10))
             }
     return ic.ManifestSplittingConfig.from_dict(config_dict)
+
+
+@st.composite
+def repository_configs(
+    draw: st.DrawFn,
+    num_updates_per_repo_info_file: st.SearchStrategy[int] = st.integers(  # noqa: B008
+        min_value=1, max_value=5
+    ),
+    inline_chunk_threshold_bytes: st.SearchStrategy[int] | None = None,
+    splitting: st.SearchStrategy[ic.ManifestSplittingConfig] | None = None,
+    ic_module: ModuleType | None = None,
+) -> ic.RepositoryConfig:
+    ice = ic_module or ic
+    manifest = None
+    if splitting is not None:
+        manifest = ice.ManifestConfig(splitting=draw(splitting))
+    kwargs: dict[str, Any] = {
+        "inline_chunk_threshold_bytes": draw(inline_chunk_threshold_bytes)
+        if inline_chunk_threshold_bytes is not None
+        else None,
+        "manifest": manifest,
+    }
+    # num_updates_per_repo_info_file is v2-only
+    if Version(ice.__version__).major >= 2:
+        kwargs["num_updates_per_repo_info_file"] = draw(num_updates_per_repo_info_file)
+    return ice.RepositoryConfig(**kwargs)  # type: ignore[no-any-return]

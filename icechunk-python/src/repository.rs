@@ -12,14 +12,15 @@ use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Repository,
     config::Credentials,
+    feature_flags::FeatureFlag,
     format::{
-        SnapshotId,
+        ManifestId, SnapshotId,
         format_constants::SpecVersionBin,
         repo_info::UpdateType,
         snapshot::{ManifestFileInfo, SnapshotInfo, SnapshotProperties},
         transaction_log::Diff,
     },
-    inspect::snapshot_json,
+    inspect::{manifest_json, repo_info_json, snapshot_json},
     migrations,
     ops::{
         gc::{ExpiredRefAction, GCConfig, GCSummary, expire, garbage_collect},
@@ -40,7 +41,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::{
     config::{
         PyCredentials, PyRepositoryConfig, PyStorage, PyStorageSettings, datetime_repr,
-        format_option_to_string,
+        format_bool, format_option, format_option_to_string,
     },
     errors::PyIcechunkStoreError,
     impl_pickle,
@@ -305,6 +306,18 @@ impl From<Diff> for PyDiff {
 
 #[pymethods]
 impl PyDiff {
+    /// Returns true if the diff contains no changes.
+    pub fn is_empty(&self) -> bool {
+        self.new_groups.is_empty()
+            && self.new_arrays.is_empty()
+            && self.deleted_groups.is_empty()
+            && self.deleted_arrays.is_empty()
+            && self.updated_groups.is_empty()
+            && self.updated_arrays.is_empty()
+            && self.updated_chunks.is_empty()
+            && self.moved_nodes.is_empty()
+    }
+
     #[allow(clippy::unwrap_used)]
     pub fn __repr__(&self) -> String {
         let mut res = String::new();
@@ -434,9 +447,87 @@ impl PyGCSummary {
 
 impl_pickle!(PyGCSummary);
 
-#[pyclass(name = "UpdateType", eq, subclass)]
+#[pyclass(name = "UpdateType", eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum PyUpdateType {
+    BranchCreated { name: String },
+    BranchDeleted { name: String, previous_snap_id: String },
+    BranchReset { name: String, previous_snap_id: String },
+    CommitAmended { branch: String, previous_snap_id: String, new_snap_id: String },
+    ConfigChanged {},
+    ExpirationRan {},
+    FeatureFlagChanged { id: u16, new_value: Option<bool> },
+    GCRan {},
+    MetadataChanged {},
+    NewCommit { branch: String, new_snap_id: String },
+    NewDetachedSnapshot { new_snap_id: String },
+    RepoInitialized {},
+    RepoMigrated { from_version: u8, to_version: u8 },
+    TagCreated { name: String },
+    TagDeleted { name: String, previous_snap_id: String },
+}
+
+#[pymethods]
+impl PyUpdateType {
+    fn __repr__(&self) -> Cow<'static, str> {
+        match self {
+            Self::RepoInitialized {} => "RepoInitialized()".into(),
+            Self::ConfigChanged {} => "ConfigChanged()".into(),
+            Self::MetadataChanged {} => "MetadataChanged()".into(),
+            Self::TagCreated { name } => format!("TagCreated(name={})", name).into(),
+            Self::TagDeleted { name, previous_snap_id } => format!(
+                "TagDeleted(name={}, previous_snap_id={})",
+                name, previous_snap_id
+            )
+            .into(),
+            Self::BranchCreated { name } => {
+                format!("BranchCreated(name={})", name).into()
+            }
+            Self::BranchDeleted { name, previous_snap_id } => format!(
+                "BranchDeleted(name={}, previous_snap_id={})",
+                name, previous_snap_id
+            )
+            .into(),
+            Self::BranchReset { name, previous_snap_id } => format!(
+                "BranchReset(name={}, previous_snap_id={})",
+                name, previous_snap_id
+            )
+            .into(),
+            Self::NewCommit { branch, new_snap_id } => {
+                format!("NewCommit(branch={}, new_snap_id={})", branch, new_snap_id)
+                    .into()
+            }
+            Self::CommitAmended { branch, previous_snap_id, new_snap_id } => format!(
+                "CommitAmended(branch={}, previous_snap_id={}, new_snap_id={})",
+                branch, previous_snap_id, new_snap_id,
+            )
+            .into(),
+            Self::RepoMigrated { from_version, to_version } => format!(
+                "RepoMigrated(from_version={}, to_version={})",
+                from_version, to_version
+            )
+            .into(),
+            Self::GCRan {} => "GCRan()".into(),
+            Self::FeatureFlagChanged { id, new_value } => format!(
+                "FeatureFlagChanged(id={}, new_value={})",
+                id,
+                format_option(new_value.map(format_bool))
+            )
+            .into(),
+            Self::ExpirationRan {} => "ExpirationRan()".into(),
+            Self::NewDetachedSnapshot { new_snap_id } => {
+                format!("NewDetachedSnapshot(new_snap_id={})", new_snap_id).into()
+            }
+        }
+    }
+}
+
+#[pyclass(name = "Update")]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyUpdateType {
+pub(crate) struct PyUpdate {
+    #[pyo3(get)]
+    kind: PyUpdateType,
+
     #[pyo3(get)]
     updated_at: DateTime<Utc>,
 
@@ -444,206 +535,61 @@ pub(crate) struct PyUpdateType {
     backup_path: Option<String>,
 }
 
-#[pyclass(name = "RepoInitializedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyRepoInitializedUpdate;
-
-#[pyclass(name = "RepoMigratedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyRepoMigratedUpdate {
-    #[pyo3(get)]
-    from_version: u8,
-    #[pyo3(get)]
-    to_version: u8,
-}
-
-#[pyclass(name = "ConfigChangedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyConfigChangedUpdate;
-
-#[pyclass(name = "MetadataChangedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyMetadataChangedUpdate;
-
-#[pyclass(name = "GCRanUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyGCRanUpdate;
-
-#[pyclass(name = "ExpirationRanUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyExpirationRanUpdate;
-
-#[pyclass(name = "TagCreatedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyTagCreatedUpdate {
-    #[pyo3(get)]
-    name: String,
-}
-
-#[pyclass(name = "BranchCreatedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyBranchCreatedUpdate {
-    #[pyo3(get)]
-    name: String,
-}
-
-#[pyclass(name = "TagDeletedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyTagDeletedUpdate {
-    #[pyo3(get)]
-    name: String,
-    #[pyo3(get)]
-    previous_snap_id: String,
-}
-
-#[pyclass(name = "BranchDeletedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyBranchDeletedUpdate {
-    #[pyo3(get)]
-    name: String,
-    #[pyo3(get)]
-    previous_snap_id: String,
-}
-
-#[pyclass(name = "BranchResetUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyBranchResetUpdate {
-    #[pyo3(get)]
-    name: String,
-    #[pyo3(get)]
-    previous_snap_id: String,
-}
-
-#[pyclass(name = "NewCommitUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyNewCommitUpdate {
-    #[pyo3(get)]
-    branch: String,
-}
-
-#[pyclass(name = "CommitAmendedUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyCommitAmendedUpdate {
-    #[pyo3(get)]
-    branch: String,
-    #[pyo3(get)]
-    previous_snap_id: String,
-}
-
-#[pyclass(name = "NewDetachedSnapshotUpdate", eq, extends=PyUpdateType)]
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PyNewDetachedSnapshotUpdate {
-    #[pyo3(get)]
-    new_snap_id: String,
-}
-
 #[pymethods]
-impl PyRepoInitializedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok("RepoInitializedUpdate()".to_string())
+impl PyUpdate {
+    fn __repr__(&self) -> Cow<'static, str> {
+        format!(
+            "Update(kind={}, updated_at='{}', backup_path={:?})",
+            self.kind.__repr__(),
+            self.updated_at,
+            self.backup_path
+        )
+        .into()
     }
 }
 
-#[pymethods]
-impl PyConfigChangedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok("ConfigChangedUpdate()".to_string())
-    }
+#[pyclass(name = "FeatureFlag", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PyFeatureFlag {
+    #[pyo3(get)]
+    id: u16,
+    #[pyo3(get)]
+    name: String,
+    #[pyo3(get)]
+    default_enabled: bool,
+    #[pyo3(get)]
+    setting: Option<bool>,
+    #[pyo3(get)]
+    enabled: bool,
 }
 
 #[pymethods]
-impl PyMetadataChangedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok("MetadataChangedUpdate()".to_string())
-    }
-}
-
-#[pymethods]
-impl PyTagCreatedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!("TagCreatedUpdate(name={})", self.name))
-    }
-}
-
-#[pymethods]
-impl PyTagDeletedUpdate {
+impl PyFeatureFlag {
     fn __repr__(&self) -> PyResult<String> {
         Ok(format!(
-            "TagDeletedUpdate(name={}, previous_snap_id={})",
-            self.name, self.previous_snap_id
+            "FeatureFlag(id={}, name={}, default_enabled={}, setting={}, enabled={})",
+            self.id,
+            self.name,
+            format_bool(self.default_enabled),
+            format_option(self.setting.map(format_bool)),
+            format_bool(self.enabled),
         ))
     }
 }
 
-#[pymethods]
-impl PyBranchCreatedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!("BranchCreatedUpdate(name={})", self.name))
+impl From<FeatureFlag> for PyFeatureFlag {
+    fn from(flag: FeatureFlag) -> Self {
+        Self {
+            id: flag.id(),
+            name: flag.name().to_string(),
+            default_enabled: flag.default_enabled(),
+            setting: flag.setting(),
+            enabled: flag.enabled(),
+        }
     }
 }
 
-#[pymethods]
-impl PyBranchDeletedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!(
-            "BranchDeletedUpdate(name={}, previous_snap_id={})",
-            self.name, self.previous_snap_id
-        ))
-    }
-}
-
-#[pymethods]
-impl PyBranchResetUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!(
-            "BranchResetUpdate(name={}, previous_snap_id={})",
-            self.name, self.previous_snap_id
-        ))
-    }
-}
-
-#[pymethods]
-impl PyNewCommitUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!("NewCommitUpdate(branch={})", self.branch))
-    }
-}
-
-#[pymethods]
-impl PyCommitAmendedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!(
-            "CommitAmendedUpdate(branch={}, previous_snap_id={})",
-            self.branch, self.previous_snap_id
-        ))
-    }
-}
-
-#[pymethods]
-impl PyRepoMigratedUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!(
-            "RepoMigratedUpdate(from_version={}, to_version={})",
-            self.from_version, self.to_version
-        ))
-    }
-}
-
-#[pymethods]
-impl PyGCRanUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok("GCRanUpdate()".to_string())
-    }
-}
-
-#[pymethods]
-impl PyExpirationRanUpdate {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok("ExpirationRanUpdate()".to_string())
-    }
-}
-
-fn mk_update_type(
+fn mk_update(
     update: &UpdateType,
     updated_at: DateTime<Utc>,
     backup_path: Option<String>,
@@ -652,126 +598,173 @@ fn mk_update_type(
         let res = match update {
             UpdateType::RepoInitializedUpdate => Bound::new(
                 py,
-                (PyRepoInitializedUpdate, PyUpdateType { updated_at, backup_path }),
+                PyUpdate {
+                    kind: PyUpdateType::RepoInitialized {},
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::RepoMigratedUpdate { from_version, to_version } => Bound::new(
                 py,
-                (
-                    PyRepoMigratedUpdate {
+                PyUpdate {
+                    kind: PyUpdateType::RepoMigrated {
                         from_version: *from_version as u8,
                         to_version: *to_version as u8,
                     },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::ConfigChangedUpdate => Bound::new(
                 py,
-                (PyConfigChangedUpdate, PyUpdateType { updated_at, backup_path }),
+                PyUpdate {
+                    kind: PyUpdateType::ConfigChanged {},
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::MetadataChangedUpdate => Bound::new(
                 py,
-                (PyMetadataChangedUpdate, PyUpdateType { updated_at, backup_path }),
+                PyUpdate {
+                    kind: PyUpdateType::MetadataChanged {},
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::TagCreatedUpdate { name } => Bound::new(
                 py,
-                (
-                    PyTagCreatedUpdate { name: name.clone() },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                PyUpdate {
+                    kind: PyUpdateType::TagCreated { name: name.clone() },
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::TagDeletedUpdate { name, previous_snap_id } => Bound::new(
                 py,
-                (
-                    PyTagDeletedUpdate {
+                PyUpdate {
+                    kind: PyUpdateType::TagDeleted {
                         name: name.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::BranchCreatedUpdate { name } => Bound::new(
                 py,
-                (
-                    PyBranchCreatedUpdate { name: name.clone() },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                PyUpdate {
+                    kind: PyUpdateType::BranchCreated { name: name.clone() },
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::BranchDeletedUpdate { name, previous_snap_id } => Bound::new(
                 py,
-                (
-                    PyBranchDeletedUpdate {
+                PyUpdate {
+                    kind: PyUpdateType::BranchDeleted {
                         name: name.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
             UpdateType::BranchResetUpdate { name, previous_snap_id } => Bound::new(
                 py,
-                (
-                    PyBranchResetUpdate {
+                PyUpdate {
+                    kind: PyUpdateType::BranchReset {
                         name: name.clone(),
                         previous_snap_id: previous_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
-            UpdateType::NewCommitUpdate { branch } => Bound::new(
+            UpdateType::NewCommitUpdate { branch, new_snap_id } => Bound::new(
                 py,
-                (
-                    PyNewCommitUpdate { branch: branch.clone() },
-                    PyUpdateType { updated_at, backup_path },
-                ),
-            )?
-            .into_any()
-            .unbind(),
-            UpdateType::CommitAmendedUpdate { branch, previous_snap_id } => Bound::new(
-                py,
-                (
-                    PyCommitAmendedUpdate {
+                PyUpdate {
+                    kind: PyUpdateType::NewCommit {
                         branch: branch.clone(),
-                        previous_snap_id: previous_snap_id.to_string(),
+                        new_snap_id: new_snap_id.to_string(),
                     },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
+            UpdateType::CommitAmendedUpdate { branch, previous_snap_id, new_snap_id } => {
+                Bound::new(
+                    py,
+                    PyUpdate {
+                        kind: PyUpdateType::CommitAmended {
+                            branch: branch.clone(),
+                            previous_snap_id: previous_snap_id.to_string(),
+                            new_snap_id: new_snap_id.to_string(),
+                        },
+                        updated_at,
+                        backup_path,
+                    },
+                )?
+                .into_any()
+                .unbind()
+            }
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id } => Bound::new(
                 py,
-                (
-                    PyNewDetachedSnapshotUpdate { new_snap_id: new_snap_id.to_string() },
-                    PyUpdateType { updated_at, backup_path },
-                ),
+                PyUpdate {
+                    kind: PyUpdateType::NewDetachedSnapshot {
+                        new_snap_id: new_snap_id.to_string(),
+                    },
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
-            UpdateType::GCRanUpdate => {
-                Bound::new(py, (PyGCRanUpdate, PyUpdateType { updated_at, backup_path }))?
-                    .into_any()
-                    .unbind()
-            }
+            UpdateType::GCRanUpdate => Bound::new(
+                py,
+                PyUpdate { kind: PyUpdateType::GCRan {}, updated_at, backup_path },
+            )?
+            .into_any()
+            .unbind(),
             UpdateType::ExpirationRanUpdate => Bound::new(
                 py,
-                (PyExpirationRanUpdate, PyUpdateType { updated_at, backup_path }),
+                PyUpdate {
+                    kind: PyUpdateType::ExpirationRan {},
+                    updated_at,
+                    backup_path,
+                },
+            )?
+            .into_any()
+            .unbind(),
+            UpdateType::FeatureFlagChanged { id, new_value } => Bound::new(
+                py,
+                PyUpdate {
+                    kind: PyUpdateType::FeatureFlagChanged {
+                        id: *id,
+                        new_value: *new_value,
+                    },
+                    updated_at,
+                    backup_path,
+                },
             )?
             .into_any()
             .unbind(),
@@ -789,14 +782,32 @@ impl PyRepository {
         py: Python<'_>,
         dry_run: bool,
         delete_unused_v1_files: bool,
-    ) -> PyResult<()> {
+        prefetch_concurrency: Option<usize>,
+    ) -> PyResult<Self> {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let mut repo = self.0.write().await;
-                migrations::migrate_1_to_2(&mut repo, dry_run, delete_unused_v1_files)
+                let repo = self.0.read().await;
+                let storage = repo.storage().clone();
+                let config = Some(repo.config().clone());
+                drop(repo);
+
+                let fresh = Repository::open(config, storage.clone(), Default::default())
                     .await
-                    .map_err(PyIcechunkStoreError::MigrationError)?;
-                Ok(())
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                migrations::migrate_1_to_2(
+                    fresh,
+                    dry_run,
+                    delete_unused_v1_files,
+                    prefetch_concurrency,
+                )
+                .await
+                .map_err(PyIcechunkStoreError::MigrationError)?;
+
+                // Reopen to get a fresh repo with the correct spec version
+                let reopened = Repository::open(None, storage, Default::default())
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(Self(Arc::new(RwLock::new(reopened))))
             })
         })
     }
@@ -807,7 +818,7 @@ impl PyRepository {
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = true))]
     fn create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -815,6 +826,7 @@ impl PyRepository {
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
         spec_version: Option<u8>,
+        check_clean_root: bool,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -834,6 +846,7 @@ impl PyRepository {
                         storage.0,
                         map_credentials(authorize_virtual_chunk_access),
                         version,
+                        check_clean_root,
                     )
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)
@@ -844,7 +857,7 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, spec_version = None, check_clean_root = true))]
     fn create_async<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
@@ -852,6 +865,7 @@ impl PyRepository {
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
         spec_version: Option<u8>,
+        check_clean_root: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
@@ -869,6 +883,7 @@ impl PyRepository {
                 storage.0,
                 authorize_virtual_chunk_access,
                 version,
+                check_clean_root,
             )
             .await
             .map_err(PyIcechunkStoreError::RepositoryError)?;
@@ -929,7 +944,7 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None, check_clean_root = true))]
     fn open_or_create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -937,6 +952,7 @@ impl PyRepository {
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
         create_version: Option<u8>,
+        check_clean_root: bool,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -957,6 +973,7 @@ impl PyRepository {
                             storage.0,
                             map_credentials(authorize_virtual_chunk_access),
                             version,
+                            check_clean_root,
                         )
                         .await
                         .map_err(PyIcechunkStoreError::RepositoryError)?,
@@ -968,7 +985,7 @@ impl PyRepository {
     }
 
     #[classmethod]
-    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None))]
+    #[pyo3(signature = (storage, *, config = None, authorize_virtual_chunk_access = None, create_version = None, check_clean_root = true))]
     fn open_or_create_async<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
@@ -976,6 +993,7 @@ impl PyRepository {
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
         create_version: Option<u8>,
+        check_clean_root: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
             config.map(|c| c.try_into().map_err(PyValueError::new_err)).transpose()?;
@@ -993,6 +1011,7 @@ impl PyRepository {
                 storage.0,
                 authorize_virtual_chunk_access,
                 version,
+                check_clean_root,
             )
             .await
             .map_err(PyIcechunkStoreError::RepositoryError)?;
@@ -1001,11 +1020,17 @@ impl PyRepository {
     }
 
     #[staticmethod]
-    fn exists(py: Python<'_>, storage: PyStorage) -> PyResult<bool> {
+    #[pyo3(signature = (storage, storage_settings=None))]
+    fn exists(
+        py: Python<'_>,
+        storage: PyStorage,
+        storage_settings: Option<Py<PyStorageSettings>>,
+    ) -> PyResult<bool> {
+        let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let exists = Repository::exists(storage.0)
+                let exists = Repository::exists(storage.0, settings)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
                 Ok(exists)
@@ -1014,12 +1039,53 @@ impl PyRepository {
     }
 
     #[staticmethod]
-    fn exists_async(py: Python<'_>, storage: PyStorage) -> PyResult<Bound<'_, PyAny>> {
+    #[pyo3(signature = (storage, storage_settings=None))]
+    fn exists_async(
+        py: Python<'_>,
+        storage: PyStorage,
+        storage_settings: Option<Py<PyStorageSettings>>,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let exists = Repository::exists(storage.0)
+            let exists = Repository::exists(storage.0, settings)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(exists)
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (storage, storage_settings=None))]
+    fn fetch_spec_version(
+        py: Python<'_>,
+        storage: PyStorage,
+        storage_settings: Option<Py<PyStorageSettings>>,
+    ) -> PyResult<Option<u8>> {
+        let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
+        // This function calls block_on, so we need to allow other thread python to make progress
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let spec_version = Repository::fetch_spec_version(storage.0, settings)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(spec_version.map(|v| v as u8))
+            })
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (storage, storage_settings=None))]
+    fn fetch_spec_version_async(
+        py: Python<'_>,
+        storage: PyStorage,
+        storage_settings: Option<Py<PyStorageSettings>>,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
+        pyo3_async_runtimes::tokio::future_into_py::<_, Option<u8>>(py, async move {
+            let spec_version = Repository::fetch_spec_version(storage.0, settings)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(spec_version.map(|v| v as u8))
         })
     }
 
@@ -1307,6 +1373,154 @@ impl PyRepository {
         })
     }
 
+    pub(crate) fn feature_flags(&self, py: Python<'_>) -> PyResult<Vec<PyFeatureFlag>> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let flags: Vec<PyFeatureFlag> = self
+                    .0
+                    .read()
+                    .await
+                    .feature_flags()
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?
+                    .map(PyFeatureFlag::from)
+                    .collect();
+                Ok(flags)
+            })
+        })
+    }
+
+    pub(crate) fn feature_flags_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let flags: Vec<PyFeatureFlag> = repository
+                .read()
+                .await
+                .feature_flags()
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?
+                .map(PyFeatureFlag::from)
+                .collect();
+            Ok(flags)
+        })
+    }
+
+    pub(crate) fn enabled_feature_flags(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<Vec<PyFeatureFlag>> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let flags: Vec<PyFeatureFlag> = self
+                    .0
+                    .read()
+                    .await
+                    .enabled_feature_flags()
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?
+                    .map(PyFeatureFlag::from)
+                    .collect();
+                Ok(flags)
+            })
+        })
+    }
+
+    pub(crate) fn enabled_feature_flags_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let flags: Vec<PyFeatureFlag> = repository
+                .read()
+                .await
+                .enabled_feature_flags()
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?
+                .map(PyFeatureFlag::from)
+                .collect();
+            Ok(flags)
+        })
+    }
+
+    pub(crate) fn disabled_feature_flags(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<Vec<PyFeatureFlag>> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let flags: Vec<PyFeatureFlag> = self
+                    .0
+                    .read()
+                    .await
+                    .disabled_feature_flags()
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?
+                    .map(PyFeatureFlag::from)
+                    .collect();
+                Ok(flags)
+            })
+        })
+    }
+
+    pub(crate) fn disabled_feature_flags_async<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let flags: Vec<PyFeatureFlag> = repository
+                .read()
+                .await
+                .disabled_feature_flags()
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?
+                .map(PyFeatureFlag::from)
+                .collect();
+            Ok(flags)
+        })
+    }
+
+    pub(crate) fn set_feature_flag(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        setting: Option<bool>,
+    ) -> PyResult<()> {
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                self.0
+                    .read()
+                    .await
+                    .set_feature_flag(name, setting)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(())
+            })
+        })
+    }
+
+    pub(crate) fn set_feature_flag_async<'py>(
+        &'py self,
+        py: Python<'py>,
+        name: String,
+        setting: Option<bool>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            repository
+                .read()
+                .await
+                .set_feature_flag(&name, setting)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(())
+        })
+    }
+
     /// Returns an object that is both a sync and an async iterator
     #[pyo3(signature = (*, branch = None, tag = None, snapshot_id = None))]
     pub(crate) fn async_ancestry(
@@ -1345,13 +1559,12 @@ impl PyRepository {
             let ops = pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move {
                     let repo = self.0.read().await;
-                    repo.ops_log().await
+                    repo.ops_log().await.map(|(stream, _, _)| stream)
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?
                 .map_err(PyIcechunkStoreError::RepositoryError)
                 .and_then(|(ts, update, repo_path)| async move {
-                    mk_update_type(&update, ts, repo_path)
-                        .map_err(PyIcechunkStoreError::from)
+                    mk_update(&update, ts, repo_path).map_err(PyIcechunkStoreError::from)
                 });
 
             let prepared_list = Arc::new(Mutex::new(ops.err_into().boxed()));
@@ -2006,7 +2219,7 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, branch, metadata=None))]
+    #[pyo3(signature = (message, *, branch, metadata=None))]
     pub(crate) fn rewrite_manifests(
         &self,
         py: Python<'_>,
@@ -2034,7 +2247,7 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, branch, metadata=None))]
+    #[pyo3(signature = (message, *, branch, metadata=None))]
     fn rewrite_manifests_async<'py>(
         &'py self,
         py: Python<'py>,
@@ -2046,6 +2259,7 @@ impl PyRepository {
         let message = message.to_owned();
         let branch = branch.to_owned();
         let metadata = metadata.map(|m| m.into());
+
         pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
             let repository = repository.read().await;
             // TODO: make commit method selectable
@@ -2080,9 +2294,10 @@ impl PyRepository {
         py.detach(move || {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                    let asset_manager = {
+                    let (asset_manager, num_updates) = {
                         let lock = self.0.read().await;
-                        Arc::clone(lock.asset_manager())
+                        let num_updates = lock.config().num_updates_per_repo_info_file();
+                        (Arc::clone(lock.asset_manager()), num_updates)
                     };
 
                     let result = expire(
@@ -2098,6 +2313,8 @@ impl PyRepository {
                         } else {
                             ExpiredRefAction::Ignore
                         },
+                        None,
+                        num_updates,
                     )
                     .await
                     .map_err(PyIcechunkStoreError::GCError)?;
@@ -2124,9 +2341,10 @@ impl PyRepository {
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py::<_, HashSet<String>>(py, async move {
-            let asset_manager = {
+            let (asset_manager, num_updates) = {
                 let lock = repository.read().await;
-                Arc::clone(lock.asset_manager())
+                let num_updates = lock.config().num_updates_per_repo_info_file();
+                (Arc::clone(lock.asset_manager()), num_updates)
             };
 
             let result = expire(
@@ -2142,6 +2360,8 @@ impl PyRepository {
                 } else {
                     ExpiredRefAction::Ignore
                 },
+                None,
+                num_updates,
             )
             .await
             .map_err(PyIcechunkStoreError::GCError)?;
@@ -2171,13 +2391,15 @@ impl PyRepository {
                         max_concurrent_manifest_fetches,
                         dry_run,
                     );
-                    let asset_manager = {
+                    let (asset_manager, num_updates) = {
                         let lock = self.0.read().await;
-                        Arc::clone(lock.asset_manager())
+                        let num_updates = lock.config().num_updates_per_repo_info_file();
+                        (Arc::clone(lock.asset_manager()), num_updates)
                     };
-                    let result = garbage_collect(asset_manager, &gc_config)
-                        .await
-                        .map_err(PyIcechunkStoreError::GCError)?;
+                    let result =
+                        garbage_collect(asset_manager, &gc_config, None, num_updates)
+                            .await
+                            .map_err(PyIcechunkStoreError::GCError)?;
                     Ok::<_, PyIcechunkStoreError>(result.into())
                 })?;
 
@@ -2205,11 +2427,12 @@ impl PyRepository {
                 max_concurrent_manifest_fetches,
                 dry_run,
             );
-            let asset_manager = {
+            let (asset_manager, num_updates) = {
                 let lock = repository.read().await;
-                Arc::clone(lock.asset_manager())
+                let num_updates = lock.config().num_updates_per_repo_info_file();
+                (Arc::clone(lock.asset_manager()), num_updates)
             };
-            let result = garbage_collect(asset_manager, &gc_config)
+            let result = garbage_collect(asset_manager, &gc_config, None, num_updates)
                 .await
                 .map_err(PyIcechunkStoreError::GCError)?;
             Ok(result.into())
@@ -2304,6 +2527,70 @@ impl PyRepository {
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             let res = snapshot_json(lock.asset_manager(), &snap, pretty)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(res)
+        })
+    }
+
+    #[pyo3(signature = (*, pretty = true))]
+    fn inspect_repo_info(&self, pretty: bool) -> PyResult<String> {
+        let result = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(async move {
+                let lock = self.0.read().await;
+                let res = repo_info_json(lock.asset_manager(), pretty).await?;
+                Ok(res)
+            })
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
+        Ok(result)
+    }
+
+    #[pyo3(signature = (*, pretty = true))]
+    fn inspect_repo_info_async<'py>(
+        &self,
+        py: Python<'py>,
+        pretty: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let lock = repository.read().await;
+            let res = repo_info_json(lock.asset_manager(), pretty)
+                .await
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            Ok(res)
+        })
+    }
+
+    #[pyo3(signature = (manifest_id, *, pretty = true))]
+    fn inspect_manifest(&self, manifest_id: String, pretty: bool) -> PyResult<String> {
+        let result = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(async move {
+                let lock = self.0.read().await;
+                let id = ManifestId::try_from(manifest_id.as_str())
+                    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+                let res = manifest_json(lock.asset_manager(), &id, pretty).await?;
+                Ok(res)
+            })
+            .map_err(PyIcechunkStoreError::RepositoryError)?;
+        Ok(result)
+    }
+
+    #[pyo3(signature = (manifest_id, *, pretty = true))]
+    fn inspect_manifest_async<'py>(
+        &self,
+        py: Python<'py>,
+        manifest_id: String,
+        pretty: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let repository = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let lock = repository.read().await;
+            let id = ManifestId::try_from(manifest_id.as_str())
+                .map_err(|e| {
+                    RepositoryError::from(RepositoryErrorKind::Other(e.to_string()))
+                })
+                .map_err(PyIcechunkStoreError::RepositoryError)?;
+            let res = manifest_json(lock.asset_manager(), &id, pretty)
                 .await
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             Ok(res)

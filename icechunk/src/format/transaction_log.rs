@@ -1,3 +1,5 @@
+//! Change records for commits, enabling conflict detection during rebase.
+
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     iter,
@@ -8,7 +10,6 @@ use itertools::{Either, Itertools as _};
 
 use crate::{
     change_set::{ChangeSet, Move},
-    format::flatbuffers::generated::ObjectId12,
     session::{Session, SessionResult},
 };
 
@@ -30,7 +31,7 @@ impl TransactionLog {
         let mut new_groups: Vec<_> =
             cs.new_groups().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
         let mut new_arrays: Vec<_> =
-            cs.new_arrays().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
+            cs.new_arrays().map(|(_, id, _)| generated::ObjectId8::new(&id.0)).collect();
         let mut deleted_groups: Vec<_> =
             cs.deleted_groups().map(|(_, id)| generated::ObjectId8::new(&id.0)).collect();
         let mut deleted_arrays: Vec<_> =
@@ -89,7 +90,7 @@ impl TransactionLog {
         let updated_groups = Some(builder.create_vector(updated_groups.as_slice()));
         let updated_arrays = Some(builder.create_vector(updated_arrays.as_slice()));
 
-        let id = ObjectId12::new(&id.0);
+        let id = generated::ObjectId12::new(&id.0);
         let id = Some(&id);
         let moved_nodes = Some(builder.create_vector(moved_nodes.as_slice()));
         let tx = generated::TransactionLog::create(
@@ -104,6 +105,106 @@ impl TransactionLog {
                 updated_arrays,
                 updated_chunks,
                 moved_nodes,
+                ..Default::default()
+            },
+        );
+
+        builder.finish(tx, Some("Ichk"));
+        let (mut buffer, offset) = builder.collapse();
+        buffer.drain(0..offset);
+        buffer.shrink_to_fit();
+        Self { buffer }
+    }
+
+    /// Low level method that creates a tx log from its parts
+    /// Intended to be used only by library creators
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_from_parts(
+        id: &SnapshotId,
+        sorted_new_groups: impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator,
+        sorted_new_arrays: impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator,
+        sorted_deleted_groups: impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator,
+        sorted_deleted_arrays: impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator,
+        sorted_updated_groups: impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator,
+        sorted_updated_arrays: impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator,
+        sorted_updated_chunks: impl ExactSizeIterator<
+            Item = (NodeId, impl Iterator<Item = ChunkIndices>),
+        > + DoubleEndedIterator,
+        sorted_moves: impl Iterator<Item = Move>,
+    ) -> Self {
+        // TODO: what's a good capacity?
+        let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(1_024 * 1_024);
+
+        //let new_groups = Some(builder.create_vector(sorted_new_groups.as_slice()));
+        let new_groups = Some(builder.create_vector_from_iter(
+            sorted_new_groups.map(|id| generated::ObjectId8::new(&id.0)),
+        ));
+        let new_arrays = Some(builder.create_vector_from_iter(
+            sorted_new_arrays.map(|id| generated::ObjectId8::new(&id.0)),
+        ));
+        let deleted_groups = Some(builder.create_vector_from_iter(
+            sorted_deleted_groups.map(|id| generated::ObjectId8::new(&id.0)),
+        ));
+        let deleted_arrays = Some(builder.create_vector_from_iter(
+            sorted_deleted_arrays.map(|id| generated::ObjectId8::new(&id.0)),
+        ));
+        let updated_groups = Some(builder.create_vector_from_iter(
+            sorted_updated_groups.map(|id| generated::ObjectId8::new(&id.0)),
+        ));
+        let updated_arrays = Some(builder.create_vector_from_iter(
+            sorted_updated_arrays.map(|id| generated::ObjectId8::new(&id.0)),
+        ));
+
+        let id = generated::ObjectId12::new(&id.0);
+        let id = Some(&id);
+        // TODO: very inefficient
+        let updated_chunks = sorted_updated_chunks
+            .map(|(node_id, chunks)| {
+                let node_id = generated::ObjectId8::new(&node_id.0);
+                let node_id = Some(&node_id);
+                let chunks = chunks
+                    .map(|indices| {
+                        let coords = Some(builder.create_vector(indices.0.as_slice()));
+                        generated::ChunkIndices::create(
+                            &mut builder,
+                            &generated::ChunkIndicesArgs { coords },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let chunks = Some(builder.create_vector(chunks.as_slice()));
+                generated::ArrayUpdatedChunks::create(
+                    &mut builder,
+                    &generated::ArrayUpdatedChunksArgs { node_id, chunks },
+                )
+            })
+            .collect::<Vec<_>>();
+        let updated_chunks = builder.create_vector(updated_chunks.as_slice());
+        let updated_chunks = Some(updated_chunks);
+
+        let moved_nodes: Vec<_> = sorted_moves
+            .map(|Move { from, to }| {
+                let from = builder.create_string(from.to_string().as_str());
+                let to = builder.create_string(to.to_string().as_str());
+                let args = MoveOperationArgs { from: Some(from), to: Some(to) };
+                MoveOperation::create(&mut builder, &args)
+            })
+            .collect();
+
+        let moved_nodes = Some(builder.create_vector(moved_nodes.as_slice()));
+
+        let tx = generated::TransactionLog::create(
+            &mut builder,
+            &generated::TransactionLogArgs {
+                id,
+                new_groups,
+                new_arrays,
+                deleted_groups,
+                deleted_arrays,
+                updated_groups,
+                updated_arrays,
+                updated_chunks,
+                moved_nodes,
+                ..Default::default()
             },
         );
 
@@ -122,27 +223,39 @@ impl TransactionLog {
         Ok(Self { buffer })
     }
 
-    pub fn new_groups(&self) -> impl Iterator<Item = NodeId> + '_ {
+    pub fn new_groups(
+        &self,
+    ) -> impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator + '_ {
         self.root().new_groups().iter().map(From::from)
     }
 
-    pub fn new_arrays(&self) -> impl Iterator<Item = NodeId> + '_ {
+    pub fn new_arrays(
+        &self,
+    ) -> impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator + '_ {
         self.root().new_arrays().iter().map(From::from)
     }
 
-    pub fn deleted_groups(&self) -> impl Iterator<Item = NodeId> + '_ {
+    pub fn deleted_groups(
+        &self,
+    ) -> impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator + '_ {
         self.root().deleted_groups().iter().map(From::from)
     }
 
-    pub fn deleted_arrays(&self) -> impl Iterator<Item = NodeId> + '_ {
+    pub fn deleted_arrays(
+        &self,
+    ) -> impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator + '_ {
         self.root().deleted_arrays().iter().map(From::from)
     }
 
-    pub fn updated_groups(&self) -> impl Iterator<Item = NodeId> + '_ {
+    pub fn updated_groups(
+        &self,
+    ) -> impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator + '_ {
         self.root().updated_groups().iter().map(From::from)
     }
 
-    pub fn updated_arrays(&self) -> impl Iterator<Item = NodeId> + '_ {
+    pub fn updated_arrays(
+        &self,
+    ) -> impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator + '_ {
         self.root().updated_arrays().iter().map(From::from)
     }
 
@@ -242,6 +355,10 @@ impl TransactionLog {
         self.len() == 0
     }
 
+    pub fn has_moves(&self) -> bool {
+        self.root().moved_nodes().map(|v| !v.is_empty()).unwrap_or(false)
+    }
+
     pub fn merge<'a, T: IntoIterator<Item = &'a TransactionLog>>(
         id: &SnapshotId,
         iter: T,
@@ -336,7 +453,7 @@ impl TransactionLog {
             Some(updated_chunks)
         };
 
-        let id = ObjectId12::new(&id.0);
+        let id = generated::ObjectId12::new(&id.0);
         let id = Some(&id);
         // FIXME: verify no moves in origins
         let moved_nodes: &[WIPOffset<_>] = &[];
@@ -353,6 +470,7 @@ impl TransactionLog {
                 updated_arrays,
                 updated_chunks,
                 moved_nodes,
+                ..Default::default()
             },
         );
 
@@ -511,10 +629,8 @@ mod tests {
     use crate::{
         change_set::{ArrayData, ChangeSet},
         format::{
-            ChunkIndices, NodeId, SnapshotId,
-            manifest::{ChunkPayload, ManifestExtents, ManifestSplits},
-            snapshot::ArrayShape,
-            transaction_log::TransactionLog,
+            ChunkIndices, NodeId, SnapshotId, manifest::ChunkPayload,
+            snapshot::ArrayShape, transaction_log::TransactionLog,
         },
     };
 
@@ -544,7 +660,6 @@ mod tests {
             chunk_added.clone(),
             ChunkIndices(vec![0]),
             Some(ChunkPayload::Inline(Bytes::new())),
-            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
         )?;
 
         let t1 = TransactionLog::new(&SnapshotId::random(), &cs1);
@@ -579,29 +694,17 @@ mod tests {
         )?;
         cs2.delete_array("/a2".try_into().unwrap(), &deleted_array2)?;
         cs2.update_group(&updated_group2, &"/g3".try_into().unwrap(), Bytes::new())?;
-        cs2.set_chunk_ref(
-            chunk_added.clone(),
-            ChunkIndices(vec![0]),
-            None,
-            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
-        )?;
+        cs2.set_chunk_ref(chunk_added.clone(), ChunkIndices(vec![0]), None)?;
         cs2.set_chunk_ref(
             chunk_added.clone(),
             ChunkIndices(vec![1]),
             Some(ChunkPayload::Inline(Bytes::new())),
-            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
         )?;
-        cs2.set_chunk_ref(
-            chunk_added.clone(),
-            ChunkIndices(vec![42]),
-            None,
-            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
-        )?;
+        cs2.set_chunk_ref(chunk_added.clone(), ChunkIndices(vec![42]), None)?;
         cs2.set_chunk_ref(
             chunk_added2.clone(),
             ChunkIndices(vec![7]),
             Some(ChunkPayload::Inline(Bytes::new())),
-            &ManifestSplits::from_extents(vec![ManifestExtents::new(&[0], &[100])]),
         )?;
 
         let t3 = TransactionLog::new(&SnapshotId::random(), &cs2);

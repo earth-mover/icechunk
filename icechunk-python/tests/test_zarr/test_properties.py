@@ -2,7 +2,6 @@ from typing import Any
 
 import pytest
 from numpy.testing import assert_array_equal
-from packaging.version import Version
 
 from icechunk import IcechunkStore, Repository, in_memory_storage
 
@@ -10,32 +9,31 @@ pytest.importorskip("hypothesis")
 import hypothesis.strategies as st
 from hypothesis import assume, given, settings
 
-import zarr
 from zarr.testing.strategies import arrays, numpy_arrays
 
 
-def create() -> IcechunkStore:
-    repo = Repository.create(in_memory_storage())
+def create(spec_version: int | None) -> IcechunkStore:
+    repo = Repository.create(in_memory_storage(), spec_version=spec_version)
     return repo.writable_session("main").store
 
 
-icechunk_stores = st.builds(create)
+@st.composite
+def icechunk_stores(
+    draw: st.DrawFn,
+    spec_version: st.SearchStrategy[int | None] = st.sampled_from([None, 1, 2]),  # noqa: B008
+) -> IcechunkStore:
+    return create(spec_version=draw(spec_version))
 
 
-@settings(report_multiple_bugs=True, deadline=None)
-@given(data=st.data(), nparray=numpy_arrays())
-def test_roundtrip(data: st.DataObject, nparray: Any) -> None:
+@settings(report_multiple_bugs=True, deadline=None, max_examples=300)
+@given(data=st.data(), nparray=numpy_arrays(), spec_version=st.sampled_from([None, 1, 2]))
+def test_roundtrip(data: st.DataObject, nparray: Any, spec_version: int | None) -> None:
     # TODO: support size-0 arrays GH392
     assume(nparray.size > 0)
 
-    # Skip bytes, unicode string, and datetime dtypes with zarr < 3.1.0
-    # These have codec/dtype issues that were fixed in 3.1.0's dtype refactor
-    if Version(zarr.__version__) < Version("3.1.0"):
-        assume(nparray.dtype.kind not in ("S", "U", "M", "m"))
-
     zarray = data.draw(
         arrays(
-            stores=icechunk_stores,
+            stores=icechunk_stores(spec_version=st.just(spec_version)),
             arrays=st.just(nparray),
             zarr_formats=st.just(3),
         )

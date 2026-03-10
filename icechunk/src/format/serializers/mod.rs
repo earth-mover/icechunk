@@ -1,4 +1,6 @@
-//! How seralizers work:
+//! Flatbuffer serialization for Icechunk metadata.
+//!
+//! How serializers work:
 //!
 //! - Main goal is to make sure newer version of Icechunk can read metadata files created using
 //!   older versions. In this way, a repository can evolve during its life. As users upgrade their
@@ -8,7 +10,7 @@
 //! - Performance is critical, so we cannot copy much data around during the process of
 //!   serialization/deserialization
 //! - For serialization:
-//!     - We define a new `XSerializer` for each metadata file type `X`. Example: [`SnapshotSerializer`].
+//!     - We define a new `XSerializer` for each metadata file type `X`. Example: `SnapshotSerializer`.
 //!     - This type implement [`serde::Serialize`]
 //!     - This type holds only references to the same fields as `X`
 //!     - This type implements `From<&X>` (notice by reference) Example:
@@ -21,7 +23,7 @@
 //!       `snapshot.into()` to get one.
 //!     - Then this object is serialized using serde.
 //! - For deserialization:
-//!     - We define a new `XDeserializer` for each metadata file type `X`. Example: [`SnapshotDeserializer`].
+//!     - We define a new `XDeserializer` for each metadata file type `X`. Example: `SnapshotDeserializer`.
 //!     - This type implement [`serde::Deserialize`]
 //!     - This type holds the same fields as `X` by value
 //!     - `X` implements `From<XDeserializer>` (notice by value). Example:

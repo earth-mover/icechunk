@@ -13,6 +13,7 @@ use icechunk::{
     },
     format::{
         ByteRange, ChunkId, ChunkIndices, Path,
+        format_constants::SpecVersionBin,
         manifest::{
             Checksum, ChunkPayload, SecondsSinceEpoch, VirtualChunkLocation,
             VirtualChunkRef, VirtualReferenceErrorKind,
@@ -28,6 +29,8 @@ use icechunk::{
     virtual_chunks::VirtualChunkContainer,
 };
 use icechunk_macros::tokio_test;
+use rstest::rstest;
+use rstest_reuse::{self, *};
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
@@ -44,6 +47,12 @@ use object_store::{
     local::LocalFileSystem,
 };
 use pretty_assertions::assert_eq;
+
+#[template]
+#[rstest]
+#[case::v1(SpecVersionBin::V1dot0)]
+#[case::v2(SpecVersionBin::V2dot0)]
+fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
 fn minio_s3_config() -> (S3Options, S3Credentials) {
     let config = S3Options {
@@ -68,6 +77,7 @@ async fn create_repository(
     storage: Arc<dyn Storage + Send + Sync>,
     virtual_chunk_containers: Vec<VirtualChunkContainer>,
     credentials: HashMap<String, Option<Credentials>>,
+    spec_version: SpecVersionBin,
 ) -> Repository {
     let virtual_chunk_containers = virtual_chunk_containers
         .into_iter()
@@ -81,7 +91,8 @@ async fn create_repository(
         }),
         storage,
         credentials,
-        None,
+        Some(spec_version),
+        true,
     )
     .await
     .expect("Failed to initialize repository")
@@ -108,6 +119,7 @@ async fn write_chunks_to_store(
 async fn create_local_repository(
     repo_path: &StdPath,
     chunks_path: Option<&StdPath>,
+    spec_version: SpecVersionBin,
 ) -> Repository {
     let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
         ObjectStorage::new_local_filesystem(repo_path)
@@ -148,7 +160,12 @@ async fn create_local_repository(
         )
         .unwrap(),
         VirtualChunkContainer::new(
-            "gcs://earthmover-sample-data/".to_string(),
+            "gcs://al-public-test-bucket/".to_string(),
+            ObjectStoreConfig::Gcs(Default::default()),
+        )
+        .unwrap(),
+        VirtualChunkContainer::new(
+            "gcs://gcp-public-data-arco-era5/".to_string(),
             ObjectStoreConfig::Gcs(Default::default()),
         )
         .unwrap(),
@@ -168,7 +185,11 @@ async fn create_local_repository(
             Some(Credentials::S3(S3Credentials::Anonymous)),
         ),
         (
-            "gcs://earthmover-sample-data".to_string(),
+            "gcs://al-public-test-bucket".to_string(),
+            Some(Credentials::Gcs(GcsCredentials::Anonymous)),
+        ),
+        (
+            "gcs://gcp-public-data-arco-era5".to_string(),
             Some(Credentials::Gcs(GcsCredentials::Anonymous)),
         ),
     ]
@@ -186,10 +207,10 @@ async fn create_local_repository(
         creds.insert(prefix, None);
     }
 
-    create_repository(storage, containers, creds).await
+    create_repository(storage, containers, creds, spec_version).await
 }
 
-async fn create_minio_repository() -> Repository {
+async fn create_minio_repository(spec_version: SpecVersionBin) -> Repository {
     let prefix = format!("{:?}", ChunkId::random());
     let (config, credentials) = minio_s3_config();
     let storage: Arc<dyn Storage + Send + Sync> =
@@ -259,7 +280,7 @@ async fn create_minio_repository() -> Repository {
     ]
     .into();
 
-    create_repository(storage, containers, credentials).await
+    create_repository(storage, containers, credentials, spec_version).await
 }
 
 async fn write_chunks_to_local_fs(chunks: impl Iterator<Item = (String, Bytes)>) {
@@ -279,7 +300,7 @@ async fn write_chunks_to_minio(chunks: impl Iterator<Item = (String, Bytes)>) {
         client
             .put_object()
             .bucket(bucket_name.clone())
-            .key(key)
+            .key(key.strip_prefix('/').unwrap())
             .body(bytes.into())
             .send()
             .await
@@ -319,7 +340,10 @@ async fn write_chunks_to_azure(
 }
 
 #[tokio_test]
-async fn test_repository_with_local_virtual_refs() -> Result<(), Box<dyn Error>> {
+#[apply(spec_version_cases)]
+async fn test_repository_with_local_virtual_refs(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn Error>> {
     let chunk_dir = TempDir::new()?;
     let chunk_1 = chunk_dir.path().join("chunk-1").to_str().unwrap().to_owned();
     let chunk_2 = chunk_dir.path().join("chunk-2").to_str().unwrap().to_owned();
@@ -330,13 +354,15 @@ async fn test_repository_with_local_virtual_refs() -> Result<(), Box<dyn Error>>
     write_chunks_to_local_fs(chunks.iter().cloned()).await;
 
     let repo_dir = TempDir::new()?;
-    let repo = create_local_repository(repo_dir.path(), Some(chunk_dir.path())).await;
+    let repo =
+        create_local_repository(repo_dir.path(), Some(chunk_dir.path()), spec_version)
+            .await;
     let mut ds = repo.writable_session("main").await.unwrap();
 
     let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
     let user_data = Bytes::new();
     let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             // intentional extra '/'
             "file://{}",
             chunks[0].0
@@ -346,10 +372,7 @@ async fn test_repository_with_local_virtual_refs() -> Result<(), Box<dyn Error>>
         checksum: None,
     });
     let payload2 = ChunkPayload::Virtual(VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
-            "file://{}",
-            chunks[1].0,
-        ))?,
+        location: VirtualChunkLocation::from_url(&format!("file://{}", chunks[1].0,))?,
         offset: 1,
         length: 5,
         checksum: None,
@@ -418,7 +441,10 @@ async fn test_repository_with_local_virtual_refs() -> Result<(), Box<dyn Error>>
 }
 
 #[tokio_test]
-async fn test_repository_with_minio_virtual_refs() -> Result<(), Box<dyn Error>> {
+#[apply(spec_version_cases)]
+async fn test_repository_with_minio_virtual_refs(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn Error>> {
     let bytes1 = Bytes::copy_from_slice(b"first");
     let bytes2 = Bytes::copy_from_slice(b"second0000");
     let chunks = [
@@ -427,13 +453,13 @@ async fn test_repository_with_minio_virtual_refs() -> Result<(), Box<dyn Error>>
     ];
     write_chunks_to_minio(chunks.iter().cloned()).await;
 
-    let repo = create_minio_repository().await;
+    let repo = create_minio_repository(spec_version).await;
     let mut ds = repo.writable_session("main").await.unwrap();
 
     let shape = ArrayShape::new(vec![(1, 1), (1, 1), (2, 1)]).unwrap();
     let user_data = Bytes::new();
     let payload1 = ChunkPayload::Virtual(VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             // intentional extra '/'
             "s3://testbucket///{}",
             chunks[0].0
@@ -443,7 +469,7 @@ async fn test_repository_with_minio_virtual_refs() -> Result<(), Box<dyn Error>>
         checksum: None,
     });
     let payload2 = ChunkPayload::Virtual(VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             "s3://testbucket/{}",
             chunks[1].0,
         ))?,
@@ -558,8 +584,10 @@ async fn test_repository_with_minio_virtual_refs() -> Result<(), Box<dyn Error>>
 }
 
 #[tokio_test]
-async fn test_zarr_store_virtual_refs_minio_set_and_get()
--> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+async fn test_zarr_store_virtual_refs_minio_set_and_get(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     let bytes1 = Bytes::copy_from_slice(b"first");
     let bytes2 = Bytes::copy_from_slice(b"second0000");
     let chunks = [
@@ -568,7 +596,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
     ];
     write_chunks_to_minio(chunks.iter().cloned()).await;
 
-    let repo = create_minio_repository().await;
+    let repo = create_minio_repository(spec_version).await;
     let ds = repo.writable_session("main").await.unwrap();
     let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
@@ -583,7 +611,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
     assert_eq!(store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(), zarr_meta);
 
     let ref1 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             // intentional extra '/'
             "s3://testbucket///{}",
             chunks[0].0
@@ -593,7 +621,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
         checksum: None,
     };
     let ref2 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             "s3://testbucket/{}",
             chunks[1].0
         ))?,
@@ -611,7 +639,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
     );
 
     // it shouldn't let us write to an non existing virtual chunk container
-    let bad_location = VirtualChunkLocation::from_absolute_path(&format!(
+    let bad_location = VirtualChunkLocation::from_url(&format!(
         "bad-protocol://testbucket/{}",
         chunks[1].0
     ))?;
@@ -629,8 +657,10 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get()
 }
 
 #[tokio_test]
-async fn test_zarr_store_virtual_refs_azure_set_and_get()
--> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+async fn test_zarr_store_virtual_refs_azure_set_and_get(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     let bytes1 = Bytes::copy_from_slice(b"first");
     let bytes2 = Bytes::copy_from_slice(b"second0000");
     let chunks =
@@ -638,7 +668,7 @@ async fn test_zarr_store_virtual_refs_azure_set_and_get()
     let prefix = ChunkId::random().to_string();
     write_chunks_to_azure(prefix.clone(), chunks.iter().cloned()).await;
 
-    let repo = create_minio_repository().await;
+    let repo = create_minio_repository(spec_version).await;
     let ds = repo.writable_session("main").await.unwrap();
     let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
 
@@ -653,7 +683,7 @@ async fn test_zarr_store_virtual_refs_azure_set_and_get()
     assert_eq!(store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(), zarr_meta);
 
     let ref1 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             "az://testcontainer/{prefix}/chunks/{}",
             chunks[0].0
         ))?,
@@ -662,7 +692,7 @@ async fn test_zarr_store_virtual_refs_azure_set_and_get()
         checksum: None,
     };
     let ref2 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             "az://testcontainer/{prefix}/chunks/{}",
             chunks[1].0
         ))?,
@@ -683,10 +713,12 @@ async fn test_zarr_store_virtual_refs_azure_set_and_get()
 }
 
 #[tokio_test]
-async fn test_zarr_store_virtual_refs_from_public_s3()
--> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+async fn test_zarr_store_virtual_refs_from_public_s3(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = TempDir::new()?;
-    let repo = create_local_repository(repo_dir.path(), None).await;
+    let repo = create_local_repository(repo_dir.path(), None, spec_version).await;
     let ds = repo.writable_session("main").await.unwrap();
 
     let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
@@ -703,7 +735,7 @@ async fn test_zarr_store_virtual_refs_from_public_s3()
     store.set("year/zarr.json", zarr_meta.clone()).await.unwrap();
 
     let ref2 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(
+        location: VirtualChunkLocation::from_url(
             "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc",
         )?,
         offset: 22306,
@@ -725,10 +757,12 @@ async fn test_zarr_store_virtual_refs_from_public_s3()
 }
 
 #[tokio_test]
-async fn test_zarr_store_virtual_refs_from_public_gcs()
--> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+async fn test_zarr_store_virtual_refs_from_public_gcs(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = TempDir::new()?;
-    let repo = create_local_repository(repo_dir.path(), None).await;
+    let repo = create_local_repository(repo_dir.path(), None, spec_version).await;
     let ds = repo.writable_session("main").await.unwrap();
 
     let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
@@ -745,8 +779,8 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
     store.set("year/zarr.json", zarr_meta.clone()).await.unwrap();
 
     let ref1 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(
-            "gcs://earthmover-sample-data/netcdf/test_echam_spectral.nc",
+        location: VirtualChunkLocation::from_url(
+            "gcs://al-public-test-bucket/netcdf_test_echam_spectral.nc",
         )?,
         offset: 22306,
         length: 288,
@@ -754,7 +788,7 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
     };
 
     let ref2 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(
+        location: VirtualChunkLocation::from_url(
             "gcs://gcp-public-data-arco-era5/ar/1959-2022-1h-240x121_equiangular_with_poles_conservative.zarr/2m_temperature/0.0.0",
         )?,
         offset: 223,
@@ -763,7 +797,7 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
     };
 
     let ref3 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(
+        location: VirtualChunkLocation::from_url(
             "gcs://gcp-public-data-arco-era5/ar/1959-2022-1h-240x121_equiangular_with_poles_conservative.zarr/2m_temperature/1.0.0",
         )?,
         offset: 0,
@@ -772,16 +806,16 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
     };
 
     let ref_expired = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(
-            "gcs://earthmover-sample-data/netcdf/test_echam_spectral.nc",
+        location: VirtualChunkLocation::from_url(
+            "gcs://al-public-test-bucket/netcdf_test_echam_spectral.nc",
         )?,
         offset: 22306,
         length: 288,
         checksum: Some(Checksum::LastModified(SecondsSinceEpoch(3600))),
     };
     let ref_bad_tag = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(
-            "gcs://earthmover-sample-data/netcdf/test_echam_spectral.nc",
+        location: VirtualChunkLocation::from_url(
+            "gcs://al-public-test-bucket/netcdf_test_echam_spectral.nc",
         )?,
         offset: 22306,
         length: 288,
@@ -794,25 +828,23 @@ async fn test_zarr_store_virtual_refs_from_public_gcs()
     store.set_virtual_ref("year/c/3", ref_expired, false).await?;
     store.set_virtual_ref("year/c/4", ref_bad_tag, false).await?;
 
-    // FIXME: enable this once object_store can access public buckets without credentials
-    // otherwise we get an error in GHA
-    if false {
-        let chunk = store.get("year/c/0", &ByteRange::ALL).await.unwrap();
-        assert_eq!(chunk.len(), 288);
-        let chunk = store.get("year/c/1", &ByteRange::ALL).await.unwrap();
-        assert_eq!(chunk.len(), 400);
-        let chunk = store.get("year/c/2", &ByteRange::ALL).await.unwrap();
-        assert_eq!(chunk.len(), 100);
+    let chunk = store.get("year/c/0", &ByteRange::ALL).await.unwrap();
+    assert_eq!(chunk.len(), 288);
+    let chunk = store.get("year/c/1", &ByteRange::ALL).await.unwrap();
+    assert_eq!(chunk.len(), 400);
+    let chunk = store.get("year/c/2", &ByteRange::ALL).await.unwrap();
+    assert_eq!(chunk.len(), 100);
 
-        assert!(store.get("year/c/3", &ByteRange::ALL).await.is_err());
-        assert!(store.get("year/c/4", &ByteRange::ALL).await.is_err());
-    }
+    assert!(store.get("year/c/3", &ByteRange::ALL).await.is_err());
+    assert!(store.get("year/c/4", &ByteRange::ALL).await.is_err());
     Ok(())
 }
 
 #[tokio_test]
-async fn test_zarr_store_with_multiple_virtual_chunk_containers()
--> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+async fn test_zarr_store_with_multiple_virtual_chunk_containers(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     // we create a repository with 3 virtual chunk containers: one for minio chunks, one for
     // local filesystem chunks and one for chunks in a public S3 bucket.
 
@@ -877,10 +909,17 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
 
     let mut config = RepositoryConfig::default();
     for container in containers {
-        config.set_virtual_chunk_container(container);
+        config.set_virtual_chunk_container(container).unwrap();
     }
 
-    let repo = Repository::create(Some(config), storage, virtual_creds, None).await?;
+    let repo = Repository::create(
+        Some(config),
+        storage,
+        virtual_creds,
+        Some(spec_version),
+        true,
+    )
+    .await?;
 
     let old_timestamp = SecondsSinceEpoch(chrono::Utc::now().timestamp() as u32 - 5);
 
@@ -908,7 +947,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
 
     // set virtual refs in minio
     let ref1 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             // intentional extra '/'
             "s3://testbucket///{}",
             chunks[0].0
@@ -918,7 +957,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         checksum: None,
     };
     let ref2 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             "s3://testbucket/{}",
             chunks[1].0
         ))?,
@@ -927,7 +966,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         checksum: None,
     };
     let ref3 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             "s3://testbucket/{}",
             chunks[2].0
         ))?,
@@ -955,7 +994,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
     write_chunks_to_local_fs(local_chunks.iter().cloned()).await;
 
     let ref1 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             // intentional extra '/'
             "file://{}",
             local_chunks[0].0
@@ -965,7 +1004,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         checksum: None,
     };
     let ref2 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             "file://{}",
             local_chunks[1].0,
         ))?,
@@ -974,7 +1013,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         checksum: None,
     };
     let ref3 = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(&format!(
+        location: VirtualChunkLocation::from_url(&format!(
             "file://{}",
             local_chunks[2].0,
         ))?,
@@ -989,7 +1028,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
 
     // set a virtual ref in a public bucket
     let public_ref = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(
+        location: VirtualChunkLocation::from_url(
             "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc",
         )?,
         offset: 22306,
@@ -997,7 +1036,7 @@ async fn test_zarr_store_with_multiple_virtual_chunk_containers()
         checksum: None,
     };
     let public_modified_ref = VirtualChunkRef {
-        location: VirtualChunkLocation::from_absolute_path(
+        location: VirtualChunkLocation::from_url(
             "s3://earthmover-sample-data/netcdf/oscar_vel2018.nc",
         )?,
         offset: 22306,
@@ -1153,6 +1192,137 @@ async fn test_set_virtual_refs_from_arrow() -> Result<(), Box<dyn std::error::Er
     assert_eq!(store.get("array/c/0/1", &ByteRange::ALL).await?, bytes2);
     assert_eq!(store.get("array/c/1/0", &ByteRange::ALL).await?, bytes3);
     assert_eq!(store.get("array/c/1/1", &ByteRange::ALL).await?, bytes4);
+
+    Ok(())
+}
+
+#[tokio_test]
+#[apply(spec_version_cases)]
+async fn test_virtual_refs_with_vcc_relative_urls(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn Error>> {
+    // Create local chunks on disk
+    let chunk_dir = TempDir::new()?;
+    let chunk_1 = chunk_dir.path().join("chunk-1").to_str().unwrap().to_owned();
+    let chunk_2 = chunk_dir.path().join("chunk-2").to_str().unwrap().to_owned();
+
+    let bytes1 = Bytes::copy_from_slice(b"first");
+    let bytes2 = Bytes::copy_from_slice(b"second0000");
+    let chunks = [(chunk_1.clone(), bytes1.clone()), (chunk_2.clone(), bytes2.clone())];
+    write_chunks_to_local_fs(chunks.iter().cloned()).await;
+
+    // Create a repo with a named virtual chunk container
+    let repo_dir = TempDir::new()?;
+    let prefix = format!("file://{}/", chunk_dir.path().to_str().unwrap());
+
+    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+        ObjectStorage::new_local_filesystem(repo_dir.path())
+            .await
+            .expect("Creating local storage failed"),
+    );
+
+    let container = VirtualChunkContainer::new_named(
+        "local-data".to_string(),
+        prefix.clone(),
+        ObjectStoreConfig::LocalFileSystem(PathBuf::new()),
+    )
+    .unwrap();
+
+    let mut config = RepositoryConfig::default();
+    config.set_virtual_chunk_container(container).unwrap();
+
+    let creds: HashMap<String, Option<Credentials>> =
+        [(format!("file://{}", chunk_dir.path().to_str().unwrap()), None)].into();
+
+    let repo = Repository::create(Some(config), storage, creds, Some(spec_version), true)
+        .await?;
+
+    let session = repo.writable_session("main").await?;
+    let store = Store::from_session(Arc::new(RwLock::new(session))).await;
+
+    store
+        .set(
+            "zarr.json",
+            Bytes::copy_from_slice(br#"{"zarr_format":3, "node_type":"group"}"#),
+        )
+        .await?;
+    let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","attributes":{"foo":42},"shape":[2,2,2],"data_type":"int32","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1,1,1]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0,"codecs":[{"name":"mycodec","configuration":{"foo":42}}],"storage_transformers":[{"name":"mytransformer","configuration":{"bar":43}}],"dimension_names":["x","y","t"]}"#);
+    store.set("array/zarr.json", zarr_meta.clone()).await?;
+
+    // Write virtual refs using vcc:// relative URLs
+    let ref1 = VirtualChunkRef {
+        location: VirtualChunkLocation::from_vcc_path("local-data", "chunk-1")?,
+        offset: 0,
+        length: 5,
+        checksum: None,
+    };
+    let ref2 = VirtualChunkRef {
+        location: VirtualChunkLocation::from_vcc_path("local-data", "chunk-2")?,
+        offset: 1,
+        length: 5,
+        checksum: None,
+    };
+
+    // Verify the locations are relative
+    assert!(ref1.location.is_relative());
+    assert!(ref2.location.is_relative());
+    assert_eq!(ref1.location.parse_vcc(), Some(("local-data", "chunk-1")));
+    assert_eq!(ref2.location.parse_vcc(), Some(("local-data", "chunk-2")));
+
+    store.set_virtual_ref("array/c/0/0/0", ref1, false).await?;
+    store.set_virtual_ref("array/c/0/0/1", ref2, false).await?;
+
+    // Read back and verify correct bytes
+    assert_eq!(store.get("array/c/0/0/0", &ByteRange::ALL).await?, bytes1);
+    assert_eq!(
+        store.get("array/c/0/0/1", &ByteRange::ALL).await?,
+        Bytes::copy_from_slice(&bytes2[1..6]),
+    );
+
+    // Verify byte range reads work with vcc:// refs
+    for range in [
+        ByteRange::bounded(0u64, 3u64),
+        ByteRange::from_offset(2u64),
+        ByteRange::to_offset(4u64),
+    ] {
+        assert_eq!(
+            get_chunk(
+                store
+                    .session()
+                    .read()
+                    .await
+                    .get_chunk_reader(
+                        &"/array".try_into().unwrap(),
+                        &ChunkIndices(vec![0, 0, 0]),
+                        &range,
+                    )
+                    .await
+                    .unwrap()
+            )
+            .await
+            .unwrap(),
+            Some(range.slice(bytes1.clone()))
+        );
+    }
+
+    // Commit and verify all_virtual_chunk_locations returns expanded absolute URLs
+    store.session().write().await.commit("vcc test", None).await?;
+
+    let session =
+        repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
+
+    let locations =
+        session.all_virtual_chunk_locations().await?.try_collect::<HashSet<_>>().await?;
+
+    // all_virtual_chunk_locations should expand vcc:// to absolute URLs
+    assert_eq!(
+        locations,
+        [
+            format!("file://{}/chunk-1", chunk_dir.path().to_str().unwrap()),
+            format!("file://{}/chunk-2", chunk_dir.path().to_str().unwrap()),
+        ]
+        .into()
+    );
 
     Ok(())
 }

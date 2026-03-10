@@ -10,7 +10,7 @@ use icechunk::{
 };
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -79,7 +79,8 @@ async fn do_test_concurrency(
         }),
         ..Default::default()
     };
-    let repo = Repository::create(Some(config), storage, HashMap::new(), None).await?;
+    let repo =
+        Repository::create(Some(config), storage, HashMap::new(), None, true).await?;
 
     let mut ds = repo.writable_session("main").await?;
 

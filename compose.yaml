@@ -1,29 +1,105 @@
 volumes:
-  minio_data:
+  rustfs_data:
   azurite-data:
 
 services:
-  minio:
-    container_name: icechunk_minio
-    image: minio/minio
+  rustfs:
+    container_name: icechunk_rustfs
+    image: rustfs/rustfs:1.0.0-alpha.85
+    hostname: rustfs
+    healthcheck:
+      test: curl 127.0.0.1:9000/health
+      interval: 1s
+      retries: 30
     entrypoint: |
         /bin/sh -c '
-        for bucket in testbucket externalbucket arraylake-repo-bucket
+        for bucket in testbucket
         do
           echo creating bucket "$$bucket";
           mkdir -p /data/"$$bucket"
         done;
 
-        /usr/bin/minio server --console-address ":9001" /data
+        rustfs --access-key minio123 --secret-key minio123 --console-enable /data
         '
-    environment:
-      - MINIO_ROOT_USER=minio123
-      - MINIO_ROOT_PASSWORD=minio123
     volumes:
-      - minio_data:/data
+      - rustfs_data:/data
     ports:
       - '9000:9000'
       - '9001:9001'
+
+  rustfs_init:
+    container_name: icechunk_rustfs_init
+    image: rustfs/rc:v0.1.4
+    restart: "no"
+    depends_on:
+      rustfs:
+        condition: service_healthy
+        restart: true
+    entrypoint:
+      - /bin/sh
+      - '-c'
+      - |
+        set -ex
+
+        rc alias set local http://rustfs:9000 minio123 minio123
+        rc admin user add local readonly basicuser
+
+        echo '{
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowGetObjectOnly",
+              "Effect": "Allow",
+              "Principal": { "AWS": ["readonly"] },
+              "Action": [
+                "s3:GetObject"
+              ],
+              "Resource": [
+                "arn:aws:s3:::testbucket",
+                "arn:aws:s3:::testbucket/*"
+              ]
+            }
+          ]
+        }' > policy.json
+
+        rc admin policy create local readonly policy.json
+        rc admin policy attach local --user readonly readonly
+
+        rc admin user add local modify modifydata
+
+        echo '{
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowToModify",
+              "Effect": "Allow",
+              "Principal": { "AWS": ["modify"] },
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:ListBucket"
+              ],
+              "Resource": [
+                "arn:aws:s3:::testbucket",
+                "arn:aws:s3:::testbucket/*"
+              ]
+            }
+          ]
+        }' > policy.json
+
+        rc admin policy create local modify policy.json
+        rc admin policy attach local --user modify modify
+
+        exit 0
+
+  toxiproxy:
+    container_name: icechunk_toxiproxy
+    image: ghcr.io/shopify/toxiproxy
+    ports:
+      - '8474:8474'
+      - '9002:9002'
+      - '9003:9003'
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:3.33.0

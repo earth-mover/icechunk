@@ -1,17 +1,15 @@
-use ::object_store::{ClientConfigKey, azure::AzureConfigKey, gcp::GoogleConfigKey};
-use aws_sdk_s3::{
-    config::http::HttpResponse,
-    error::SdkError,
-    operation::{
-        complete_multipart_upload::CompleteMultipartUploadError,
-        copy_object::CopyObjectError,
-        create_multipart_upload::CreateMultipartUploadError,
-        delete_objects::DeleteObjectsError, get_object::GetObjectError,
-        head_object::HeadObjectError, list_objects_v2::ListObjectsV2Error,
-        put_object::PutObjectError, upload_part::UploadPartError,
-    },
-    primitives::ByteStreamError,
-};
+//! Object store abstraction layer.
+//!
+//! The [`Storage`] trait defines generic object store operations (get, put, delete,
+//! list) for persisting Icechunk data. Constructor functions like [`new_s3_storage`],
+//! [`new_gcs_storage`], [`new_in_memory_storage`] create configured storage instances.
+
+#[cfg(feature = "object-store-http")]
+use ::object_store::ClientConfigKey;
+#[cfg(feature = "object-store-azure")]
+use ::object_store::azure::AzureConfigKey;
+#[cfg(feature = "object-store-gcs")]
+use ::object_store::gcp::GoogleConfigKey;
 use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{
@@ -19,12 +17,17 @@ use futures::{
     stream::{self, BoxStream, FuturesOrdered},
 };
 use itertools::Itertools;
+#[cfg(feature = "s3")]
 use s3::S3Storage;
+pub use s3_config::{
+    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::{max, min},
     collections::HashMap,
     ffi::OsString,
+    fmt::Display,
     iter,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
@@ -45,19 +48,28 @@ use thiserror::Error;
 #[cfg(test)]
 pub mod logging;
 
+/// Storage using the `object_store` crate (local, in-memory, Azure, GCS).
 pub mod object_store;
+/// HTTP redirect-based storage for read-only access.
+#[cfg(feature = "redirect")]
 pub mod redirect;
+/// Native S3 client implementation.
+#[cfg(feature = "s3")]
 pub mod s3;
+/// Shared S3 configuration types (always compiled).
+pub mod s3_config;
 
 pub use object_store::ObjectStorage;
 
-use crate::{
-    config::{AzureCredentials, GcsCredentials, S3Credentials, S3Options},
-    error::ICError,
-    private,
-    storage::redirect::RedirectStorage,
-};
+#[cfg(feature = "redirect")]
+use crate::storage::redirect::RedirectStorage;
+use crate::{error::ICError, private};
+#[cfg(feature = "object-store-azure")]
+use object_store::AzureCredentials;
+#[cfg(feature = "object-store-gcs")]
+use object_store::GcsCredentials;
 
+/// Storage operation error types.
 #[derive(Debug, Error)]
 pub enum StorageErrorKind {
     #[error("object not found")]
@@ -67,29 +79,25 @@ pub enum StorageErrorKind {
     #[error("bad object store prefix {0:?}")]
     BadPrefix(OsString),
     #[error("error getting object from object store {0}")]
-    S3GetObjectError(#[from] Box<SdkError<GetObjectError, HttpResponse>>),
+    S3GetObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("error writing object to object store {0}")]
-    S3PutObjectError(#[from] Box<SdkError<PutObjectError, HttpResponse>>),
+    S3PutObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("error creating multipart upload {0}")]
-    S3CreateMultipartUploadError(
-        #[from] Box<SdkError<CreateMultipartUploadError, HttpResponse>>,
-    ),
+    S3CreateMultipartUploadError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("error uploading multipart part {0}")]
-    S3UploadPartError(#[from] Box<SdkError<UploadPartError, HttpResponse>>),
+    S3UploadPartError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("error completing multipart upload {0}")]
-    S3CompleteMultipartUploadError(
-        #[from] Box<SdkError<CompleteMultipartUploadError, HttpResponse>>,
-    ),
+    S3CompleteMultipartUploadError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("error copying object in object store {0}")]
-    S3CopyObjectError(#[from] Box<SdkError<CopyObjectError, HttpResponse>>),
+    S3CopyObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("error getting object metadata from object store {0}")]
-    S3HeadObjectError(#[from] Box<SdkError<HeadObjectError, HttpResponse>>),
+    S3HeadObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("error listing objects in object store {0}")]
-    S3ListObjectError(#[from] Box<SdkError<ListObjectsV2Error, HttpResponse>>),
+    S3ListObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("error deleting objects in object store {0}")]
-    S3DeleteObjectError(#[from] Box<SdkError<DeleteObjectsError, HttpResponse>>),
+    S3DeleteObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("error streaming bytes from object store {0}")]
-    S3StreamError(#[from] Box<ByteStreamError>),
+    S3StreamError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
     #[error("storage configuration error: {0}")]
@@ -160,6 +168,19 @@ impl VersionInfo {
     }
 }
 
+impl Display for VersionInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (&self.etag, &self.generation) {
+            (Some(etag), Some(generation)) => {
+                write!(f, "etag={}, generation={}", etag.0, generation.0)
+            }
+            (Some(etag), None) => write!(f, "etag={}", etag.0),
+            (None, Some(generation)) => write!(f, "generation={}", generation.0),
+            (None, None) => write!(f, "new"),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct RetriesSettings {
     pub max_tries: Option<NonZeroU16>,
@@ -223,6 +244,7 @@ impl ConcurrencySettings {
     }
 }
 
+/// Configuration for storage operations (retries, concurrency, storage classes).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct Settings {
     #[serde(default)]
@@ -406,6 +428,11 @@ impl DeleteObjectsResult {
     }
 }
 
+pub enum GetModifiedResult {
+    Modified { data: Pin<Box<dyn AsyncBufRead + Send>>, new_version: VersionInfo },
+    OnLatestVersion,
+}
+
 /// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
@@ -472,6 +499,10 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult>;
 
+    /// List objects in storage whose keys start with the given prefix.
+    ///
+    /// Returns a stream of [`ListInfo`] entries, each containing the object's key and size in bytes.
+    /// Pass an empty prefix to list all objects in the repository's storage root.
     async fn list_objects<'a>(
         &'a self,
         settings: &Settings,
@@ -490,6 +521,13 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         path: &str,
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>>;
+
+    async fn get_object_conditional(
+        &self,
+        settings: &Settings,
+        path: &str,
+        previous_version: Option<&VersionInfo>,
+    ) -> StorageResult<GetModifiedResult>;
 
     /// Delete a stream of objects, by their id string representations
     /// Input stream includes sizes to get as result the total number of bytes deleted
@@ -524,8 +562,8 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
         Ok(res.clone())
     }
 
-    async fn root_is_clean(&self) -> StorageResult<bool> {
-        match self.list_objects(&Settings::default(), "").await?.next().await {
+    async fn root_is_clean(&self, settings: &Settings) -> StorageResult<bool> {
+        match self.list_objects(settings, "").await?.next().await {
             None => Ok(true),
             Some(Ok(_)) => Ok(false),
             Some(Err(err)) => Err(err),
@@ -662,6 +700,7 @@ pub fn split_in_multiple_equal_requests(
     .map(|(_, range)| range)
 }
 
+#[cfg(feature = "s3")]
 pub fn new_s3_storage(
     config: S3Options,
     bucket: String,
@@ -672,7 +711,10 @@ pub fn new_s3_storage(
         && (endpoint.contains("fly.storage.tigris.dev")
             || endpoint.contains("t3.storage.dev"))
     {
-        return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
+        return Err(StorageError::from(StorageErrorKind::Other(
+            "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead"
+                .to_string(),
+        )));
     }
 
     let st = S3Storage::new(
@@ -687,6 +729,7 @@ pub fn new_s3_storage(
     Ok(Arc::new(st))
 }
 
+#[cfg(feature = "s3")]
 pub fn new_r2_storage(
     config: S3Options,
     bucket: Option<String>,
@@ -736,6 +779,7 @@ pub fn new_r2_storage(
     Ok(Arc::new(st))
 }
 
+#[cfg(feature = "s3")]
 pub fn new_tigris_storage(
     config: S3Options,
     bucket: String,
@@ -786,6 +830,7 @@ pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
     Ok(Arc::new(st))
 }
 
+#[cfg(feature = "object-store-fs")]
 pub async fn new_local_filesystem_storage(
     path: &Path,
 ) -> StorageResult<Arc<dyn Storage>> {
@@ -793,6 +838,7 @@ pub async fn new_local_filesystem_storage(
     Ok(Arc::new(st))
 }
 
+#[cfg(feature = "object-store-http")]
 pub fn new_http_storage(
     base_url: &str,
     config: Option<HashMap<String, String>>,
@@ -811,6 +857,7 @@ pub fn new_http_storage(
     Ok(Arc::new(st))
 }
 
+#[cfg(feature = "redirect")]
 pub fn new_redirect_storage(base_url: &str) -> StorageResult<Arc<dyn Storage>> {
     let base_url = Url::parse(base_url).map_err(|e| {
         StorageErrorKind::CannotParseUrl { cause: e, url: base_url.to_string() }
@@ -818,6 +865,7 @@ pub fn new_redirect_storage(base_url: &str) -> StorageResult<Arc<dyn Storage>> {
     Ok(Arc::new(RedirectStorage::new(base_url)))
 }
 
+#[cfg(feature = "object-store-s3")]
 pub async fn new_s3_object_store_storage(
     config: S3Options,
     bucket: String,
@@ -828,13 +876,17 @@ pub async fn new_s3_object_store_storage(
         && (endpoint.contains("fly.storage.tigris.dev")
             || endpoint.contains("t3.storage.dev"))
     {
-        return Err(StorageError::from(StorageErrorKind::Other("Tigris Storage is not S3 compatible, use the Tigris specific constructor instead".to_string())));
+        return Err(StorageError::from(StorageErrorKind::Other(
+            "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead"
+                .to_string(),
+        )));
     }
     let storage =
         ObjectStorage::new_s3(bucket, prefix, credentials, Some(config)).await?;
     Ok(Arc::new(storage))
 }
 
+#[cfg(feature = "object-store-azure")]
 pub async fn new_azure_blob_storage(
     account: String,
     container: String,
@@ -853,6 +905,7 @@ pub async fn new_azure_blob_storage(
     Ok(Arc::new(storage))
 }
 
+#[cfg(feature = "object-store-gcs")]
 pub fn new_gcs_storage(
     bucket: String,
     prefix: Option<String>,
@@ -870,38 +923,45 @@ pub fn new_gcs_storage(
     Ok(Arc::new(storage))
 }
 
+pub fn strip_quotes(s: &str) -> &str {
+    s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
 
-    use std::{collections::HashSet, fs::File, io::Write, path::PathBuf};
-
-    use crate::config::{GcsBearerCredential, GcsStaticCredentials};
+    use std::collections::HashSet;
 
     use super::*;
-    use icechunk_macros::tokio_test;
     use proptest::prelude::*;
-    use tempfile::TempDir;
 
-    #[tokio_test]
+    #[cfg(feature = "object-store-fs")]
+    #[icechunk_macros::tokio_test]
     async fn test_is_clean() {
+        use std::{fs::File, io::Write, path::PathBuf};
+        use tempfile::TempDir;
+
         let repo_dir = TempDir::new().unwrap();
         let s = new_local_filesystem_storage(repo_dir.path()).await.unwrap();
-        assert!(s.root_is_clean().await.unwrap());
+        assert!(s.root_is_clean(&Settings::default()).await.unwrap());
 
         let mut file = File::create(repo_dir.path().join("foo.txt")).unwrap();
         write!(file, "hello").unwrap();
-        assert!(!s.root_is_clean().await.unwrap());
+        assert!(!s.root_is_clean(&Settings::default()).await.unwrap());
 
         let inside_existing =
             PathBuf::from_iter([repo_dir.path().as_os_str().to_str().unwrap(), "foo"]);
         let s = new_local_filesystem_storage(&inside_existing).await.unwrap();
-        assert!(s.root_is_clean().await.unwrap());
+        assert!(s.root_is_clean(&Settings::default()).await.unwrap());
     }
 
-    #[tokio_test]
+    #[cfg(feature = "object-store-gcs")]
+    #[icechunk_macros::tokio_test]
     /// Regression test: we can deserialize a GCS credential with token
     async fn test_gcs_session_serialization() {
+        use crate::config::{GcsBearerCredential, GcsStaticCredentials};
+
         let storage = new_gcs_storage(
             "bucket".to_string(),
             Some("prefix".to_string()),

@@ -1,3 +1,9 @@
+//! References to external data sources.
+//!
+//! Virtual chunks allow arrays to reference data stored outside the Icechunk
+//! repository (e.g., existing Parquet, NetCDF, or other files). Instead of
+//! copying data, chunks store references to byte ranges in external files.
+
 use std::{
     collections::HashMap,
     num::{NonZeroU16, NonZeroU64},
@@ -7,40 +13,74 @@ use std::{
 };
 
 use async_trait::async_trait;
+#[cfg(feature = "s3")]
 use aws_sdk_s3::{Client, error::SdkError, operation::get_object::GetObjectError};
 use bytes::{Buf, Bytes};
 use futures::{TryStreamExt, stream::FuturesOrdered};
-use object_store::{
-    ClientConfigKey, GetOptions, ObjectStore, azure::AzureConfigKey,
-    gcp::GoogleConfigKey, local::LocalFileSystem, path::Path,
-};
+#[cfg(any(
+    feature = "object-store-s3",
+    feature = "object-store-gcs",
+    feature = "object-store-azure",
+    feature = "object-store-http"
+))]
+use object_store::ClientConfigKey;
+#[cfg(feature = "object-store-azure")]
+use object_store::azure::AzureConfigKey;
+#[cfg(feature = "object-store-gcs")]
+use object_store::gcp::GoogleConfigKey;
+#[cfg(feature = "object-store-fs")]
+use object_store::local::LocalFileSystem;
+#[cfg(any(
+    feature = "object-store-s3",
+    feature = "object-store-fs",
+    feature = "object-store-gcs",
+    feature = "object-store-azure",
+    feature = "object-store-http"
+))]
+use object_store::{GetOptions, ObjectStore, path::Path};
 use quick_cache::sync::Cache;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+#[cfg(feature = "object-store-azure")]
+use crate::config::AzureCredentials;
+#[cfg(feature = "object-store-gcs")]
+use crate::config::GcsCredentials;
+use crate::config::{S3Credentials, S3Options};
+#[cfg(feature = "object-store-azure")]
+use crate::storage::object_store::AzureObjectStoreBackend;
+#[cfg(feature = "object-store-gcs")]
+use crate::storage::object_store::GcsObjectStoreBackend;
+#[cfg(feature = "object-store-http")]
+use crate::storage::object_store::HttpObjectStoreBackend;
+#[cfg(any(
+    feature = "object-store-s3",
+    feature = "object-store-gcs",
+    feature = "object-store-azure",
+    feature = "object-store-http"
+))]
+use crate::storage::object_store::ObjectStoreBackend as _;
+#[cfg(feature = "object-store-s3")]
+use crate::storage::object_store::S3ObjectStoreBackend;
+#[cfg(feature = "s3")]
+use crate::storage::s3::{mk_client, range_to_header};
 use crate::{
     ObjectStoreConfig,
-    config::{AzureCredentials, Credentials, GcsCredentials, S3Credentials, S3Options},
+    config::Credentials,
     format::{
         ChunkOffset,
         manifest::{
-            Checksum, SecondsSinceEpoch, VirtualReferenceError, VirtualReferenceErrorKind,
+            Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualReferenceError,
+            VirtualReferenceErrorKind,
         },
     },
     private,
-    storage::{
-        self,
-        object_store::{
-            AzureObjectStoreBackend, GcsObjectStoreBackend, HttpObjectStoreBackend,
-            ObjectStoreBackend as _,
-        },
-        s3::{mk_client, range_to_header},
-        split_in_multiple_requests,
-    },
+    storage::{self, split_in_multiple_requests, strip_quotes},
 };
 
 pub type ContainerName = String;
 
+/// Configuration for an external data source that virtual chunks can reference.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VirtualChunkContainer {
     // name is no longer needed, but we keep it for compatibility with
@@ -59,6 +99,28 @@ pub type VirtualChunkCredentialsError = String;
 
 impl VirtualChunkContainer {
     pub fn new(url_prefix: String, store: ObjectStoreConfig) -> Result<Self, String> {
+        Self::create(None, url_prefix, store)
+    }
+
+    pub fn new_named(
+        name: ContainerName,
+        url_prefix: String,
+        store: ObjectStoreConfig,
+    ) -> Result<Self, String> {
+        if name.is_empty() || name.contains('/') {
+            return Err(
+                "VirtualChunkContainer name must be non-empty and not contain '/'"
+                    .to_string(),
+            );
+        }
+        Self::create(Some(name), url_prefix, store)
+    }
+
+    fn create(
+        name: Option<ContainerName>,
+        url_prefix: String,
+        store: ObjectStoreConfig,
+    ) -> Result<Self, String> {
         if !url_prefix.ends_with('/') {
             return Err(
                 "VirtualChunkContainer url_prefix must end in a / character".to_string()
@@ -79,6 +141,7 @@ impl VirtualChunkContainer {
                     );
                 }
             }
+            #[cfg(feature = "object-store-gcs")]
             ("gcs" | "gs", ObjectStoreConfig::Gcs(_)) => {
                 if !url.has_host() {
                     return Err(
@@ -86,6 +149,7 @@ impl VirtualChunkContainer {
                     );
                 }
             }
+            #[cfg(feature = "object-store-azure")]
             ("az" | "azure" | "abfs", ObjectStoreConfig::Azure(..)) => {
                 if !url.has_host() {
                     return Err(
@@ -101,6 +165,7 @@ impl VirtualChunkContainer {
                     );
                 }
             }
+            #[cfg(feature = "object-store-http")]
             ("http" | "https", ObjectStoreConfig::Http(_)) => {
                 if !url.has_host() {
                     return Err(
@@ -109,6 +174,7 @@ impl VirtualChunkContainer {
                     );
                 }
             }
+            #[cfg(feature = "object-store-fs")]
             ("file", ObjectStoreConfig::LocalFileSystem(_)) => {
                 if !url.has_host() && url.path().len() < 2 {
                     return Err("Url prefix for file:// containers must include a path"
@@ -133,7 +199,11 @@ impl VirtualChunkContainer {
             }
         };
 
-        Ok(Self { url_prefix, store, name: None })
+        Ok(Self { url_prefix, store, name })
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 
     pub fn url_prefix(&self) -> &str {
@@ -149,19 +219,25 @@ impl VirtualChunkContainer {
                 Ok(())
             }
             (ObjectStoreConfig::S3(_), Some(Credentials::S3(_)) | None) => Ok(()),
+            #[cfg(feature = "object-store-gcs")]
             (ObjectStoreConfig::Gcs(_), Some(Credentials::Gcs(_)) | None) => Ok(()),
+            #[cfg(feature = "object-store-azure")]
             (ObjectStoreConfig::Azure(_), Some(Credentials::Azure(_))) => Ok(()),
             (ObjectStoreConfig::Tigris(_), Some(Credentials::S3(_)) | None) => Ok(()),
             (ObjectStoreConfig::InMemory, None) => Ok(()),
+            #[cfg(feature = "object-store-fs")]
             (ObjectStoreConfig::LocalFileSystem(_), None) => Ok(()),
+            #[cfg(feature = "object-store-http")]
             (ObjectStoreConfig::Http(_), None) => Ok(()),
 
             (ObjectStoreConfig::InMemory, Some(_)) => {
                 Err("in memory storage does not accept credentials".to_string())
             }
+            #[cfg(feature = "object-store-fs")]
             (ObjectStoreConfig::LocalFileSystem(..), Some(_)) => {
-                Err("in memory storage does not accept credentials".to_string())
+                Err("local file storage does not accept credentials".to_string())
             }
+            #[cfg(feature = "object-store-http")]
             (ObjectStoreConfig::Http(_), Some(_)) => {
                 // TODO: Support basic and bearer auth
                 Err("http storage does not support credentials yet".to_string())
@@ -173,6 +249,7 @@ impl VirtualChunkContainer {
     }
 }
 
+/// Trait for fetching byte ranges from external data sources.
 #[async_trait]
 pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64;
@@ -226,18 +303,12 @@ pub(crate) fn sort_containers(containers: &mut [VirtualChunkContainer]) {
     containers.sort_by_key(|cont| -(cont.url_prefix.len() as i64));
 }
 
-fn find_container<'a>(
-    chunk_location: &str,
-    containers: &'a [VirtualChunkContainer],
-) -> Option<&'a VirtualChunkContainer> {
-    containers.iter().find(|cont| chunk_location.starts_with(cont.url_prefix.as_str()))
-}
-
 type BucketName = String;
 type CacheKey = (ContainerName, Option<BucketName>);
 
 type ChunkFetcherCache = Cache<CacheKey, Arc<dyn ChunkFetcher>>;
 
+/// Resolves virtual chunk references to actual bytes from external sources.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VirtualChunkResolver {
     containers: Vec<VirtualChunkContainer>,
@@ -269,7 +340,14 @@ impl VirtualChunkResolver {
 
         let mut containers = containers
             .filter_map(|cont| {
-                VirtualChunkContainer::new(add_trailing(cont.url_prefix), cont.store)
+                let url_prefix = add_trailing(cont.url_prefix);
+                let result = match cont.name {
+                    Some(name) => {
+                        VirtualChunkContainer::new_named(name, url_prefix, cont.store)
+                    }
+                    None => VirtualChunkContainer::new(url_prefix, cont.store),
+                };
+                result
                     .inspect_err(|err| {
                         tracing::warn!(
                             "Invalid virtual chunk container, ignoring it: {err}"
@@ -286,9 +364,50 @@ impl VirtualChunkResolver {
 
     pub fn matching_container(
         &self,
+        chunk_location: &VirtualChunkLocation,
+    ) -> Option<&VirtualChunkContainer> {
+        if let Some((name, _)) = chunk_location.parse_vcc() {
+            self.matching_container_by_name(name)
+        } else {
+            self.matching_container_by_url(chunk_location.url())
+        }
+    }
+
+    fn matching_container_by_url(
+        &self,
         chunk_location: &str,
     ) -> Option<&VirtualChunkContainer> {
-        find_container(chunk_location, self.containers.as_ref())
+        self.containers
+            .iter()
+            .find(|cont| chunk_location.starts_with(cont.url_prefix.as_str()))
+    }
+
+    fn matching_container_by_name(&self, name: &str) -> Option<&VirtualChunkContainer> {
+        self.containers.iter().find(|c| c.name.as_deref() == Some(name))
+    }
+
+    /// Expand a chunk location to an absolute URL. For `vcc://name/path` locations,
+    /// resolves the name to a container's url_prefix. For absolute URLs, returns as-is.
+    pub fn expand_location(
+        &self,
+        location: &str,
+    ) -> Result<String, VirtualReferenceError> {
+        let Some(rest) =
+            location.strip_prefix(crate::format::manifest::VCC_RELATIVE_URL_SCHEME)
+        else {
+            return Ok(location.to_string());
+        };
+        let Some(slash) = rest.find('/') else {
+            return Err(
+                VirtualReferenceErrorKind::NoContainerForName(rest.to_string()).into()
+            );
+        };
+        let name = &rest[..slash];
+        let relative_path = &rest[slash + 1..];
+        let cont = self.matching_container_by_name(name).ok_or_else(|| {
+            VirtualReferenceErrorKind::NoContainerForName(name.to_string())
+        })?;
+        Ok(format!("{}{}", cont.url_prefix(), relative_path))
     }
 
     async fn get_fetcher(
@@ -297,9 +416,10 @@ impl VirtualChunkResolver {
     ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
         let location = chunk_location.to_string();
         let location = urlencoding::decode(location.as_str())?;
-        let cont = self.matching_container(location.as_ref()).ok_or_else(|| {
-            VirtualReferenceErrorKind::NoContainerForUrl(chunk_location.to_string())
-        })?;
+        let cont =
+            self.matching_container_by_url(location.as_ref()).ok_or_else(|| {
+                VirtualReferenceErrorKind::NoContainerForUrl(chunk_location.to_string())
+            })?;
 
         let cache_key = fetcher_cache_key(cont, chunk_location)?;
         // TODO: we shouldn't need to clone the container name
@@ -319,12 +439,11 @@ impl VirtualChunkResolver {
         range: &Range<ChunkOffset>,
         checksum: Option<&Checksum>,
     ) -> Result<Bytes, VirtualReferenceError> {
+        let location = self.expand_location(chunk_location)?;
+
         // this resolves things like /../
-        let url = Url::parse(chunk_location).map_err(|e| {
-            VirtualReferenceErrorKind::CannotParseUrl {
-                cause: e,
-                url: chunk_location.to_string(),
-            }
+        let url = Url::parse(&location).map_err(|e| {
+            VirtualReferenceErrorKind::CannotParseUrl { cause: e, url: location.clone() }
         })?;
         let fetcher = self.get_fetcher(&url).await?;
         fetcher.fetch_chunk(&url, range, checksum).await
@@ -337,6 +456,7 @@ impl VirtualChunkResolver {
     ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
         #[allow(clippy::unimplemented)]
         match &cont.store {
+            #[cfg(feature = "s3")]
             ObjectStoreConfig::S3(opts) | ObjectStoreConfig::S3Compatible(opts) => {
                 let creds = match self.credentials.get(&cont.url_prefix) {
                     Some(Some(Credentials::S3(creds))) => creds,
@@ -358,6 +478,7 @@ impl VirtualChunkResolver {
                 };
                 Ok(Arc::new(S3Fetcher::new(opts, creds, self.settings.clone()).await))
             }
+            #[cfg(feature = "s3")]
             ObjectStoreConfig::Tigris(opts) => {
                 let creds = match self.credentials.get(&cont.url_prefix) {
                     Some(Some(Credentials::S3(creds))) => creds,
@@ -387,6 +508,60 @@ impl VirtualChunkResolver {
                 };
                 Ok(Arc::new(S3Fetcher::new(opts, creds, self.settings.clone()).await))
             }
+            #[cfg(all(not(feature = "s3"), feature = "object-store-s3"))]
+            ObjectStoreConfig::S3(opts)
+            | ObjectStoreConfig::S3Compatible(opts)
+            | ObjectStoreConfig::Tigris(opts) => {
+                let creds = match self.credentials.get(&cont.url_prefix) {
+                    Some(Some(Credentials::S3(creds))) => Some(creds.clone()),
+                    Some(Some(_)) => Err(VirtualReferenceErrorKind::InvalidCredentials(
+                        "S3".to_string(),
+                    ))?,
+                    Some(None) => {
+                        if opts.anonymous {
+                            Some(S3Credentials::Anonymous)
+                        } else {
+                            Some(S3Credentials::FromEnv)
+                        }
+                    }
+                    None => Err(
+                        VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer(
+                            Box::new(cont.clone()),
+                        ),
+                    )?,
+                };
+
+                let bucket_name = if let Some(host) = chunk_location.host_str() {
+                    urlencoding::decode(host)?.into_owned()
+                } else {
+                    Err(VirtualReferenceErrorKind::CannotParseBucketName(
+                        "No bucket name found".to_string(),
+                    ))?
+                };
+
+                Ok(Arc::new(
+                    ObjectStoreFetcher::new_s3(
+                        bucket_name,
+                        None,
+                        creds,
+                        Some(opts.clone()),
+                    )
+                    .await?,
+                ))
+            }
+            #[cfg(not(any(feature = "s3", feature = "object-store-s3")))]
+            ObjectStoreConfig::S3(_)
+            | ObjectStoreConfig::S3Compatible(_)
+            | ObjectStoreConfig::Tigris(_) => {
+                Err(VirtualReferenceErrorKind::OtherError(Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "S3/Tigris virtual chunk fetching requires the `s3` or `object-store-s3` feature",
+                    ),
+                ))
+                .into())
+            }
+            #[cfg(feature = "object-store-fs")]
             ObjectStoreConfig::LocalFileSystem { .. } => {
                 match self.credentials.get(&cont.url_prefix) {
                     Some(None) => Ok(Arc::new(ObjectStoreFetcher::new_local())),
@@ -400,6 +575,7 @@ impl VirtualChunkResolver {
                     )?,
                 }
             }
+            #[cfg(feature = "object-store-gcs")]
             ObjectStoreConfig::Gcs(opts) => {
                 let creds = match self.credentials.get(&cont.url_prefix) {
                     Some(Some(Credentials::Gcs(creds))) => creds,
@@ -432,6 +608,7 @@ impl VirtualChunkResolver {
                     .await?,
                 ))
             }
+            #[cfg(feature = "object-store-http")]
             ObjectStoreConfig::Http(opts) => {
                 match self.credentials.get(&cont.url_prefix) {
                     // FIXME: support http auth
@@ -456,6 +633,7 @@ impl VirtualChunkResolver {
                 let root_url = format!("{}://{}", chunk_location.scheme(), hostname);
                 Ok(Arc::new(ObjectStoreFetcher::new_http(&root_url, opts).await?))
             }
+            #[cfg(feature = "object-store-azure")]
             ObjectStoreConfig::Azure(config) => {
                 let account = config.get("account").ok_or(
                     VirtualReferenceErrorKind::AzureConfigurationMustIncludeAccount,
@@ -500,12 +678,22 @@ impl VirtualChunkResolver {
 }
 
 fn is_fetcher_bucket_constrained(store: &ObjectStoreConfig) -> bool {
-    matches!(
-        store,
-        ObjectStoreConfig::Gcs(_)
-            | ObjectStoreConfig::Http(_)
-            | ObjectStoreConfig::Azure(_)
-    )
+    match store {
+        // When using the native S3Fetcher (feature = "s3"), the client handles any
+        // bucket, so it is NOT bucket-constrained. When falling back to
+        // ObjectStoreFetcher via object-store-s3, each client is bound to one bucket.
+        #[cfg(all(not(feature = "s3"), feature = "object-store-s3"))]
+        ObjectStoreConfig::S3(_)
+        | ObjectStoreConfig::S3Compatible(_)
+        | ObjectStoreConfig::Tigris(_) => true,
+        #[cfg(feature = "object-store-gcs")]
+        ObjectStoreConfig::Gcs(_) => true,
+        #[cfg(feature = "object-store-http")]
+        ObjectStoreConfig::Http(_) => true,
+        #[cfg(feature = "object-store-azure")]
+        ObjectStoreConfig::Azure(_) => true,
+        _ => false,
+    }
 }
 
 fn fetcher_cache_key(
@@ -529,12 +717,14 @@ fn fetcher_cache_key(
     }
 }
 
+#[cfg(feature = "s3")]
 #[derive(Debug)]
 pub struct S3Fetcher {
     client: Arc<Client>,
     settings: storage::Settings,
 }
 
+#[cfg(feature = "s3")]
 impl S3Fetcher {
     pub async fn new(
         opts: &S3Options,
@@ -547,8 +737,10 @@ impl S3Fetcher {
     }
 }
 
+#[cfg(feature = "s3")]
 impl private::Sealed for S3Fetcher {}
 
+#[cfg(feature = "s3")]
 #[async_trait]
 impl ChunkFetcher for S3Fetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
@@ -589,7 +781,7 @@ impl ChunkFetcher for S3Fetcher {
                 ))
             }
             Some(Checksum::ETag(etag)) => {
-                b = b.if_match(&etag.0);
+                b = b.if_match(strip_quotes(&etag.0));
             }
             None => {}
         };
@@ -642,14 +834,37 @@ impl ChunkFetcher for S3Fetcher {
     }
 }
 
+#[cfg(any(
+    feature = "object-store-s3",
+    feature = "object-store-fs",
+    feature = "object-store-gcs",
+    feature = "object-store-azure",
+    feature = "object-store-http"
+))]
 #[derive(Debug)]
 pub struct ObjectStoreFetcher {
     client: Arc<dyn ObjectStore>,
     settings: storage::Settings,
 }
+
+#[cfg(any(
+    feature = "object-store-s3",
+    feature = "object-store-fs",
+    feature = "object-store-gcs",
+    feature = "object-store-azure",
+    feature = "object-store-http"
+))]
 impl private::Sealed for ObjectStoreFetcher {}
 
+#[cfg(any(
+    feature = "object-store-s3",
+    feature = "object-store-fs",
+    feature = "object-store-gcs",
+    feature = "object-store-azure",
+    feature = "object-store-http"
+))]
 impl ObjectStoreFetcher {
+    #[cfg(feature = "object-store-fs")]
     fn new_local() -> Self {
         ObjectStoreFetcher {
             client: Arc::new(LocalFileSystem::new()),
@@ -669,6 +884,22 @@ impl ObjectStoreFetcher {
         }
     }
 
+    #[cfg(feature = "object-store-s3")]
+    pub async fn new_s3(
+        bucket: String,
+        prefix: Option<String>,
+        credentials: Option<S3Credentials>,
+        config: Option<S3Options>,
+    ) -> Result<Self, VirtualReferenceError> {
+        let backend = S3ObjectStoreBackend { bucket, prefix, credentials, config };
+        let settings = storage::Settings::default();
+        let client = backend
+            .mk_object_store(&settings)
+            .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))?;
+        Ok(ObjectStoreFetcher { client, settings })
+    }
+
+    #[cfg(feature = "object-store-http")]
     pub async fn new_http(
         url: &str,
         opts: &HashMap<String, String>,
@@ -688,6 +919,7 @@ impl ObjectStoreFetcher {
         Ok(ObjectStoreFetcher { client, settings })
     }
 
+    #[cfg(feature = "object-store-gcs")]
     pub async fn new_gcs(
         bucket: String,
         prefix: Option<String>,
@@ -710,6 +942,7 @@ impl ObjectStoreFetcher {
         Ok(ObjectStoreFetcher { client, settings })
     }
 
+    #[cfg(feature = "object-store-azure")]
     pub async fn new_azure(
         account: String,
         container: String,
@@ -740,6 +973,13 @@ impl ObjectStoreFetcher {
     }
 }
 
+#[cfg(any(
+    feature = "object-store-s3",
+    feature = "object-store-fs",
+    feature = "object-store-gcs",
+    feature = "object-store-azure",
+    feature = "object-store-http"
+))]
 #[async_trait]
 impl ChunkFetcher for ObjectStoreFetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
@@ -767,7 +1007,9 @@ impl ChunkFetcher for ObjectStoreFetcher {
                     .expect("Bad last modified field in virtual chunk reference");
                 options.if_unmodified_since = Some(d);
             }
-            Some(Checksum::ETag(etag)) => options.if_match = Some(etag.0.clone()),
+            Some(Checksum::ETag(etag)) => {
+                options.if_match = Some(strip_quotes(&etag.0).to_string())
+            }
             None => {}
         }
 
@@ -799,7 +1041,9 @@ mod tests {
     use crate::{
         ObjectStoreConfig,
         config::S3Options,
-        format::manifest::{VirtualReferenceError, VirtualReferenceErrorKind},
+        format::manifest::{
+            VirtualChunkLocation, VirtualReferenceError, VirtualReferenceErrorKind,
+        },
         virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
     };
 
@@ -912,6 +1156,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "object-store-fs")]
     #[tokio::test]
     async fn test_cannot_resolve_for_nonexistent_container() {
         let container = VirtualChunkContainer::new(
@@ -936,6 +1181,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "object-store-fs")]
     #[tokio::test]
     async fn test_cannot_resolve_for_unauthorized_container() {
         let container = VirtualChunkContainer::new(
@@ -960,6 +1206,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "object-store-fs")]
     #[tokio::test]
     async fn test_resolver_filters_out_invalid_containers() {
         // this may be a container manipulated on-disk to have a bad url-prefix
@@ -984,5 +1231,130 @@ mod tests {
                 ..
             }) if error_path.as_str() == path
         ));
+    }
+
+    fn s3_store_config() -> ObjectStoreConfig {
+        ObjectStoreConfig::S3(S3Options {
+            region: Some("us-east-1".to_string()),
+            endpoint_url: None,
+            anonymous: false,
+            allow_http: false,
+            force_path_style: false,
+            network_stream_timeout_seconds: None,
+            requester_pays: false,
+        })
+    }
+
+    #[test]
+    fn test_new_named_container() {
+        let cont = VirtualChunkContainer::new_named(
+            "my-data".to_string(),
+            "s3://bucket/prefix/".to_string(),
+            s3_store_config(),
+        )
+        .unwrap();
+        assert_eq!(cont.name(), Some("my-data"));
+        assert_eq!(cont.url_prefix(), "s3://bucket/prefix/");
+    }
+
+    #[test]
+    fn test_new_named_container_invalid_name() {
+        // Empty name
+        assert!(
+            VirtualChunkContainer::new_named(
+                "".to_string(),
+                "s3://bucket/prefix/".to_string(),
+                s3_store_config(),
+            )
+            .is_err()
+        );
+
+        // Name with slash
+        assert!(
+            VirtualChunkContainer::new_named(
+                "a/b".to_string(),
+                "s3://bucket/prefix/".to_string(),
+                s3_store_config(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_expand_location() {
+        let cont = VirtualChunkContainer::new_named(
+            "my-data".to_string(),
+            "s3://bucket/prefix/".to_string(),
+            s3_store_config(),
+        )
+        .unwrap();
+        let resolver = VirtualChunkResolver::new(
+            [cont].into_iter(),
+            Default::default(),
+            Default::default(),
+        );
+
+        // vcc:// expands to absolute
+        let expanded =
+            resolver.expand_location("vcc://my-data/path/to/chunk.nc").unwrap();
+        assert_eq!(expanded, "s3://bucket/prefix/path/to/chunk.nc");
+
+        // Absolute URL passes through as-is
+        let expanded = resolver.expand_location("s3://bucket/prefix/chunk.nc").unwrap();
+        assert_eq!(expanded, "s3://bucket/prefix/chunk.nc");
+    }
+
+    #[test]
+    fn test_expand_location_unknown_name() {
+        let cont = VirtualChunkContainer::new_named(
+            "my-data".to_string(),
+            "s3://bucket/prefix/".to_string(),
+            s3_store_config(),
+        )
+        .unwrap();
+        let resolver = VirtualChunkResolver::new(
+            [cont].into_iter(),
+            Default::default(),
+            Default::default(),
+        );
+
+        let result = resolver.expand_location("vcc://unknown/chunk.nc");
+        assert!(matches!(
+            result,
+            Err(VirtualReferenceError {
+                kind: VirtualReferenceErrorKind::NoContainerForName(name),
+                ..
+            }) if name == "unknown"
+        ));
+
+        // No slash after the name
+        let result = resolver.expand_location("vcc://chunk.nc");
+        assert!(matches!(
+            result,
+            Err(VirtualReferenceError {
+                kind: VirtualReferenceErrorKind::NoContainerForName(name),
+                ..
+            }) if name == "chunk.nc"
+        ));
+    }
+
+    #[test]
+    fn test_resolver_preserves_names() {
+        let cont = VirtualChunkContainer::new_named(
+            "my-data".to_string(),
+            "s3://bucket/prefix/".to_string(),
+            s3_store_config(),
+        )
+        .unwrap();
+        let resolver = VirtualChunkResolver::new(
+            [cont].into_iter(),
+            Default::default(),
+            Default::default(),
+        );
+
+        let loc = VirtualChunkLocation::from_vcc_path("my-data", "chunk.nc").unwrap();
+        let found = resolver.matching_container(&loc);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name(), Some("my-data"));
     }
 }

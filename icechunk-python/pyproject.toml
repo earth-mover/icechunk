@@ -21,13 +21,13 @@ license = { file = "LICENSE" }
 dynamic = ["version"]
 authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
-dependencies = ["zarr>=3,!=3.0.3"]
+dependencies = ["zarr>=3.1.0"]
 
 [dependency-groups]
 dev = [
     { include-group = "test" },
     "mypy",
-    "ruff",
+    "ruff==0.15.3",
     "maturin>=1.7,<2.0",
     "maturin-import-hook>=0.3.0",
 ]
@@ -40,9 +40,9 @@ test = [
   "pytest-asyncio",
   "pytest-xdist",
   "pytest-reportlog",
-  "dask>=2024.11.0",
-  "distributed>=2024.11.0",
-  "xarray>=2025.01.2",
+  "dask>=2025.2.0",
+  "distributed>=2025.2.0",
+  "xarray>=2025.07.1",
   "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
@@ -68,9 +68,9 @@ docs = [
   "scipy",
   "cftime",
   "pooch",
-  "dask>=2024.11.0",
-  "distributed>=2024.11.0",
-  "xarray>=2025.01.2",
+  "dask>=2025.2.0",
+  "distributed>=2025.2.0",
+  "xarray>=2025.07.1",
   "myst_nb",
   "pydata_sphinx_theme",
   "mkdocs-awesome-pages-plugin",
@@ -94,6 +94,7 @@ docs = [
   "sphinx_design",
   "sphinx_togglebutton",
   "sphinx-autodoc-typehints",
+  "rich",
 ]
 
 [tool.maturin]
@@ -101,6 +102,8 @@ features = ["pyo3/extension-module"]
 module-name = "icechunk._icechunk_python"
 python-source = "python"
 exclude = ["README.md"]
+editable-profile = "dev"
+cargo-extra-args = ["--workspace"]
 
 [tool.uv]
 # Disable automatic package building - we use maturin-import-hook for faster dev cycles
@@ -113,7 +116,7 @@ minversion = "7"
 testpaths = ["tests", "integration_tests"]
 log_cli_level = "INFO"
 xfail_strict = true
-addopts = ["-ra", "--strict-config", "--strict-markers"]
+addopts = ["-ra", "--strict-config", "--strict-markers", "-n", "auto"]
 markers = [
   "gpu", # need this to run the zarr tests
 ]
@@ -185,3 +188,27 @@ ban-relative-imports = "all"
 
 [project.scripts]
 icechunk = "icechunk._icechunk_python:cli_entrypoint"
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64", "linux-aarch64", "win-64"]
+
+[tool.pixi.feature.docs.dependencies]
+cairo = ">=1.18.4,<2"
+
+[tool.pixi.feature.build.dependencies]
+python = ">=3.11,<3.14"
+rust = "~=1.92.0"
+just = ">=1.46.0,<2"
+compilers = ">=1.11.0,<2"
+uv = ">=0.10.4,<0.11"
+openssl = ">=3.6.1,<4"
+pkgconfig = ">=1.5.5,<2"
+cargo-deny = ">=0.19.0,<0.20"
+prek = ">=0.3.3,<0.4"
+netcdf4 = ">=1.7.4,<2"
+cargo-nextest = ">=0.9.106,<0.10"
+
+[tool.pixi.environments]
+default = { features = ["build", "dev", "docs", "test"], solve-group = "default" }
+benchmark = { features = ["benchmark"], solve-group = "default" }

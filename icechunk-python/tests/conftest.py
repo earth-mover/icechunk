@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Literal, cast
 
 import boto3
@@ -5,6 +6,21 @@ import pytest
 from mypy_boto3_s3.client import S3Client
 
 from icechunk import Repository, in_memory_storage, local_filesystem_storage
+
+
+class Permission(Enum):
+    READONLY = 1
+    MODIFY = 2
+    SUPERUSER = 3  # temporary, while figuring out right permissions
+
+    def keys(self) -> tuple[str, str]:
+        match self:
+            case Permission.READONLY:
+                return ("readonly", "basicuser")
+            case Permission.MODIFY:
+                return ("modify", "modifydata")
+            case Permission.SUPERUSER:
+                return ("minio123", "minio123")
 
 
 def parse_repo(
@@ -20,6 +36,7 @@ def parse_repo(
             storage=in_memory_storage(),
             spec_version=spec_version,
         )
+    raise ValueError(f"Unknown store type: {store}")
 
 
 @pytest.fixture(scope="function")
@@ -37,12 +54,13 @@ minio_client = None
 def get_minio_client() -> S3Client:
     global minio_client
     if minio_client is None:
+        (aws_access_key_id, aws_secret_access_key) = Permission.MODIFY.keys()
         minio_client = boto3.client(
             "s3",
             endpoint_url="http://localhost:9000",
             use_ssl=False,
-            aws_access_key_id="minio123",
-            aws_secret_access_key="minio123",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
         )
     return minio_client
 

@@ -9,9 +9,26 @@ use icechunk::{
     storage::{new_r2_storage, new_tigris_storage},
 };
 
+pub(crate) enum Permission {
+    ReadOnly, // GetObject
+    Modify,   // {Get,Put,Delete}Object, ListBucket
+}
+
+impl Permission {
+    pub(crate) fn keys(&self) -> (&str, &str) {
+        match self {
+            Permission::Modify => ("modify", "modifydata"),
+            Permission::ReadOnly => ("readonly", "basicuser"),
+        }
+    }
+}
+
 pub(crate) fn make_minio_integration_storage(
     prefix: String,
+    permission: &Permission,
 ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
+    let (access_key_id, secret_access_key) = permission.keys();
+
     let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
         S3Options {
             region: Some("us-east-1".to_string()),
@@ -25,8 +42,8 @@ pub(crate) fn make_minio_integration_storage(
         "testbucket".to_string(),
         Some(prefix),
         Some(S3Credentials::Static(S3StaticCredentials {
-            access_key_id: "minio123".into(),
-            secret_access_key: "minio123".into(),
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
             session_token: None,
             expires_after: None,
         })),

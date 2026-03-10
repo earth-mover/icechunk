@@ -1,3 +1,5 @@
+//! CLI configuration file parsing.
+
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
 use serde::{Deserialize, Serialize};

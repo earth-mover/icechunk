@@ -5,6 +5,10 @@ all-features = true
 version = 2
 # only fail for direct unmaintained dependencies, this can only be used with rustc 1.85
 unmaintained = "workspace"
+ignore = [
+  # generator crate: transitive dev-dependency via noxious-client, only used in tests
+  "RUSTSEC-2020-0151",
+]
 
 [licenses]
 # List of explicitly allowed licenses

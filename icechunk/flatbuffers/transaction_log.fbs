@@ -56,6 +56,10 @@ table TransactionLog {
   // sorted in application order, oldest first
   // Added in spec version: 2.0
   moved_nodes: [MoveOperation];
+
+  // Reserved for future use. Opaque byte vector for extensibility.
+  // Introduced in spec version 2
+  extra: [uint8];
 }
 
 root_type TransactionLog;

@@ -6,15 +6,10 @@ from icechunk._icechunk_python import (
     AzureCredentials,
     AzureStaticCredentials,
     BasicConflictSolver,
-    BranchCreatedUpdate,
-    BranchDeletedUpdate,
-    BranchResetUpdate,
     CachingConfig,
     ChunkType,
-    CommitAmendedUpdate,
     CompressionAlgorithm,
     CompressionConfig,
-    ConfigChangedUpdate,
     Conflict,
     ConflictDetector,
     ConflictError,
@@ -22,8 +17,7 @@ from icechunk._icechunk_python import (
     ConflictType,
     Credentials,
     Diff,
-    ExpirationRanUpdate,
-    GCRanUpdate,
+    FeatureFlag,
     GcsBearerCredential,
     GcsCredentials,
     GcsStaticCredentials,
@@ -36,24 +30,20 @@ from icechunk._icechunk_python import (
     ManifestSplitCondition,
     ManifestSplitDimCondition,
     ManifestSplittingConfig,
-    MetadataChangedUpdate,
-    NewCommitUpdate,
-    NewDetachedSnapshotUpdate,
+    ManifestVirtualChunkLocationCompressionConfig,
     ObjectStoreConfig,
     RebaseFailedError,
-    RepoInitializedUpdate,
-    RepoMigratedUpdate,
     RepositoryConfig,
     S3Credentials,
     S3Options,
     S3StaticCredentials,
+    SessionMode,
     SnapshotInfo,
     Storage,
     StorageConcurrencySettings,
     StorageRetriesSettings,
     StorageSettings,
-    TagCreatedUpdate,
-    TagDeletedUpdate,
+    Update,
     UpdateType,
     VersionSelection,
     VirtualChunkContainer,
@@ -116,15 +106,10 @@ __all__ = [
     "AzureCredentials",
     "AzureStaticCredentials",
     "BasicConflictSolver",
-    "BranchCreatedUpdate",
-    "BranchDeletedUpdate",
-    "BranchResetUpdate",
     "CachingConfig",
     "ChunkType",
-    "CommitAmendedUpdate",
     "CompressionAlgorithm",
     "CompressionConfig",
-    "ConfigChangedUpdate",
     "Conflict",
     "ConflictDetector",
     "ConflictError",
@@ -132,9 +117,8 @@ __all__ = [
     "ConflictType",
     "Credentials",
     "Diff",
-    "ExpirationRanUpdate",
+    "FeatureFlag",
     "ForkSession",
-    "GCRanUpdate",
     "GCSummary",
     "GcsBearerCredential",
     "GcsCredentials",
@@ -148,26 +132,22 @@ __all__ = [
     "ManifestSplitCondition",
     "ManifestSplitDimCondition",
     "ManifestSplittingConfig",
-    "MetadataChangedUpdate",
-    "NewCommitUpdate",
-    "NewDetachedSnapshotUpdate",
+    "ManifestVirtualChunkLocationCompressionConfig",
     "ObjectStoreConfig",
     "RebaseFailedError",
-    "RepoInitializedUpdate",
-    "RepoMigratedUpdate",
     "Repository",
     "RepositoryConfig",
     "S3Credentials",
     "S3Options",
     "S3StaticCredentials",
     "Session",
+    "SessionMode",
     "SnapshotInfo",
     "Storage",
     "StorageConcurrencySettings",
     "StorageRetriesSettings",
     "StorageSettings",
-    "TagCreatedUpdate",
-    "TagDeletedUpdate",
+    "Update",
     "UpdateType",
     "VersionSelection",
     "VirtualChunkContainer",
@@ -250,9 +230,23 @@ def to_dict(config: ManifestSplittingConfig) -> SplitSizesDict:
     }
 
 
+class _InvalidatedRepository:
+    """Sentinel replacing a PyRepository after migration to prevent stale usage."""
+
+    def __getattr__(self, name: str) -> object:
+        raise RuntimeError(
+            "This repository has been invalidated by upgrade_icechunk_repository(). "
+            "Use the new Repository object returned by that function instead."
+        )
+
+
 def upgrade_icechunk_repository(
-    repo: Repository, *, dry_run: bool = True, delete_unused_v1_files: bool = True
-) -> None:
+    repo: Repository,
+    *,
+    dry_run: bool,
+    delete_unused_v1_files: bool = True,
+    prefetch_concurrency: int | None = None,
+) -> Repository:
     """
     Migrate a repository to the latest version of Icechunk.
 
@@ -265,13 +259,41 @@ def upgrade_icechunk_repository(
 
     The operation is usually fast, but it can take several minutes if there is a very
     large version history (thousands of snapshots).
+
+    Returns a new Repository object. The original repo object should not be used
+    after calling this function.
+
+    Parameters
+    ----------
+    repo : Repository
+        The repository to upgrade.
+    dry_run : bool
+        If True, perform a dry run without actually upgrading. If False, perform
+        the upgrade.
+    delete_unused_v1_files : bool, optional
+        If True (the default), delete unused v1 files after upgrading.
+    prefetch_concurrency : int or None, optional
+        Number of snapshots to prefetch concurrently during migration.
+        Defaults to 64 if not specified. Lower this value for repos that
+        cannot fit many snapshots in memory.
+
+    Returns
+    -------
+    Repository
+        A freshly opened repository with the updated spec version.
     """
-    _upgrade_icechunk_repository(
-        repo._repository, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
+    new_repo = _upgrade_icechunk_repository(
+        repo._repository,
+        dry_run=dry_run,
+        delete_unused_v1_files=delete_unused_v1_files,
+        prefetch_concurrency=prefetch_concurrency,
     )
+    if not dry_run:
+        repo._repository = _InvalidatedRepository()  # type: ignore[assignment]
+    return Repository(new_repo)
 
 
-ManifestSplittingConfig.from_dict = from_dict  # type: ignore[method-assign]
-ManifestSplittingConfig.to_dict = to_dict  # type: ignore[method-assign]
+ManifestSplittingConfig.from_dict = staticmethod(from_dict)  # type: ignore[method-assign]
+ManifestSplittingConfig.to_dict = to_dict  # type: ignore[method-assign,assignment]
 
 initialize_logs()

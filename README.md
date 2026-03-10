@@ -1,6 +1,6 @@
 # Icechunk
 
-![Icechunk logo](https://raw.githubusercontent.com/earth-mover/icechunk/refs/heads/main/docs/docs/assets/logo.svg)
+![Icechunk logo](https://raw.githubusercontent.com/earth-mover/icechunk/refs/heads/main/icechunk-python/docs/docs/assets/logo.svg)
 
 <a href="https://pypi.org/project/icechunk" target="_blank"><img alt="PyPI" src="https://img.shields.io/pypi/v/icechunk?logo=pypi&logoColor=ffde57&label=pypi&style=for-the-badge"></a>
 <a href="https://anaconda.org/conda-forge/icechunk" target="_blank"><img alt="Conda Forge" src="https://img.shields.io/conda/vn/conda-forge/icechunk.svg?logo=conda-forge&style=for-the-badge"></a>
@@ -22,7 +22,7 @@ that enhance performance, collaboration, and safety in a cloud-computing context
 - This page: a general overview of the project's goals and components.
 - [Icechunk Launch Blog Post](https://earthmover.io/blog/icechunk)
 - [Frequently Asked Questions](https://icechunk.io/en/latest/faq/)
-- Documentation for [Icechunk Python](https://icechunk.io/en/latest/icechunk-python), the main user-facing
+- Documentation for [Icechunk Python](https://icechunk.io/en/latest/), the main user-facing
   library
 - Documentation for the [Icechunk Rust Crate](https://icechunk.io/en/latest/icechunk-rust)
 - The [Contributor Guide](https://icechunk.io/en/latest/contributing)
