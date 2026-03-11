@@ -320,11 +320,11 @@ impl Store {
         match Key::parse(key)? {
             Key::Metadata { node_path } => {
                 let node_meta = serde_json::from_slice::<NodeMetadata>(value.as_ref())
-                    .map_err(|err| StoreErrorKind::BadMetadata(err))?;
+                    .map_err(StoreErrorKind::BadMetadata)?;
                 match node_meta.node_type.as_str() {
                     "array" => {
                         let array_meta = serde_json::from_slice(value.as_ref())
-                            .map_err(|err| StoreErrorKind::BadMetadata(err))?;
+                            .map_err(StoreErrorKind::BadMetadata)?;
                         self.set_array_meta(node_path, value, array_meta, locked_session)
                             .await
                     }
@@ -1283,7 +1283,6 @@ impl TryFrom<ChunkGridSerializer> for Vec<u64> {
     type Error = &'static str;
 
     fn try_from(value: ChunkGridSerializer) -> Result<Self, Self::Error> {
-        dbg!(&value);
         match value {
             ChunkGridSerializer {
                 name,

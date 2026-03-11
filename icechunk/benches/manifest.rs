@@ -362,7 +362,6 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
 
     let path: Path = "/temperature".try_into().unwrap();
-    let chunk_size = 1u32;
     let num_chunks = 500_000u32;
     let num_manifests = 50u32;
 

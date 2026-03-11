@@ -90,7 +90,7 @@ impl ArrayShape {
             .0
             .iter()
             .zip(self.num_chunks())
-            .all(|(index, index_permitted)| *index <= (index_permitted - 1).max(0))
+            .all(|(index, index_permitted)| *index <= (index_permitted.max(1) - 1))
     }
 }
 
@@ -193,10 +193,13 @@ impl<'a> From<generated::ManifestRef<'a>> for ManifestRef {
 
 impl From<&generated::DimensionShape> for DimensionShape {
     fn from(value: &generated::DimensionShape) -> Self {
-        DimensionShape {
-            dim_length: value.array_length(),
-            num_chunks: value.array_length().div_ceil(value.chunk_length()) as u32,
-        }
+        let num_chunks = if value.chunk_length() == 0 {
+            debug_assert_eq!(value.array_length(), 0);
+            0
+        } else {
+            value.array_length().div_ceil(value.chunk_length()) as u32
+        };
+        DimensionShape { dim_length: value.array_length(), num_chunks }
     }
 }
 
@@ -785,14 +788,18 @@ fn mk_node_data(
                         .0
                         .iter()
                         .map(|ds| {
-                            generated::DimensionShape::new(
-                                ds.dim_length,
+                            let chunk_length = if ds.num_chunks == 0 {
+                                debug_assert_eq!(ds.dim_length, 0);
+                                0
+                            } else {
                                 // FIXME: this can be *very* wrong, but I'm not sure it really matters
                                 //        we still preserve num_chunks, and return the proper Zarr JSON metadata
                                 //        which is stored in NodeData::user_data which stores the zarr.json exactly
                                 //        as provided by Zarr
-                                ds.dim_length.div_ceil(ds.num_chunks as u64),
-                            )
+                                ds.dim_length.div_ceil(ds.num_chunks as u64)
+                            };
+
+                            generated::DimensionShape::new(ds.dim_length, chunk_length)
                         })
                         .collect::<Vec<_>>();
                     let shape = builder.create_vector(shape.as_slice());
