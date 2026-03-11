@@ -483,7 +483,7 @@ impl From<PyRepoAvailability> for RepoAvailability {
     }
 }
 
-#[pyclass(name = "RepoStatus", get_all)]
+#[pyclass(name = "RepoStatus", get_all, eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PyRepoStatus {
     availability: PyRepoAvailability,

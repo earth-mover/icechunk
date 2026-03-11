@@ -304,9 +304,9 @@ def test_readonly_repo_status_blocks_writable_session() -> None:
 
     # Set back to Online and verify writable session works again
     repo.set_status(RepoStatus(availability=RepoAvailability.Online))
-    assert repo.status.availability == RepoAvailability.Online
+    assert repo.status.availability == RepoAvailability.Online  # type: ignore[comparison-overlap]
 
-    session = repo.writable_session("main")
+    session = repo.writable_session("main")  # type: ignore[unreachable]
     assert not session.read_only
 
 
@@ -336,9 +336,9 @@ def test_readonly_repo_status_blocks_rearrange_session() -> None:
 
     # Set back to Online and verify rearrange session works again
     repo.set_status(RepoStatus(availability=RepoAvailability.Online))
-    assert repo.status.availability == RepoAvailability.Online
+    assert repo.status.availability == RepoAvailability.Online  # type: ignore[comparison-overlap]
 
-    session = repo.rearrange_session("main")
+    session = repo.rearrange_session("main")  # type: ignore[unreachable]
     assert not session.read_only
 
 
