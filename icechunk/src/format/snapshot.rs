@@ -217,6 +217,9 @@ impl<'a> From<generated::ArrayNodeData<'a>> for NodeData {
         let dimension_names = value
             .dimension_names()
             .map(|dn| dn.iter().map(|name| name.name().into()).collect());
+        // In our flatbuffers the V1 `shape` is required and will be an empty `[]` for V2 repos
+        // Note that `shape` is *also* `[]` for scalars in V1 repos.
+        // So we branch on `shape_v2` which is optional, and thus None, on V1 repos.
         let shape = ArrayShape(value.shape_v2().map_or_else(
             || value.shape().iter().map(|dim| dim.into()).collect(),
             |x| x.iter().map(|dim| (&dim).into()).collect(),
