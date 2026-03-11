@@ -149,10 +149,13 @@ icechunk._icechunk_python.S3Credentials.Static.__new__
 icechunk._icechunk_python.S3Options
 icechunk._icechunk_python.S3Options.requester_pays
 icechunk._icechunk_python.S3StaticCredentials
+icechunk._icechunk_python.CommitMethod
+icechunk._icechunk_python.CommitMethod.new_commit
+icechunk._icechunk_python.CommitMethod.amend
 icechunk._icechunk_python.SessionMode
-icechunk._icechunk_python.SessionMode.READONLY
-icechunk._icechunk_python.SessionMode.REARRANGE
-icechunk._icechunk_python.SessionMode.WRITABLE
+icechunk._icechunk_python.SessionMode.readonly
+icechunk._icechunk_python.SessionMode.rearrange
+icechunk._icechunk_python.SessionMode.writable
 icechunk._icechunk_python.SnapshotInfo
 icechunk._icechunk_python.Storage
 icechunk._icechunk_python.StorageConcurrencySettings

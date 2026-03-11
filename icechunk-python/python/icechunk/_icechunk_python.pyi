@@ -1837,6 +1837,7 @@ class ManifestFileInfo:
         """The number of chunk references contained in this manifest"""
         ...
 
+@final
 class CommitMethod(Enum):
     """The commit method to use when rewriting manifests.
 
