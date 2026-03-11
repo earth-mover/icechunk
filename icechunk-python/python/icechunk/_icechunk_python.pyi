@@ -2108,27 +2108,27 @@ class ChunkType(Enum):
         Chunk is store inline in the manifest
     """
 
-    UNINITIALIZED = 0
-    NATIVE = 1
-    VIRTUAL = 2
-    INLINE = 3
+    uninitialized = 0
+    native = 1
+    virtual = 2
+    inline = 3
 
 class SessionMode(Enum):
     """Enum for session access modes
 
     Attributes
     ----------
-    READONLY: int
+    readonly: int
         Session can only read data
-    WRITABLE: int
+    writable: int
         Session can read and write data
-    REARRANGE: int
+    rearrange: int
         Session can only move nodes and reindex arrays
     """
 
-    READONLY = 0
-    WRITABLE = 1
-    REARRANGE = 2
+    readonly = 0
+    writable = 1
+    rearrange = 2
 
 class PySession:
     @classmethod

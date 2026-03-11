@@ -2,7 +2,9 @@
 
 use crate::{
     Repository,
-    format::{SnapshotId, snapshot::SnapshotProperties},
+    format::{
+        SnapshotId, format_constants::SpecVersionBin, snapshot::SnapshotProperties,
+    },
     session::{CommitMethod, SessionError},
 };
 
@@ -10,6 +12,10 @@ use crate::{
 pub enum ManifestOpsError {
     #[error("error rewriting manifests")]
     ManifestRewriteError(#[from] Box<SessionError>),
+    #[error(
+        "amend is not supported for spec version 1 repositories, use new commit instead"
+    )]
+    AmendNotSupportedForV1,
 }
 
 pub type ManifestOpsResult<A> = Result<A, ManifestOpsError>;
@@ -21,6 +27,12 @@ pub async fn rewrite_manifests(
     properties: Option<SnapshotProperties>,
     commit_method: CommitMethod,
 ) -> ManifestOpsResult<SnapshotId> {
+    if commit_method == CommitMethod::Amend
+        && repository.spec_version() < SpecVersionBin::V2dot0
+    {
+        return Err(ManifestOpsError::AmendNotSupportedForV1);
+    }
+
     let mut session = repository
         .writable_session(branch)
         .await

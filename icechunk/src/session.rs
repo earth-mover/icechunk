@@ -4700,6 +4700,57 @@ mod tests {
         Ok(())
     }
 
+    // Regression test for https://github.com/earth-mover/icechunk/issues/1744
+    // rewrite_manifests after a rearrange_session commit should succeed
+    #[tokio_test]
+    async fn test_rewrite_manifests_after_rearrange() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session
+            .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        session.commit("init", None).await?;
+
+        // Rearrange session: move a node
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/source".try_into().unwrap(), "/dest".try_into().unwrap())
+            .await?;
+        session.commit("moved source to dest", None).await?;
+
+        // Open a fresh repo from the same storage (as the issue reproducer does)
+        let repo2 = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
+
+        // Amend should fail because the previous commit was a rearrange
+        let result = repo2
+            .writable_session("main")
+            .await?
+            .rewrite_manifests("rewriting manifests", None, CommitMethod::Amend)
+            .await;
+        assert!(result.is_err());
+
+        // NewCommit (the new default) should succeed
+        let result = repo2
+            .writable_session("main")
+            .await?
+            .rewrite_manifests("rewriting manifests", None, CommitMethod::NewCommit)
+            .await;
+        assert!(result.is_ok());
+
+        Ok(())
+    }
+
     /// Integration test that fetch_snapshot_info correctly identifies initial vs non-initial.
     #[tokio_test]
     #[apply(spec_version_cases)]

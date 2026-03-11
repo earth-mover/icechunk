@@ -50,6 +50,25 @@ use crate::{
     streams::PyAsyncGenerator,
 };
 
+/// The commit method to use when committing changes.
+#[pyclass(name = "CommitMethod", module = "icechunk", eq, rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PyCommitMethod {
+    /// Create a new commit (default).
+    NewCommit,
+    /// Amend the previous commit, replacing it with the new one.
+    Amend,
+}
+
+impl From<PyCommitMethod> for icechunk::session::CommitMethod {
+    fn from(method: PyCommitMethod) -> Self {
+        match method {
+            PyCommitMethod::NewCommit => icechunk::session::CommitMethod::NewCommit,
+            PyCommitMethod::Amend => icechunk::session::CommitMethod::Amend,
+        }
+    }
+}
+
 /// Wrapper needed to implement pyo3 conversion classes
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonValue(pub serde_json::Value);
@@ -2219,26 +2238,22 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, *, branch, metadata=None))]
+    #[pyo3(signature = (message, *, branch, metadata=None, commit_method=None))]
     pub(crate) fn rewrite_manifests(
         &self,
         py: Python<'_>,
         message: &str,
         branch: &str,
         metadata: Option<PySnapshotProperties>,
+        commit_method: Option<PyCommitMethod>,
     ) -> PyResult<String> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let metadata = metadata.map(|m| m.into());
+            let commit_method = commit_method.unwrap_or(PyCommitMethod::NewCommit).into();
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let lock = self.0.read().await;
-                    // TODO: make commit method selectable
-                    let commit_method = if lock.spec_version() > SpecVersionBin::V1dot0 {
-                        icechunk::session::CommitMethod::Amend
-                    } else {
-                        icechunk::session::CommitMethod::NewCommit
-                    };
                     rewrite_manifests(&lock, branch, message, metadata, commit_method)
                         .await
                         .map_err(PyIcechunkStoreError::ManifestOpsError)
@@ -2247,28 +2262,23 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, *, branch, metadata=None))]
+    #[pyo3(signature = (message, *, branch, metadata=None, commit_method=None))]
     fn rewrite_manifests_async<'py>(
         &'py self,
         py: Python<'py>,
         message: &str,
         branch: &str,
         metadata: Option<PySnapshotProperties>,
+        commit_method: Option<PyCommitMethod>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
         let message = message.to_owned();
         let branch = branch.to_owned();
         let metadata = metadata.map(|m| m.into());
+        let commit_method = commit_method.unwrap_or(PyCommitMethod::NewCommit).into();
 
         pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
             let repository = repository.read().await;
-            // TODO: make commit method selectable
-            // TODO: make commit method selectable
-            let commit_method = if repository.spec_version() > SpecVersionBin::V1dot0 {
-                icechunk::session::CommitMethod::Amend
-            } else {
-                icechunk::session::CommitMethod::NewCommit
-            };
             let result = rewrite_manifests(
                 &repository,
                 &branch,
