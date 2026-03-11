@@ -12,7 +12,9 @@ from hypothesis import assume, given, settings
 from zarr.testing.strategies import arrays, numpy_arrays
 
 try:
-    from zarr.testing.strategies import complex_chunked_arrays
+    from zarr.testing.strategies import (  # type: ignore[attr-defined, unused-ignore]
+        complex_chunked_arrays,
+    )
 
     supports_rectilinear_chunk_grids = True
 

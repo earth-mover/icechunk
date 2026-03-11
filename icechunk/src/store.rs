@@ -1136,11 +1136,17 @@ impl ArrayMetadata {
     }
 
     fn num_chunks(&self) -> StoreResult<Vec<u32>> {
-        match &self.chunk_grid {
-            ChunkGridSerializer {
-                name,
-                configuration: serde_json::Value::Object(kvs),
-            } if name == "regular" => {
+        let kvs = match &self.chunk_grid.configuration {
+            serde_json::Value::Object(kvs) => kvs,
+            _ => {
+                return Err(StoreErrorKind::BadChunkGridMetadata(
+                    "Unsupported chunk grid".into(),
+                )
+                .into());
+            }
+        };
+        match self.chunk_grid.name.as_str() {
+            "regular" => {
                 let values = kvs.get("chunk_shape").and_then(|v| v.as_array()).ok_or(
                     StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shape` for regular chunk grid".into(),
@@ -1159,10 +1165,7 @@ impl ArrayMetadata {
                     .collect::<Vec<_>>();
                 Ok(num_chunks)
             }
-            ChunkGridSerializer {
-                name,
-                configuration: serde_json::Value::Object(kvs),
-            } if name == "rectilinear" => {
+            "rectilinear" => {
                 let values = kvs.get("chunk_shapes").and_then(|v| v.as_array()).ok_or(
                     StoreErrorKind::BadChunkGridMetadata(
                         "cannot parse `chunk_shapes` for rectilinear chunk grid".into(),
@@ -1643,18 +1646,14 @@ mod tests {
         let zarr_meta = Bytes::from(format!(
             r#"{{"zarr_format":3,"node_type":"array","attributes":{{"foo":42}},"shape":[6,6,6,6,6,6],"data_type":"int32","chunk_grid":{chunk_grid},"chunk_key_encoding":{{"name":"default","configuration":{{"separator":"/"}}}},"fill_value":0,"codecs":[{{"name":"mycodec","configuration":{{"foo":42}}}}],"storage_transformers":[{{"name":"mytransformer","configuration":{{"bar":43}}}}],"dimension_names":["x","y","t"]}}"#
         ));
-        eprintln!("setting first json");
         store.set("a/b/array/zarr.json", zarr_meta.clone()).await?;
         assert_eq!(
             store.get("a/b/array/zarr.json", &ByteRange::ALL).await.unwrap(),
             zarr_meta.clone()
         );
 
-        let node = session
-            .read()
-            .await
-            .get_array(&Path::new("/a/b/array".into()).unwrap())
-            .await?;
+        let node =
+            session.read().await.get_array(&Path::new("/a/b/array").unwrap()).await?;
         if let NodeSnapshot { node_data: NodeData::Array { shape, .. }, .. } = node {
             assert_eq!(shape.num_chunks().collect::<Vec<_>>(), vec![3, 3, 6, 3, 4, 1])
         } else {

@@ -127,11 +127,9 @@ fn benchmark_set_chunks(c: &mut Criterion) {
                     b.iter_batched(
                         || {
                             let path = path.clone();
-                            let shape = ArrayShape::new(vec![(
-                                num_chunks.into(),
-                                num_chunks.into(),
-                            )])
-                            .unwrap();
+                            let shape =
+                                ArrayShape::new(vec![(num_chunks.into(), num_chunks)])
+                                    .unwrap();
                             rt.block_on(async move {
                                 let repo = setup_repo(path.clone(), shape, None, None)
                                     .await
@@ -188,8 +186,8 @@ fn benchmark_get_chunks(c: &mut Criterion) {
         // Lazy init: write chunks once, then rewrite manifests for each split config.
         let storage = storage_cache.get_or_insert_with(|| {
             rt.block_on(async {
-                let shape = ArrayShape::new(vec![(num_chunks.into(), num_chunks.into())])
-                    .unwrap();
+                let shape =
+                    ArrayShape::new(vec![(num_chunks.into(), num_chunks)]).unwrap();
                 let repo = setup_repo(path.clone(), shape, None, None).await.unwrap();
                 let mut write_session = repo.writable_session("main").await.unwrap();
                 set_chunks(
@@ -314,11 +312,9 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
                     b.iter_batched(
                         || {
                             let path = path.clone();
-                            let shape = ArrayShape::new(vec![(
-                                num_chunks.into(),
-                                num_chunks.into(),
-                            )])
-                            .unwrap();
+                            let shape =
+                                ArrayShape::new(vec![(num_chunks.into(), num_chunks)])
+                                    .unwrap();
                             let split_config = split_config.clone();
                             rt.block_on(async move {
                                 let repo = setup_repo(
@@ -452,8 +448,7 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
                 b.iter_custom(|_iters| {
                     // Fresh repo per sample
                     let shape =
-                        ArrayShape::new(vec![(num_chunks.into(), num_chunks.into())])
-                            .unwrap();
+                        ArrayShape::new(vec![(num_chunks.into(), num_chunks)]).unwrap();
                     let repo = rt.block_on(async {
                         setup_repo(path.clone(), shape, None, Some(split_config.clone()))
                             .await
