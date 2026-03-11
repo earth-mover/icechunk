@@ -2238,19 +2238,19 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, *, branch, metadata=None, commit_method=None))]
+    #[pyo3(signature = (message, *, branch, metadata=None, commit_method=PyCommitMethod::NewCommit))]
     pub(crate) fn rewrite_manifests(
         &self,
         py: Python<'_>,
         message: &str,
         branch: &str,
         metadata: Option<PySnapshotProperties>,
-        commit_method: Option<PyCommitMethod>,
+        commit_method: PyCommitMethod,
     ) -> PyResult<String> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let metadata = metadata.map(|m| m.into());
-            let commit_method = commit_method.unwrap_or(PyCommitMethod::NewCommit).into();
+            let commit_method = commit_method.into();
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let lock = self.0.read().await;
@@ -2262,20 +2262,20 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, *, branch, metadata=None, commit_method=None))]
+    #[pyo3(signature = (message, *, branch, metadata=None, commit_method=PyCommitMethod::NewCommit))]
     fn rewrite_manifests_async<'py>(
         &'py self,
         py: Python<'py>,
         message: &str,
         branch: &str,
         metadata: Option<PySnapshotProperties>,
-        commit_method: Option<PyCommitMethod>,
+        commit_method: PyCommitMethod,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
         let message = message.to_owned();
         let branch = branch.to_owned();
         let metadata = metadata.map(|m| m.into());
-        let commit_method = commit_method.unwrap_or(PyCommitMethod::NewCommit).into();
+        let commit_method = commit_method.into();
 
         pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
             let repository = repository.read().await;

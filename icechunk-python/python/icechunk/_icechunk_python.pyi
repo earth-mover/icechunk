@@ -1837,6 +1837,21 @@ class ManifestFileInfo:
         """The number of chunk references contained in this manifest"""
         ...
 
+class CommitMethod(Enum):
+    """The commit method to use when rewriting manifests.
+
+    Attributes
+    ----------
+    new_commit: int
+        Create a new commit (default).
+    amend: int
+        Amend the previous commit, replacing it with the new one.
+        Only supported for spec version 2 repositories.
+    """
+
+    new_commit = 0
+    amend = 1
+
 class PyRepository:
     @classmethod
     def create(
@@ -2043,10 +2058,20 @@ class PyRepository:
         delete_expired_tags: bool = False,
     ) -> set[str]: ...
     def rewrite_manifests(
-        self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
+        self,
+        message: str,
+        *,
+        branch: str,
+        metadata: dict[str, Any] | None = None,
+        commit_method: CommitMethod = CommitMethod.new_commit,
     ) -> str: ...
     async def rewrite_manifests_async(
-        self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
+        self,
+        message: str,
+        *,
+        branch: str,
+        metadata: dict[str, Any] | None = None,
+        commit_method: CommitMethod = CommitMethod.new_commit,
     ) -> str: ...
     def garbage_collect(
         self,
