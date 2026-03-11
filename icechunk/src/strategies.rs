@@ -431,6 +431,7 @@ prop_compose! {
         Settings {
             concurrency,
             retries,
+            timeouts: None,
             unsafe_use_conditional_update,
             unsafe_use_conditional_create,
             unsafe_use_metadata,
