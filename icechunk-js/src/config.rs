@@ -7,7 +7,9 @@ use icechunk::config::{
     CachingConfig, CompressionAlgorithm, CompressionConfig, ManifestConfig,
     RepositoryConfig,
 };
-use icechunk::storage::{ConcurrencySettings, RetriesSettings, Settings};
+use icechunk::storage::{
+    ConcurrencySettings, RetriesSettings, Settings, TimeoutSettings,
+};
 
 #[cfg(not(target_family = "wasm"))]
 use icechunk::virtual_chunks::VirtualChunkContainer;
@@ -110,12 +112,34 @@ impl From<JsStorageRetriesSettings> for RetriesSettings {
     }
 }
 
+/// Storage timeout settings
+#[napi(object, js_name = "StorageTimeoutSettings")]
+#[derive(Clone, Debug)]
+pub struct JsStorageTimeoutSettings {
+    pub connect_timeout_ms: Option<u32>,
+    pub read_timeout_ms: Option<u32>,
+    pub operation_timeout_ms: Option<u32>,
+    pub operation_attempt_timeout_ms: Option<u32>,
+}
+
+impl From<JsStorageTimeoutSettings> for TimeoutSettings {
+    fn from(value: JsStorageTimeoutSettings) -> Self {
+        TimeoutSettings {
+            connect_timeout_ms: value.connect_timeout_ms,
+            read_timeout_ms: value.read_timeout_ms,
+            operation_timeout_ms: value.operation_timeout_ms,
+            operation_attempt_timeout_ms: value.operation_attempt_timeout_ms,
+        }
+    }
+}
+
 /// Storage settings
 #[napi(object, js_name = "StorageSettings")]
 #[derive(Clone, Debug)]
 pub struct JsStorageSettings {
     pub concurrency: Option<JsStorageConcurrencySettings>,
     pub retries: Option<JsStorageRetriesSettings>,
+    pub timeouts: Option<JsStorageTimeoutSettings>,
     pub unsafe_use_conditional_update: Option<bool>,
     pub unsafe_use_conditional_create: Option<bool>,
     pub unsafe_use_metadata: Option<bool>,
@@ -130,6 +154,7 @@ impl From<JsStorageSettings> for Settings {
         Settings {
             concurrency: value.concurrency.map(|c| c.into()),
             retries: value.retries.map(|r| r.into()),
+            timeouts: value.timeouts.map(|t| t.into()),
             unsafe_use_conditional_update: value.unsafe_use_conditional_update,
             unsafe_use_conditional_create: value.unsafe_use_conditional_create,
             unsafe_use_metadata: value.unsafe_use_metadata,
