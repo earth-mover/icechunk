@@ -1602,7 +1602,7 @@ class Repository:
         *,
         branch: str,
         metadata: dict[str, Any] | None = None,
-        commit_method: CommitMethod | None = None,
+        commit_method: CommitMethod = CommitMethod.new_commit,
     ) -> str:
         """
         Rewrite manifests for all arrays.
@@ -1622,7 +1622,7 @@ class Repository:
             The branch to commit to.
         metadata : dict[str, Any] | None, optional
             Additional metadata to store with the commit snapshot.
-        commit_method : CommitMethod | None, optional
+        commit_method : CommitMethod, optional
             The commit method to use. Defaults to ``CommitMethod.new_commit``.
             Use ``CommitMethod.amend`` to replace the previous commit.
             Note that ``CommitMethod.amend`` is only supported for spec version 2
@@ -1644,7 +1644,7 @@ class Repository:
         *,
         branch: str,
         metadata: dict[str, Any] | None = None,
-        commit_method: CommitMethod | None = None,
+        commit_method: CommitMethod = CommitMethod.new_commit,
     ) -> str:
         """
         Rewrite manifests for all arrays (async version).
@@ -1664,7 +1664,7 @@ class Repository:
             The branch to commit to.
         metadata : dict[str, Any] | None, optional
             Additional metadata to store with the commit snapshot.
-        commit_method : CommitMethod | None, optional
+        commit_method : CommitMethod, optional
             The commit method to use. Defaults to ``CommitMethod.new_commit``.
             Use ``CommitMethod.amend`` to replace the previous commit.
             Note that ``CommitMethod.amend`` is only supported for spec version 2
