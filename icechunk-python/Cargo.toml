@@ -22,8 +22,10 @@ crate-type = ["cdylib"]
 bytes = "1.11.1"
 chrono = { version = "0.4.44" }
 futures = "0.3.32"
-icechunk = { path = "../icechunk", version = "2.0.0-alpha.3", features = ["logs"] }
+icechunk = { path = "../icechunk", version = "2.0.0-alpha.3", features = ["logs", "arrow"] }
 itertools = "0.14.0"
+pyo3-arrow = "0.15"
+arrow-array = "57"
 pyo3 = { version = "0.27.2", features = [
   "chrono",
   "experimental-async",

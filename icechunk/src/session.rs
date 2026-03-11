@@ -683,7 +683,7 @@ impl Session {
     ) -> SessionResult<()> {
         let node = self.get_array(node_path).await?;
         for coord in coords {
-            self.set_node_chunk_ref(node.clone(), coord, None).await?
+            self.set_node_chunk_ref(&node, coord, None).await?
         }
         Ok(())
     }
@@ -699,7 +699,7 @@ impl Session {
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
         let node_snapshot = self.get_array(&path).await?;
-        self.set_node_chunk_ref(node_snapshot, coord, data).await
+        self.set_node_chunk_ref(&node_snapshot, coord, data).await
     }
 
     fn change_set(&self) -> &ChangeSet {
@@ -723,17 +723,18 @@ impl Session {
         self.config.manifest().splitting().get_split_sizes(path, shape, dimension_names)
     }
 
-    // Helper function that accepts a NodeSnapshot instead of a path,
-    // this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
-    async fn set_node_chunk_ref(
+    /// Helper function that accepts a NodeSnapshot instead of a path,
+    /// this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
+    #[instrument(skip(self))]
+    pub async fn set_node_chunk_ref(
         &mut self,
-        node: NodeSnapshot,
+        node: &NodeSnapshot,
         coord: ChunkIndices,
         data: Option<ChunkPayload>,
     ) -> SessionResult<()> {
-        if let NodeData::Array { shape, .. } = node.node_data {
+        if let NodeData::Array { ref shape, .. } = node.node_data {
             if shape.valid_chunk_coord(&coord) {
-                self.change_set_mut()?.set_chunk_ref(node.id, coord, data)?;
+                self.change_set_mut()?.set_chunk_ref(node.id.clone(), coord, data)?;
                 Ok(())
             } else {
                 Err(SessionErrorKind::InvalidIndex {
@@ -746,6 +747,29 @@ impl Session {
             Err(SessionErrorKind::NotAnArray {
                 node: Box::new(node.clone()),
                 message: "getting an array".to_string(),
+            }
+            .into())
+        }
+    }
+
+    /// Bulk version - sets multiple chunk refs for a single node.
+    /// More efficient than calling set_node_chunk_ref repeatedly.
+    #[instrument(skip(self, chunks))]
+    pub fn set_node_chunk_refs<I>(
+        &mut self,
+        node: &NodeSnapshot,
+        chunks: I,
+    ) -> SessionResult<()>
+    where
+        I: IntoIterator<Item = (ChunkIndices, Option<ChunkPayload>)>,
+    {
+        if let NodeData::Array { .. } = &node.node_data {
+            self.change_set_mut()?.set_chunk_refs(node.id.clone(), chunks)?;
+            Ok(())
+        } else {
+            Err(SessionErrorKind::NotAnArray {
+                node: Box::new(node.clone()),
+                message: "setting chunk refs".to_string(),
             }
             .into())
         }
