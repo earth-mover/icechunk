@@ -211,6 +211,29 @@ impl RetriesSettings {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+pub struct TimeoutSettings {
+    pub connect_timeout_ms: Option<u32>,
+    pub read_timeout_ms: Option<u32>,
+    pub operation_timeout_ms: Option<u32>,
+    pub operation_attempt_timeout_ms: Option<u32>,
+}
+
+impl TimeoutSettings {
+    pub fn merge(&self, other: Self) -> Self {
+        Self {
+            connect_timeout_ms: other.connect_timeout_ms.or(self.connect_timeout_ms),
+            read_timeout_ms: other.read_timeout_ms.or(self.read_timeout_ms),
+            operation_timeout_ms: other
+                .operation_timeout_ms
+                .or(self.operation_timeout_ms),
+            operation_attempt_timeout_ms: other
+                .operation_attempt_timeout_ms
+                .or(self.operation_attempt_timeout_ms),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct ConcurrencySettings {
     pub max_concurrent_requests_for_object: Option<NonZeroU16>,
     pub ideal_concurrent_request_size: Option<NonZeroU64>,
@@ -254,6 +277,9 @@ pub struct Settings {
     pub retries: Option<RetriesSettings>,
 
     #[serde(default)]
+    pub timeouts: Option<TimeoutSettings>,
+
+    #[serde(default)]
     pub unsafe_use_conditional_update: Option<bool>,
 
     #[serde(default)]
@@ -289,6 +315,10 @@ impl Settings {
         self.retries
             .as_ref()
             .unwrap_or_else(|| DEFAULT_RETRIES.get_or_init(Default::default))
+    }
+
+    pub fn timeouts(&self) -> Option<&TimeoutSettings> {
+        self.timeouts.as_ref()
     }
 
     pub fn unsafe_use_conditional_create(&self) -> bool {
@@ -329,6 +359,12 @@ impl Settings {
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
             retries: match (&self.retries, other.retries) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            timeouts: match (&self.timeouts, other.timeouts) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),

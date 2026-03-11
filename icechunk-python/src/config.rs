@@ -807,6 +807,70 @@ fn storage_retries_settings_repr(s: &PyStorageRetriesSettings) -> String {
     )
 }
 
+#[pyclass(name = "StorageTimeoutSettings", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyStorageTimeoutSettings {
+    #[pyo3(get, set)]
+    pub connect_timeout_ms: Option<u32>,
+    #[pyo3(get, set)]
+    pub read_timeout_ms: Option<u32>,
+    #[pyo3(get, set)]
+    pub operation_timeout_ms: Option<u32>,
+    #[pyo3(get, set)]
+    pub operation_attempt_timeout_ms: Option<u32>,
+}
+
+impl From<storage::TimeoutSettings> for PyStorageTimeoutSettings {
+    fn from(value: storage::TimeoutSettings) -> Self {
+        Self {
+            connect_timeout_ms: value.connect_timeout_ms,
+            read_timeout_ms: value.read_timeout_ms,
+            operation_timeout_ms: value.operation_timeout_ms,
+            operation_attempt_timeout_ms: value.operation_attempt_timeout_ms,
+        }
+    }
+}
+
+impl From<&PyStorageTimeoutSettings> for storage::TimeoutSettings {
+    fn from(value: &PyStorageTimeoutSettings) -> Self {
+        Self {
+            connect_timeout_ms: value.connect_timeout_ms,
+            read_timeout_ms: value.read_timeout_ms,
+            operation_timeout_ms: value.operation_timeout_ms,
+            operation_attempt_timeout_ms: value.operation_attempt_timeout_ms,
+        }
+    }
+}
+
+#[pymethods]
+impl PyStorageTimeoutSettings {
+    #[pyo3(signature = (connect_timeout_ms=None, read_timeout_ms=None, operation_timeout_ms=None, operation_attempt_timeout_ms=None))]
+    #[new]
+    pub fn new(
+        connect_timeout_ms: Option<u32>,
+        read_timeout_ms: Option<u32>,
+        operation_timeout_ms: Option<u32>,
+        operation_attempt_timeout_ms: Option<u32>,
+    ) -> Self {
+        Self {
+            connect_timeout_ms,
+            read_timeout_ms,
+            operation_timeout_ms,
+            operation_attempt_timeout_ms,
+        }
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!(
+            r#"StorageTimeoutSettings(connect_timeout_ms={c}, read_timeout_ms={r}, operation_timeout_ms={o}, operation_attempt_timeout_ms={oa})"#,
+            c = format_option_to_string(self.connect_timeout_ms),
+            r = format_option_to_string(self.read_timeout_ms),
+            o = format_option_to_string(self.operation_timeout_ms),
+            oa = format_option_to_string(self.operation_attempt_timeout_ms),
+        )
+    }
+}
+
 #[pyclass(name = "RepoUpdateRetryConfig", eq)]
 #[derive(Debug)]
 pub struct PyRepoUpdateRetryConfig {
@@ -923,6 +987,8 @@ pub struct PyStorageSettings {
     #[pyo3(get, set)]
     pub retries: Option<Py<PyStorageRetriesSettings>>,
     #[pyo3(get, set)]
+    pub timeouts: Option<Py<PyStorageTimeoutSettings>>,
+    #[pyo3(get, set)]
     pub unsafe_use_conditional_update: Option<bool>,
     #[pyo3(get, set)]
     pub unsafe_use_conditional_create: Option<bool>,
@@ -951,7 +1017,11 @@ impl From<storage::Settings> for PyStorageSettings {
                 Py::new(py, Into::<PyStorageRetriesSettings>::into(c))
                     .expect("Cannot create instance of StorageRetriesSettings")
             }),
-
+            #[allow(clippy::expect_used)]
+            timeouts: value.timeouts.map(|c| {
+                Py::new(py, Into::<PyStorageTimeoutSettings>::into(c))
+                    .expect("Cannot create instance of StorageTimeoutSettings")
+            }),
             unsafe_use_conditional_create: value.unsafe_use_conditional_create,
             unsafe_use_conditional_update: value.unsafe_use_conditional_update,
             unsafe_use_metadata: value.unsafe_use_metadata,
@@ -968,6 +1038,7 @@ impl From<&PyStorageSettings> for storage::Settings {
         Python::attach(|py| Self {
             concurrency: value.concurrency.as_ref().map(|c| (&*c.borrow(py)).into()),
             retries: value.retries.as_ref().map(|c| (&*c.borrow(py)).into()),
+            timeouts: value.timeouts.as_ref().map(|c| (&*c.borrow(py)).into()),
             unsafe_use_conditional_create: value.unsafe_use_conditional_create,
             unsafe_use_conditional_update: value.unsafe_use_conditional_update,
             unsafe_use_metadata: value.unsafe_use_metadata,
@@ -991,7 +1062,7 @@ impl Eq for PyStorageSettings {}
 
 #[pymethods]
 impl PyStorageSettings {
-    #[pyo3(signature = ( concurrency=None, retries=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None))]
+    #[pyo3(signature = ( concurrency=None, retries=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None, timeouts=None))]
     #[new]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -1004,10 +1075,12 @@ impl PyStorageSettings {
         metadata_storage_class: Option<String>,
         chunks_storage_class: Option<String>,
         minimum_size_for_multipart_upload: Option<u64>,
+        timeouts: Option<Py<PyStorageTimeoutSettings>>,
     ) -> Self {
         Self {
             concurrency,
             retries,
+            timeouts,
             unsafe_use_conditional_create,
             unsafe_use_metadata,
             unsafe_use_conditional_update,
@@ -1034,10 +1107,15 @@ impl PyStorageSettings {
                 storage_retries_settings_repr(conc)
             }),
         };
+        let inner_timeouts = match &self.timeouts {
+            None => "None".to_string(),
+            Some(timeouts) => Python::attach(|py| timeouts.borrow(py).__repr__()),
+        };
         format!(
-            r#"StorageSettings(concurrency={conc}, retries={retr}, unsafe_use_conditional_create={cr}, unsafe_use_conditional_update={up}, unsafe_use_metadata={me}, storage_class={sc}, metadata_storage_class={msc}, chunks_storage_class={csc})"#,
+            r#"StorageSettings(concurrency={conc}, retries={retr}, timeouts={tout}, unsafe_use_conditional_create={cr}, unsafe_use_conditional_update={up}, unsafe_use_metadata={me}, storage_class={sc}, metadata_storage_class={msc}, chunks_storage_class={csc})"#,
             conc = inner_conc,
             retr = inner_retries,
+            tout = inner_timeouts,
             cr = format_option(self.unsafe_use_conditional_create.map(format_bool)),
             up = format_option(self.unsafe_use_conditional_update.map(format_bool)),
             me = format_option(self.unsafe_use_metadata.map(format_bool)),
