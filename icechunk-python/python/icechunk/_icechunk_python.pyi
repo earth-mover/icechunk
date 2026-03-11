@@ -854,7 +854,7 @@ class ManifestVirtualChunkLocationCompressionConfig:
 
         Parameters
         ----------
-        num_chunks: int | None
+        min_num_chunks: int | None
             Minimum number of virtual chunks required to enable compression. Default: 1000.
         dictionary_max_training_samples: int | None
             Maximum number of URL samples used to train the compression dictionary. Default: 100.
@@ -1071,6 +1071,51 @@ class StorageRetriesSettings:
         """
         ...
 
+@final
+class StorageTimeoutSettings:
+    """Configuration for AWS SDK timeout settings.
+
+    Controls connect, read, and operation timeouts for the underlying S3 client."""
+
+    def __new__(
+        cls,
+        connect_timeout_ms: int | None = None,
+        read_timeout_ms: int | None = None,
+        operation_timeout_ms: int | None = None,
+        operation_attempt_timeout_ms: int | None = None,
+    ) -> StorageTimeoutSettings:
+        """
+        Create a new `StorageTimeoutSettings` object
+
+        Parameters
+        ----------
+        connect_timeout_ms: int | None
+            The timeout for establishing a connection in milliseconds.
+        read_timeout_ms: int | None
+            The timeout for reading a response in milliseconds.
+        operation_timeout_ms: int | None
+            The timeout for the entire operation (including retries) in milliseconds.
+        operation_attempt_timeout_ms: int | None
+            The timeout for a single attempt of an operation in milliseconds.
+        """
+        ...
+    @property
+    def connect_timeout_ms(self) -> int | None: ...
+    @connect_timeout_ms.setter
+    def connect_timeout_ms(self, value: int | None) -> None: ...
+    @property
+    def read_timeout_ms(self) -> int | None: ...
+    @read_timeout_ms.setter
+    def read_timeout_ms(self, value: int | None) -> None: ...
+    @property
+    def operation_timeout_ms(self) -> int | None: ...
+    @operation_timeout_ms.setter
+    def operation_timeout_ms(self, value: int | None) -> None: ...
+    @property
+    def operation_attempt_timeout_ms(self) -> int | None: ...
+    @operation_attempt_timeout_ms.setter
+    def operation_attempt_timeout_ms(self, value: int | None) -> None: ...
+
 class StorageConcurrencySettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
@@ -1149,6 +1194,7 @@ class StorageSettings:
         metadata_storage_class: str | None = None,
         chunks_storage_class: str | None = None,
         minimum_size_for_multipart_upload: int | None = None,
+        timeouts: StorageTimeoutSettings | None = None,
     ) -> StorageSettings:
         """
         Create a new `StorageSettings` object
@@ -1195,6 +1241,9 @@ class StorageSettings:
         minimum_size_for_multipart_upload: int | None
             Use object store's multipart upload for objects larger than this size in bytes.
             Default: 100 MB if None is passed.
+
+        timeouts: StorageTimeoutSettings | None
+            The configuration for AWS SDK timeout settings.
         """
         ...
     @property
@@ -1223,6 +1272,19 @@ class StorageSettings:
 
     @retries.setter
     def retries(self, value: StorageRetriesSettings | None) -> None: ...
+    @property
+    def timeouts(self) -> StorageTimeoutSettings | None:
+        """
+        The configuration for AWS SDK timeout settings.
+
+        Returns
+        -------
+        StorageTimeoutSettings | None
+            The timeout configuration.
+        """
+
+    @timeouts.setter
+    def timeouts(self, value: StorageTimeoutSettings | None) -> None: ...
     @property
     def unsafe_use_conditional_update(self) -> bool | None:
         """True if Icechunk will use conditional PUT operations for updates in the object store"""
