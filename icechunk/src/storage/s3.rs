@@ -12,6 +12,7 @@ use crate::{Storage, StorageError, format::ChunkOffset, private};
 use async_trait::async_trait;
 use aws_config::{
     AppName, BehaviorVersion, meta::region::RegionProviderChain, retry::RetryConfig,
+    timeout::TimeoutConfig,
 };
 use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_s3::{
@@ -229,6 +230,27 @@ pub async fn mk_client(
         .with_max_backoff(Duration::from_millis(
             settings.retries().max_backoff_ms() as u64
         ));
+
+    if let Some(timeouts) = settings.timeouts() {
+        let mut timeout_builder = TimeoutConfig::builder();
+        if let Some(ms) = timeouts.connect_timeout_ms {
+            timeout_builder =
+                timeout_builder.connect_timeout(Duration::from_millis(ms as u64));
+        }
+        if let Some(ms) = timeouts.read_timeout_ms {
+            timeout_builder =
+                timeout_builder.read_timeout(Duration::from_millis(ms as u64));
+        }
+        if let Some(ms) = timeouts.operation_timeout_ms {
+            timeout_builder =
+                timeout_builder.operation_timeout(Duration::from_millis(ms as u64));
+        }
+        if let Some(ms) = timeouts.operation_attempt_timeout_ms {
+            timeout_builder = timeout_builder
+                .operation_attempt_timeout(Duration::from_millis(ms as u64));
+        }
+        aws_config = aws_config.timeout_config(timeout_builder.build());
+    }
 
     let mut s3_builder = Builder::from(&aws_config.load().await)
         .force_path_style(config.force_path_style)
