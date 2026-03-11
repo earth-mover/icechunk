@@ -287,14 +287,14 @@ def test_readonly_repo_status_blocks_writable_session() -> None:
     session = repo.writable_session("main")
     session.commit("initial commit", allow_empty=True)
 
-    # Writable session works before setting ReadOnly
+    # Writable session works before setting read_only
     session = repo.writable_session("main")
     assert not session.read_only
 
-    repo.set_status(RepoStatus(availability=RepoAvailability.ReadOnly))
-    assert repo.status.availability == RepoAvailability.ReadOnly
+    repo.set_status(RepoStatus(availability=RepoAvailability.read_only))
+    assert repo.status.availability == RepoAvailability.read_only
 
-    # Writable session should fail when repo is ReadOnly
+    # Writable session should fail when repo is read_only
     with pytest.raises(IcechunkError):
         repo.writable_session("main")
 
@@ -302,9 +302,9 @@ def test_readonly_repo_status_blocks_writable_session() -> None:
     session = repo.readonly_session("main")
     assert session.read_only
 
-    # Set back to Online and verify writable session works again
-    repo.set_status(RepoStatus(availability=RepoAvailability.Online))
-    assert repo.status.availability == RepoAvailability.Online  # type: ignore[comparison-overlap]
+    # Set back to online and verify writable session works again
+    repo.set_status(RepoStatus(availability=RepoAvailability.online))
+    assert repo.status.availability == RepoAvailability.online  # type: ignore[comparison-overlap]
 
     session = repo.writable_session("main")  # type: ignore[unreachable]
     assert not session.read_only
@@ -319,14 +319,14 @@ def test_readonly_repo_status_blocks_rearrange_session() -> None:
     session = repo.writable_session("main")
     session.commit("initial commit", allow_empty=True)
 
-    # Rearrange session works before setting ReadOnly
+    # Rearrange session works before setting read_only
     session = repo.rearrange_session("main")
     assert not session.read_only
 
-    repo.set_status(RepoStatus(availability=RepoAvailability.ReadOnly))
-    assert repo.status.availability == RepoAvailability.ReadOnly
+    repo.set_status(RepoStatus(availability=RepoAvailability.read_only))
+    assert repo.status.availability == RepoAvailability.read_only
 
-    # Rearrange session should fail when repo is ReadOnly
+    # Rearrange session should fail when repo is read_only
     with pytest.raises(IcechunkError):
         repo.rearrange_session("main")
 
@@ -334,9 +334,9 @@ def test_readonly_repo_status_blocks_rearrange_session() -> None:
     session = repo.readonly_session("main")
     assert session.read_only
 
-    # Set back to Online and verify rearrange session works again
-    repo.set_status(RepoStatus(availability=RepoAvailability.Online))
-    assert repo.status.availability == RepoAvailability.Online  # type: ignore[comparison-overlap]
+    # Set back to online and verify rearrange session works again
+    repo.set_status(RepoStatus(availability=RepoAvailability.online))
+    assert repo.status.availability == RepoAvailability.online  # type: ignore[comparison-overlap]
 
     session = repo.rearrange_session("main")  # type: ignore[unreachable]
     assert not session.read_only
@@ -351,9 +351,9 @@ async def test_readonly_repo_status_blocks_rearrange_session_async() -> None:
     session = await repo.writable_session_async("main")
     await session.commit_async("initial commit", allow_empty=True)
 
-    await repo.set_status_async(RepoStatus(availability=RepoAvailability.ReadOnly))
+    await repo.set_status_async(RepoStatus(availability=RepoAvailability.read_only))
     status = await repo.get_status_async()
-    assert status.availability == RepoAvailability.ReadOnly
+    assert status.availability == RepoAvailability.read_only
 
     with pytest.raises(IcechunkError):
         await repo.rearrange_session_async("main")
@@ -361,9 +361,9 @@ async def test_readonly_repo_status_blocks_rearrange_session_async() -> None:
     session = await repo.readonly_session_async("main")
     assert session.read_only
 
-    await repo.set_status_async(RepoStatus(availability=RepoAvailability.Online))
+    await repo.set_status_async(RepoStatus(availability=RepoAvailability.online))
     status = await repo.get_status_async()
-    assert status.availability == RepoAvailability.Online
+    assert status.availability == RepoAvailability.online
 
     session = await repo.rearrange_session_async("main")
     assert not session.read_only
@@ -378,9 +378,9 @@ async def test_readonly_repo_status_blocks_writable_session_async() -> None:
     session = await repo.writable_session_async("main")
     await session.commit_async("initial commit", allow_empty=True)
 
-    await repo.set_status_async(RepoStatus(availability=RepoAvailability.ReadOnly))
+    await repo.set_status_async(RepoStatus(availability=RepoAvailability.read_only))
     status = await repo.get_status_async()
-    assert status.availability == RepoAvailability.ReadOnly
+    assert status.availability == RepoAvailability.read_only
 
     with pytest.raises(IcechunkError):
         await repo.writable_session_async("main")

@@ -458,7 +458,7 @@ impl PyGCSummary {
 
 impl_pickle!(PyGCSummary);
 
-#[pyclass(name = "RepoAvailability", eq, eq_int)]
+#[pyclass(name = "RepoAvailability", eq, eq_int, rename_all = "snake_case")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum PyRepoAvailability {
     Online,

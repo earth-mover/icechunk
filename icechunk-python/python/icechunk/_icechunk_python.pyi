@@ -1726,14 +1726,14 @@ class RepoAvailability(Enum):
 
     Attributes
     ----------
-    Online: int
+    online: int
         The repository is fully available for reads and writes.
-    ReadOnly: int
+    readonly: int
         The repository is available for reads only.
     """
 
-    Online = 0
-    ReadOnly = 1
+    online = 0
+    read_only = 1
 
 @final
 class RepoStatus:
