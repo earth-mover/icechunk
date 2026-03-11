@@ -389,24 +389,14 @@ impl Repository {
 
         let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2dot0
         {
-            // For V2+ repos, read config from the repo info object.
-            // Only fall back to config.yaml for old V2 repos that predate embedded config.
+            // V2+ repos: config is always embedded in the repo info object.
             let (repo_info, _) = temp_am.fetch_repo_info().await?;
             match repo_info.config()? {
                 Some(embedded_config) => {
                     trace!("Repository configuration found in repo info");
                     (Some(embedded_config), storage::VersionInfo::for_creation())
                 }
-                None => {
-                    trace!(
-                        "No embedded config in repo info, attempting to fall back to config.yaml"
-                    );
-                    // Surface config.yaml errors only when we actually need the result
-                    match config_yaml_result? {
-                        Some((c, v)) => (Some(c), v),
-                        None => (None, storage::VersionInfo::for_creation()),
-                    }
-                }
+                None => (None, storage::VersionInfo::for_creation()),
             }
         } else {
             // V1 repos: use the config.yaml result we already fetched
@@ -642,16 +632,14 @@ impl Repository {
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
 
-        // For V2+ repos, try reading config from the repo info object first
-        if spec_version >= SpecVersionBin::V2dot0
-            && let Ok((repo_info, version)) = am.fetch_repo_info().await
-            && let Ok(Some(config)) = repo_info.config()
-        {
-            return Ok(Some((config, version)));
+        if spec_version >= SpecVersionBin::V2dot0 {
+            // V2+ repos: config is always embedded in the repo info object.
+            let (repo_info, version) = am.fetch_repo_info().await?;
+            Ok(repo_info.config()?.map(|config| (config, version)))
+        } else {
+            // V1 repos: read from config.yaml
+            am.fetch_config().await
         }
-
-        // Fall back to config.yaml (V1 repos, or old V2 repos without embedded config)
-        am.fetch_config().await
     }
 
     #[instrument(skip_all)]
