@@ -157,10 +157,11 @@ pub fn deserialize_repo_info(
             buffer.shrink_to_fit();
             RepoInfo::from_buffer(buffer)
         }
-        SpecVersionBin::V1dot0 => Err(IcechunkFormatErrorKind::InvalidSpecVersion {
-            found: SpecVersionBin::V1dot0 as u8,
-            max_supported: SpecVersionBin::current() as u8,
+        SpecVersionBin::V1dot0 => {
+            Err(IcechunkFormatErrorKind::UnsupportedOperationForVersion {
+                version: SpecVersionBin::V1dot0 as u8,
+            }
+            .into())
         }
-        .into()),
     }
 }

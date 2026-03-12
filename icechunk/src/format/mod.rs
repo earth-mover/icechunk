@@ -315,6 +315,8 @@ pub enum IcechunkFormatErrorKind {
         "this repository uses Icechunk format version {found}, but this library only supports up to version {max_supported}. Please upgrade the icechunk library"
     )]
     InvalidSpecVersion { found: u8, max_supported: u8 },
+    #[error("this operation is not supported for Icechunk format version {version}")]
+    UnsupportedOperationForVersion { version: u8 },
     #[error("Icechunk cannot read this file type, expected {expected:?} got {got}")]
     InvalidFileType { expected: FileTypeBin, got: u8 }, // TODO: add more info
     #[error("Icechunk cannot read file, invalid compression algorithm")]
