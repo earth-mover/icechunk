@@ -202,3 +202,31 @@ async def test_tag_with_open_session(any_spec_version: int | None) -> None:
     async for k in store.list_prefix(""):
         value = await store.get(k, default_buffer_prototype())
         assert value is not None, k
+
+
+async def test_list_missing_array(any_spec_version: int | None) -> None:
+    """This is an issue found by hypothesis"""
+
+    repo = Repository.create(
+        storage=in_memory_storage(),
+    )
+    session = repo.writable_session("main")
+
+    root = zarr.group(store=session.store)
+    group = root.create_group("foo-bar")
+    group = root.create_group("foo")
+    arrays = {"bar", "baz"}
+    for array in arrays:
+        group.create_array(name=array, shape=((2,)), chunks=((1,)), dtype="i4")
+
+    async def check_keys(store: zarr.abc.store.Store) -> None:
+        keys = set([k async for k in store.list_prefix("foo")])
+        assert keys == {f"foo/{a}/zarr.json" for a in arrays} | {"foo/zarr.json"}
+
+        keys = set([k async for k in store.list_dir("foo")])
+        assert keys == arrays | {"zarr.json"}
+
+    await check_keys(session.store)
+    session.commit("commit")
+    session = repo.readonly_session(branch="main")
+    await check_keys(session.store)
