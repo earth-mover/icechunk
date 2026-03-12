@@ -1094,10 +1094,12 @@ impl RepoInfo {
     }
 
     pub fn spec_version(&self) -> IcechunkResult<SpecVersionBin> {
-        self.root()?
-            .spec_version()
-            .try_into()
-            .map_err(|_| IcechunkFormatErrorKind::InvalidSpecVersion)
+        let raw = self.root()?.spec_version();
+        raw.try_into()
+            .map_err(|_| IcechunkFormatErrorKind::InvalidSpecVersion {
+                found: raw,
+                max_supported: SpecVersionBin::current() as u8,
+            })
             .err_into()
     }
 
@@ -1129,15 +1131,23 @@ impl RepoInfo {
             }
             generated::UpdateType::RepoMigratedUpdate => {
                 let up = update.update_type_as_repo_migrated_update().unwrap();
+                let from_raw = up.from_version();
+                let to_raw = up.to_version();
                 Ok(UpdateType::RepoMigratedUpdate {
-                    from_version: up.from_version().try_into().map_err(|_| {
+                    from_version: from_raw.try_into().map_err(|_| {
                         IcechunkFormatError::from(
-                            IcechunkFormatErrorKind::InvalidSpecVersion,
+                            IcechunkFormatErrorKind::InvalidSpecVersion {
+                                found: from_raw,
+                                max_supported: SpecVersionBin::current() as u8,
+                            },
                         )
                     })?,
-                    to_version: up.to_version().try_into().map_err(|_| {
+                    to_version: to_raw.try_into().map_err(|_| {
                         IcechunkFormatError::from(
-                            IcechunkFormatErrorKind::InvalidSpecVersion,
+                            IcechunkFormatErrorKind::InvalidSpecVersion {
+                                found: to_raw,
+                                max_supported: SpecVersionBin::current() as u8,
+                            },
                         )
                     })?,
                 })
