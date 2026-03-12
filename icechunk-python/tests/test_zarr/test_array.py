@@ -163,3 +163,34 @@ async def test_special_complex_fill_values_roundtrip(
     actual = json.loads(content.to_bytes())
     assert actual
     assert actual["fill_value"] == expected
+
+
+def test_scalar_array_roundtrip_regular(store: IcechunkStore) -> None:
+    a = create_array(store=store, shape=(), dtype=np.float64, fill_value=0.0)
+    assert a.shape == ()
+    a[()] = 42.0
+    assert a[()] == 42.0
+
+
+try:
+    from zarr.core.chunk_grids import (
+        RectilinearChunkGrid,  # type: ignore[attr-defined, unused-ignore]
+    )
+
+    _has_rectilinear = True
+except ImportError:
+    _has_rectilinear = False
+
+
+@pytest.mark.skipif(not _has_rectilinear, reason="RectilinearChunkGrid not available")
+def test_scalar_array_roundtrip_rectilinear(store: IcechunkStore) -> None:
+    a = create_array(
+        store=store,
+        shape=(),
+        dtype=np.float64,
+        fill_value=0.0,
+        chunks=RectilinearChunkGrid(chunk_shapes=[]),
+    )
+    assert a.shape == ()
+    a[()] = 42.0
+    assert a[()] == 42.0

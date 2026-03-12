@@ -1719,6 +1719,39 @@ mod tests {
     }
 
     #[tokio_test]
+    async fn test_scalar_array_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        let repo = create_memory_store_repository().await;
+        let session = repo.writable_session("main").await?;
+        let session = Arc::new(RwLock::new(session));
+        let store = Store::from_session(session.clone()).await;
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","shape":[],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0.0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}]}"#);
+        store.set("scalar/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(store.get("scalar/zarr.json", &ByteRange::ALL).await?, zarr_meta);
+
+        let node = session.read().await.get_array(&Path::new("/scalar").unwrap()).await?;
+        if let NodeSnapshot { node_data: NodeData::Array { shape, .. }, .. } = node {
+            assert!(shape.is_empty());
+        } else {
+            unreachable!();
+        }
+
+        let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","shape":[],"data_type":"float64","chunk_grid":{"name":"rectilinear","configuration":{"kind":"inline","chunk_shapes":[]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0.0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}]}"#);
+        store.set("scalar_rect/zarr.json", zarr_meta.clone()).await?;
+        assert_eq!(store.get("scalar_rect/zarr.json", &ByteRange::ALL).await?, zarr_meta);
+
+        let node =
+            session.read().await.get_array(&Path::new("/scalar_rect").unwrap()).await?;
+        if let NodeSnapshot { node_data: NodeData::Array { shape, .. }, .. } = node {
+            assert!(shape.is_empty());
+        } else {
+            unreachable!();
+        }
+
+        Ok(())
+    }
+
+    #[tokio_test]
     async fn test_rectilinear_chunk_grid_metadata()
     -> Result<(), Box<dyn std::error::Error>> {
         let repo = create_memory_store_repository().await;
