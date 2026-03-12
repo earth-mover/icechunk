@@ -1019,8 +1019,11 @@ fn check_header(
     let mut spec_version = 0;
     read.read_exact(std::slice::from_mut(&mut spec_version))?;
 
-    let spec_version = spec_version.try_into().map_err(|_| {
-        RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidSpecVersion)
+    let spec_version: SpecVersionBin = spec_version.try_into().map_err(|_| {
+        RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidSpecVersion {
+            found: spec_version,
+            max_supported: SpecVersionBin::current() as u8,
+        })
     })?;
 
     let mut actual_file_type_int = 0;
