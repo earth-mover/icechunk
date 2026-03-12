@@ -886,8 +886,8 @@ async def test_repository_lifecycle_async(any_spec_version: int | None) -> None:
     assert not await ic.Repository.exists_async(storage)
 
     # Test fetch_config_async with non-existent repo
-    config = await ic.Repository.fetch_config_async(storage)
-    assert config is None
+    with pytest.raises(ic.IcechunkError):
+        await ic.Repository.fetch_config_async(storage)
 
     # Test create_async with custom config
     custom_config = ic.RepositoryConfig.default()
