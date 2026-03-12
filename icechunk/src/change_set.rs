@@ -22,7 +22,7 @@ use crate::{
         manifest::{ChunkInfo, ChunkPayload},
         snapshot::{ArrayShape, DimensionName, NodeData, NodeSnapshot},
     },
-    session::{SessionErrorKind, SessionResult},
+    session::{SessionError, SessionErrorKind, SessionResult},
 };
 
 // We have limitations on how many chunks we can save on a single commit.
@@ -68,9 +68,129 @@ impl EditChanges {
         self == &Default::default()
     }
 
-    fn merge(&mut self, other: EditChanges) {
-        // FIXME: this should detect conflict, for example, if different writers added on the same
-        // path, different objects, or if the same path is added and deleted, etc.
+    fn merge(&mut self, other: EditChanges) -> SessionResult<()> {
+        // TODO: the conflict  detection is not comprehensive
+
+        // check if both created same group with different metadata
+        let shared: Vec<_> = self
+            .new_groups
+            .iter()
+            .filter_map(
+                |(k, v)| if other.new_groups.get(k) != Some(v) { None } else { Some(k) },
+            )
+            .collect();
+        if !shared.is_empty() {
+            return Err(SessionErrorKind::SessionMerge(format!(
+                "Multiple writers created the same groups: {}",
+                shared.into_iter().join(", ")
+            ))
+            .into());
+        }
+
+        // check if both updated same group with different metadata
+        let shared: Vec<_> = self
+            .updated_groups
+            .iter()
+            .filter_map(|(k, v)| {
+                if other.updated_groups.get(k) != Some(v) { None } else { Some(k) }
+            })
+            .collect();
+        if !shared.is_empty() {
+            return Err(SessionErrorKind::SessionMerge(format!(
+                "Multiple writers updated the same groups: {}",
+                shared.into_iter().join(", ")
+            ))
+            .into());
+        }
+
+        // check if both create same array with different metadata
+        let shared: Vec<_> = self
+            .new_arrays
+            .iter()
+            .filter_map(
+                |(k, v)| if other.new_arrays.get(k) != Some(v) { None } else { Some(k) },
+            )
+            .collect();
+        if !shared.is_empty() {
+            return Err(SessionErrorKind::SessionMerge(format!(
+                "Multiple writers created the same arrays: {}",
+                shared.into_iter().join(", ")
+            ))
+            .into());
+        }
+
+        // check if both updated same array with different metadata
+        let shared: Vec<_> = self
+            .updated_arrays
+            .iter()
+            .filter_map(|(k, v)| {
+                if other.updated_arrays.get(k) != Some(v) { None } else { Some(k) }
+            })
+            .collect();
+        if !shared.is_empty() {
+            return Err(SessionErrorKind::SessionMerge(format!(
+                "Multiple writers updated the same arrays: {}",
+                shared.into_iter().join(", ")
+            ))
+            .into());
+        }
+
+        let check_deleted_and_updated_arrays = |a: &Self, b: &Self| {
+            let shared: Vec<_> = a
+                .deleted_arrays
+                .iter()
+                .filter_map(|(path, node_id)| {
+                    if b.new_arrays.contains_key(path)
+                        || b.updated_arrays.contains_key(node_id)
+                        || b.set_chunks.contains_key(node_id)
+                        || b.deleted_chunks_outside_bounds.contains_key(node_id)
+                    {
+                        Some(path)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if !shared.is_empty() {
+                return Err(SessionError::from(SessionErrorKind::SessionMerge(format!(
+                    "Arrays were both deleted and modified: {}",
+                    shared.into_iter().join(", ")
+                ))));
+            }
+            Ok(())
+        };
+
+        let check_deleted_and_updated_groups = |a: &Self, b: &Self| {
+            let shared: Vec<_> = a
+                .deleted_groups
+                .iter()
+                .filter_map(|(path, node_id)| {
+                    if b.new_groups.contains_key(path)
+                        || b.updated_groups.contains_key(node_id)
+                    {
+                        Some(path)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if !shared.is_empty() {
+                return Err(SessionError::from(SessionErrorKind::SessionMerge(format!(
+                    "Groups were both deleted and modified: {}",
+                    shared.into_iter().join(", ")
+                ))));
+            }
+            Ok(())
+        };
+
+        // check if a deleted array was modified
+        check_deleted_and_updated_arrays(self, &other)?;
+        check_deleted_and_updated_arrays(&other, self)?;
+
+        // check if a deleted group was modified
+        check_deleted_and_updated_groups(self, &other)?;
+        check_deleted_and_updated_groups(&other, self)?;
+
         // TODO: optimize
         self.new_groups.extend(other.new_groups);
         self.new_arrays.extend(other.new_arrays);
@@ -81,6 +201,7 @@ impl EditChanges {
         // FIXME: do we even test this?
         self.deleted_chunks_outside_bounds.extend(other.deleted_chunks_outside_bounds);
 
+        // TODO: check conflicts on nodes, for now it is last one wins semantics
         other.set_chunks.into_iter().for_each(|(node, other_manifest)| {
             match self.set_chunks.get_mut(&node) {
                 Some(manifest) => manifest.extend(other_manifest),
@@ -89,6 +210,7 @@ impl EditChanges {
                 }
             }
         });
+        Ok(())
     }
 }
 
@@ -552,7 +674,7 @@ impl ChangeSet {
     pub fn merge(&mut self, other: ChangeSet) -> SessionResult<()> {
         match (self, other) {
             (ChangeSet::Edit(my_edit_changes), ChangeSet::Edit(other_changes)) => {
-                my_edit_changes.merge(other_changes);
+                my_edit_changes.merge(other_changes)?;
                 Ok(())
             }
             _ => Err(SessionErrorKind::RearrangeSessionOnly.into()),
