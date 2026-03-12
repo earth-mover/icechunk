@@ -5,7 +5,10 @@ use std::{collections::BTreeMap, convert::Infallible, ops::Range, sync::Arc};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use flatbuffers::{FlatBufferBuilder, VerifierOptions};
+use flatbuffers::{
+    FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, VerifierOptions,
+    WIPOffset,
+};
 use itertools::Itertools as _;
 use quick_cache::sync::{Cache, GuardResult};
 use serde::{Deserialize, Serialize};
@@ -729,7 +732,7 @@ fn mk_node<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
     node: &NodeSnapshot,
     spec_version: SpecVersionBin,
-) -> IcechunkResult<flatbuffers::WIPOffset<generated::NodeSnapshot<'bldr>>> {
+) -> IcechunkResult<WIPOffset<generated::NodeSnapshot<'bldr>>> {
     let id = generated::ObjectId8::new(&node.id.0);
     let path = builder.create_string(node.path.to_string().as_str());
     let (node_data_type, node_data) =
@@ -748,14 +751,9 @@ fn mk_node<'bldr>(
     ))
 }
 
-type ShapeV1<'a> =
-    flatbuffers::WIPOffset<flatbuffers::Vector<'a, generated::DimensionShape>>;
-type ShapeV2<'a> = flatbuffers::WIPOffset<
-    flatbuffers::Vector<
-        'a,
-        flatbuffers::ForwardsUOffset<generated::DimensionShapeV2<'a>>,
-    >,
->;
+type ShapeV1<'a> = WIPOffset<Vector<'a, generated::DimensionShape>>;
+type ShapeV2<'a> =
+    WIPOffset<Vector<'a, ForwardsUOffset<generated::DimensionShapeV2<'a>>>>;
 
 fn mk_array_shapes<'a>(
     builder: &mut FlatBufferBuilder<'a>,
@@ -813,10 +811,7 @@ fn mk_node_data(
     builder: &mut FlatBufferBuilder<'_>,
     node_data: &NodeData,
     spec_version: SpecVersionBin,
-) -> IcechunkResult<(
-    generated::NodeData,
-    Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
-)> {
+) -> IcechunkResult<(generated::NodeData, Option<WIPOffset<UnionWIPOffset>>)> {
     match node_data {
         NodeData::Array { manifests, dimension_names, shape } => {
             let manifests = manifests
