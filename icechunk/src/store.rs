@@ -1198,15 +1198,17 @@ impl ArrayMetadata {
                     ))?;
                 Ok(num_chunks)
             }
-            _ => {
-                Err(StoreErrorKind::BadChunkGridMetadata("Unsupported chunk grid".into())
+            _other => {
+                Err(StoreErrorKind::BadChunkGridMetadata(format!(
+                    "Unsupported chunk grid {}. Only 'regular' and 'rectilinear' chunk grids are supported."
+                                                                 , _other))
                     .into())
             }
         }
     }
 
     /// Look up chunk size along each axis for a given chunk coordinate
-    #[allow(dead_code, unused)]
+    #[allow(unused)]
     pub fn get_chunk_shapes<'a>(
         &self,
         coords: impl Iterator<Item = &'a ChunkIndices> + 'a,
@@ -1394,6 +1396,8 @@ struct ChunkGridSerializer {
     configuration: serde_json::Value,
 }
 
+#[cfg(test)]
+/// Used as a convenience method in the tests
 impl From<Vec<u64>> for ChunkGridSerializer {
     fn from(value: Vec<u64>) -> Self {
         let arr = serde_json::Value::Array(

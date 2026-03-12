@@ -347,6 +347,8 @@ pub enum IcechunkFormatErrorKind {
         "compressed chunk location present but no decompression dictionary available"
     )]
     MissingLocationCompressionDictionary,
+    #[error("Invalid array metadata: {0}")]
+    InvalidArrayMetadata(String),
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;

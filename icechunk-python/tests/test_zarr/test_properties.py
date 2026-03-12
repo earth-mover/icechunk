@@ -11,6 +11,7 @@ from hypothesis import assume, given, settings
 
 from zarr.testing.strategies import arrays, numpy_arrays
 
+# TODO: use a version guard instead, once the appropriate Zarr release is out.
 try:
     from zarr.testing.strategies import (  # type: ignore[attr-defined, unused-ignore]
         complex_chunked_arrays,

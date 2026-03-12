@@ -373,7 +373,7 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
                     b.iter_custom(|_iters| {
                         // Fresh repo per sample
                         let shape =
-                            ArrayShape::new(vec![(num_chunks.into(), num_chunks.into())])
+                            ArrayShape::new(vec![(num_chunks.into(), num_chunks)])
                                 .unwrap();
                         let repo = rt.block_on(async {
                             setup_repo(

@@ -191,15 +191,23 @@ impl<'a> From<generated::ManifestRef<'a>> for ManifestRef {
     }
 }
 
-impl From<&generated::DimensionShape> for DimensionShape {
-    fn from(value: &generated::DimensionShape) -> Self {
+impl TryFrom<&generated::DimensionShape> for DimensionShape {
+    type Error = IcechunkFormatError;
+
+    fn try_from(value: &generated::DimensionShape) -> Result<Self, Self::Error> {
+        if value.chunk_length() == 0 && value.array_length() != 0 {
+            return Err(IcechunkFormatErrorKind::InvalidArrayMetadata(format!(
+                "Array metadata has chunk_length = 0 while array_length={:?}",
+                value.array_length()
+            ))
+            .into());
+        }
         let num_chunks = if value.chunk_length() == 0 {
-            debug_assert_eq!(value.array_length(), 0);
             0
         } else {
             value.array_length().div_ceil(value.chunk_length()) as u32
         };
-        DimensionShape { dim_length: value.array_length(), num_chunks }
+        Ok(DimensionShape { dim_length: value.array_length(), num_chunks })
     }
 }
 
@@ -212,20 +220,26 @@ impl<'a> From<&generated::DimensionShapeV2<'a>> for DimensionShape {
     }
 }
 
-impl<'a> From<generated::ArrayNodeData<'a>> for NodeData {
-    fn from(value: generated::ArrayNodeData<'a>) -> Self {
+impl<'a> TryFrom<generated::ArrayNodeData<'a>> for NodeData {
+    type Error = IcechunkFormatError;
+
+    fn try_from(value: generated::ArrayNodeData<'a>) -> Result<Self, Self::Error> {
         let dimension_names = value
             .dimension_names()
             .map(|dn| dn.iter().map(|name| name.name().into()).collect());
         // In our flatbuffers the V1 `shape` is required and will be an empty `[]` for V2 repos
         // Note that `shape` is *also* `[]` for scalars in V1 repos.
         // So we branch on `shape_v2` which is optional, and thus None, on V1 repos.
-        let shape = ArrayShape(value.shape_v2().map_or_else(
-            || value.shape().iter().map(|dim| dim.into()).collect(),
-            |x| x.iter().map(|dim| (&dim).into()).collect(),
-        ));
+        let shape = ArrayShape(match value.shape_v2() {
+            None => value
+                .shape()
+                .iter()
+                .map(|dim| dim.try_into())
+                .collect::<Result<Vec<_>, IcechunkFormatError>>()?,
+            Some(x) => x.iter().map(|dim| (&dim).into()).collect(),
+        });
         let manifests = value.manifests().iter().map(|m| m.into()).collect();
-        Self::Array { shape, dimension_names, manifests }
+        Ok(Self::Array { shape, dimension_names, manifests })
     }
 }
 
@@ -241,9 +255,10 @@ impl<'a> TryFrom<generated::NodeSnapshot<'a>> for NodeSnapshot {
     fn try_from(value: generated::NodeSnapshot<'a>) -> Result<Self, Self::Error> {
         #[allow(clippy::expect_used, clippy::panic)]
         let node_data: NodeData = match value.node_data_type() {
-            generated::NodeData::Array => {
-                value.node_data_as_array().expect("Bug in flatbuffers library").into()
-            }
+            generated::NodeData::Array => value
+                .node_data_as_array()
+                .expect("Bug in flatbuffers library")
+                .try_into()?,
             generated::NodeData::Group => {
                 value.node_data_as_group().expect("Bug in flatbuffers library").into()
             }
@@ -837,7 +852,7 @@ fn mk_node_data(
                         builder,
                         &generated::ArrayNodeDataArgs {
                             manifests: Some(manifests),
-                            shape: Some(empty_shape),
+                            shape: Some(empty_shape_for_v1_compat),
                             shape_v2: Some(shape),
                             dimension_names: dimensions,
                         },
