@@ -75,9 +75,10 @@ impl EditChanges {
         let shared: Vec<_> = self
             .new_groups
             .iter()
-            .filter_map(
-                |(k, v)| if other.new_groups.get(k) != Some(v) { None } else { Some(k) },
-            )
+            .filter_map(|(k, v)| {
+                let theirs = other.new_groups.get(k);
+                if theirs.is_none() || theirs == Some(v) { None } else { Some(k) }
+            })
             .collect();
         if !shared.is_empty() {
             return Err(SessionErrorKind::SessionMerge(format!(
@@ -92,7 +93,8 @@ impl EditChanges {
             .updated_groups
             .iter()
             .filter_map(|(k, v)| {
-                if other.updated_groups.get(k) != Some(v) { None } else { Some(k) }
+                let theirs = other.updated_groups.get(k);
+                if theirs.is_none() || theirs == Some(v) { None } else { Some(k) }
             })
             .collect();
         if !shared.is_empty() {
@@ -107,9 +109,10 @@ impl EditChanges {
         let shared: Vec<_> = self
             .new_arrays
             .iter()
-            .filter_map(
-                |(k, v)| if other.new_arrays.get(k) != Some(v) { None } else { Some(k) },
-            )
+            .filter_map(|(k, v)| {
+                let theirs = other.new_arrays.get(k);
+                if theirs.is_none() || theirs == Some(v) { None } else { Some(k) }
+            })
             .collect();
         if !shared.is_empty() {
             return Err(SessionErrorKind::SessionMerge(format!(
@@ -124,7 +127,8 @@ impl EditChanges {
             .updated_arrays
             .iter()
             .filter_map(|(k, v)| {
-                if other.updated_arrays.get(k) != Some(v) { None } else { Some(k) }
+                let theirs = other.updated_arrays.get(k);
+                if theirs.is_none() || theirs == Some(v) { None } else { Some(k) }
             })
             .collect();
         if !shared.is_empty() {
