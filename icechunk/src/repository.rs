@@ -391,13 +391,7 @@ impl Repository {
         {
             // V2+ repos: config is always embedded in the repo info object.
             let (repo_info, _) = temp_am.fetch_repo_info().await?;
-            match repo_info.config()? {
-                Some(embedded_config) => {
-                    trace!("Repository configuration found in repo info");
-                    (Some(embedded_config), storage::VersionInfo::for_creation())
-                }
-                None => (None, storage::VersionInfo::for_creation()),
-            }
+            (repo_info.config()?, storage::VersionInfo::for_creation())
         } else {
             // V1 repos: use the config.yaml result we already fetched
             match config_yaml_result? {
