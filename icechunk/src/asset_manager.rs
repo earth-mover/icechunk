@@ -710,6 +710,12 @@ impl AssetManager {
         bytes: Bytes,
     ) -> RepositoryResult<()> {
         trace!(%chunk_id, size_bytes=bytes.len(), "Writing chunk");
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot write chunk".to_string(),
+            )
+            .into());
+        }
 
         let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
         let _permit = self.request_semaphore.acquire().await?;
@@ -1058,6 +1064,12 @@ async fn write_new_manifest(
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<u64> {
+    if !storage.can_write().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot write manifest".to_string(),
+        )
+        .into());
+    }
     use format_constants::*;
     let metadata = vec![
         (
@@ -1162,6 +1174,12 @@ async fn write_new_snapshot(
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<SnapshotId> {
+    if !storage.can_write().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot write snapshot".to_string(),
+        )
+        .into());
+    }
     use format_constants::*;
     let metadata = vec![
         (
@@ -1245,6 +1263,12 @@ async fn write_new_tx_log(
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<()> {
+    if !storage.can_write().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot write transaction log".to_string(),
+        )
+        .into());
+    }
     use format_constants::*;
     let metadata = vec![
         (
@@ -1328,6 +1352,12 @@ pub async fn write_repo_info(
     storage_settings: &storage::Settings,
     path: Option<&str>,
 ) -> RepositoryResult<VersionInfo> {
+    if !storage.can_write().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot write repo info".to_string(),
+        )
+        .into());
+    }
     use format_constants::*;
     let metadata = vec![
         (
