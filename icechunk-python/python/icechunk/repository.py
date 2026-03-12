@@ -3,7 +3,7 @@ import json
 import warnings
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
-from typing import Any, Literal, Self, cast
+from typing import Any, Self, cast
 
 from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
@@ -22,8 +22,7 @@ from icechunk._icechunk_python import (
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
 from icechunk.store import IcechunkStore
-
-CommitMethod = Literal["new_commit", "amend"]
+from icechunk.types import CommitMethod
 
 
 class Repository:

@@ -1,6 +1,6 @@
 # module
 
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
 from icechunk._icechunk_python import (
     AzureCredentials,
@@ -95,8 +95,7 @@ from icechunk.storage import (
     tigris_storage,
 )
 from icechunk.store import IcechunkStore
-
-CommitMethod = Literal["new_commit", "amend"]
+from icechunk.types import CommitMethod
 
 __all__ = [
     "AnyAzureCredential",
