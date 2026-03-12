@@ -149,8 +149,7 @@ icechunk._icechunk_python.S3Credentials.Static.__new__
 icechunk._icechunk_python.S3Options
 icechunk._icechunk_python.S3Options.requester_pays
 icechunk._icechunk_python.S3StaticCredentials
-icechunk._icechunk_python.CommitMethod.new_commit
-icechunk._icechunk_python.CommitMethod.amend
+icechunk._icechunk_python.CommitMethod
 icechunk._icechunk_python.SessionMode
 icechunk._icechunk_python.SessionMode.readonly
 icechunk._icechunk_python.SessionMode.rearrange

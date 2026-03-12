@@ -9,7 +9,7 @@ from collections.abc import (
     Sequence,
 )
 from enum import Enum
-from typing import Any, TypeAlias, final
+from typing import Any, Literal, TypeAlias, final
 
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
@@ -1837,21 +1837,7 @@ class ManifestFileInfo:
         """The number of chunk references contained in this manifest"""
         ...
 
-@final
-class CommitMethod(Enum):
-    """The commit method to use when rewriting manifests.
-
-    Attributes
-    ----------
-    new_commit: int
-        Create a new commit (default).
-    amend: int
-        Amend the previous commit, replacing it with the new one.
-        Only supported for spec version 2 repositories.
-    """
-
-    new_commit = 0
-    amend = 1
+CommitMethod = Literal["new_commit", "amend"]
 
 class PyRepository:
     @classmethod
@@ -2064,7 +2050,7 @@ class PyRepository:
         *,
         branch: str,
         metadata: dict[str, Any] | None = None,
-        commit_method: CommitMethod = CommitMethod.new_commit,
+        commit_method: CommitMethod = "new_commit",
     ) -> str: ...
     async def rewrite_manifests_async(
         self,
@@ -2072,7 +2058,7 @@ class PyRepository:
         *,
         branch: str,
         metadata: dict[str, Any] | None = None,
-        commit_method: CommitMethod = CommitMethod.new_commit,
+        commit_method: CommitMethod = "new_commit",
     ) -> str: ...
     def garbage_collect(
         self,

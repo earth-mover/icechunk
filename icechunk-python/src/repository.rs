@@ -50,22 +50,14 @@ use crate::{
     streams::PyAsyncGenerator,
 };
 
-/// The commit method to use when committing changes.
-#[pyclass(name = "CommitMethod", module = "icechunk", eq, rename_all = "snake_case")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PyCommitMethod {
-    /// Create a new commit (default).
-    NewCommit,
-    /// Amend the previous commit, replacing it with the new one.
-    Amend,
-}
-
-impl From<PyCommitMethod> for icechunk::session::CommitMethod {
-    fn from(method: PyCommitMethod) -> Self {
-        match method {
-            PyCommitMethod::NewCommit => icechunk::session::CommitMethod::NewCommit,
-            PyCommitMethod::Amend => icechunk::session::CommitMethod::Amend,
-        }
+fn parse_commit_method(method: &str) -> PyResult<icechunk::session::CommitMethod> {
+    match method {
+        "new_commit" => Ok(icechunk::session::CommitMethod::NewCommit),
+        "amend" => Ok(icechunk::session::CommitMethod::Amend),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid commit method: '{}'. Expected 'new_commit' or 'amend'.",
+            other
+        ))),
     }
 }
 
@@ -2238,19 +2230,19 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, *, branch, metadata=None, commit_method=PyCommitMethod::NewCommit))]
+    #[pyo3(signature = (message, *, branch, metadata=None, commit_method="new_commit"))]
     pub(crate) fn rewrite_manifests(
         &self,
         py: Python<'_>,
         message: &str,
         branch: &str,
         metadata: Option<PySnapshotProperties>,
-        commit_method: PyCommitMethod,
+        commit_method: &str,
     ) -> PyResult<String> {
         // This function calls block_on, so we need to allow other thread python to make progress
+        let commit_method = parse_commit_method(commit_method)?;
         py.detach(move || {
             let metadata = metadata.map(|m| m.into());
-            let commit_method = commit_method.into();
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let lock = self.0.read().await;
@@ -2262,20 +2254,20 @@ impl PyRepository {
         })
     }
 
-    #[pyo3(signature = (message, *, branch, metadata=None, commit_method=PyCommitMethod::NewCommit))]
+    #[pyo3(signature = (message, *, branch, metadata=None, commit_method="new_commit"))]
     fn rewrite_manifests_async<'py>(
         &'py self,
         py: Python<'py>,
         message: &str,
         branch: &str,
         metadata: Option<PySnapshotProperties>,
-        commit_method: PyCommitMethod,
+        commit_method: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = self.0.clone();
         let message = message.to_owned();
         let branch = branch.to_owned();
         let metadata = metadata.map(|m| m.into());
-        let commit_method = commit_method.into();
+        let commit_method = parse_commit_method(commit_method)?;
 
         pyo3_async_runtimes::tokio::future_into_py::<_, String>(py, async move {
             let repository = repository.read().await;

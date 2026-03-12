@@ -3,12 +3,11 @@ import json
 import warnings
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
-from typing import Any, Self, cast
+from typing import Any, Literal, Self, cast
 
 from icechunk import ConflictSolver
 from icechunk._icechunk_python import (
     ChunkStorageStats,
-    CommitMethod,
     Diff,
     FeatureFlag,
     GCSummary,
@@ -23,6 +22,8 @@ from icechunk._icechunk_python import (
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
 from icechunk.store import IcechunkStore
+
+CommitMethod = Literal["new_commit", "amend"]
 
 
 class Repository:
@@ -1602,7 +1603,7 @@ class Repository:
         *,
         branch: str,
         metadata: dict[str, Any] | None = None,
-        commit_method: CommitMethod = CommitMethod.new_commit,
+        commit_method: CommitMethod = "new_commit",
     ) -> str:
         """
         Rewrite manifests for all arrays.
@@ -1623,9 +1624,9 @@ class Repository:
         metadata : dict[str, Any] | None, optional
             Additional metadata to store with the commit snapshot.
         commit_method : CommitMethod, optional
-            The commit method to use. Defaults to ``CommitMethod.new_commit``.
-            Use ``CommitMethod.amend`` to replace the previous commit.
-            Note that ``CommitMethod.amend`` is only supported for spec version 2
+            The commit method to use. Defaults to ``"new_commit"``.
+            Use ``"amend"`` to replace the previous commit.
+            Note that ``"amend"`` is only supported for spec version 2
             repositories.
 
         Returns
@@ -1644,7 +1645,7 @@ class Repository:
         *,
         branch: str,
         metadata: dict[str, Any] | None = None,
-        commit_method: CommitMethod = CommitMethod.new_commit,
+        commit_method: CommitMethod = "new_commit",
     ) -> str:
         """
         Rewrite manifests for all arrays (async version).
@@ -1665,9 +1666,9 @@ class Repository:
         metadata : dict[str, Any] | None, optional
             Additional metadata to store with the commit snapshot.
         commit_method : CommitMethod, optional
-            The commit method to use. Defaults to ``CommitMethod.new_commit``.
-            Use ``CommitMethod.amend`` to replace the previous commit.
-            Note that ``CommitMethod.amend`` is only supported for spec version 2
+            The commit method to use. Defaults to ``"new_commit"``.
+            Use ``"amend"`` to replace the previous commit.
+            Note that ``"amend"`` is only supported for spec version 2
             repositories.
 
         Returns
