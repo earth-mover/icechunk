@@ -41,7 +41,7 @@ use object_store::{
     feature = "object-store-azure",
     feature = "object-store-http"
 ))]
-use object_store::{BackoffConfig, ClientOptions, RetryConfig};
+use object_store::{BackoffConfig, RetryConfig};
 #[cfg(any(feature = "object-store-gcs", feature = "object-store-azure"))]
 use object_store::{CredentialProvider, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
@@ -720,10 +720,9 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
         &self,
         settings: &Settings,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
-        let builder = HttpBuilder::new().with_url(&self.url).with_client_options(
-            ClientOptions::new()
-                .with_config(ClientConfigKey::UserAgent, crate::user_agent()),
-        );
+        let builder = HttpBuilder::new()
+            .with_url(&self.url)
+            .with_config(ClientConfigKey::UserAgent, crate::user_agent());
 
         let empty = HashMap::new();
         let config = self.config.as_ref().unwrap_or(&empty);
@@ -845,9 +844,9 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
         let builder = builder
             .with_bucket_name(&self.bucket)
             .with_conditional_put(object_store::aws::S3ConditionalPut::ETagMatch)
-            .with_client_options(
-                ClientOptions::new()
-                    .with_config(ClientConfigKey::UserAgent, crate::user_agent()),
+            .with_config(
+                object_store::aws::AmazonS3ConfigKey::Client(ClientConfigKey::UserAgent),
+                crate::user_agent(),
             );
 
         let builder = builder.with_retry(RetryConfig {
@@ -927,9 +926,9 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
         let builder = builder
             .with_account(&self.account)
             .with_container_name(&self.container)
-            .with_client_options(
-                ClientOptions::new()
-                    .with_config(ClientConfigKey::UserAgent, crate::user_agent()),
+            .with_config(
+                AzureConfigKey::Client(ClientConfigKey::UserAgent),
+                crate::user_agent(),
             );
 
         // Add options (user config takes precedence over defaults)
@@ -1031,9 +1030,9 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
             None | Some(GcsCredentials::FromEnv) => GoogleCloudStorageBuilder::from_env(),
         };
 
-        let builder = builder.with_bucket_name(&self.bucket).with_client_options(
-            ClientOptions::new()
-                .with_config(ClientConfigKey::UserAgent, crate::user_agent()),
+        let builder = builder.with_bucket_name(&self.bucket).with_config(
+            GoogleConfigKey::Client(ClientConfigKey::UserAgent),
+            crate::user_agent(),
         );
 
         // Add options (user config takes precedence over defaults)
