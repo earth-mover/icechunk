@@ -710,6 +710,12 @@ impl AssetManager {
         bytes: Bytes,
     ) -> RepositoryResult<()> {
         trace!(%chunk_id, size_bytes=bytes.len(), "Writing chunk");
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot write chunk".to_string(),
+            )
+            .into());
+        }
 
         let path = format!("{CHUNKS_FILE_PATH}/{chunk_id}");
         let _permit = self.request_semaphore.acquire().await?;
@@ -1013,8 +1019,11 @@ fn check_header(
     let mut spec_version = 0;
     read.read_exact(std::slice::from_mut(&mut spec_version))?;
 
-    let spec_version = spec_version.try_into().map_err(|_| {
-        RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidSpecVersion)
+    let spec_version: SpecVersionBin = spec_version.try_into().map_err(|_| {
+        RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidSpecVersion {
+            found: spec_version,
+            max_supported: SpecVersionBin::current() as u8,
+        })
     })?;
 
     let mut actual_file_type_int = 0;
@@ -1058,6 +1067,12 @@ async fn write_new_manifest(
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<u64> {
+    if !storage.can_write().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot write manifest".to_string(),
+        )
+        .into());
+    }
     use format_constants::*;
     let metadata = vec![
         (
@@ -1162,6 +1177,12 @@ async fn write_new_snapshot(
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<SnapshotId> {
+    if !storage.can_write().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot write snapshot".to_string(),
+        )
+        .into());
+    }
     use format_constants::*;
     let metadata = vec![
         (
@@ -1245,6 +1266,12 @@ async fn write_new_tx_log(
     storage_settings: &storage::Settings,
     semaphore: &Semaphore,
 ) -> RepositoryResult<()> {
+    if !storage.can_write().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot write transaction log".to_string(),
+        )
+        .into());
+    }
     use format_constants::*;
     let metadata = vec![
         (
@@ -1328,6 +1355,12 @@ pub async fn write_repo_info(
     storage_settings: &storage::Settings,
     path: Option<&str>,
 ) -> RepositoryResult<VersionInfo> {
+    if !storage.can_write().await? {
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot write repo info".to_string(),
+        )
+        .into());
+    }
     use format_constants::*;
     let metadata = vec![
         (
