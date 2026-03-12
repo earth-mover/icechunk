@@ -831,7 +831,7 @@ fn mk_node_data(
                         })
                         .collect::<Vec<_>>();
                     let shape = builder.create_vector(shape.as_slice());
-                    let empty_shape =
+                    let empty_shape_for_v1_compat =
                         builder.create_vector(&[] as &[generated::DimensionShape]);
                     generated::ArrayNodeData::create(
                         builder,
