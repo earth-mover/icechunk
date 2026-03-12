@@ -1972,11 +1972,8 @@ pub fn construct_valid_byte_range(
     chunk_length: u64,
 ) -> SessionResult<Range<ChunkOffset>> {
     let err = || -> SessionError {
-        SessionErrorKind::InvalidByteRange {
-            request: request.clone(),
-            chunk_length,
-        }
-        .into()
+        SessionErrorKind::InvalidByteRange { request: request.clone(), chunk_length }
+            .into()
     };
     match request {
         ByteRange::Bounded(std::ops::Range { start: req_start, end: req_end }) => {
@@ -6201,9 +6198,7 @@ mod tests {
             construct_valid_byte_range(&ByteRange::Bounded(0..10), 0, 10).unwrap(),
             0..10,
         );
-        assert!(
-            construct_valid_byte_range(&ByteRange::Bounded(0..11), 0, 10).is_err()
-        );
+        assert!(construct_valid_byte_range(&ByteRange::Bounded(0..11), 0, 10).is_err());
     }
 
     #[cfg(test)]
