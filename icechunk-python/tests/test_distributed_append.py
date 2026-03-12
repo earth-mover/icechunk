@@ -18,7 +18,7 @@ SPLIT_EVERY = 128
 DIMS = ("x", "y")
 
 
-def mk_ic_storage():
+def mk_ic_storage() -> ic.Storage:
     return ic.local_filesystem_storage(
         f"/tmp/test/icechunk_data_corrupted/{str(datetime.datetime.now()).split(' ')[-1]}",
     )
