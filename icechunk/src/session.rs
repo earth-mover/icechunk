@@ -3010,7 +3010,7 @@ mod tests {
     #[proptest(async = "tokio")]
     async fn test_add_delete_array(
         #[strategy(node_paths())] path: Path,
-        #[strategy(shapes_and_dims(None))] metadata: ShapeDim,
+        #[strategy(shapes_and_dims(None, None))] metadata: ShapeDim,
         #[strategy(empty_writable_session())] mut session: Session,
     ) {
         // new array must always succeed
@@ -3065,7 +3065,7 @@ mod tests {
     #[proptest(async = "tokio")]
     async fn test_add_array_group_clash(
         #[strategy(node_paths())] path: Path,
-        #[strategy(shapes_and_dims(None))] metadata: ShapeDim,
+        #[strategy(shapes_and_dims(None, None))] metadata: ShapeDim,
         #[strategy(empty_writable_session())] mut session: Session,
     ) {
         // adding a group at an existing array node must fail
@@ -6164,7 +6164,7 @@ mod tests {
                 prop_oneof![
                     (
                         node_paths(),
-                        shapes_and_dims(None),
+                        shapes_and_dims(None, None),
                         proptest::collection::vec(any::<u8>(), 0..=100)
                     )
                         .prop_map(|(a, shape, user_data)| {
@@ -6177,7 +6177,7 @@ mod tests {
                         }),
                     (
                         node_paths(),
-                        shapes_and_dims(None),
+                        shapes_and_dims(None, None),
                         proptest::collection::vec(any::<u8>(), 0..=100)
                     )
                         .prop_map(|(a, shape, user_data)| {

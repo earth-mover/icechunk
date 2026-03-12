@@ -7,7 +7,7 @@ from icechunk import IcechunkStore, Repository, in_memory_storage
 
 pytest.importorskip("hypothesis")
 import hypothesis.strategies as st
-from hypothesis import assume, given, settings
+from hypothesis import given, settings
 
 from zarr.testing.strategies import arrays, numpy_arrays
 
@@ -39,9 +39,6 @@ def icechunk_stores(
 @settings(report_multiple_bugs=True, deadline=None, max_examples=300)
 @given(data=st.data(), nparray=numpy_arrays(), spec_version=st.sampled_from([None, 1, 2]))
 def test_roundtrip(data: st.DataObject, nparray: Any, spec_version: int | None) -> None:
-    # TODO: support size-0 arrays GH392
-    assume(nparray.size > 0)
-
     zarray = data.draw(
         arrays(
             stores=icechunk_stores(spec_version=st.just(spec_version)),

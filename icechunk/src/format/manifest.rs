@@ -1141,7 +1141,7 @@ mod tests {
 
     #[alt_proptest]
     fn test_manifest_split_from_edges(
-        #[strategy(shapes_and_dims(Some(5)))] shape_dim: ShapeDim,
+        #[strategy(shapes_and_dims(Some(5), Some(1)))] shape_dim: ShapeDim,
     ) {
         // Note: using the shape, chunks strategy to generate chunk_shape, split_shape
         let ShapeDim { shape, .. } = shape_dim;

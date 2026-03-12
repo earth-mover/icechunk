@@ -1165,7 +1165,7 @@ impl ArrayMetadata {
                 let num_chunks = chunks
                     .iter()
                     .zip(self.shape.iter())
-                    .map(|(c, s)| (*s).div_ceil(*c) as u32)
+                    .map(|(c, s)| if *c == 0 { 0 } else {(*s).div_ceil(*c) as u32})
                     .collect::<Vec<_>>();
                 Ok(num_chunks)
             }
@@ -1726,7 +1726,12 @@ mod tests {
         let session = Arc::new(RwLock::new(session));
         let store = Store::from_session(session.clone()).await;
 
-        // all of these are valid ways of specifying chunk sizes for a dimension of size
+        // the first six of these are valid ways of specifying chunk sizes for
+        // a dimension of size 6
+        // The last two test with 0-size dimensions
+        // THe last one is weird size = 0, chunk_sizes = [1, 2, 3]
+        // but presumably we can do this
+        // when appending i.e. write a 1-sized chunk, then 2, then 3
         let chunk_grid = r#"{
             "name":"rectilinear",
             "configuration": {
@@ -1737,11 +1742,13 @@ mod tests {
                         [[1, 6]],
                         [1, [2, 1], 3],
                         [[1, 3], 3],
-                        [6]
+                        [6],
+                        [0],
+                        [1, 2, 3]
                 ]
             }}"#;
         let zarr_meta = Bytes::from(format!(
-            r#"{{"zarr_format":3,"node_type":"array","attributes":{{"foo":42}},"shape":[6,6,6,6,6,6],"data_type":"int32","chunk_grid":{chunk_grid},"chunk_key_encoding":{{"name":"default","configuration":{{"separator":"/"}}}},"fill_value":0,"codecs":[{{"name":"mycodec","configuration":{{"foo":42}}}}],"storage_transformers":[{{"name":"mytransformer","configuration":{{"bar":43}}}}],"dimension_names":["x","y","t"]}}"#
+            r#"{{"zarr_format":3,"node_type":"array","attributes":{{"foo":42}},"shape":[6,6,6,6,6,6,0,0],"data_type":"int32","chunk_grid":{chunk_grid},"chunk_key_encoding":{{"name":"default","configuration":{{"separator":"/"}}}},"fill_value":0,"codecs":[{{"name":"mycodec","configuration":{{"foo":42}}}}],"storage_transformers":[{{"name":"mytransformer","configuration":{{"bar":43}}}}],"dimension_names":["x","y","t"]}}"#
         ));
         store.set("a/b/array/zarr.json", zarr_meta.clone()).await?;
         assert_eq!(
@@ -1752,7 +1759,10 @@ mod tests {
         let node =
             session.read().await.get_array(&Path::new("/a/b/array").unwrap()).await?;
         if let NodeSnapshot { node_data: NodeData::Array { shape, .. }, .. } = node {
-            assert_eq!(shape.num_chunks().collect::<Vec<_>>(), vec![3, 3, 6, 3, 4, 1])
+            assert_eq!(
+                shape.num_chunks().collect::<Vec<_>>(),
+                vec![3, 3, 6, 3, 4, 1, 1, 3]
+            )
         } else {
             unreachable!();
         }
