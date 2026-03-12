@@ -888,7 +888,7 @@ mod tests {
     use super::*;
     use crate::{
         roundtrip_serialization_tests,
-        strategies::{manifest_file_info, node_snapshot},
+        strategies::{ShapeDim, manifest_file_info, node_snapshot, shapes_and_dims},
     };
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
@@ -1092,5 +1092,36 @@ mod tests {
         assert!(shape1.valid_chunk_coord(&coord1));
         assert!(!shape1.valid_chunk_coord(&coord2));
         assert!(shape2.valid_chunk_coord(&coord3));
+    }
+
+    #[icechunk_macros::test]
+    fn test_valid_chunk_coord_zero_length_dim() {
+        let shape = ArrayShape::new(vec![(0, 0)]).unwrap();
+        assert!(shape.valid_chunk_coord(&ChunkIndices(vec![0])));
+        assert!(!shape.valid_chunk_coord(&ChunkIndices(vec![1])));
+    }
+
+    #[test_strategy::proptest]
+    fn test_prop_valid_chunk_coord(
+        #[strategy(shapes_and_dims(None, Some(1)))] shape_dim: ShapeDim,
+        axis_offset: usize,
+    ) {
+        let shape = &shape_dim.shape;
+        let ndim = shape.len();
+        let axis = axis_offset % ndim;
+
+        // origin is always valid
+        let origin = ChunkIndices(vec![0; ndim]);
+        prop_assert!(shape.valid_chunk_coord(&origin));
+
+        // max valid coord is in bounds
+        let max_valid =
+            ChunkIndices(shape.num_chunks().map(|nc| (nc - 1).min(0)).collect());
+        prop_assert!(shape.valid_chunk_coord(&max_valid));
+
+        // bumping one axis out of bounds is rejected
+        let mut oob = max_valid.0.clone();
+        oob[axis] = shape.iter().nth(axis).unwrap().num_chunks().max(1);
+        prop_assert!(!shape.valid_chunk_coord(&ChunkIndices(oob)));
     }
 }
