@@ -16,6 +16,15 @@ from zarr.core.common import ZarrFormat
 from zarr.errors import ContainsArrayError, ContainsGroupError
 from zarr.storage import StorePath
 
+try:
+    from zarr.core.chunk_grids import (  # type: ignore[attr-defined, unused-ignore]
+        RectilinearChunkGrid,
+    )
+
+    _has_rectilinear = True
+except ImportError:
+    _has_rectilinear = False
+
 
 # @pytest.fixture(params=["local"])
 @pytest.fixture
@@ -170,16 +179,6 @@ def test_scalar_array_roundtrip_regular(store: IcechunkStore) -> None:
     assert a.shape == ()
     a[()] = 42.0
     assert a[()] == 42.0
-
-
-try:
-    from zarr.core.chunk_grids import (
-        RectilinearChunkGrid,  # type: ignore[attr-defined, unused-ignore]
-    )
-
-    _has_rectilinear = True
-except ImportError:
-    _has_rectilinear = False
 
 
 @pytest.mark.skipif(not _has_rectilinear, reason="RectilinearChunkGrid not available")
