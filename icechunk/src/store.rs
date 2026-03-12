@@ -1327,8 +1327,10 @@ impl ArrayMetadata {
                 });
                 Ok(Box::new(iter))
             }
-            _ => {
-                Err(StoreErrorKind::BadChunkGridMetadata("Unsupported chunk grid".into())
+            _other => {
+                Err(StoreErrorKind::BadChunkGridMetadata(format!(
+                    "Unsupported chunk grid {}. Only 'regular' and 'rectilinear' chunk grids are supported."
+                        , _other))
                     .into())
             }
         }

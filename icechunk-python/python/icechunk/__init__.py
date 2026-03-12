@@ -95,6 +95,7 @@ from icechunk.storage import (
     tigris_storage,
 )
 from icechunk.store import IcechunkStore
+from icechunk.types import CommitMethod
 
 __all__ = [
     "AnyAzureCredential",
@@ -109,6 +110,7 @@ __all__ = [
     "BasicConflictSolver",
     "CachingConfig",
     "ChunkType",
+    "CommitMethod",
     "CompressionAlgorithm",
     "CompressionConfig",
     "Conflict",

@@ -311,8 +311,12 @@ pub enum IcechunkFormatErrorKind {
     ManifestInfoNotFound { manifest_id: ManifestId },
     #[error("invalid magic numbers in file")]
     InvalidMagicNumbers, // TODO: add more info
-    #[error("Icechunk cannot read from repository written with a more modern version")]
-    InvalidSpecVersion, // TODO: add more info
+    #[error(
+        "this repository uses Icechunk format version {found}, but this library only supports up to version {max_supported}. Please upgrade the icechunk library"
+    )]
+    InvalidSpecVersion { found: u8, max_supported: u8 },
+    #[error("this operation is not supported for Icechunk format version {version}")]
+    UnsupportedOperationForVersion { version: u8 },
     #[error("Icechunk cannot read this file type, expected {expected:?} got {got}")]
     InvalidFileType { expected: FileTypeBin, got: u8 }, // TODO: add more info
     #[error("Icechunk cannot read file, invalid compression algorithm")]
@@ -657,6 +661,29 @@ mod tests {
             )
             .unwrap(),
             sid,
+        );
+    }
+
+    #[icechunk_macros::test]
+    fn test_unknown_spec_version_gives_nice_error() {
+        use format_constants::SpecVersionBin;
+
+        let future_version: u8 = 3;
+        let result = SpecVersionBin::try_from(future_version);
+        assert!(result.is_err());
+
+        let err = IcechunkFormatErrorKind::InvalidSpecVersion {
+            found: future_version,
+            max_supported: SpecVersionBin::current() as u8,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("format version 3"),
+            "Error should mention the found version: {msg}"
+        );
+        assert!(
+            msg.contains("upgrade the icechunk library"),
+            "Error should suggest upgrading: {msg}"
         );
     }
 }
