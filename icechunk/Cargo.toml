@@ -25,7 +25,7 @@ thiserror = "2.0.18"
 serde_json = "1.0.149"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_with = { version = "3.17.0", features = ["hex"] }
-quick_cache = "0.6.18"
+quick_cache = "0.6.19"
 base32 = "0.5.1"
 chrono = { version = "0.4.44", features = ["serde"] }
 async-recursion = "1.1.1"
@@ -33,8 +33,8 @@ rmp-serde = "1.3.1"
 url = { version = "2.5.8", features = ["serde"] }
 async-stream = "0.3.6"
 rmpv = { version = "1.3.1", features = ["serde", "with-serde"] }
-aws-sdk-s3 = { version = "1.120.0", optional = true }
-aws-config = { version = "1.8.12", optional = true }
+aws-sdk-s3 = { version = "1.125.0", optional = true }
+aws-config = { version = "1.8.15", optional = true }
 aws-credential-types = { version = "1.2.14", optional = true }
 typed-path = "0.12.3"
 aws-smithy-runtime = { version = "1.10.3", optional = true }
@@ -78,7 +78,7 @@ reqwest = { version = "0.12.28", default-features = false, features = [
 tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros"] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-tokio = { version = "1.49.0", features = ["rt", "macros"] }
+tokio = { version = "1.50.0", features = ["rt", "macros"] }
 
 [dev-dependencies]
 clap = { version = "4.5", features = ["derive"] }
@@ -91,7 +91,7 @@ proptest = "1.10.0"
 proptest-state-machine = "0.7.0"
 rstest = "0.26.1"
 rstest_reuse = "0.7.0"
-tempfile = "3.26.0"
+tempfile = "3.27.0"
 test-log = { version = "0.2.19", default-features = false, features = [
   "trace",
   "color",
