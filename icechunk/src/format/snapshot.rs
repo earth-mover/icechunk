@@ -748,6 +748,67 @@ fn mk_node<'bldr>(
     ))
 }
 
+type ShapeV1<'a> =
+    flatbuffers::WIPOffset<flatbuffers::Vector<'a, generated::DimensionShape>>;
+type ShapeV2<'a> = flatbuffers::WIPOffset<
+    flatbuffers::Vector<
+        'a,
+        flatbuffers::ForwardsUOffset<generated::DimensionShapeV2<'a>>,
+    >,
+>;
+
+fn mk_array_shapes<'a>(
+    builder: &mut FlatBufferBuilder<'a>,
+    spec_version: SpecVersionBin,
+    shape: &ArrayShape,
+) -> (Option<ShapeV1<'a>>, Option<ShapeV2<'a>>) {
+    use SpecVersionBin::*;
+    match spec_version {
+        V1dot0 => {
+            let shape = shape
+                .0
+                .iter()
+                .map(|ds| {
+                    let chunk_length = if ds.num_chunks == 0 {
+                        debug_assert_eq!(ds.dim_length, 0);
+                        0
+                    } else {
+                        // FIXME: this can be *very* wrong, but I'm not sure it really matters
+                        //        we still preserve num_chunks, and return the proper Zarr JSON metadata
+                        //        which is stored in NodeData::user_data which stores the zarr.json exactly
+                        //        as provided by Zarr
+                        ds.dim_length.div_ceil(ds.num_chunks as u64)
+                    };
+
+                    generated::DimensionShape::new(ds.dim_length, chunk_length)
+                })
+                .collect::<Vec<_>>();
+            (Some(builder.create_vector(shape.as_slice())), None)
+        }
+        V2dot0 => {
+            let shape = shape
+                .0
+                .iter()
+                .map(|ds| {
+                    generated::DimensionShapeV2::create(
+                        builder,
+                        &generated::DimensionShapeV2Args {
+                            array_length: ds.dim_length,
+                            num_chunks: ds.num_chunks,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            let empty_shape_for_v1_compat =
+                builder.create_vector(&[] as &[generated::DimensionShape]);
+            (
+                Some(empty_shape_for_v1_compat),
+                Some(builder.create_vector(shape.as_slice())),
+            )
+        }
+    }
+}
+
 fn mk_node_data(
     builder: &mut FlatBufferBuilder<'_>,
     node_data: &NodeData,
@@ -756,7 +817,6 @@ fn mk_node_data(
     generated::NodeData,
     Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
 )> {
-    use SpecVersionBin::*;
     match node_data {
         NodeData::Array { manifests, dimension_names, shape } => {
             let manifests = manifests
@@ -800,66 +860,16 @@ fn mk_node_data(
                     .collect::<Vec<_>>();
                 builder.create_vector(names.as_slice())
             });
-            let node_data = match spec_version {
-                V1dot0 => {
-                    let shape = shape
-                        .0
-                        .iter()
-                        .map(|ds| {
-                            let chunk_length = if ds.num_chunks == 0 {
-                                debug_assert_eq!(ds.dim_length, 0);
-                                0
-                            } else {
-                                // FIXME: this can be *very* wrong, but I'm not sure it really matters
-                                //        we still preserve num_chunks, and return the proper Zarr JSON metadata
-                                //        which is stored in NodeData::user_data which stores the zarr.json exactly
-                                //        as provided by Zarr
-                                ds.dim_length.div_ceil(ds.num_chunks as u64)
-                            };
-
-                            generated::DimensionShape::new(ds.dim_length, chunk_length)
-                        })
-                        .collect::<Vec<_>>();
-                    let shape = builder.create_vector(shape.as_slice());
-                    generated::ArrayNodeData::create(
-                        builder,
-                        &generated::ArrayNodeDataArgs {
-                            manifests: Some(manifests),
-                            shape: Some(shape),
-                            shape_v2: None,
-                            dimension_names: dimensions,
-                        },
-                    )
-                }
-                V2dot0 => {
-                    let shape = shape
-                        .0
-                        .iter()
-                        .map(|ds| {
-                            generated::DimensionShapeV2::create(
-                                builder,
-                                &generated::DimensionShapeV2Args {
-                                    array_length: ds.dim_length,
-                                    num_chunks: ds.num_chunks,
-                                },
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    let shape = builder.create_vector(shape.as_slice());
-                    let empty_shape_for_v1_compat =
-                        builder.create_vector(&[] as &[generated::DimensionShape]);
-                    generated::ArrayNodeData::create(
-                        builder,
-                        &generated::ArrayNodeDataArgs {
-                            manifests: Some(manifests),
-                            shape: Some(empty_shape_for_v1_compat),
-                            shape_v2: Some(shape),
-                            dimension_names: dimensions,
-                        },
-                    )
-                }
-            };
-
+            let (shape_v1, shape_v2) = mk_array_shapes(builder, spec_version, shape);
+            let node_data = generated::ArrayNodeData::create(
+                builder,
+                &generated::ArrayNodeDataArgs {
+                    manifests: Some(manifests),
+                    shape: shape_v1,
+                    shape_v2,
+                    dimension_names: dimensions,
+                },
+            );
             Ok((generated::NodeData::Array, Some(node_data.as_union_value())))
         }
         NodeData::Group => Ok((
