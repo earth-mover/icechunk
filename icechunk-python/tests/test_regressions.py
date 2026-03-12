@@ -15,6 +15,7 @@ from icechunk import (
 )
 from icechunk.repository import Repository
 from tests.conftest import Permission, write_chunks_to_minio
+from zarr.abc.store import Store
 from zarr.core.buffer import default_buffer_prototype
 from zarr.core.buffer.cpu import Buffer
 
@@ -219,7 +220,7 @@ async def test_list_missing_array(any_spec_version: int | None) -> None:
     for array in arrays:
         group.create_array(name=array, shape=((2,)), chunks=((1,)), dtype="i4")
 
-    async def check_keys(store: zarr.abc.store.Store) -> None:
+    async def check_keys(store: Store) -> None:
         keys = set([k async for k in store.list_prefix("foo")])
         assert keys == {f"foo/{a}/zarr.json" for a in arrays} | {"foo/zarr.json"}
 
