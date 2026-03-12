@@ -686,7 +686,7 @@ impl Iterator for NodeIterator {
     fn next(&mut self) -> Option<Self::Item> {
         let nodes = self.snapshot.root().nodes();
         loop {
-            // we need to looop over all nodes starting from the index
+            // we need to loop over all nodes starting from the index
             // until we are sure we'll see no more children
             if self.next_index >= nodes.len() {
                 return None;
