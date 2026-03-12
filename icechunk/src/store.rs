@@ -863,7 +863,6 @@ async fn set_array_meta(
                 .update_array(&path, shape, array_meta.dimension_names(), user_data)
                 .await?;
         }
-        // FIXME: don't ignore error
         Ok(())
     } else {
         session
