@@ -74,7 +74,7 @@ impl RedirectStorage {
         };
 
         let client = rw::Client::builder()
-            .user_agent("icechunk")
+            .user_agent(concat!("icechunk/", env!("CARGO_PKG_VERSION")))
             .redirect(rw::redirect::Policy::custom(redirect))
             .build()
             .map_err(|e| {
