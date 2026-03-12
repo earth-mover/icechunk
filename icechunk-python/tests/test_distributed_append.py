@@ -16,9 +16,12 @@ p = zarr.core.buffer.default_buffer_prototype()
 PLOT = False
 SPLIT_EVERY = 128
 DIMS = ("x", "y")
-IC_STORAGE = ic.local_filesystem_storage(
-    f"/tmp/test/icechunk_data_corrupted/{str(datetime.datetime.now()).split(' ')[-1]}",
-)
+
+
+def mk_ic_storage():
+    return ic.local_filesystem_storage(
+        f"/tmp/test/icechunk_data_corrupted/{str(datetime.datetime.now()).split(' ')[-1]}",
+    )
 
 
 def do_test(scheduler: str, spec_version: int | None = None) -> None:
@@ -69,8 +72,10 @@ def do_test(scheduler: str, spec_version: int | None = None) -> None:
         }
     ).chunk(x=CHUNKX, y=CHUNKY)
 
-    repo = ic.Repository.open_or_create(IC_STORAGE, create_version=spec_version)
+    repo = ic.Repository.open_or_create(mk_ic_storage(), create_version=spec_version)
     session = repo.writable_session("main")
+    print("starting initial write")
+    print("-=====================")
     with dask.config.set(scheduler=scheduler):
         to_icechunk(initial, session=session, mode="w", split_every=SPLIT_EVERY)
     plot()
@@ -120,6 +125,8 @@ def do_test(scheduler: str, spec_version: int | None = None) -> None:
         )
     plot()
     session.commit("append along y")
+    print("finished writing")
+    print("-===============")
     assert (xr.open_zarr(session.store, consolidated=False)["a"] >= 1).all()
 
 

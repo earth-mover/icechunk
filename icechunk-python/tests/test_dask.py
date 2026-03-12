@@ -96,7 +96,7 @@ def test_xarray_to_icechunk_nested_pickling(
 
             newds = ds + 1
             session = repo.writable_session("main")
-            to_icechunk(newds, session=session, mode="w")
+            to_icechunk(newds, session=session, mode="a")
             # Needed because we can't pickle the writable session
             session.commit("wrote another commit.")
             with xr.open_zarr(session.store, consolidated=False) as actual:
