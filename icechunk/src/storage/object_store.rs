@@ -58,13 +58,6 @@ use std::{
 };
 use tokio::sync::{OnceCell, RwLock};
 
-#[cfg(any(
-    feature = "object-store-s3",
-    feature = "object-store-gcs",
-    feature = "object-store-azure",
-    feature = "object-store-http"
-))]
-static ICECHUNK_USER_AGENT: &str = concat!("icechunk/", env!("CARGO_PKG_VERSION"));
 use tokio_util::io::StreamReader;
 use tracing::instrument;
 use url::Url;
@@ -729,7 +722,7 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
         let builder = HttpBuilder::new().with_url(&self.url).with_client_options(
             ClientOptions::new()
-                .with_config(ClientConfigKey::UserAgent, ICECHUNK_USER_AGENT),
+                .with_config(ClientConfigKey::UserAgent, crate::user_agent()),
         );
 
         let empty = HashMap::new();
@@ -854,7 +847,7 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
             .with_conditional_put(object_store::aws::S3ConditionalPut::ETagMatch)
             .with_client_options(
                 ClientOptions::new()
-                    .with_config(ClientConfigKey::UserAgent, ICECHUNK_USER_AGENT),
+                    .with_config(ClientConfigKey::UserAgent, crate::user_agent()),
             );
 
         let builder = builder.with_retry(RetryConfig {
@@ -936,7 +929,7 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
             .with_container_name(&self.container)
             .with_client_options(
                 ClientOptions::new()
-                    .with_config(ClientConfigKey::UserAgent, ICECHUNK_USER_AGENT),
+                    .with_config(ClientConfigKey::UserAgent, crate::user_agent()),
             );
 
         // Add options (user config takes precedence over defaults)
@@ -1040,7 +1033,7 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
 
         let builder = builder.with_bucket_name(&self.bucket).with_client_options(
             ClientOptions::new()
-                .with_config(ClientConfigKey::UserAgent, ICECHUNK_USER_AGENT),
+                .with_config(ClientConfigKey::UserAgent, crate::user_agent()),
         );
 
         // Add options (user config takes precedence over defaults)

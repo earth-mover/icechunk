@@ -54,6 +54,7 @@ from icechunk._icechunk_python import (
     initialize_logs,
     set_logs_filter,
     spec_version,
+    user_agent,
 )
 from icechunk.credentials import (
     AnyAzureCredential,
@@ -188,6 +189,7 @@ __all__ = [
     "set_logs_filter",
     "spec_version",
     "tigris_storage",
+    "user_agent",
 ]
 
 
