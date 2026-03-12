@@ -9,7 +9,9 @@ from collections.abc import (
     Sequence,
 )
 from enum import Enum
-from typing import Any, Literal, TypeAlias, final
+from typing import Any, TypeAlias, final
+
+from icechunk.types import CommitMethod
 
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
@@ -1836,8 +1838,6 @@ class ManifestFileInfo:
     def num_chunk_refs(self) -> int:
         """The number of chunk references contained in this manifest"""
         ...
-
-CommitMethod = Literal["new_commit", "amend"]
 
 class PyRepository:
     @classmethod
