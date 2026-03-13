@@ -511,6 +511,11 @@ pub async fn migrate_1_to_2(
             Box::new(e),
         ))
     })?;
+
+    // main_ancestry is tip-to-root, so last element is the root
+    let root = &main_ancestry[main_ancestry.len() - 1];
+    let root_time = root.flushed_at;
+
     let repo_info = Arc::new(RepoInfo::new(
         SpecVersionBin::V2dot0,
         tags,
@@ -534,7 +539,7 @@ pub async fn migrate_1_to_2(
         None::<std::iter::Empty<u16>>,
         &RepoStatus {
             availability: RepoAvailability::Online,
-            set_at: Utc::now(),
+            set_at: root_time,
             limited_availability_reason: None,
         },
     )?);
