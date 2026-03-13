@@ -32,15 +32,19 @@ A patch release (e.g. `2.1.0` to `2.1.1`) contains only bug fixes. No new featur
 
 Users should always feel safe upgrading to the latest patch release.
 
-## Compatibility and migration
+## Support Window
+
+When a new major version is released, the previous major version will continue to receive **bug fixes and security patches for at least one year**. For example, if Icechunk 2.0 is released on April 1, 2026, Icechunk 1.x will receive bug and security fixes until at least April 1, 2027.
+
+## Migration  and Compatibility
+
+### Migratioon
 
 Migrating an Icechunk repository from one major format version to the next is a **metadata-only operation** — it does not require copying or duplicating your data. Only Icechunk's internal metadata is updated; your chunk data remains in place.
 
 We maintain a documented and tested upgrade path from all major versions starting with Icechunk 1 to the latest version. Upgrading may be a multi-step process across major versions (e.g. upgrade 1 → 2, then 2 → 3), and we cover each step with integration tests.
 
-When a new major version is released, the previous major version will continue to receive **bug fixes and security patches for at least one year**. For example, if Icechunk 2.0 is released on April 1, 2026, Icechunk 1.x will receive bug and security fixes until at least April 1, 2027.
-
-### Reading and writing
+### Compatibility
 
 An Icechunk library of major version N can read and write Icechunk Spec versions N and N-1. We make best effort to support reading older spec versions, but do not guarantee it. For example, Icechunk 3.x can read and write Spec versions 2 and 3, and will make best effort to read Spec version 1 data.
 
