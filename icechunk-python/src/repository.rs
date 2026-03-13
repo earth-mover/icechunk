@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    fmt::Display,
     num::{NonZeroU16, NonZeroUsize},
     sync::Arc,
 };
@@ -484,7 +485,7 @@ impl From<PyRepoAvailability> for RepoAvailability {
 }
 
 #[pyclass(name = "RepoStatus", get_all, eq)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PyRepoStatus {
     availability: PyRepoAvailability,
     set_at: DateTime<Utc>,
@@ -508,6 +509,16 @@ impl From<PyRepoStatus> for RepoStatus {
             set_at: value.set_at,
             limited_availability_reason: value.limited_availability_reason,
         }
+    }
+}
+
+impl Display for PyRepoStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "RepoStatus(availability={:?}, set_at={:?}, limited_availability_reason={:?})",
+            self.availability, self.set_at, self.limited_availability_reason
+        )
     }
 }
 
@@ -550,6 +561,7 @@ pub(crate) enum PyUpdateType {
     NewDetachedSnapshot { new_snap_id: String },
     RepoInitialized {},
     RepoMigrated { from_version: u8, to_version: u8 },
+    RepoStatusChanged { status: PyRepoStatus },
     TagCreated { name: String },
     TagDeleted { name: String, previous_snap_id: String },
 }
@@ -594,6 +606,9 @@ impl PyUpdateType {
                 from_version, to_version
             )
             .into(),
+            Self::RepoStatusChanged { status } => {
+                format!("RepoStatusChanged(status={})", status,).into()
+            }
             Self::GCRan {} => "GCRan()".into(),
             Self::FeatureFlagChanged { id, new_value } => format!(
                 "FeatureFlagChanged(id={}, new_value={})",
@@ -699,6 +714,18 @@ fn mk_update(
                     kind: PyUpdateType::RepoMigrated {
                         from_version: *from_version as u8,
                         to_version: *to_version as u8,
+                    },
+                    updated_at,
+                    backup_path,
+                },
+            )?
+            .into_any()
+            .unbind(),
+            UpdateType::RepoStatusChangedUpdate { status } => Bound::new(
+                py,
+                PyUpdate {
+                    kind: PyUpdateType::RepoStatusChanged {
+                        status: status.clone().into(),
                     },
                     updated_at,
                     backup_path,

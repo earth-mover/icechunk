@@ -37,6 +37,7 @@ use tokio::{
 };
 use tracing::{debug, instrument, trace, warn};
 
+use crate::format::repo_info::RepoAvailability;
 use crate::storage::GetModifiedResult;
 use crate::{
     RepositoryConfig, Storage, StorageError,
@@ -619,6 +620,7 @@ impl AssetManager {
             &str,
             VersionInfo,
         ) -> RepositoryResult<Arc<RepoInfo>>,
+        skip_online_check: bool,
     ) -> RepositoryResult<VersionInfo> {
         let max_attempts = retry_settings.max_tries().get() as usize;
 
@@ -640,6 +642,14 @@ impl AssetManager {
         let mut attempts: u64 = 1;
         loop {
             let (repo_info, repo_version) = self.fetch_repo_info().await?;
+            if !skip_online_check
+                && repo_info.status()?.availability != RepoAvailability::Online
+            {
+                return Err(RepositoryErrorKind::ReadonlyRepository(
+                    "Cannot update repo info".to_string(),
+                )
+                .into());
+            }
             let backup_path = self.backup_path_for_repo_info();
             let new_repo = update(repo_info, backup_path.as_str(), repo_version.clone())?;
             trace!(attempts, "Attempting to update repo object");

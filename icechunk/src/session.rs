@@ -1196,7 +1196,11 @@ impl Session {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(
+                self.config.repo_update_retries().retries(),
+                do_update,
+                false,
+            )
             .await?;
         Ok(())
     }
@@ -2851,7 +2855,7 @@ async fn do_commit_v2(
         )?))
     };
 
-    let res = asset_manager.update_repo_info(retry_settings, do_update).await?;
+    let res = asset_manager.update_repo_info(retry_settings, do_update, false).await?;
     Ok(res)
 }
 

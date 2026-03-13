@@ -47,11 +47,30 @@ impl From<RepoAvailability> for generated::RepoAvailability {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoStatus {
     pub availability: RepoAvailability,
     pub set_at: DateTime<Utc>,
     pub limited_availability_reason: Option<String>,
+}
+
+impl TryFrom<generated::RepoStatus<'_>> for RepoStatus {
+    type Error = IcechunkFormatError;
+
+    fn try_from(fb_status: generated::RepoStatus<'_>) -> Result<Self, Self::Error> {
+        let ts: i64 = fb_status.set_at().try_into().map_err(|_| {
+            IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidTimestamp)
+        })?;
+        let set_at = DateTime::from_timestamp_micros(ts)
+            .ok_or_else(|| IcechunkFormatErrorKind::InvalidTimestamp)?;
+        Ok(RepoStatus {
+            availability: fb_status.availability().into(),
+            set_at,
+            limited_availability_reason: fb_status
+                .limited_availability_reason()
+                .map(|s| s.to_string()),
+        })
+    }
 }
 
 // TODO: should we not implement serialize and let the session fetch the repo info?
@@ -97,6 +116,9 @@ pub enum UpdateType {
     RepoMigratedUpdate {
         from_version: SpecVersionBin,
         to_version: SpecVersionBin,
+    },
+    RepoStatusChangedUpdate {
+        status: RepoStatus,
     },
     ConfigChangedUpdate,
     MetadataChangedUpdate,
@@ -574,18 +596,7 @@ impl RepoInfo {
     pub fn status(&self) -> IcechunkResult<RepoStatus> {
         let root = self.root()?;
         let fb_status = root.status();
-        let ts: i64 = fb_status.set_at().try_into().map_err(|_| {
-            IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidTimestamp)
-        })?;
-        let set_at = DateTime::from_timestamp_micros(ts)
-            .ok_or_else(|| IcechunkFormatErrorKind::InvalidTimestamp)?;
-        Ok(RepoStatus {
-            availability: fb_status.availability().into(),
-            set_at,
-            limited_availability_reason: fb_status
-                .limited_availability_reason()
-                .map(|s| s.to_string()),
-        })
+        fb_status.try_into()
     }
 
     pub fn enabled_feature_flags(
@@ -1108,7 +1119,9 @@ impl RepoInfo {
             snaps,
             &self.metadata()?,
             UpdateInfo {
-                update_type: UpdateType::ConfigChangedUpdate,
+                update_type: UpdateType::RepoStatusChangedUpdate {
+                    status: status.clone(),
+                },
                 update_time: Utc::now(),
                 previous_updates: self.latest_updates()?,
             },
@@ -1254,6 +1267,13 @@ impl RepoInfo {
                         )
                     })?,
                 })
+            }
+            generated::UpdateType::RepoStatusChangedUpdate => {
+                let up = update.update_type_as_repo_status_changed_update().unwrap();
+                let fb_status = up.status().unwrap();
+                let status = fb_status.try_into()?;
+
+                Ok(UpdateType::RepoStatusChangedUpdate { status })
             }
             generated::UpdateType::ConfigChangedUpdate => {
                 Ok(UpdateType::ConfigChangedUpdate)
@@ -1486,6 +1506,29 @@ fn update_type_to_fb<'bldr>(
             )
             .as_union_value(),
         )),
+        UpdateType::RepoStatusChangedUpdate { status } => {
+            let limited_availability_reason = status
+                .limited_availability_reason
+                .as_ref()
+                .map(|r| builder.create_string(r));
+            let status = generated::RepoStatus::create(
+                builder,
+                &generated::RepoStatusArgs {
+                    availability: status.availability.into(),
+                    set_at: status.set_at.timestamp_micros() as u64,
+                    limited_availability_reason,
+                },
+            );
+
+            Ok((
+                generated::UpdateType::RepoStatusChangedUpdate,
+                generated::RepoStatusChangedUpdate::create(
+                    builder,
+                    &generated::RepoStatusChangedUpdateArgs { status: Some(status) },
+                )
+                .as_union_value(),
+            ))
+        }
         UpdateType::ConfigChangedUpdate => Ok((
             generated::UpdateType::ConfigChangedUpdate,
             generated::ConfigChangedUpdate::create(

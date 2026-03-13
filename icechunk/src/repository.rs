@@ -655,7 +655,11 @@ impl Repository {
             };
             let version = self
                 .asset_manager
-                .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+                .update_repo_info(
+                    self.config.repo_update_retries().retries(),
+                    do_update,
+                    false,
+                )
                 .await?;
 
             Ok(version)
@@ -714,7 +718,11 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(
+                self.config.repo_update_retries().retries(),
+                do_update,
+                false,
+            )
             .await?;
         Ok(final_metadata)
     }
@@ -743,7 +751,11 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(
+                self.config.repo_update_retries().retries(),
+                do_update,
+                false,
+            )
             .await?;
         Ok(())
     }
@@ -755,7 +767,7 @@ impl Repository {
         Ok(repo.status()?)
     }
 
-    #[instrument(skip(self, status))]
+    #[instrument(skip(self))]
     pub async fn set_status(&self, status: &RepoStatus) -> RepositoryResult<()> {
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
         if !self.storage.can_write().await? {
@@ -777,7 +789,11 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(
+                self.config.repo_update_retries().retries(),
+                do_update,
+                true,
+            )
             .await?;
         Ok(())
     }
@@ -850,7 +866,11 @@ impl Repository {
         };
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(
+                self.config.repo_update_retries().retries(),
+                do_update,
+                false,
+            )
             .await?;
         Ok(())
     }
@@ -1089,7 +1109,11 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(
+                self.config.repo_update_retries().retries(),
+                do_update,
+                false,
+            )
             .await?;
         Ok(())
     }
@@ -1313,7 +1337,11 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(
+                self.config.repo_update_retries().retries(),
+                do_update,
+                false,
+            )
             .await?;
         Ok(())
     }
@@ -1366,7 +1394,11 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(
+                self.config.repo_update_retries().retries(),
+                do_update,
+                false,
+            )
             .await?;
         Ok(())
     }
@@ -1418,7 +1450,11 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(
+                self.config.repo_update_retries().retries(),
+                do_update,
+                false,
+            )
             .await?;
         Ok(())
     }
@@ -1496,7 +1532,11 @@ impl Repository {
 
         let _ = self
             .asset_manager
-            .update_repo_info(self.config.repo_update_retries().retries(), do_update)
+            .update_repo_info(
+                self.config.repo_update_retries().retries(),
+                do_update,
+                false,
+            )
             .await?;
         Ok(())
     }
@@ -1810,6 +1850,19 @@ impl Repository {
         Ok(session)
     }
 
+    async fn fail_unless_online_status(&self, error_msg: &str) -> RepositoryResult<()> {
+        if self.spec_version() >= SpecVersionBin::V2dot0 {
+            let status = self.get_status().await?;
+            if status.availability != RepoAvailability::Online {
+                return Err(RepositoryErrorKind::ReadonlyRepository(
+                    error_msg.to_string(),
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
+
     #[instrument(skip(self))]
     pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
         if !self.storage.can_write().await? {
@@ -1818,15 +1871,9 @@ impl Repository {
             )
             .into());
         }
-        if self.spec_version() >= SpecVersionBin::V2dot0 {
-            let status = self.get_status().await?;
-            if status.availability == RepoAvailability::ReadOnly {
-                return Err(RepositoryErrorKind::ReadonlyRepository(
-                    "Cannot create writable session".to_string(),
-                )
-                .into());
-            }
-        }
+
+        self.fail_unless_online_status("Cannot create writable session").await?;
+
         let snapshot_id = self.lookup_branch(branch).await?;
 
         let session = Session::create_writable_session(
@@ -1854,16 +1901,10 @@ impl Repository {
             .into());
         }
 
-        let status = self.get_status().await?;
-        if status.availability == RepoAvailability::ReadOnly {
-            return Err(RepositoryErrorKind::ReadonlyRepository(
-                "Cannot create rearrange session".to_string(),
-            )
-            .into());
-        }
-
         // this feature is only available in IC2
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+
+        self.fail_unless_online_status("Cannot create rearrange session").await?;
 
         let (ri, _) = self.asset_manager().fetch_repo_info().await?;
         let snapshot_id = self.lookup_branch_v2(branch, Some(&ri)).await?;
