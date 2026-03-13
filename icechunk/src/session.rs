@@ -25,7 +25,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::task::JoinError;
-use tracing::{Instrument, debug, info, instrument, trace, warn};
+use tracing::{Instrument, Span, debug, info, instrument, trace, warn};
 
 use crate::{
     RepositoryConfig, Storage, StorageError,
@@ -2606,23 +2606,26 @@ async fn do_flush(
     trace!(transaction_log_id = %new_snapshot.id(), "Creating transaction log");
     let new_snapshot_id = new_snapshot.id();
 
-    // FIXME: this should execute in a non-blocking context
     let this_tx_log = TransactionLog::new(&new_snapshot_id, flush_data.change_set);
     let new_tx_log = if commit_method == CommitMethod::NewCommit {
         this_tx_log
     } else {
-        // Previous tx log was fetched in the beginning of do_flush,
-        // so it will be available here. Just to be sure, still use
-        // .map and .unwrap_or_else to avoid unwrapping.
-        previous_tx_log
-            .map(|previous_log| {
-                // FIXME: this should execute in a non-blocking context
-                TransactionLog::merge(
-                    &new_snapshot_id,
-                    [previous_log.as_ref(), &this_tx_log],
-                )
-            })
-            .unwrap_or_else(|| this_tx_log)
+        match previous_tx_log {
+            Some(previous_log) => {
+                let snapshot_id = new_snapshot_id.clone();
+                let span = Span::current();
+                tokio::task::spawn_blocking(move || {
+                    let _entered = span.entered();
+                    TransactionLog::merge(
+                        &snapshot_id,
+                        [previous_log.as_ref(), &this_tx_log],
+                    )
+                })
+                .await
+                .map_err(SessionError::from)?
+            }
+            None => this_tx_log,
+        }
     };
 
     flush_data
