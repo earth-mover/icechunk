@@ -142,6 +142,12 @@ fn spec_version() -> u8 {
 }
 
 #[pyfunction]
+/// The user-agent string sent with icechunk storage requests
+fn user_agent() -> &'static str {
+    icechunk::user_agent()
+}
+
+#[pyfunction]
 #[pyo3(signature = (repo, *, dry_run = true, delete_unused_v1_files = true, prefetch_concurrency = None))]
 fn _upgrade_icechunk_repository(
     py: Python,
@@ -211,6 +217,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
+    m.add_function(wrap_pyfunction!(user_agent, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
     m.add_function(wrap_pyfunction!(_upgrade_icechunk_repository, m)?)?;
     m.add("__version__", pep440_version())?;

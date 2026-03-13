@@ -57,6 +57,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::{OnceCell, RwLock};
+
 use tokio_util::io::StreamReader;
 use tracing::instrument;
 use url::Url;
@@ -719,12 +720,14 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
         &self,
         settings: &Settings,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
-        let builder = HttpBuilder::new().with_url(&self.url);
+        let builder = HttpBuilder::new()
+            .with_url(&self.url)
+            .with_config(ClientConfigKey::UserAgent, crate::user_agent());
 
         let empty = HashMap::new();
         let config = self.config.as_ref().unwrap_or(&empty);
 
-        // Add options
+        // Add options (user config takes precedence over defaults)
         let mut builder = config
             .iter()
             .fold(builder, |builder, (key, value)| builder.with_config(*key, value));
@@ -840,7 +843,11 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
         // Defaults
         let builder = builder
             .with_bucket_name(&self.bucket)
-            .with_conditional_put(object_store::aws::S3ConditionalPut::ETagMatch);
+            .with_conditional_put(object_store::aws::S3ConditionalPut::ETagMatch)
+            .with_config(
+                object_store::aws::AmazonS3ConfigKey::Client(ClientConfigKey::UserAgent),
+                crate::user_agent(),
+            );
 
         let builder = builder.with_retry(RetryConfig {
             backoff: BackoffConfig {
@@ -916,9 +923,15 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
         };
 
         // Either the account name should be provided or user_emulator should be set to true to use the default account
-        let builder =
-            builder.with_account(&self.account).with_container_name(&self.container);
+        let builder = builder
+            .with_account(&self.account)
+            .with_container_name(&self.container)
+            .with_config(
+                AzureConfigKey::Client(ClientConfigKey::UserAgent),
+                crate::user_agent(),
+            );
 
+        // Add options (user config takes precedence over defaults)
         let builder = self
             .config
             .as_ref()
@@ -1017,9 +1030,12 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
             None | Some(GcsCredentials::FromEnv) => GoogleCloudStorageBuilder::from_env(),
         };
 
-        let builder = builder.with_bucket_name(&self.bucket);
+        let builder = builder.with_bucket_name(&self.bucket).with_config(
+            GoogleConfigKey::Client(ClientConfigKey::UserAgent),
+            crate::user_agent(),
+        );
 
-        // Add options
+        // Add options (user config takes precedence over defaults)
         let builder = self
             .config
             .as_ref()
