@@ -121,12 +121,16 @@ We welcome contributions from folks interested in developing Icechunk bindings f
 ## Is Icechunk stable?
 
 Yes! Icechunk 1.0, released in July 2025, is a stable release suitable for production use.
-Data written by Icechunk 1.0 and greater will forever be readable by future Icechunk versions.
 
 ## What is the backwards compatibility policy for the Icechunk format?
 
-Any data written by Icechunk v1.0 or greater will be readable forever by future Icechunk releases (backwards compatible).
-Any data written in a _greater major version_ are not guaranteed to be compatible with a _lesser major version_ (e.g. data written by v2.2 are not guaranteed to be readable with v1.1 libraries).
+See the [version policy](./version-policy.md) for full details.
+
+An Icechunk library of major version N can read and write Icechunk Spec versions N and N-1. We make best effort to support reading older spec versions, but do not guarantee it. Icechunk libraries do not support forward-compatible reading or writing (e.g. v1.x cannot read data written by v2.x).
+
+Migrating between major format versions is a **metadata-only operation** — no data copying required. We maintain a documented and tested upgrade path from all versions starting with Icechunk 1.
+
+All Icechunk major versions receive bug fixes and security patches for at least one year after they are superseded, guaranteeing at least a one-year window to upgrade.
 
 ## Is Icechunk fast?
 
