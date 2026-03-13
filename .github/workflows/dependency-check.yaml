@@ -3,6 +3,7 @@ name: Dependency Check
 on:
   pull_request:
     types: [opened, reopened, synchronize]
+  merge_group:
   push:
     branches:
       - main
