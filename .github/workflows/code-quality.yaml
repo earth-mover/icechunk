@@ -55,7 +55,7 @@ jobs:
 
       - name: Run clippy linting
         run: |
-          just profile=ci lint --workspace
+          just profile=ci lint --workspace --all-targets
 
       - name: Run doc tests
         run: |
