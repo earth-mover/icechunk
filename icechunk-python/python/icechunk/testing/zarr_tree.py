@@ -36,6 +36,10 @@ class GroupNode:
             if isinstance(child, GroupNode):
                 yield from child._walk(p)
 
+    def nodes(self, prefix: str = "") -> list[str]:
+        """Return paths of all nodes (root ``""`` + all children)."""
+        return [prefix] + [p for p, _ in self._walk(prefix)]
+
     def groups(self, prefix: str = "") -> list[str]:
         """Return paths of all group nodes (including root as ``""``).."""
         return [prefix] + [p for p, c in self._walk(prefix) if isinstance(c, GroupNode)]
