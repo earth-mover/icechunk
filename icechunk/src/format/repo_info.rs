@@ -13,7 +13,8 @@ use crate::{config::RepositoryConfig, format::snapshot::SnapshotProperties, refs
 
 use super::{
     IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
-    flatbuffers::generated, format_constants::SpecVersionBin, snapshot::SnapshotInfo,
+    flatbuffers::generated, format_constants::SpecVersionBin, lookup_index_by_key,
+    snapshot::SnapshotInfo,
 };
 
 use chrono::{DateTime, Utc};
@@ -342,6 +343,7 @@ impl RepoInfo {
             config,
             enabled_feature_flags,
             disabled_feature_flags,
+            ..Default::default()
         };
         let repo = generated::Repo::create(&mut builder, &repo_args);
         builder.finish(repo, Some("Ichk"));
@@ -461,8 +463,8 @@ impl RepoInfo {
         snapshot: SnapshotInfo,
         num_updates_per_file: u16,
         config: Option<&RepositoryConfig>,
+        update_time: Option<DateTime<Utc>>,
     ) -> Self {
-        let last_updated_at = snapshot.flushed_at;
         #[allow(clippy::expect_used)]
         let config_bytes =
             config.map(|c| flexbuffers::to_vec(c).expect("Cannot serialize config"));
@@ -477,7 +479,7 @@ impl RepoInfo {
             &Default::default(),
             UpdateInfo {
                 update_type: UpdateType::RepoInitializedUpdate,
-                update_time: last_updated_at,
+                update_time: update_time.unwrap_or(Utc::now()),
                 previous_updates: [],
             },
             None,
@@ -650,16 +652,17 @@ impl RepoInfo {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_snapshot(
         &self,
         spec_version: SpecVersionBin,
         snap: SnapshotInfo,
         branch: Option<&str>,
         update_type: UpdateType,
+        update_time: Option<DateTime<Utc>>, // for testing
         previous_file: &str,
         num_updates_per_file: u16,
     ) -> IcechunkResult<Self> {
-        let flushed_at = snap.flushed_at;
         let mut snapshots: Vec<_> = self.all_snapshots()?.try_collect()?;
         let new_index = match snapshots.binary_search_by_key(&&snap.id, |snap| &snap.id) {
             Ok(_) => Err(IcechunkFormatError::from(
@@ -694,7 +697,7 @@ impl RepoInfo {
             &self.metadata()?,
             UpdateInfo {
                 update_type,
-                update_time: flushed_at,
+                update_time: update_time.unwrap_or(Utc::now()),
                 previous_updates: self.latest_updates()?,
             },
             Some(previous_file),
@@ -1092,10 +1095,12 @@ impl RepoInfo {
     }
 
     pub fn spec_version(&self) -> IcechunkResult<SpecVersionBin> {
-        self.root()?
-            .spec_version()
-            .try_into()
-            .map_err(|_| IcechunkFormatErrorKind::InvalidSpecVersion)
+        let raw = self.root()?.spec_version();
+        raw.try_into()
+            .map_err(|_| IcechunkFormatErrorKind::InvalidSpecVersion {
+                found: raw,
+                max_supported: SpecVersionBin::current() as u8,
+            })
             .err_into()
     }
 
@@ -1127,15 +1132,23 @@ impl RepoInfo {
             }
             generated::UpdateType::RepoMigratedUpdate => {
                 let up = update.update_type_as_repo_migrated_update().unwrap();
+                let from_raw = up.from_version();
+                let to_raw = up.to_version();
                 Ok(UpdateType::RepoMigratedUpdate {
-                    from_version: up.from_version().try_into().map_err(|_| {
+                    from_version: from_raw.try_into().map_err(|_| {
                         IcechunkFormatError::from(
-                            IcechunkFormatErrorKind::InvalidSpecVersion,
+                            IcechunkFormatErrorKind::InvalidSpecVersion {
+                                found: from_raw,
+                                max_supported: SpecVersionBin::current() as u8,
+                            },
                         )
                     })?,
-                    to_version: up.to_version().try_into().map_err(|_| {
+                    to_version: to_raw.try_into().map_err(|_| {
                         IcechunkFormatError::from(
-                            IcechunkFormatErrorKind::InvalidSpecVersion,
+                            IcechunkFormatErrorKind::InvalidSpecVersion {
+                                found: to_raw,
+                                max_supported: SpecVersionBin::current() as u8,
+                            },
                         )
                     })?,
                 })
@@ -1270,8 +1283,9 @@ impl RepoInfo {
     }
 
     fn resolve_snapshot_index(&self, id: &SnapshotId) -> IcechunkResult<Option<usize>> {
-        // TODO: replace by binary search
-        Ok(self.root()?.snapshots().iter().position(|snap| snap.id().0 == id.0))
+        Ok(lookup_index_by_key(self.root()?.snapshots(), &id.0, |snap, key| {
+            snap.id().0.cmp(key)
+        }))
     }
 }
 
@@ -1548,7 +1562,8 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None);
+        let repo =
+            RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None, None);
         assert_eq!(repo.all_snapshots()?.next().unwrap().unwrap(), snap1);
 
         let id2 = SnapshotId::random();
@@ -1567,6 +1582,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: snap2.id.clone(),
             },
+            None,
             "foo/bar",
             100,
         )?;
@@ -1600,6 +1616,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: snap3.id.clone(),
             },
+            None,
             "foo",
             100,
         )?;
@@ -1632,7 +1649,8 @@ mod tests {
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None);
+        let repo =
+            RepoInfo::initial(SpecVersionBin::current(), snap1.clone(), 100, None, None);
         let repo = repo.add_branch(SpecVersionBin::current(), "foo", &id1, "foo", 100)?;
         let repo = repo.add_branch(SpecVersionBin::current(), "bar", &id1, "bar", 100)?;
         assert!(matches!(
@@ -1678,6 +1696,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: snap2.id.clone(),
             },
+            None,
             "foo",
             100,
         )?;
@@ -1770,6 +1789,7 @@ mod tests {
             snap1,
             num_updates_per_file,
             None,
+            None,
         );
         assert_eq!(repo.latest_updates()?.count(), 1);
         let (last_update, _, file) = repo.latest_updates()?.next().unwrap()?;
@@ -1853,15 +1873,22 @@ mod tests {
     #[test]
     fn test_update_timestamp_ordering_rejected() -> Result<(), Box<dyn std::error::Error>>
     {
+        let flushed_at = DateTime::from_timestamp_micros(1_000_000).unwrap();
         let id1 = SnapshotId::random();
         let snap1 = SnapshotInfo {
             id: id1.clone(),
             parent_id: None,
-            flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
+            flushed_at,
             message: "snap 1".to_string(),
             metadata: Default::default(),
         };
-        let repo = RepoInfo::initial(SpecVersionBin::current(), snap1, 100, None);
+        let repo = RepoInfo::initial(
+            SpecVersionBin::current(),
+            snap1,
+            100,
+            None,
+            Some(flushed_at),
+        );
 
         // Attempting add_snapshot with a timestamp equal to the top of the ops log
         // should fail
@@ -1881,6 +1908,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: id2.clone(),
             },
+            Some(flushed_at),
             "backup",
             100,
         );
@@ -1894,11 +1922,12 @@ mod tests {
 
         // Attempting add_snapshot with a timestamp older than the top of the ops log
         // should also fail
+        let flushed_at = DateTime::from_timestamp_micros(500_000).unwrap();
         let id3 = SnapshotId::random();
         let snap3 = SnapshotInfo {
             id: id3.clone(),
             parent_id: Some(id1.clone()),
-            flushed_at: DateTime::from_timestamp_micros(500_000).unwrap(),
+            flushed_at,
             message: "snap 3".to_string(),
             metadata: Default::default(),
         };
@@ -1910,6 +1939,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: id3.clone(),
             },
+            Some(flushed_at),
             "backup",
             100,
         );
@@ -1922,11 +1952,12 @@ mod tests {
         ));
 
         // Attempting add_snapshot with a strictly newer timestamp should succeed
+        let flushed_at = DateTime::from_timestamp_micros(2_000_000).unwrap();
         let id4 = SnapshotId::random();
         let snap4 = SnapshotInfo {
             id: id4.clone(),
             parent_id: Some(id1.clone()),
-            flushed_at: DateTime::from_timestamp_micros(2_000_000).unwrap(),
+            flushed_at,
             message: "snap 4".to_string(),
             metadata: Default::default(),
         };
@@ -1938,6 +1969,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: id4.clone(),
             },
+            Some(flushed_at),
             "backup",
             100,
         );

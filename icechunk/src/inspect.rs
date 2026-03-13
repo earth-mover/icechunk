@@ -4,6 +4,7 @@
 //! repository information to JSON.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
@@ -12,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     asset_manager::AssetManager,
     format::{
-        SnapshotId,
-        manifest::ManifestRef,
+        ManifestId, SnapshotId,
+        manifest::{ChunkPayload, ManifestRef},
         repo_info::UpdateType,
         snapshot::{
             ManifestFileInfo, NodeData, NodeSnapshot, NodeType, SnapshotProperties,
@@ -311,6 +312,98 @@ pub async fn repo_info_json(
     pretty: bool,
 ) -> RepositoryResult<String> {
     let info = inspect_repo_info(asset_manager).await?;
+    let res = if pretty {
+        serde_json::to_string_pretty(&info)
+    } else {
+        serde_json::to_string(&info)
+    }
+    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+    Ok(res)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ArrayManifestInspect {
+    node_id: String,
+    num_chunk_refs: usize,
+    num_inline: usize,
+    num_native: usize,
+    num_virtual: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ManifestVirtualChunksCompressionInspect {
+    uses_location_compression: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dictionary_size_bytes: Option<usize>,
+    num_compressed_refs: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ManifestInspect {
+    id: String,
+    size_bytes: usize,
+    num_arrays: usize,
+    total_chunk_refs: usize,
+    total_inline: usize,
+    total_native: usize,
+    total_virtual: usize,
+    arrays: Vec<ArrayManifestInspect>,
+    compression: ManifestVirtualChunksCompressionInspect,
+}
+
+async fn inspect_manifest(
+    asset_manager: &AssetManager,
+    manifest_id: &ManifestId,
+) -> RepositoryResult<ManifestInspect> {
+    let manifest = asset_manager.fetch_manifest_unknown_size(manifest_id).await?;
+    let node_ids: Vec<_> = manifest.arrays().collect();
+    let mut arrays = Vec::with_capacity(node_ids.len());
+    for node_id in node_ids {
+        let (mut num_inline, mut num_native, mut num_virtual) = (0, 0, 0);
+        let node_id_str = node_id.to_string();
+        for payload in Arc::clone(&manifest).iter(node_id)? {
+            match payload? {
+                (_, ChunkPayload::Inline(_)) => num_inline += 1,
+                (_, ChunkPayload::Ref(_)) => num_native += 1,
+                (_, ChunkPayload::Virtual(_)) => num_virtual += 1,
+            }
+        }
+        arrays.push(ArrayManifestInspect {
+            node_id: node_id_str,
+            num_chunk_refs: num_inline + num_native + num_virtual,
+            num_inline,
+            num_native,
+            num_virtual,
+        });
+    }
+    let (total_inline, total_native, total_virtual) =
+        arrays.iter().fold((0, 0, 0), |(i, n, v), a| {
+            (i + a.num_inline, n + a.num_native, v + a.num_virtual)
+        });
+    let compression = ManifestVirtualChunksCompressionInspect {
+        uses_location_compression: manifest.uses_location_compression(),
+        dictionary_size_bytes: manifest.location_dictionary_size(),
+        num_compressed_refs: manifest.num_compressed_refs(),
+    };
+    Ok(ManifestInspect {
+        id: manifest.id().to_string(),
+        size_bytes: manifest.bytes().len(),
+        num_arrays: arrays.len(),
+        total_chunk_refs: total_inline + total_native + total_virtual,
+        total_inline,
+        total_native,
+        total_virtual,
+        arrays,
+        compression,
+    })
+}
+
+pub async fn manifest_json(
+    asset_manager: &AssetManager,
+    manifest_id: &ManifestId,
+    pretty: bool,
+) -> RepositoryResult<String> {
+    let info = inspect_manifest(asset_manager, manifest_id).await?;
     let res = if pretty {
         serde_json::to_string_pretty(&info)
     } else {

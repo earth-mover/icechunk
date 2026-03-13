@@ -12,16 +12,11 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use futures::{
-    Stream, StreamExt, TryStreamExt,
-    future::Either,
-    stream::{self},
-};
+use futures::{Stream, StreamExt, TryStreamExt, future::Either, stream};
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
-    cmp::min,
     collections::{HashMap, HashSet},
     convert::Infallible,
     future::{Future, ready},
@@ -30,13 +25,16 @@ use std::{
 };
 use thiserror::Error;
 use tokio::task::JoinError;
-use tracing::{Instrument, debug, info, instrument, trace, warn};
+use tracing::{Instrument, Span, debug, info, instrument, trace, warn};
 
 use crate::{
     RepositoryConfig, Storage, StorageError,
     asset_manager::AssetManager,
-    change_set::{ArrayData, ChangeSet, ChunkTable},
-    config::{ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig},
+    change_set::{ArrayData, ChangeSet, ChunkTable, MovedFrom},
+    config::{
+        ManifestConfig, ManifestSplitDim, ManifestSplitDimCondition,
+        ManifestSplittingConfig,
+    },
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     error::ICError,
     feature_flags::{MOVE_NODE_FLAG, raise_if_feature_flag_disabled},
@@ -158,6 +156,8 @@ pub enum SessionErrorKind {
     NoAmendForInitialCommit,
     #[error("failed to create manifest from chunk stream")]
     ManifestCreationError(#[from] Box<SessionError>),
+    #[error("byte range {request:?} is out of bounds for chunk of length {chunk_length}")]
+    InvalidByteRange { request: ByteRange, chunk_length: u64 },
     #[error("unknown error: {0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -210,11 +210,9 @@ impl From<RefError> for SessionError {
 
 pub type SessionResult<T> = Result<T, SessionError>;
 
-// Returns the index of split_range that includes ChunkIndices
-// This can be used at write time to split manifests based on the config
-// and at read time to choose which manifest to query for chunk payload
+// Returns the index of split_range that includes ChunkIndices using _linear search_.
+// This is used at read time to choose which manifest to query for chunk payload
 /// It is useful to have this act on an iterator (e.g. get_chunk_ref)
-/// The find method on ManifestSplits is simply a helper.
 #[inline(always)]
 pub fn find_coord<'a, I>(
     iter: I,
@@ -237,16 +235,22 @@ where
 }
 
 impl ManifestSplits {
+    /// Binary search to locate ManifestExtents for a given chunk coordinate.
     #[inline(always)]
-    pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<&'a ManifestExtents> {
-        debug_assert_eq!(coord.0.len(), self.0[0].len());
-        find_coord(self.iter(), coord).map(|x| x.1)
-    }
-
-    #[inline(always)]
-    pub fn position(&self, coord: &ChunkIndices) -> Option<usize> {
-        debug_assert_eq!(coord.0.len(), self.0[0].len());
-        find_coord(self.iter(), coord).map(|x| x.0)
+    pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<ManifestExtents> {
+        debug_assert_eq!(coord.0.len(), self.0.len());
+        let mut ranges = Vec::with_capacity(self.0.len());
+        for (edges, loc) in self.0.iter().zip(coord.0.iter()) {
+            // Find insertion point for axis chunk index in sorted vector of split edges.
+            let bin = edges.partition_point(|&e| e <= *loc);
+            // detected bin is out of range. This _should_ never happen
+            // note that if loc == 0, then bin = 1
+            if bin == 0 || bin >= edges.len() {
+                return None;
+            }
+            ranges.push(edges[bin - 1]..edges[bin]);
+        }
+        Some(ManifestExtents::from_ranges_iter(ranges))
     }
 }
 
@@ -390,7 +394,7 @@ impl Session {
         &self,
         chunk_location: &VirtualChunkLocation,
     ) -> Option<&VirtualChunkContainer> {
-        self.virtual_resolver.matching_container(chunk_location.url())
+        self.virtual_resolver.matching_container(chunk_location)
     }
 
     /// Compute an overview of the current session changes
@@ -646,7 +650,7 @@ impl Session {
     pub async fn shift_array(
         &mut self,
         array_path: &Path,
-        chunk_offset: &[i64], // FIXME: overflow
+        chunk_offset: &[i64],
     ) -> SessionResult<()> {
         let node = self.get_array(array_path).await?;
         let num_chunks: Vec<u32> = match &node.node_data {
@@ -663,7 +667,12 @@ impl Session {
                 .enumerate()
                 .map(|(dim, &idx)| {
                     let n = num_chunks[dim] as i64;
-                    let new_idx = idx as i64 + chunk_offset[dim];
+                    // On overflow, checked_add returns None, which ? propagates
+                    // to the map closure, causing .collect() to yield None and
+                    // discarding the chunk
+                    // So, we are setting the semantics of this to
+                    // automatically discard out of bounds chunks
+                    let new_idx = (idx as i64).checked_add(chunk_offset[dim])?;
                     if new_idx < 0 || new_idx >= n { None } else { Some(new_idx as u32) }
                 })
                 .collect();
@@ -722,7 +731,6 @@ impl Session {
 
     // Helper function that accepts a NodeSnapshot instead of a path,
     // this lets us do bulk sets (and deletes) without repeatedly grabbing the node.
-    #[instrument(skip(self, node, data))]
     async fn set_node_chunk_ref(
         &mut self,
         node: NodeSnapshot,
@@ -886,7 +894,7 @@ impl Session {
             Some(ChunkPayload::Ref(ChunkRef { id, offset, length })) => {
                 let byte_range = byte_range.clone();
                 let asset_manager = Arc::clone(&self.asset_manager);
-                let byte_range = construct_valid_byte_range(&byte_range, offset, length);
+                let byte_range = construct_valid_byte_range(&byte_range, offset, length)?;
                 Ok(Some(crate::compat::ic_boxed!(async move {
                     // TODO: we don't have a way to distinguish if we want to pass a range or not
                     asset_manager
@@ -897,7 +905,7 @@ impl Session {
             }
             Some(ChunkPayload::Inline(bytes)) => {
                 let byte_range =
-                    construct_valid_byte_range(byte_range, 0, bytes.len() as u64);
+                    construct_valid_byte_range(byte_range, 0, bytes.len() as u64)?;
                 trace!("fetching inline chunk for range {:?}.", &byte_range);
                 Ok(Some(crate::compat::ic_boxed!(ready(Ok(
                     bytes.slice(byte_range.start as usize..byte_range.end as usize)
@@ -909,7 +917,7 @@ impl Session {
                 length,
                 checksum,
             })) => {
-                let byte_range = construct_valid_byte_range(byte_range, offset, length);
+                let byte_range = construct_valid_byte_range(byte_range, offset, length)?;
                 let resolver = Arc::clone(&self.virtual_resolver);
                 Ok(Some(crate::compat::ic_boxed!(async move {
                     resolver
@@ -1090,13 +1098,19 @@ impl Session {
     pub async fn all_virtual_chunk_locations(
         &self,
     ) -> SessionResult<impl Stream<Item = SessionResult<String>> + '_> {
-        let stream =
-            self.all_chunks().await?.try_filter_map(|(_, info)| match info.payload {
-                ChunkPayload::Virtual(reference) => {
-                    ready(Ok(Some(reference.location.url().to_string())))
-                }
-                _ => ready(Ok(None)),
-            });
+        let resolver = &self.virtual_resolver;
+        let stream = self.all_chunks().await?.try_filter_map(move |(_, info)| match info
+            .payload
+        {
+            ChunkPayload::Virtual(reference) => {
+                let expanded = match resolver.expand_location(reference.location.url()) {
+                    Ok(abs) => abs,
+                    Err(e) => return ready(Err(e.into())),
+                };
+                ready(Ok(Some(expanded)))
+            }
+            _ => ready(Ok(None)),
+        });
         Ok(stream)
     }
 
@@ -1174,6 +1188,7 @@ impl Session {
                 new_snapshot_info,
                 None,
                 update_type.clone(),
+                None,
                 backup_path,
                 num_updates,
             )?))
@@ -1215,6 +1230,7 @@ impl Session {
             Arc::clone(&self.asset_manager),
             &self.change_set,
             self.snapshot_id(),
+            self.config.manifest(),
         );
         let new_snap = do_flush(
             flush_data,
@@ -1331,7 +1347,7 @@ impl Session {
             Some(properties),
             rewrite_manifests,
             commit_method,
-            self.config.manifest().splitting(),
+            self.config.manifest(),
             allow_empty,
             is_rearrange,
             self.config.repo_update_retries().retries(),
@@ -1716,10 +1732,11 @@ async fn verified_node_chunk_iterator<'a>(
                                     asset_manager,
                                 )
                                 .await;
-                                match manifest {
-                                    Ok(manifest) => {
-                                        let old_chunks = manifest
-                                            .iter(node_id_c.clone())
+                                match manifest
+                                    .and_then(|m| m.iter(node_id_c.clone()).err_into())
+                                {
+                                    Ok(iter) => {
+                                        let old_chunks = iter
                                             .filter_ok(move |(coord, _)| {
                                                 !new_chunk_indices.contains(coord)
                                             })
@@ -1862,67 +1879,75 @@ async fn get_existing_node(
     // An existing node is one that is present in a Snapshot file on storage
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
 
-    match change_set.moved_from(path) {
-        None => Err(SessionErrorKind::NodeNotFound {
+    let moved_from = change_set.moved_from(path);
+    if matches!(moved_from, MovedFrom::Deleted) {
+        return Err(SessionErrorKind::NodeNotFound {
+            path: path.clone(),
+            message: "existing node not found".to_string(),
+        }
+        .into());
+    }
+    let was_moved = matches!(moved_from, MovedFrom::From(_));
+    let renamed_path = match moved_from {
+        MovedFrom::From(p) | MovedFrom::NotMoved(p) => p,
+        MovedFrom::Deleted => unreachable!(),
+    };
+
+    match snapshot.get_node(renamed_path.as_ref()) {
+        Ok(node) => {
+            let node = match node.node_data {
+                // this overly verbose match arm allows us to minimize clones
+                NodeData::Array { .. } => match change_set.get_updated_array(&node.id) {
+                    Some(new_data) => {
+                        if let NodeData::Array { manifests, .. } = &node.node_data {
+                            let node_data = NodeData::Array {
+                                shape: new_data.shape.clone(),
+                                dimension_names: new_data.dimension_names.clone(),
+                                manifests: manifests.clone(),
+                            };
+                            NodeSnapshot {
+                                user_data: new_data.user_data.clone(),
+                                node_data,
+                                id: node.id.clone(),
+                                path: node.path.clone(),
+                            }
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    None => Arc::unwrap_or_clone(node),
+                },
+                NodeData::Group => {
+                    let node = Arc::unwrap_or_clone(node);
+                    if let Some(updated_definition) =
+                        change_set.get_updated_group(&node.id)
+                    {
+                        NodeSnapshot { user_data: updated_definition.clone(), ..node }
+                    } else {
+                        node
+                    }
+                }
+            };
+            let node = if was_moved {
+                // this is technically unnecessary for back-and-forth moves
+                // but we will ignore that rare case
+                NodeSnapshot { path: path.clone(), ..node }
+            } else {
+                node
+            };
+            Ok(node)
+        }
+        // A missing node here is not really a format error, so we need to
+        // generate the correct error for repositories
+        Err(IcechunkFormatError {
+            kind: IcechunkFormatErrorKind::NodeNotFound { .. },
+            ..
+        }) => Err(SessionErrorKind::NodeNotFound {
             path: path.clone(),
             message: "existing node not found".to_string(),
         }
         .into()),
-        Some(renamed_path) => {
-            match snapshot.get_node(renamed_path.as_ref()) {
-                Ok(node) => {
-                    let node = Arc::unwrap_or_clone(node);
-                    let node = match node.node_data {
-                        NodeData::Array { ref manifests, .. } => {
-                            if let Some(new_data) = change_set.get_updated_array(&node.id)
-                            {
-                                let node_data = NodeData::Array {
-                                    shape: new_data.shape.clone(),
-                                    dimension_names: new_data.dimension_names.clone(),
-                                    manifests: manifests.clone(),
-                                };
-                                NodeSnapshot {
-                                    user_data: new_data.user_data.clone(),
-                                    node_data,
-                                    ..node
-                                }
-                            } else {
-                                node
-                            }
-                        }
-                        NodeData::Group => {
-                            if let Some(updated_definition) =
-                                change_set.get_updated_group(&node.id)
-                            {
-                                NodeSnapshot {
-                                    user_data: updated_definition.clone(),
-                                    ..node
-                                }
-                            } else {
-                                node
-                            }
-                        }
-                    };
-                    let node = if &node.path != path {
-                        NodeSnapshot { path: path.clone(), ..node }
-                    } else {
-                        node
-                    };
-                    Ok(node)
-                }
-                // A missing node here is not really a format error, so we need to
-                // generate the correct error for repositories
-                Err(IcechunkFormatError {
-                    kind: IcechunkFormatErrorKind::NodeNotFound { .. },
-                    ..
-                }) => Err(SessionErrorKind::NodeNotFound {
-                    path: path.clone(),
-                    message: "existing node not found".to_string(),
-                }
-                .into()),
-                Err(err) => Err(SessionError::from(err)),
-            }
-        }
+        Err(err) => Err(SessionError::from(err)),
     }
 }
 
@@ -1945,29 +1970,44 @@ pub fn construct_valid_byte_range(
     request: &ByteRange,
     chunk_offset: u64,
     chunk_length: u64,
-) -> Range<ChunkOffset> {
-    // TODO: error for offset<0
-    // TODO: error if request.start > offset + length
+) -> SessionResult<Range<ChunkOffset>> {
+    let err = || -> SessionError {
+        SessionErrorKind::InvalidByteRange { request: request.clone(), chunk_length }
+            .into()
+    };
     match request {
         ByteRange::Bounded(std::ops::Range { start: req_start, end: req_end }) => {
-            let new_start =
-                min(chunk_offset + req_start, chunk_offset + chunk_length - 1);
-            let new_end = min(chunk_offset + req_end, chunk_offset + chunk_length);
-            new_start..new_end
+            let new_start = chunk_offset + req_start;
+            let new_end = chunk_offset + req_end;
+            if new_start >= chunk_offset + chunk_length
+                || new_end > chunk_offset + chunk_length
+            {
+                return Err(err());
+            }
+            Ok(new_start..new_end)
         }
         ByteRange::From(n) => {
-            let new_start = min(chunk_offset + n, chunk_offset + chunk_length - 1);
-            new_start..chunk_offset + chunk_length
+            let new_start = chunk_offset + n;
+            if new_start >= chunk_offset + chunk_length {
+                return Err(err());
+            }
+            Ok(new_start..chunk_offset + chunk_length)
         }
         ByteRange::Until(n) => {
+            if *n > chunk_length {
+                return Err(err());
+            }
             let new_end = chunk_offset + chunk_length;
             let new_start = new_end - n;
-            new_start..new_end
+            Ok(new_start..new_end)
         }
         ByteRange::Last(n) => {
+            if *n > chunk_length {
+                return Err(err());
+            }
             let new_end = chunk_offset + chunk_length;
             let new_start = new_end - n;
-            new_start..new_end
+            Ok(new_start..new_end)
         }
     }
 }
@@ -1976,6 +2016,7 @@ struct FlushProcess<'a> {
     asset_manager: Arc<AssetManager>,
     change_set: &'a ChangeSet,
     parent_id: &'a SnapshotId,
+    manifest_config: &'a ManifestConfig,
     manifest_refs: HashMap<NodeId, Vec<ManifestRef>>,
     manifest_files: HashSet<ManifestFileInfo>,
 }
@@ -1985,11 +2026,13 @@ impl<'a> FlushProcess<'a> {
         asset_manager: Arc<AssetManager>,
         change_set: &'a ChangeSet,
         parent_id: &'a SnapshotId,
+        manifest_config: &'a ManifestConfig,
     ) -> Self {
         Self {
             asset_manager,
             change_set,
             parent_id,
+            manifest_config,
             manifest_refs: Default::default(),
             manifest_files: Default::default(),
         }
@@ -2003,9 +2046,16 @@ impl<'a> FlushProcess<'a> {
         let mut to = vec![];
         let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-        if let Some(new_manifest) = Manifest::from_stream(&ManifestId::random(), chunks)
-            .await
-            .map_err(|e| SessionErrorKind::ManifestCreationError(Box::new(e)))?
+        let compression_config =
+            if self.asset_manager.spec_version() >= SpecVersionBin::V2dot0 {
+                Some(self.manifest_config.virtual_chunk_location_compression())
+            } else {
+                None
+            };
+        if let Some(new_manifest) =
+            Manifest::from_stream(&ManifestId::random(), chunks, compression_config)
+                .await
+                .map_err(|e| SessionErrorKind::ManifestCreationError(Box::new(e)))?
         {
             let new_manifest = Arc::new(new_manifest);
             let new_manifest_size =
@@ -2072,47 +2122,57 @@ impl<'a> FlushProcess<'a> {
     async fn write_manifest_with_changes(
         &mut self,
         previous_manifests: impl Iterator<Item = &ManifestRef>,
-        modified_chunks: &ChunkTable,
+        modified_chunks: ChunkTable,
         extent: &ManifestExtents,
         node_id: &NodeId,
         old_snapshot: &SnapshotId,
     ) -> SessionResult<Option<ManifestRef>> {
         // Collect unmodified chunks from all intersecting manifests
-        let mut all_chunks_vec: Vec<Result<ChunkInfo, SessionError>> = Vec::new();
 
-        // add chunks from previous manifests that are not modified
-        for mref in previous_manifests {
-            let manifest =
+        // First add chunks from previous manifests that are not modified
+        let futs = previous_manifests
+            .map(|mref| {
                 fetch_manifest(&mref.object_id, old_snapshot, &self.asset_manager)
-                    .await?;
+            })
+            .collect::<Vec<_>>();
 
-            for item in manifest.iter(node_id.clone()) {
-                match item {
-                    Ok((idx, payload)) => {
-                        if !modified_chunks.contains_key(&idx) && extent.contains(&idx.0)
-                        {
-                            all_chunks_vec.push(Ok(ChunkInfo {
-                                node: node_id.clone(),
-                                coord: idx,
-                                payload,
-                            }));
-                        }
-                    }
-                    Err(e) => all_chunks_vec.push(Err(e.into())),
-                }
-            }
-        }
+        // We could be more clever here by considering size of manifests and fetching more in parallel if they are small
+        // but for now we concurrently fetch one manifess as we iterate through another one.
+        let mut all_chunks_vec = stream::iter(futs)
+            .buffer_unordered(1)
+            .try_fold(
+                Vec::with_capacity(modified_chunks.len()),
+                |mut acc, manifest| async {
+                    acc.extend(manifest.iter(node_id.clone())?.filter_map_ok(
+                        |(idx, payload)| {
+                            // we expect that most users have no splitting
+                            // and so the first condition here is most restrictive.
+                            if !modified_chunks.contains_key(&idx)
+                                && extent.contains(&idx.0)
+                            {
+                                Some(ChunkInfo {
+                                    node: node_id.clone(),
+                                    coord: idx,
+                                    payload,
+                                })
+                            } else {
+                                None
+                            }
+                        },
+                    ));
+                    Ok(acc)
+                },
+            )
+            .await?;
 
-        // add modified chunks
-        for (idx, maybe_payload) in modified_chunks.iter() {
-            if let Some(payload) = maybe_payload.as_ref() {
-                all_chunks_vec.push(Ok(ChunkInfo {
-                    node: node_id.clone(),
-                    coord: idx.clone(),
-                    payload: payload.clone(),
-                }));
-            }
-        }
+        // Then add modified chunks from ChangeSet
+        all_chunks_vec.extend(modified_chunks.into_iter().filter_map(
+            |(idx, maybe_payload)| {
+                maybe_payload.map(|payload| {
+                    Ok(ChunkInfo { node: node_id.clone(), coord: idx, payload })
+                })
+            },
+        ));
 
         self.write_manifest_from_iterator(stream::iter(all_chunks_vec).err_into()).await
     }
@@ -2157,12 +2217,12 @@ impl<'a> FlushProcess<'a> {
         //             elist of refs
         //             * else create a new manifest filtering out the chunks that are outside of
         //             the extent
-        let updated_chunks_by_extent: HashMap<ManifestExtents, ChunkTable> = self
+        let mut updated_chunks_by_extent: HashMap<ManifestExtents, ChunkTable> = self
             .change_set
             .array_chunks_iterator(&node.id, &node.path)
             .fold(HashMap::new(), |mut res, (idx, payload)| {
                 if let Some(extents) = splits.find(idx) {
-                    let entry = res.entry(extents.clone()).or_default();
+                    let entry = res.entry(extents).or_default();
                     entry.insert(idx.clone(), payload.clone());
                 }
                 res
@@ -2174,16 +2234,15 @@ impl<'a> FlushProcess<'a> {
                 .iter()
                 .filter_map(|mr| {
                     // order is critical here, `overlap_with` is not symmetric
-                    match mr.extents.overlap_with(extent) {
+                    match mr.extents.overlap_with(&extent) {
                         Overlap::None => None,
                         ov => Some((mr, ov)),
                     }
                 })
                 .collect();
 
-            let no_changes = Default::default();
             let modified_chunks =
-                updated_chunks_by_extent.get(extent).unwrap_or(&no_changes);
+                updated_chunks_by_extent.remove(&extent).unwrap_or_default();
 
             if !modified_chunks.is_empty() || rewrite_manifests {
                 // if we were ask to rewrite manifests, or there are modified chunks in this split
@@ -2192,7 +2251,7 @@ impl<'a> FlushProcess<'a> {
                     .write_manifest_with_changes(
                         intersecting_manifests.iter().map(|(mr, _)| *mr),
                         modified_chunks,
-                        extent,
+                        &extent,
                         &node.id,
                         snapshot_id,
                     )
@@ -2222,8 +2281,8 @@ impl<'a> FlushProcess<'a> {
                         // one that contains only the chunks we want
                         .write_manifest_with_changes(
                             std::iter::once(mref),
-                            &no_changes,
-                            extent,
+                            Default::default(),
+                            &extent,
                             &node.id,
                             snapshot_id,
                         )
@@ -2547,23 +2606,26 @@ async fn do_flush(
     trace!(transaction_log_id = %new_snapshot.id(), "Creating transaction log");
     let new_snapshot_id = new_snapshot.id();
 
-    // FIXME: this should execute in a non-blocking context
     let this_tx_log = TransactionLog::new(&new_snapshot_id, flush_data.change_set);
     let new_tx_log = if commit_method == CommitMethod::NewCommit {
         this_tx_log
     } else {
-        // Previous tx log was fetched in the beginning of do_flush,
-        // so it will be available here. Just to be sure, still use
-        // .map and .unwrap_or_else to avoid unwrapping.
-        previous_tx_log
-            .map(|previous_log| {
-                // FIXME: this should execute in a non-blocking context
-                TransactionLog::merge(
-                    &new_snapshot_id,
-                    [previous_log.as_ref(), &this_tx_log],
-                )
-            })
-            .unwrap_or_else(|| this_tx_log)
+        match previous_tx_log {
+            Some(previous_log) => {
+                let snapshot_id = new_snapshot_id.clone();
+                let span = Span::current();
+                tokio::task::spawn_blocking(move || {
+                    let _entered = span.entered();
+                    TransactionLog::merge(
+                        &snapshot_id,
+                        [previous_log.as_ref(), &this_tx_log],
+                    )
+                })
+                .await
+                .map_err(SessionError::from)?
+            }
+            None => this_tx_log,
+        }
     };
 
     flush_data
@@ -2604,7 +2666,7 @@ async fn do_commit(
     properties: Option<SnapshotProperties>,
     rewrite_manifests: bool,
     commit_method: CommitMethod,
-    split_config: &ManifestSplittingConfig,
+    manifest_config: &ManifestConfig,
     allow_empty: bool,
     is_rearrange: bool,
     retry_settings: &storage::RetriesSettings,
@@ -2622,15 +2684,19 @@ async fn do_commit(
     }
 
     let properties = properties.unwrap_or_default();
-    let flush_data =
-        FlushProcess::new(Arc::clone(&asset_manager), change_set, snapshot_id);
+    let flush_data = FlushProcess::new(
+        Arc::clone(&asset_manager),
+        change_set,
+        snapshot_id,
+        manifest_config,
+    );
     let new_snapshot = do_flush(
         flush_data,
         message,
         properties,
         rewrite_manifests,
         commit_method,
-        split_config,
+        manifest_config.splitting(),
     )
     .await?;
     let new_snapshot_id = new_snapshot.id();
@@ -2779,6 +2845,7 @@ async fn do_commit_v2(
             new_snapshot_info,
             Some(branch_name),
             update_type,
+            None,
             backup_path,
             num_updates_per_repo_info_file,
         )?))
@@ -3105,16 +3172,33 @@ mod tests {
     async fn test_which_split() -> Result<(), Box<dyn Error>> {
         let splits = ManifestSplits::from_edges(vec![vec![0, 10, 20]]);
 
-        assert_eq!(splits.position(&ChunkIndices(vec![1])), Some(0));
-        assert_eq!(splits.position(&ChunkIndices(vec![11])), Some(1));
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1])),
+            Some(ManifestExtents::new(&[0], &[10]))
+        );
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![11])),
+            Some(ManifestExtents::new(&[10], &[20]))
+        );
 
         let edges = vec![vec![0, 10, 20], vec![0, 10, 20]];
 
         let splits = ManifestSplits::from_edges(edges);
-        assert_eq!(splits.position(&ChunkIndices(vec![1, 1])), Some(0));
-        assert_eq!(splits.position(&ChunkIndices(vec![1, 10])), Some(1));
-        assert_eq!(splits.position(&ChunkIndices(vec![1, 11])), Some(1));
-        assert!(splits.position(&ChunkIndices(vec![21, 21])).is_none());
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1, 1])),
+            Some(ManifestExtents::new(&[0, 0], &[10, 10]))
+        );
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1, 10])),
+            Some(ManifestExtents::new(&[0, 10], &[10, 20]))
+        );
+        assert_eq!(
+            splits.find(&ChunkIndices(vec![1, 11])),
+            Some(ManifestExtents::new(&[0, 10], &[10, 20]))
+        );
+        assert!(splits.find(&ChunkIndices(vec![21, 21])).is_none());
+        assert!(splits.find(&ChunkIndices(vec![0, 21])).is_none());
+        assert!(splits.find(&ChunkIndices(vec![21, 0])).is_none());
 
         Ok(())
     }
@@ -3337,6 +3421,7 @@ mod tests {
         let manifest = Manifest::from_iter(
             &ManifestId::random(),
             vec![chunk1.clone(), chunk2.clone()],
+            None,
         )
         .await?
         .unwrap();
@@ -3409,6 +3494,7 @@ mod tests {
             (&initial).try_into()?,
             100,
             None,
+            None,
         )
         .add_snapshot(
             SpecVersionBin::current(),
@@ -3418,6 +3504,7 @@ mod tests {
                 branch: "main".to_string(),
                 new_snap_id: snapshot.id().clone(),
             },
+            None,
             "backup_path",
             100,
         )?;
@@ -5187,6 +5274,70 @@ mod tests {
     }
 
     #[tokio_test]
+    /// Test that delete-then-recreate exactly the same node
+    /// does NOT conflict
+    ///
+    /// This session: delete group + recreate group at same path
+    /// Previous commit: add a different sibling group
+    async fn test_no_conflict_on_delete_then_recreate() -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar".try_into().unwrap();
+        ds1.add_group("/foo/quux".try_into().unwrap(), user_data()).await?;
+        ds1.commit("add sibling group", None).await?;
+
+        ds2.delete_group(path.clone()).await?;
+        ds2.add_group(path.clone(), Bytes::new()).await?;
+        assert!(matches!(
+            ds2.commit("delete+re-add group", None).await,
+            Err(SessionError {
+                kind: SessionErrorKind::Conflict {
+                    expected_parent, actual_parent
+                }, ..
+            }) if expected_parent != actual_parent
+        ));
+
+        ds2.rebase(&ConflictDetector).await?;
+        ds2.commit("delete+re-add group", None).await?;
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    /// Test that delete-then-recreate DOES conflict when the previous commit
+    /// updated the group's metadata.
+    ///
+    /// This session: delete group + recreate group at same path
+    /// Previous commit: updated the group's metadata
+    async fn test_conflict_on_delete_then_recreate_when_group_updated()
+    -> Result<(), Box<dyn Error>> {
+        let (mut ds1, mut ds2) = get_sessions_for_conflict().await?;
+
+        let path: Path = "/foo/bar".try_into().unwrap();
+        ds1.update_group(&path, Bytes::from("updated")).await?;
+        ds1.commit("update group metadata", None).await?;
+
+        let node = ds2.get_node(&path).await.unwrap();
+        ds2.delete_group(path.clone()).await?;
+        ds2.add_group(path.clone(), user_data()).await?;
+        assert!(matches!(
+            ds2.commit("delete+re-add group", None).await,
+            Err(SessionError {
+                kind: SessionErrorKind::Conflict {
+                    expected_parent, actual_parent
+                }, ..
+            }) if expected_parent != actual_parent
+        ));
+
+        assert_has_conflict(
+            &Conflict::DeleteOfUpdatedGroup { path, node_id: node.id },
+            ds2.rebase(&ConflictDetector).await,
+        );
+
+        Ok(())
+    }
+
+    #[tokio_test]
     /// Test conflict detection
     ///
     /// This session: add array
@@ -5953,6 +6104,104 @@ mod tests {
         );
         assert_eq!(attempts.into_inner(), 3);
         Ok(())
+    }
+
+    #[test]
+    fn test_construct_valid_byte_range() {
+        // chunk at offset 100, length 50 → valid absolute range is [100, 150]
+        let offset = 100u64;
+        let length = 50u64;
+
+        // Bounded: valid requests
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Bounded(0..50), offset, length)
+                .unwrap(),
+            100..150,
+        );
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Bounded(10..30), offset, length)
+                .unwrap(),
+            110..130,
+        );
+        // Bounded: empty range at start is ok
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Bounded(0..0), offset, length)
+                .unwrap(),
+            100..100,
+        );
+
+        // Bounded: end beyond chunk
+        assert!(
+            construct_valid_byte_range(&ByteRange::Bounded(0..51), offset, length)
+                .is_err()
+        );
+        // Bounded: start at chunk length
+        assert!(
+            construct_valid_byte_range(&ByteRange::Bounded(50..50), offset, length)
+                .is_err()
+        );
+        // Bounded: start beyond chunk length
+        assert!(
+            construct_valid_byte_range(&ByteRange::Bounded(60..70), offset, length)
+                .is_err()
+        );
+
+        // From: valid
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::From(0), offset, length).unwrap(),
+            100..150,
+        );
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::From(25), offset, length).unwrap(),
+            125..150,
+        );
+        // From: at chunk length
+        assert!(
+            construct_valid_byte_range(&ByteRange::From(50), offset, length).is_err()
+        );
+        // From: beyond chunk length
+        assert!(
+            construct_valid_byte_range(&ByteRange::From(60), offset, length).is_err()
+        );
+
+        // Until: valid (last n bytes)
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Until(50), offset, length).unwrap(),
+            100..150,
+        );
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Until(10), offset, length).unwrap(),
+            140..150,
+        );
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Until(0), offset, length).unwrap(),
+            150..150,
+        );
+        // Until: beyond chunk length
+        assert!(
+            construct_valid_byte_range(&ByteRange::Until(51), offset, length).is_err()
+        );
+
+        // Last: valid
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Last(50), offset, length).unwrap(),
+            100..150,
+        );
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Last(1), offset, length).unwrap(),
+            149..150,
+        );
+        // Last: beyond chunk length
+        assert!(
+            construct_valid_byte_range(&ByteRange::Last(51), offset, length).is_err()
+        );
+
+        // Edge case: chunk at offset 0
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Bounded(0..10), 0, 10).unwrap(),
+            0..10,
+        );
+        assert!(construct_valid_byte_range(&ByteRange::Bounded(0..11), 0, 10).is_err());
     }
 
     #[cfg(test)]

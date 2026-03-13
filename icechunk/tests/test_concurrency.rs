@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
 use chrono::Utc;
 use icechunk::{
@@ -24,7 +23,7 @@ use tokio::{
 
 use futures::TryStreamExt;
 
-mod common;
+use crate::common;
 
 const N: usize = 20;
 

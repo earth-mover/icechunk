@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt, TryStream, TryStreamExt, stream};
 use itertools::Itertools;
 use tokio::task::{self};
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, error, info, instrument, trace};
 
 use crate::{
     StorageError,
@@ -232,7 +232,7 @@ async fn chunks_retained(
     minfo: ManifestFileInfo,
 ) -> RepositoryResult<ManifestFileInfo> {
     task::spawn_blocking(move || {
-        let chunk_ids = manifest.chunk_payloads().filter_map(|payload| match payload {
+        let chunk_ids = manifest.chunk_payloads()?.filter_map(|payload| match payload {
             Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
             Ok(_) => None,
             Err(err) => {
@@ -325,6 +325,13 @@ pub async fn garbage_collect(
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
+    if !asset_manager.can_write_to_storage().await? {
+        return Err(GCError::Repository(
+            RepositoryErrorKind::ReadonlyStorage("Cannot garbage collect".to_string())
+                .into(),
+        ));
+    }
+
     let default_retry_config = RepoUpdateRetryConfig::default();
     let retry_config = repo_update_retries.unwrap_or(&default_retry_config).retries();
 
@@ -368,18 +375,11 @@ pub async fn garbage_collect(
         .await
 }
 
-pub async fn garbage_collect_one_attempt(
+async fn garbage_collect_one_attempt(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
-    if !asset_manager.can_write_to_storage().await? {
-        return Err(GCError::Repository(
-            RepositoryErrorKind::ReadonlyStorage("Cannot garbage collect".to_string())
-                .into(),
-        ));
-    }
-
     // TODO: this function could have much more parallelism
     if !config.action_needed() {
         info!("No action requested");
@@ -628,7 +628,7 @@ pub async fn gc_chunks(
     let to_delete = asset_manager
         .list_chunks()
         .await?
-        // TODO: don't skip over errors
+        .inspect_err(|e| error!("Deleting chunks: {e}"))
         .filter_map(move |chunk| {
             ready(chunk.ok().and_then(|chunk| {
                 if config.must_delete_chunk(&chunk) && !keep_ids.contains(&chunk.id) {
@@ -656,7 +656,7 @@ pub async fn gc_manifests(
     let to_delete = asset_manager
         .list_manifests()
         .await?
-        // TODO: don't skip over errors
+        .inspect_err(|e| error!("Deleting manifests: {e}"))
         .filter_map(move |manifest| {
             ready(manifest.ok().and_then(|manifest| {
                 if config.must_delete_manifest(&manifest)
@@ -687,7 +687,7 @@ pub async fn gc_snapshots(
     let to_delete = asset_manager
         .list_snapshots()
         .await?
-        // TODO: don't skip over errors
+        .inspect_err(|e| error!("Deleting snapshots: {e}"))
         .filter_map(move |snapshot| {
             ready(snapshot.ok().and_then(|snapshot| {
                 if config.must_delete_snapshot(&snapshot)
@@ -718,7 +718,7 @@ pub async fn gc_transaction_logs(
     let to_delete = asset_manager
         .list_transaction_logs()
         .await?
-        // TODO: don't skip over errors
+        .inspect_err(|e| error!("Deleting transaction logs: {e}"))
         .filter_map(move |tx| {
             ready(tx.ok().and_then(|tx| {
                 if config.must_delete_transaction_log(&tx) && !keep_ids.contains(&tx.id) {
@@ -777,6 +777,12 @@ pub async fn expire(
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<ExpireResult> {
+    if !asset_manager.can_write_to_storage().await? {
+        return Err(GCError::Repository(
+            RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into(),
+        ));
+    }
+
     match asset_manager.spec_version() {
         SpecVersionBin::V1dot0 => {
             super::expiration_v1::expire(
@@ -858,18 +864,13 @@ pub async fn expire_v2(
 }
 
 #[instrument(skip(asset_manager))]
-pub async fn expire_v2_one_attempt(
+async fn expire_v2_one_attempt(
     asset_manager: Arc<AssetManager>,
     older_than: DateTime<Utc>,
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<ExpireResult> {
-    if !asset_manager.can_write_to_storage().await? {
-        return Err(GCError::Repository(
-            RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into(),
-        ));
-    }
     info!("Expiration started");
     let (repo_info, repo_info_version_at_start) = asset_manager.fetch_repo_info().await?;
     let tags: Vec<(Ref, SnapshotId)> = repo_info

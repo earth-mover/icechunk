@@ -7,6 +7,7 @@ on:
       - 'support/**'
   pull_request:
     types: [opened, reopened, synchronize, labeled]
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -229,7 +230,7 @@ jobs:
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
           uv pip install "$WHEEL" --group test
-          uv pip install pytest-mypy-plugins
+          uv pip install "pytest-mypy-plugins<4"
           # Install specific xarray version based on matrix
           if [ "${{ matrix.xarray-version.version }}" != "latest-release" ]; then
             echo "Installing xarray ${{ matrix.xarray-version.version }}"
@@ -311,7 +312,7 @@ jobs:
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
           uv pip install "$WHEEL" --group dev
-          python -m mypy.stubtest icechunk._icechunk_python --allowlist stubtest_allowlist.txt
+          python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt
 
   check-xarray-docs:
     runs-on: ubuntu-latest

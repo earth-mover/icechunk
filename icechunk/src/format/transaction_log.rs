@@ -105,6 +105,7 @@ impl TransactionLog {
                 updated_arrays,
                 updated_chunks,
                 moved_nodes,
+                ..Default::default()
             },
         );
 
@@ -203,6 +204,7 @@ impl TransactionLog {
                 updated_arrays,
                 updated_chunks,
                 moved_nodes,
+                ..Default::default()
             },
         );
 
@@ -293,6 +295,16 @@ impl TransactionLog {
             Some(arr) => Either::Left(arr.chunks().iter().map(From::from)),
             None => Either::Right(iter::empty()),
         }
+    }
+
+    pub fn updated_chunks_counts(
+        &self,
+    ) -> impl Iterator<Item = (NodeId, u64)> + '_ + use<'_> {
+        self.root().updated_chunks().iter().map(|arr_chunks| {
+            let id: NodeId = arr_chunks.node_id().into();
+            let n = arr_chunks.chunks().len();
+            (id, n as u64)
+        })
     }
 
     pub fn group_created(&self, id: &NodeId) -> bool {
@@ -468,6 +480,7 @@ impl TransactionLog {
                 updated_arrays,
                 updated_chunks,
                 moved_nodes,
+                ..Default::default()
             },
         );
 
@@ -671,6 +684,10 @@ mod tests {
         let chunks =
             Vec::from_iter(tx.updated_chunks().map(|(id, it)| (id, Vec::from_iter(it))));
         assert_eq!(chunks, vec![(chunk_added.clone(), vec![ChunkIndices(vec![0])])]);
+        assert_eq!(
+            tx.updated_chunks_counts().collect::<Vec<_>>(),
+            vec![(chunk_added.clone(), 1)]
+        );
 
         let added_group2 = NodeId::random();
         let deleted_group2 = NodeId::random();
@@ -754,6 +771,11 @@ mod tests {
                 ),
                 (chunk_added2.clone(), vec![ChunkIndices(vec![7]),])
             ])
+        );
+
+        assert_eq!(
+            tx.updated_chunks_counts().collect::<HashSet<_>>(),
+            HashSet::from([(chunk_added.clone(), 3), (chunk_added2, 1)])
         );
         Ok(())
     }

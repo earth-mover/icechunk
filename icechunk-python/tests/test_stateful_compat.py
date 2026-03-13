@@ -149,8 +149,10 @@ class CrossVersionTwoActorZarrHierarchyStateMachine(ModifiedZarrHierarchyStateMa
     # v1 doesn't support empty commits, so only allow them when the actor is v2
     @rule(data=st.data())
     @precondition(
-        lambda self: self.store.session.has_uncommitted_changes
-        or Version(self.ic.__version__).major >= 2
+        lambda self: (
+            self.store.session.has_uncommitted_changes
+            or Version(self.ic.__version__).major >= 2
+        )
     )
     def commit_with_check(self, data: st.DataObject) -> None:
         return super().commit_with_check(data)

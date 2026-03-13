@@ -23,8 +23,8 @@ use icechunk::{
         GcsCredentialsFetcher, GcsStaticCredentials, ManifestConfig,
         ManifestPreloadCondition, ManifestPreloadConfig, ManifestSplitCondition,
         ManifestSplitDim, ManifestSplitDimCondition, ManifestSplittingConfig,
-        RepoUpdateRetryConfig, S3Credentials, S3CredentialsFetcher, S3Options,
-        S3StaticCredentials,
+        ManifestVirtualChunkLocationCompressionConfig, RepoUpdateRetryConfig,
+        S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
     },
     storage::{self, ConcurrencySettings},
     virtual_chunks::VirtualChunkContainer,
@@ -560,8 +560,13 @@ pub struct PyVirtualChunkContainer {
 #[pymethods]
 impl PyVirtualChunkContainer {
     #[new]
-    pub fn new(url_prefix: String, store: PyObjectStoreConfig) -> Self {
-        Self { name: None, url_prefix, store }
+    #[pyo3(signature = (url_prefix, store, name = None))]
+    pub fn new(
+        url_prefix: String,
+        store: PyObjectStoreConfig,
+        name: Option<String>,
+    ) -> Self {
+        Self { name, url_prefix, store }
     }
 }
 
@@ -569,9 +574,13 @@ impl TryFrom<&PyVirtualChunkContainer> for VirtualChunkContainer {
     type Error = String;
 
     fn try_from(value: &PyVirtualChunkContainer) -> Result<Self, Self::Error> {
-        let cont =
-            VirtualChunkContainer::new(value.url_prefix.clone(), (&value.store).into())?;
-        Ok(cont)
+        let store = (&value.store).into();
+        match value.name.clone() {
+            Some(name) => {
+                VirtualChunkContainer::new_named(name, value.url_prefix.clone(), store)
+            }
+            None => VirtualChunkContainer::new(value.url_prefix.clone(), store),
+        }
     }
 }
 
@@ -798,6 +807,70 @@ fn storage_retries_settings_repr(s: &PyStorageRetriesSettings) -> String {
     )
 }
 
+#[pyclass(name = "StorageTimeoutSettings", eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyStorageTimeoutSettings {
+    #[pyo3(get, set)]
+    pub connect_timeout_ms: Option<u32>,
+    #[pyo3(get, set)]
+    pub read_timeout_ms: Option<u32>,
+    #[pyo3(get, set)]
+    pub operation_timeout_ms: Option<u32>,
+    #[pyo3(get, set)]
+    pub operation_attempt_timeout_ms: Option<u32>,
+}
+
+impl From<storage::TimeoutSettings> for PyStorageTimeoutSettings {
+    fn from(value: storage::TimeoutSettings) -> Self {
+        Self {
+            connect_timeout_ms: value.connect_timeout_ms,
+            read_timeout_ms: value.read_timeout_ms,
+            operation_timeout_ms: value.operation_timeout_ms,
+            operation_attempt_timeout_ms: value.operation_attempt_timeout_ms,
+        }
+    }
+}
+
+impl From<&PyStorageTimeoutSettings> for storage::TimeoutSettings {
+    fn from(value: &PyStorageTimeoutSettings) -> Self {
+        Self {
+            connect_timeout_ms: value.connect_timeout_ms,
+            read_timeout_ms: value.read_timeout_ms,
+            operation_timeout_ms: value.operation_timeout_ms,
+            operation_attempt_timeout_ms: value.operation_attempt_timeout_ms,
+        }
+    }
+}
+
+#[pymethods]
+impl PyStorageTimeoutSettings {
+    #[pyo3(signature = (connect_timeout_ms=None, read_timeout_ms=None, operation_timeout_ms=None, operation_attempt_timeout_ms=None))]
+    #[new]
+    pub fn new(
+        connect_timeout_ms: Option<u32>,
+        read_timeout_ms: Option<u32>,
+        operation_timeout_ms: Option<u32>,
+        operation_attempt_timeout_ms: Option<u32>,
+    ) -> Self {
+        Self {
+            connect_timeout_ms,
+            read_timeout_ms,
+            operation_timeout_ms,
+            operation_attempt_timeout_ms,
+        }
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!(
+            r#"StorageTimeoutSettings(connect_timeout_ms={c}, read_timeout_ms={r}, operation_timeout_ms={o}, operation_attempt_timeout_ms={oa})"#,
+            c = format_option_to_string(self.connect_timeout_ms),
+            r = format_option_to_string(self.read_timeout_ms),
+            o = format_option_to_string(self.operation_timeout_ms),
+            oa = format_option_to_string(self.operation_attempt_timeout_ms),
+        )
+    }
+}
+
 #[pyclass(name = "RepoUpdateRetryConfig", eq)]
 #[derive(Debug)]
 pub struct PyRepoUpdateRetryConfig {
@@ -914,6 +987,8 @@ pub struct PyStorageSettings {
     #[pyo3(get, set)]
     pub retries: Option<Py<PyStorageRetriesSettings>>,
     #[pyo3(get, set)]
+    pub timeouts: Option<Py<PyStorageTimeoutSettings>>,
+    #[pyo3(get, set)]
     pub unsafe_use_conditional_update: Option<bool>,
     #[pyo3(get, set)]
     pub unsafe_use_conditional_create: Option<bool>,
@@ -942,7 +1017,11 @@ impl From<storage::Settings> for PyStorageSettings {
                 Py::new(py, Into::<PyStorageRetriesSettings>::into(c))
                     .expect("Cannot create instance of StorageRetriesSettings")
             }),
-
+            #[allow(clippy::expect_used)]
+            timeouts: value.timeouts.map(|c| {
+                Py::new(py, Into::<PyStorageTimeoutSettings>::into(c))
+                    .expect("Cannot create instance of StorageTimeoutSettings")
+            }),
             unsafe_use_conditional_create: value.unsafe_use_conditional_create,
             unsafe_use_conditional_update: value.unsafe_use_conditional_update,
             unsafe_use_metadata: value.unsafe_use_metadata,
@@ -959,6 +1038,7 @@ impl From<&PyStorageSettings> for storage::Settings {
         Python::attach(|py| Self {
             concurrency: value.concurrency.as_ref().map(|c| (&*c.borrow(py)).into()),
             retries: value.retries.as_ref().map(|c| (&*c.borrow(py)).into()),
+            timeouts: value.timeouts.as_ref().map(|c| (&*c.borrow(py)).into()),
             unsafe_use_conditional_create: value.unsafe_use_conditional_create,
             unsafe_use_conditional_update: value.unsafe_use_conditional_update,
             unsafe_use_metadata: value.unsafe_use_metadata,
@@ -982,7 +1062,7 @@ impl Eq for PyStorageSettings {}
 
 #[pymethods]
 impl PyStorageSettings {
-    #[pyo3(signature = ( concurrency=None, retries=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None))]
+    #[pyo3(signature = ( concurrency=None, retries=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=None, metadata_storage_class=None, chunks_storage_class=None, minimum_size_for_multipart_upload=None, timeouts=None))]
     #[new]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -995,10 +1075,12 @@ impl PyStorageSettings {
         metadata_storage_class: Option<String>,
         chunks_storage_class: Option<String>,
         minimum_size_for_multipart_upload: Option<u64>,
+        timeouts: Option<Py<PyStorageTimeoutSettings>>,
     ) -> Self {
         Self {
             concurrency,
             retries,
+            timeouts,
             unsafe_use_conditional_create,
             unsafe_use_metadata,
             unsafe_use_conditional_update,
@@ -1025,10 +1107,15 @@ impl PyStorageSettings {
                 storage_retries_settings_repr(conc)
             }),
         };
+        let inner_timeouts = match &self.timeouts {
+            None => "None".to_string(),
+            Some(timeouts) => Python::attach(|py| timeouts.borrow(py).__repr__()),
+        };
         format!(
-            r#"StorageSettings(concurrency={conc}, retries={retr}, unsafe_use_conditional_create={cr}, unsafe_use_conditional_update={up}, unsafe_use_metadata={me}, storage_class={sc}, metadata_storage_class={msc}, chunks_storage_class={csc})"#,
+            r#"StorageSettings(concurrency={conc}, retries={retr}, timeouts={tout}, unsafe_use_conditional_create={cr}, unsafe_use_conditional_update={up}, unsafe_use_metadata={me}, storage_class={sc}, metadata_storage_class={msc}, chunks_storage_class={csc})"#,
             conc = inner_conc,
             retr = inner_retries,
+            tout = inner_timeouts,
             cr = format_option(self.unsafe_use_conditional_create.map(format_bool)),
             up = format_option(self.unsafe_use_conditional_update.map(format_bool)),
             me = format_option(self.unsafe_use_metadata.map(format_bool)),
@@ -1444,6 +1531,82 @@ impl From<&PyManifestSplittingConfig> for ManifestSplittingConfig {
     }
 }
 
+#[pyclass(name = "ManifestVirtualChunkLocationCompressionConfig", eq)]
+#[derive(Debug, Default)]
+pub struct PyManifestVirtualChunkLocationCompressionConfig {
+    #[pyo3(get, set)]
+    pub min_num_chunks: Option<u16>,
+    #[pyo3(get, set)]
+    pub dictionary_max_training_samples: Option<u16>,
+    #[pyo3(get, set)]
+    pub dictionary_max_size_bytes: Option<u32>,
+    #[pyo3(get, set)]
+    pub compression_level: Option<i32>,
+}
+
+#[pymethods]
+impl PyManifestVirtualChunkLocationCompressionConfig {
+    #[new]
+    #[pyo3(signature = (min_num_chunks=None, *, dictionary_max_training_samples=None, dictionary_max_size_bytes=None, compression_level=None))]
+    fn new(
+        min_num_chunks: Option<u16>,
+        dictionary_max_training_samples: Option<u16>,
+        dictionary_max_size_bytes: Option<u32>,
+        compression_level: Option<i32>,
+    ) -> Self {
+        Self {
+            min_num_chunks,
+            dictionary_max_training_samples,
+            dictionary_max_size_bytes,
+            compression_level,
+        }
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!(
+            "ManifestVirtualChunkLocationCompressionConfig(min_num_chunks={}, dictionary_max_training_samples={}, dictionary_max_size_bytes={}, compression_level={})",
+            format_option_to_string(self.min_num_chunks),
+            format_option_to_string(self.dictionary_max_training_samples),
+            format_option_to_string(self.dictionary_max_size_bytes),
+            format_option_to_string(self.compression_level),
+        )
+    }
+}
+
+impl PartialEq for PyManifestVirtualChunkLocationCompressionConfig {
+    fn eq(&self, other: &Self) -> bool {
+        let x: ManifestVirtualChunkLocationCompressionConfig = self.into();
+        let y: ManifestVirtualChunkLocationCompressionConfig = other.into();
+        x == y
+    }
+}
+
+impl From<&PyManifestVirtualChunkLocationCompressionConfig>
+    for ManifestVirtualChunkLocationCompressionConfig
+{
+    fn from(value: &PyManifestVirtualChunkLocationCompressionConfig) -> Self {
+        Self {
+            min_num_chunks: value.min_num_chunks,
+            dictionary_max_training_samples: value.dictionary_max_training_samples,
+            dictionary_max_size_bytes: value.dictionary_max_size_bytes,
+            compression_level: value.compression_level,
+        }
+    }
+}
+
+impl From<ManifestVirtualChunkLocationCompressionConfig>
+    for PyManifestVirtualChunkLocationCompressionConfig
+{
+    fn from(value: ManifestVirtualChunkLocationCompressionConfig) -> Self {
+        Self {
+            min_num_chunks: value.min_num_chunks,
+            dictionary_max_training_samples: value.dictionary_max_training_samples,
+            dictionary_max_size_bytes: value.dictionary_max_size_bytes,
+            compression_level: value.compression_level,
+        }
+    }
+}
+
 #[pyclass(name = "ManifestConfig", eq)]
 #[derive(Debug, Default)]
 pub struct PyManifestConfig {
@@ -1451,25 +1614,33 @@ pub struct PyManifestConfig {
     pub preload: Option<Py<PyManifestPreloadConfig>>,
     #[pyo3(get, set)]
     pub splitting: Option<Py<PyManifestSplittingConfig>>,
+    #[pyo3(get, set)]
+    pub virtual_chunk_location_compression:
+        Option<Py<PyManifestVirtualChunkLocationCompressionConfig>>,
 }
 
 #[pymethods]
 impl PyManifestConfig {
     #[new]
-    #[pyo3(signature = (preload=None, splitting=None))]
+    #[pyo3(signature = (preload=None, splitting=None, virtual_chunk_location_compression=None))]
     fn new(
         preload: Option<Py<PyManifestPreloadConfig>>,
         splitting: Option<Py<PyManifestSplittingConfig>>,
+        virtual_chunk_location_compression: Option<
+            Py<PyManifestVirtualChunkLocationCompressionConfig>,
+        >,
     ) -> Self {
-        Self { preload, splitting }
+        Self { preload, splitting, virtual_chunk_location_compression }
     }
 
     pub fn __repr__(&self) -> String {
-        // TODO: improve repr
         format!(
-            r#"ManifestConfig(preload={pre}, splitting={sha})"#,
+            r#"ManifestConfig(preload={pre}, splitting={spl}, virtual_chunk_location_compression={comp})"#,
             pre = format_option_to_string(self.preload.as_ref().map(|l| l.to_string())),
-            sha = format_option_to_string(self.splitting.as_ref().map(|l| l.to_string())),
+            spl = format_option_to_string(self.splitting.as_ref().map(|l| l.to_string())),
+            comp = format_option_to_string(
+                self.virtual_chunk_location_compression.as_ref().map(|l| l.to_string())
+            ),
         )
     }
 }
@@ -1487,6 +1658,10 @@ impl From<&PyManifestConfig> for ManifestConfig {
         Python::attach(|py| Self {
             preload: value.preload.as_ref().map(|c| (&*c.borrow(py)).into()),
             splitting: value.splitting.as_ref().map(|c| (&*c.borrow(py)).into()),
+            virtual_chunk_location_compression: value
+                .virtual_chunk_location_compression
+                .as_ref()
+                .map(|c| (&*c.borrow(py)).into()),
         })
     }
 }
@@ -1494,7 +1669,8 @@ impl From<&PyManifestConfig> for ManifestConfig {
 impl From<ManifestConfig> for PyManifestConfig {
     fn from(value: ManifestConfig) -> Self {
         #[allow(clippy::expect_used)]
-        Python::attach(|py| Self {
+        Python::attach(|py| {
+            Self {
             preload: value.preload.map(|c| {
                 Py::new(py, Into::<PyManifestPreloadConfig>::into(c))
                     .expect("Cannot create instance of ManifestPreloadConfig")
@@ -1503,6 +1679,18 @@ impl From<ManifestConfig> for PyManifestConfig {
                 Py::new(py, Into::<PyManifestSplittingConfig>::into(c))
                     .expect("Cannot create instance of ManifestSplittingConfig")
             }),
+            virtual_chunk_location_compression: value
+                .virtual_chunk_location_compression
+                .map(|c| {
+                    Py::new(
+                        py,
+                        Into::<PyManifestVirtualChunkLocationCompressionConfig>::into(c),
+                    )
+                    .expect(
+                        "Cannot create instance of ManifestVirtualChunkLocationCompressionConfig",
+                    )
+                }),
+        }
         })
     }
 }
@@ -1658,7 +1846,8 @@ impl PyRepositoryConfig {
         // TODO: this is a very ugly way to do it but, it avoids duplicating logic
         let this: &PyRepositoryConfig = &*self;
         let mut c: RepositoryConfig = this.try_into().map_err(PyValueError::new_err)?;
-        c.set_virtual_chunk_container((&cont).try_into().map_err(PyValueError::new_err)?);
+        c.set_virtual_chunk_container((&cont).try_into().map_err(PyValueError::new_err)?)
+            .map_err(PyValueError::new_err)?;
         self.virtual_chunk_containers = c
             .virtual_chunk_containers
             .map(|c| c.into_iter().map(|(s, c)| (s, c.into())).collect());

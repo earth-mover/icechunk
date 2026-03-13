@@ -12,6 +12,7 @@ use crate::{Storage, StorageError, format::ChunkOffset, private};
 use async_trait::async_trait;
 use aws_config::{
     AppName, BehaviorVersion, meta::region::RegionProviderChain, retry::RetryConfig,
+    timeout::TimeoutConfig,
 };
 use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_s3::{
@@ -182,7 +183,7 @@ pub async fn mk_client(
     };
 
     #[allow(clippy::unwrap_used)]
-    let app_name = AppName::new("icechunk").unwrap();
+    let app_name = AppName::new(crate::user_agent()).unwrap();
     let mut aws_config = aws_config::defaults(BehaviorVersion::v2026_01_12())
         .region(region)
         .app_name(app_name);
@@ -230,6 +231,27 @@ pub async fn mk_client(
             settings.retries().max_backoff_ms() as u64
         ));
 
+    if let Some(timeouts) = settings.timeouts() {
+        let mut timeout_builder = TimeoutConfig::builder();
+        if let Some(ms) = timeouts.connect_timeout_ms {
+            timeout_builder =
+                timeout_builder.connect_timeout(Duration::from_millis(ms as u64));
+        }
+        if let Some(ms) = timeouts.read_timeout_ms {
+            timeout_builder =
+                timeout_builder.read_timeout(Duration::from_millis(ms as u64));
+        }
+        if let Some(ms) = timeouts.operation_timeout_ms {
+            timeout_builder =
+                timeout_builder.operation_timeout(Duration::from_millis(ms as u64));
+        }
+        if let Some(ms) = timeouts.operation_attempt_timeout_ms {
+            timeout_builder = timeout_builder
+                .operation_attempt_timeout(Duration::from_millis(ms as u64));
+        }
+        aws_config = aws_config.timeout_config(timeout_builder.build());
+    }
+
     let mut s3_builder = Builder::from(&aws_config.load().await)
         .force_path_style(config.force_path_style)
         .retry_config(retry_config);
@@ -242,9 +264,13 @@ pub async fn mk_client(
 
     s3_builder = s3_builder.identity_cache(id_cache);
 
-    // Add retry classifier for HTTP 408 (Request Timeout)
+    // Add retry classifier for HTTP 408 (Request Timeout) and 429 (Too Many Requests).
     // The default HttpStatusCodeClassifier only retries on 500, 502, 503, 504
-    static RETRY_CODES: &[u16] = &[408];
+    // Note R2 sends 429 for "slowdown" while S3 sends 503.
+    //   - R2: https://developers.cloudflare.com/r2/api/error-codes/
+    //   - S3: https://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html
+    // Tigris can occasionally respond with 499: "Client Closed Request"
+    static RETRY_CODES: &[u16] = &[408, 429, 499];
     // This confusingly named `retry_classifier` method ends up calling
     // `push_retry_classifier` after wrapping our custom classifier in `SharedRetryClassifier`.
     // Ultimately, this is a push on to a `Vec<SharedRetryClassifier>`, and is thus additive
@@ -715,15 +741,9 @@ impl Storage for S3Storage {
                 ready(Ok(contents))
             })
             .try_flatten()
-            .try_filter_map(move |object| {
+            .and_then(move |object| {
                 let prefix = prefix.clone();
-                async move {
-                    let info = object_to_list_info(prefix.as_str(), &object);
-                    if info.is_none() {
-                        tracing::error!(object=?object, "Found bad object while listing");
-                    }
-                    Ok(info)
-                }
+                ready(object_to_list_info(prefix.as_str(), &object))
             });
         Ok(stream.boxed())
     }
@@ -942,14 +962,17 @@ impl S3Storage {
     }
 }
 
-fn object_to_list_info(prefix: &str, object: &Object) -> Option<ListInfo<String>> {
-    let key = object.key()?;
-    let last_modified = object.last_modified()?;
-    let created_at = last_modified.to_chrono_utc().ok()?;
-    let prefix = Utf8UnixPath::new(prefix);
-    let id = Utf8UnixPath::new(key).strip_prefix(prefix).ok()?.to_string();
-    let size_bytes = object.size.unwrap_or(0) as u64;
-    Some(ListInfo { id, created_at, size_bytes })
+fn object_to_list_info(prefix: &str, object: &Object) -> StorageResult<ListInfo<String>> {
+    let inner = || {
+        let key = object.key()?;
+        let last_modified = object.last_modified()?;
+        let created_at = last_modified.to_chrono_utc().ok()?;
+        let prefix = Utf8UnixPath::new(prefix);
+        let id = Utf8UnixPath::new(key).strip_prefix(prefix).ok()?.to_string();
+        let size_bytes = object.size.unwrap_or(0) as u64;
+        Some(ListInfo { id, created_at, size_bytes })
+    };
+    inner().ok_or_else(|| StorageErrorKind::BadPrefix(prefix.into()).into())
 }
 
 #[derive(Debug)]

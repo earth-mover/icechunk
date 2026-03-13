@@ -14,10 +14,12 @@ use config::{
     PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
     PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsBearerCredential,
     PyGcsCredentials, PyGcsStaticCredentials, PyManifestConfig,
-    PyManifestPreloadCondition, PyManifestPreloadConfig, PyObjectStoreConfig,
+    PyManifestPreloadCondition, PyManifestPreloadConfig,
+    PyManifestVirtualChunkLocationCompressionConfig, PyObjectStoreConfig,
     PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials, PyS3Options,
     PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings,
-    PyStorageRetriesSettings, PyStorageSettings, PyVirtualChunkContainer,
+    PyStorageRetriesSettings, PyStorageSettings, PyStorageTimeoutSettings,
+    PyVirtualChunkContainer,
 };
 use config::{
     PyManifestSplitCondition, PyManifestSplitDimCondition, PyManifestSplittingConfig,
@@ -140,14 +142,21 @@ fn spec_version() -> u8 {
 }
 
 #[pyfunction]
-#[pyo3(signature = (repo, *, dry_run = true, delete_unused_v1_files = true))]
+/// The user-agent string sent with icechunk storage requests
+fn user_agent() -> &'static str {
+    icechunk::user_agent()
+}
+
+#[pyfunction]
+#[pyo3(signature = (repo, *, dry_run = true, delete_unused_v1_files = true, prefetch_concurrency = None))]
 fn _upgrade_icechunk_repository(
     py: Python,
     repo: &PyRepository,
     dry_run: bool,
     delete_unused_v1_files: bool,
+    prefetch_concurrency: Option<usize>,
 ) -> PyResult<PyRepository> {
-    repo.migrate_1_to_2(py, dry_run, delete_unused_v1_files)
+    repo.migrate_1_to_2(py, dry_run, delete_unused_v1_files, prefetch_concurrency)
 }
 
 fn pep440_version() -> String {
@@ -189,10 +198,12 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCachingConfig>()?;
     m.add_class::<PyStorageConcurrencySettings>()?;
     m.add_class::<PyStorageRetriesSettings>()?;
+    m.add_class::<PyStorageTimeoutSettings>()?;
     m.add_class::<PyRepoUpdateRetryConfig>()?;
     m.add_class::<PyManifestPreloadConfig>()?;
     m.add_class::<PyManifestPreloadCondition>()?;
     m.add_class::<PyManifestConfig>()?;
+    m.add_class::<PyManifestVirtualChunkLocationCompressionConfig>()?;
     m.add_class::<PyManifestSplitDimCondition>()?;
     m.add_class::<PyManifestSplitCondition>()?;
     m.add_class::<PyManifestSplittingConfig>()?;
@@ -206,6 +217,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
+    m.add_function(wrap_pyfunction!(user_agent, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
     m.add_function(wrap_pyfunction!(_upgrade_icechunk_repository, m)?)?;
     m.add("__version__", pep440_version())?;

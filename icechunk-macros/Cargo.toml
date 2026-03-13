@@ -9,8 +9,9 @@ license = "Apache-2.0"
 keywords = ["zarr", "xarray", "database"]
 categories = ["database", "science", "science::geo"]
 authors = ["Earthmover PBC"]
-edition = "2024"
+edition.workspace = true
 publish = true
+rust-version.workspace = true
 
 [dependencies]
 syn = { version = "2.0", features = ["full"] }

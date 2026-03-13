@@ -863,7 +863,6 @@ async fn set_array_meta(
                 .update_array(&path, shape, array_meta.dimension_names(), user_data)
                 .await?;
         }
-        // FIXME: don't ignore error
         Ok(())
     } else {
         session
@@ -897,9 +896,13 @@ async fn get_metadata(
     range: &ByteRange,
     session: &Session,
 ) -> StoreResult<Bytes> {
-    // FIXME: don't skip errors
-    let node = session.get_node(path).await.map_err(|_| {
-        StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound { path: path.clone() })
+    let node = session.get_node(path).await.map_err(|e| match e {
+        SessionError { kind: SessionErrorKind::NodeNotFound { .. }, .. } => {
+            StoreErrorKind::NotFound(KeyNotFoundError::NodeNotFound {
+                path: path.clone(),
+            })
+        }
+        e => StoreErrorKind::SessionError(e.kind),
     })?;
     Ok(range.slice(node.user_data))
 }

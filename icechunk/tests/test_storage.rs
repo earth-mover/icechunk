@@ -37,8 +37,8 @@ use tokio::{
 use warp::Filter;
 use zstd::zstd_safe::WriteBuf;
 
-mod common;
-use common::Permission;
+use crate::common;
+use crate::common::Permission;
 
 #[template]
 #[rstest]
@@ -896,7 +896,7 @@ pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-pub async fn test_write_object_larger_than_multipart_threshold()
+async fn test_write_object_larger_than_multipart_threshold()
 -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
         let custom_settings = storage::Settings {
@@ -1000,7 +1000,7 @@ pub async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Err
 #[allow(clippy::unwrap_used)]
 /// Start an HTTP server serving static files from icechunk-python/tests/data/test-repo-v2
 /// Create an HTTP storage that hits that server, and call some methods on it
-pub async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
     let repo_path =
         std::env::current_dir()?.join("../icechunk-python/tests/data/test-repo-v2");
     let route = warp::fs::dir(repo_path.clone());
@@ -1064,7 +1064,7 @@ pub async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
 #[allow(clippy::unwrap_used)]
 /// Start a server that after a few redirects returns a redirect to a S3 public repo
 /// Build a redirect storage and verify the S3 repo is accessible
-pub async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
     let port = port_check::free_local_ipv4_port_in_range(9000..65000).unwrap();
     let route = warp::path::end()
         .map(|| warp::redirect::found(warp::http::Uri::from_static("1")))

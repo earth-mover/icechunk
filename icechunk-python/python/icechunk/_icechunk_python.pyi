@@ -11,7 +11,7 @@ from collections.abc import (
 from enum import Enum
 from typing import Any, TypeAlias, final
 
-from typing_extensions import disjoint_base
+from icechunk.types import CommitMethod
 
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
@@ -238,18 +238,24 @@ class VirtualChunkContainer:
 
     Attributes
     ----------
+    name: str | None
+        Optional name for this container. When set, chunks can use relative ``vcc://name/path``
+        locations instead of full absolute URLs.
     url_prefix: str
         The prefix of urls that will use this containers configuration for reading virtual references.
     store: ObjectStoreConfig
         The storage backend to use for the virtual chunk container.
     """
 
-    name: str
+    name: str | None
     url_prefix: str
     store: ObjectStoreConfig
 
     def __new__(
-        cls, url_prefix: str, store: _AnyObjectStoreConfig
+        cls,
+        url_prefix: str,
+        store: _AnyObjectStoreConfig,
+        name: str | None = None,
     ) -> VirtualChunkContainer:
         """
         Create a new `VirtualChunkContainer` object
@@ -260,6 +266,9 @@ class VirtualChunkContainer:
             The prefix of urls that will use this containers configuration for reading virtual references.
         store: ObjectStoreConfig
             The storage backend to use for the virtual chunk container.
+        name: str | None
+            Optional name for this container. When set, chunks can use relative ``vcc://name/path``
+            locations instead of full absolute URLs.
         """
 
 class VirtualChunkSpec:
@@ -831,6 +840,50 @@ class ManifestSplittingConfig:
         """
         ...
 
+class ManifestVirtualChunkLocationCompressionConfig:
+    """Configuration for zstd dictionary-based compression of virtual chunk location URLs in manifests."""
+
+    def __new__(
+        cls,
+        min_num_chunks: int | None = None,
+        *,
+        dictionary_max_training_samples: int | None = None,
+        dictionary_max_size_bytes: int | None = None,
+        compression_level: int | None = None,
+    ) -> ManifestVirtualChunkLocationCompressionConfig:
+        """
+        Create a new `ManifestVirtualChunkLocationCompressionConfig` object
+
+        Parameters
+        ----------
+        min_num_chunks: int | None
+            Minimum number of virtual chunks required to enable compression. Default: 1000.
+        dictionary_max_training_samples: int | None
+            Maximum number of URL samples used to train the compression dictionary. Default: 100.
+        dictionary_max_size_bytes: int | None
+            Maximum size of the trained compression dictionary in bytes. Default: 2048.
+        compression_level: int | None
+            Zstd compression level. Default: 3.
+        """
+        ...
+
+    @property
+    def min_num_chunks(self) -> int | None: ...
+    @min_num_chunks.setter
+    def min_num_chunks(self, value: int | None) -> None: ...
+    @property
+    def dictionary_max_training_samples(self) -> int | None: ...
+    @dictionary_max_training_samples.setter
+    def dictionary_max_training_samples(self, value: int | None) -> None: ...
+    @property
+    def dictionary_max_size_bytes(self) -> int | None: ...
+    @dictionary_max_size_bytes.setter
+    def dictionary_max_size_bytes(self, value: int | None) -> None: ...
+    @property
+    def compression_level(self) -> int | None: ...
+    @compression_level.setter
+    def compression_level(self, value: int | None) -> None: ...
+
 class ManifestConfig:
     """Configuration for how Icechunk manifests"""
 
@@ -838,6 +891,8 @@ class ManifestConfig:
         cls,
         preload: ManifestPreloadConfig | None = None,
         splitting: ManifestSplittingConfig | None = None,
+        virtual_chunk_location_compression: ManifestVirtualChunkLocationCompressionConfig
+        | None = None,
     ) -> ManifestConfig:
         """
         Create a new `ManifestConfig` object
@@ -848,6 +903,8 @@ class ManifestConfig:
             The configuration for how Icechunk manifests will be preloaded.
         splitting: ManifestSplittingConfig | None
             The configuration for how Icechunk manifests will be split.
+        virtual_chunk_location_compression: ManifestVirtualChunkLocationCompressionConfig | None
+            The configuration for zstd compression of virtual chunk location URLs.
         """
         ...
     @property
@@ -894,6 +951,34 @@ class ManifestConfig:
         ----------
         value: ManifestSplittingConfig | None
             The configuration for how Icechunk manifests will be split.
+        """
+        ...
+
+    @property
+    def virtual_chunk_location_compression(
+        self,
+    ) -> ManifestVirtualChunkLocationCompressionConfig | None:
+        """
+        The configuration for zstd compression of virtual chunk location URLs.
+
+        Returns
+        -------
+        ManifestVirtualChunkLocationCompressionConfig | None
+            The compression configuration.
+        """
+        ...
+
+    @virtual_chunk_location_compression.setter
+    def virtual_chunk_location_compression(
+        self, value: ManifestVirtualChunkLocationCompressionConfig | None
+    ) -> None:
+        """
+        Set the configuration for zstd compression of virtual chunk location URLs.
+
+        Parameters
+        ----------
+        value: ManifestVirtualChunkLocationCompressionConfig | None
+            The compression configuration.
         """
         ...
 
@@ -988,6 +1073,51 @@ class StorageRetriesSettings:
         """
         ...
 
+@final
+class StorageTimeoutSettings:
+    """Configuration for AWS SDK timeout settings.
+
+    Controls connect, read, and operation timeouts for the underlying S3 client."""
+
+    def __new__(
+        cls,
+        connect_timeout_ms: int | None = None,
+        read_timeout_ms: int | None = None,
+        operation_timeout_ms: int | None = None,
+        operation_attempt_timeout_ms: int | None = None,
+    ) -> StorageTimeoutSettings:
+        """
+        Create a new `StorageTimeoutSettings` object
+
+        Parameters
+        ----------
+        connect_timeout_ms: int | None
+            The timeout for establishing a connection in milliseconds.
+        read_timeout_ms: int | None
+            The timeout for reading a response in milliseconds.
+        operation_timeout_ms: int | None
+            The timeout for the entire operation (including retries) in milliseconds.
+        operation_attempt_timeout_ms: int | None
+            The timeout for a single attempt of an operation in milliseconds.
+        """
+        ...
+    @property
+    def connect_timeout_ms(self) -> int | None: ...
+    @connect_timeout_ms.setter
+    def connect_timeout_ms(self, value: int | None) -> None: ...
+    @property
+    def read_timeout_ms(self) -> int | None: ...
+    @read_timeout_ms.setter
+    def read_timeout_ms(self, value: int | None) -> None: ...
+    @property
+    def operation_timeout_ms(self) -> int | None: ...
+    @operation_timeout_ms.setter
+    def operation_timeout_ms(self, value: int | None) -> None: ...
+    @property
+    def operation_attempt_timeout_ms(self) -> int | None: ...
+    @operation_attempt_timeout_ms.setter
+    def operation_attempt_timeout_ms(self, value: int | None) -> None: ...
+
 class StorageConcurrencySettings:
     """Configuration for how Icechunk uses its Storage instance"""
 
@@ -1066,6 +1196,7 @@ class StorageSettings:
         metadata_storage_class: str | None = None,
         chunks_storage_class: str | None = None,
         minimum_size_for_multipart_upload: int | None = None,
+        timeouts: StorageTimeoutSettings | None = None,
     ) -> StorageSettings:
         """
         Create a new `StorageSettings` object
@@ -1112,6 +1243,9 @@ class StorageSettings:
         minimum_size_for_multipart_upload: int | None
             Use object store's multipart upload for objects larger than this size in bytes.
             Default: 100 MB if None is passed.
+
+        timeouts: StorageTimeoutSettings | None
+            The configuration for AWS SDK timeout settings.
         """
         ...
     @property
@@ -1140,6 +1274,19 @@ class StorageSettings:
 
     @retries.setter
     def retries(self, value: StorageRetriesSettings | None) -> None: ...
+    @property
+    def timeouts(self) -> StorageTimeoutSettings | None:
+        """
+        The configuration for AWS SDK timeout settings.
+
+        Returns
+        -------
+        StorageTimeoutSettings | None
+            The timeout configuration.
+        """
+
+    @timeouts.setter
+    def timeouts(self, value: StorageTimeoutSettings | None) -> None: ...
     @property
     def unsafe_use_conditional_update(self) -> bool | None:
         """True if Icechunk will use conditional PUT operations for updates in the object store"""
@@ -1429,7 +1576,11 @@ class RepositoryConfig:
         ...
     def set_virtual_chunk_container(self, cont: VirtualChunkContainer) -> None:
         """
-        Set the virtual chunk container for the repository.
+        Add or update a virtual chunk container in the repository configuration.
+
+        For named containers, the name is the identity: if a container with the
+        same name already exists (even with a different url_prefix), it will be
+        replaced. For unnamed containers, the url_prefix is the key.
 
         Parameters
         ----------
@@ -1442,6 +1593,12 @@ class RepositoryConfig:
         Clear all virtual chunk containers from the repository.
         """
         ...
+    @property
+    def repo_update_retries(self) -> RepoUpdateRetryConfig | None:
+        """Retry configuration for repo info update operations."""
+        ...
+    @repo_update_retries.setter
+    def repo_update_retries(self, value: RepoUpdateRetryConfig | None) -> None: ...
     @property
     def num_updates_per_repo_info_file(self) -> int | None:
         """The number of updates per repo info file."""
@@ -1572,7 +1729,6 @@ class Update:
     @property
     def backup_path(self) -> str | None: ...
 
-@disjoint_base
 class UpdateType:
     @final
     class BranchCreated(UpdateType):
@@ -1889,10 +2045,20 @@ class PyRepository:
         delete_expired_tags: bool = False,
     ) -> set[str]: ...
     def rewrite_manifests(
-        self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
+        self,
+        message: str,
+        *,
+        branch: str,
+        metadata: dict[str, Any] | None = None,
+        commit_method: CommitMethod = "new_commit",
     ) -> str: ...
     async def rewrite_manifests_async(
-        self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
+        self,
+        message: str,
+        *,
+        branch: str,
+        metadata: dict[str, Any] | None = None,
+        commit_method: CommitMethod = "new_commit",
     ) -> str: ...
     def garbage_collect(
         self,
@@ -1932,6 +2098,10 @@ class PyRepository:
     ) -> str: ...
     def inspect_repo_info(self, *, pretty: bool = True) -> str: ...
     async def inspect_repo_info_async(self, *, pretty: bool = True) -> str: ...
+    def inspect_manifest(self, manifest_id: str, *, pretty: bool = True) -> str: ...
+    async def inspect_manifest_async(
+        self, manifest_id: str, *, pretty: bool = True
+    ) -> str: ...
     @property
     def spec_version(self) -> int: ...
 
@@ -1950,27 +2120,27 @@ class ChunkType(Enum):
         Chunk is store inline in the manifest
     """
 
-    UNINITIALIZED = 0
-    NATIVE = 1
-    VIRTUAL = 2
-    INLINE = 3
+    uninitialized = 0
+    native = 1
+    virtual = 2
+    inline = 3
 
 class SessionMode(Enum):
     """Enum for session access modes
 
     Attributes
     ----------
-    READONLY: int
+    readonly: int
         Session can only read data
-    WRITABLE: int
+    writable: int
         Session can read and write data
-    REARRANGE: int
+    rearrange: int
         Session can only move nodes and reindex arrays
     """
 
-    READONLY = 0
-    WRITABLE = 1
-    REARRANGE = 2
+    readonly = 0
+    writable = 1
+    rearrange = 2
 
 class PySession:
     @classmethod
@@ -2125,7 +2295,7 @@ class PyStore:
     async def getsize(self, key: str) -> int: ...
     async def getsize_prefix(self, prefix: str) -> int: ...
 
-class _PyAsyncStringGenerator(AsyncGenerator[str, None], metaclass=abc.ABCMeta):
+class _PyAsyncStringGenerator(AsyncGenerator[str], metaclass=abc.ABCMeta):
     def __aiter__(self) -> _PyAsyncStringGenerator: ...
     async def __anext__(self) -> str: ...
 
@@ -2158,9 +2328,7 @@ class SnapshotInfo:
         """
         ...
 
-class _PyAsyncSnapshotGenerator(
-    AsyncGenerator[SnapshotInfo, None], metaclass=abc.ABCMeta
-):
+class _PyAsyncSnapshotGenerator(AsyncGenerator[SnapshotInfo], metaclass=abc.ABCMeta):
     def __aiter__(self) -> _PyAsyncSnapshotGenerator: ...
     async def __anext__(self) -> SnapshotInfo: ...
 
@@ -2820,8 +2988,21 @@ def spec_version() -> int:
     """
     ...
 
+def user_agent() -> str:
+    """
+    The user-agent string sent with icechunk storage requests.
+
+    Returns:
+        str: The user-agent string (e.g., "icechunk-rust-2.0.0-alpha.3")
+    """
+    ...
+
 def _upgrade_icechunk_repository(
-    repo: PyRepository, *, dry_run: bool = True, delete_unused_v1_files: bool = True
+    repo: PyRepository,
+    *,
+    dry_run: bool = True,
+    delete_unused_v1_files: bool = True,
+    prefetch_concurrency: int | None = None,
 ) -> PyRepository:
     """
     Migrate a repository to the latest version of Icechunk.

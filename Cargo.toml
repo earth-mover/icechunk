@@ -3,6 +3,10 @@ members = ["icechunk", "icechunk-python", "icechunk-macros"]
 default-members = ["icechunk"]
 resolver = "2"
 
+[workspace.package]
+rust-version = "1.91.1"
+edition = "2024"
+
 [workspace.lints.clippy]
 expect_used = "warn"
 unwrap_used = "warn"
@@ -26,7 +30,19 @@ lto = "thin"
 codegen-units = 1
 
 # Some settings for faster compiles when benchmarking
+# inherits from "release" by default
+# keep this in sync with `perf` below
 [profile.bench]
+opt-level = 2
+lto = "off"
+codegen-units = 8
+debug = 1
+
+# Optimized profile for benchmarking with maturin/PyO3 compatibility
+# maturin doesn't work well with --profile bench for ... reasons.
+# keep this in sync with `bench` above.
+[profile.perf]
+inherits = "release"
 opt-level = 2
 lto = "off"
 codegen-units = 8

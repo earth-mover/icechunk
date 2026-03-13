@@ -7,6 +7,7 @@ import pytest
 
 import icechunk
 import zarr
+from icechunk._icechunk_python import RepoUpdateRetryConfig
 
 
 @pytest.fixture(scope="function")
@@ -29,9 +30,10 @@ def tmp_store(
 
 
 def test_config_fetch(any_spec_version: int | None) -> None:
+    storage = icechunk.in_memory_storage()
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
-    storage = icechunk.in_memory_storage()
+    config.storage = storage.default_settings()
     repo = icechunk.Repository.create(
         storage=storage,
         config=config,
@@ -43,14 +45,15 @@ def test_config_fetch(any_spec_version: int | None) -> None:
 
 
 def test_config_save(any_spec_version: int | None) -> None:
-    config = icechunk.RepositoryConfig.default()
     storage = icechunk.in_memory_storage()
+    config = icechunk.RepositoryConfig.default()
     repo = icechunk.Repository.create(
         storage=storage,
         spec_version=any_spec_version,
     )
 
     config.inline_chunk_threshold_bytes = 5
+    config.storage = storage.default_settings()
     repo = icechunk.Repository.open(
         storage=storage,
         config=config,
@@ -173,15 +176,29 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     config.manifest = icechunk.ManifestConfig()
     config.manifest.preload = icechunk.ManifestPreloadConfig(max_total_refs=42)
     config.max_concurrent_requests = 10
+    config.num_updates_per_repo_info_file = 50
+    config.repo_update_retries = RepoUpdateRetryConfig(
+        default=icechunk.StorageRetriesSettings(
+            max_tries=200, initial_backoff_ms=100, max_backoff_ms=60_000
+        )
+    )
     config.manifest.preload.preload_if = icechunk.ManifestPreloadCondition.and_conditions(
         [
             icechunk.ManifestPreloadCondition.true(),
             icechunk.ManifestPreloadCondition.name_matches("foo"),
         ]
     )
+    config.manifest.virtual_chunk_location_compression = (
+        icechunk.ManifestVirtualChunkLocationCompressionConfig(
+            min_num_chunks=500,
+            dictionary_max_training_samples=200,
+            dictionary_max_size_bytes=4096,
+            compression_level=5,
+        )
+    )
 
     assert re.match(
-        r"RepositoryConfig\(inline_chunk_threshold_bytes=5, get_partial_values_concurrency=42, compression=CompressionConfig\(algorithm=None, level=2\), caching=CachingConfig\(num_snapshot_nodes=None, num_chunk_refs=8, num_transaction_changes=None, num_bytes_attributes=None, num_bytes_chunks=None\), storage=StorageSettings\(concurrency=StorageConcurrencySettings\(max_concurrent_requests_for_object=5, ideal_concurrent_request_size=1000000\), retries=StorageRetriesSettings\(max_tries=42, initial_backoff_ms=500, max_backoff_ms=600\), unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=\"STANDARD_IA\", metadata_storage_class=None, chunks_storage_class=None\), manifest=.*\)",
+        r"RepositoryConfig\(inline_chunk_threshold_bytes=5, get_partial_values_concurrency=42, compression=CompressionConfig\(algorithm=None, level=2\), caching=CachingConfig\(num_snapshot_nodes=None, num_chunk_refs=8, num_transaction_changes=None, num_bytes_attributes=None, num_bytes_chunks=None\), storage=StorageSettings\(concurrency=StorageConcurrencySettings\(max_concurrent_requests_for_object=5, ideal_concurrent_request_size=1000000\), retries=StorageRetriesSettings\(max_tries=42, initial_backoff_ms=500, max_backoff_ms=600\), timeouts=None, unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=\"STANDARD_IA\", metadata_storage_class=None, chunks_storage_class=None\), manifest=.*\)",
         repr(config),
     )
     repo = icechunk.Repository.open(
@@ -193,9 +210,11 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     stored_config = icechunk.Repository.fetch_config(storage)
     assert stored_config
     assert stored_config.inline_chunk_threshold_bytes == 5
+    assert stored_config.get_partial_values_concurrency == 42
     assert stored_config.compression
     assert stored_config.compression.level == 2
     assert stored_config.max_concurrent_requests == 10
+    assert stored_config.num_updates_per_repo_info_file == 50
     assert stored_config.caching
     assert stored_config.caching.num_chunk_refs == 8
     assert stored_config.storage
@@ -205,11 +224,17 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     assert stored_config.storage.retries.max_tries == 42
     assert stored_config.storage.retries.initial_backoff_ms == 500
     assert stored_config.storage.retries.max_backoff_ms == 600
+    assert stored_config.storage.storage_class == "STANDARD_IA"
+    assert stored_config.repo_update_retries
+    assert stored_config.repo_update_retries.default
+    assert stored_config.repo_update_retries.default.max_tries == 200
+    assert stored_config.repo_update_retries.default.initial_backoff_ms == 100
+    assert stored_config.repo_update_retries.default.max_backoff_ms == 60_000
     assert stored_config.manifest
     assert stored_config.manifest.preload
-    assert config.manifest.preload.max_total_refs == 42
+    assert stored_config.manifest.preload.max_total_refs == 42
     assert (
-        config.manifest.preload.preload_if
+        stored_config.manifest.preload.preload_if
         == icechunk.ManifestPreloadCondition.and_conditions(
             [
                 icechunk.ManifestPreloadCondition.true(),
@@ -217,6 +242,12 @@ def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
             ]
         )
     )
+    assert stored_config.manifest.virtual_chunk_location_compression
+    vlc = stored_config.manifest.virtual_chunk_location_compression
+    assert vlc.min_num_chunks == 500
+    assert vlc.dictionary_max_training_samples == 200
+    assert vlc.dictionary_max_size_bytes == 4096
+    assert vlc.compression_level == 5
 
 
 def test_manifest_preload_magic_methods() -> None:
@@ -247,14 +278,15 @@ def test_spec_version() -> None:
 
 
 def test_config_from_store(any_spec_version: int | None) -> None:
+    storage = icechunk.in_memory_storage()
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
+    config.storage = storage.default_settings()
 
     store_config = icechunk.s3_store(region="us-east-1")
     container = icechunk.VirtualChunkContainer("s3://example/", store_config)
     config.set_virtual_chunk_container(container)
 
-    storage = icechunk.in_memory_storage()
     repo = icechunk.Repository.create(
         storage=storage,
         config=config,
@@ -311,6 +343,6 @@ def test_clear_virtual_chunk_containers_persists_through_reopen() -> None:
 
     # VCCs should be cleared after reopen
     reopened_vccs = repo.config.virtual_chunk_containers or {}
-    assert (
-        reopened_vccs == {}
-    ), f"Expected no VCCs after reopen, got: {list(reopened_vccs.keys())}"
+    assert reopened_vccs == {}, (
+        f"Expected no VCCs after reopen, got: {list(reopened_vccs.keys())}"
+    )

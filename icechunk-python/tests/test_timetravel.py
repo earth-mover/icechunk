@@ -886,8 +886,8 @@ async def test_repository_lifecycle_async(any_spec_version: int | None) -> None:
     assert not await ic.Repository.exists_async(storage)
 
     # Test fetch_config_async with non-existent repo
-    config = await ic.Repository.fetch_config_async(storage)
-    assert config is None
+    with pytest.raises(ic.IcechunkError, match=r"the repository doesn.t exist"):
+        await ic.Repository.fetch_config_async(storage)
 
     # Test create_async with custom config
     custom_config = ic.RepositoryConfig.default()
@@ -983,8 +983,7 @@ async def test_rewrite_manifests_async(any_spec_version: int | None) -> None:
 
     # Verify ancestry after rewrite
     new_ancestry = [snap async for snap in repo.async_ancestry(branch="main")]
-    extra_commits = 1 if any_spec_version == 1 else 0  # we do amend in IC2+
-    assert len(new_ancestry) == len(initial_ancestry) + extra_commits
+    assert len(new_ancestry) == len(initial_ancestry) + 1  # new_commit adds to ancestry
     assert new_ancestry[0].message == "rewritten manifests"
 
     # Verify data is still accessible after manifest rewrite

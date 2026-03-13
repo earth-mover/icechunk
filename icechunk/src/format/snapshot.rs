@@ -1,6 +1,8 @@
 //! Repository state at a point in time (arrays, groups, and manifest references).
 
-use std::{collections::BTreeMap, convert::Infallible, num::NonZeroU64, sync::Arc};
+use std::{
+    collections::BTreeMap, convert::Infallible, num::NonZeroU64, ops::Range, sync::Arc,
+};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -199,9 +201,12 @@ impl From<&generated::ObjectId12> for AttributesId {
 
 impl<'a> From<generated::ManifestRef<'a>> for ManifestRef {
     fn from(value: generated::ManifestRef<'a>) -> Self {
-        let from = value.extents().iter().map(|range| range.from()).collect::<Vec<_>>();
-        let to = value.extents().iter().map(|range| range.to()).collect::<Vec<_>>();
-        let extents = ManifestExtents::new(from.as_slice(), to.as_slice());
+        let extents = ManifestExtents::from_ranges_iter(
+            value
+                .extents()
+                .iter()
+                .map(|range| Range { start: range.from(), end: range.to() }),
+        );
         ManifestRef { object_id: value.object_id().into(), extents }
     }
 }
@@ -248,7 +253,7 @@ impl<'a> TryFrom<generated::NodeSnapshot<'a>> for NodeSnapshot {
         };
         let res = NodeSnapshot {
             id: value.id().into(),
-            path: value.path().to_string().try_into()?,
+            path: Path::from_trusted(value.path()),
             node_data,
             user_data: Bytes::copy_from_slice(value.user_data().bytes()),
         };
@@ -303,14 +308,19 @@ impl ManifestFileInfo {
     }
 }
 
+// It is _extremely_ common to set/get chunks in large batches sequentially.
+// Without a cache we incur the cost of repeatedly decoding the flatbuffer.
+// This cache is very small (size 2 currently), because we could cache a large number of
+// snapshots. The size of 2 is fine for typically workloads that iterate sequentially
+// through nodes.
+// We cannot choose 1 because of a bug in the `quick_cache` dependency
+// where a size-1 cache is effectively no cache
+// https://github.com/arthurprs/quick-cache/issues/105
+const SNAPSHOT_NODE_CACHE_SIZE: usize = 2;
+
 pub struct Snapshot {
     buffer: Vec<u8>,
     spec_version: SpecVersionBin,
-    // It is _extremely_ common to set/get chunks in large batches sequentially.
-    // Without a cache we incur the cost of repeatedly decoding the flatbuffer.
-    // This cache is very small (size 1 currently), because we could cache a large number of
-    // snapshots. The size of 1 is fine for typically workloads that iterate sequentially
-    // through nodes.
     node_cache: Cache<Path, Arc<NodeSnapshot>>,
 }
 
@@ -393,7 +403,7 @@ impl Snapshot {
             buffer,
             spec_version,
             // this number is low because we cache a very large number of snapshot nodes.
-            node_cache: Cache::new(1),
+            node_cache: Cache::new(SNAPSHOT_NODE_CACHE_SIZE),
         })
     }
 
@@ -471,6 +481,7 @@ impl Snapshot {
                 message: Some(message),
                 metadata: Some(metadata_items),
                 manifest_files: Some(manifest_files),
+                ..Default::default()
             },
         );
 
@@ -482,7 +493,7 @@ impl Snapshot {
             buffer,
             spec_version,
             // this number is low because we cache a very large number of snapshot nodes.
-            node_cache: Cache::new(1),
+            node_cache: Cache::new(SNAPSHOT_NODE_CACHE_SIZE),
         })
     }
 
@@ -674,26 +685,37 @@ impl Iterator for NodeIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         let nodes = self.snapshot.root().nodes();
-        if self.next_index < nodes.len() {
+        loop {
+            // we need to loop over all nodes starting from the index
+            // until we are sure we'll see no more children
+            if self.next_index >= nodes.len() {
+                return None;
+            }
+
             let node: IcechunkResult<NodeSnapshot> =
                 nodes.get(self.next_index).try_into();
 
             match node {
                 Ok(res) => {
+                    let node_path = res.path.to_string();
                     if let Some(after_prefix) =
-                        res.path.to_string().strip_prefix(self.prefix.as_str())
+                        node_path.strip_prefix(self.prefix.as_str())
                         && (after_prefix.is_empty() || after_prefix.starts_with('/'))
                     {
                         self.next_index += 1;
-                        Some(Ok(res))
+                        return Some(Ok(res));
+                    } else if node_path.as_str() > self.prefix.as_str()
+                        && !node_path.starts_with(self.prefix.as_str())
+                    {
+                        // We've passed all possible children of the prefix
+                        return None;
                     } else {
-                        None
+                        // Not a match but there may be matches later (foo-bar" comes before "foo/bar")
+                        self.next_index += 1;
                     }
                 }
-                Err(err) => Some(Err(err)),
+                Err(err) => return Some(Err(err)),
             }
-        } else {
-            None
         }
     }
 }
@@ -714,6 +736,7 @@ fn mk_node<'bldr>(
             node_data_type,
             node_data,
             user_data,
+            ..Default::default()
         },
     ))
 }

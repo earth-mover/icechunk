@@ -30,6 +30,7 @@ from icechunk._icechunk_python import (
     ManifestSplitCondition,
     ManifestSplitDimCondition,
     ManifestSplittingConfig,
+    ManifestVirtualChunkLocationCompressionConfig,
     ObjectStoreConfig,
     RebaseFailedError,
     RepositoryConfig,
@@ -42,6 +43,7 @@ from icechunk._icechunk_python import (
     StorageConcurrencySettings,
     StorageRetriesSettings,
     StorageSettings,
+    StorageTimeoutSettings,
     Update,
     UpdateType,
     VersionSelection,
@@ -52,6 +54,7 @@ from icechunk._icechunk_python import (
     initialize_logs,
     set_logs_filter,
     spec_version,
+    user_agent,
 )
 from icechunk.credentials import (
     AnyAzureCredential,
@@ -93,6 +96,7 @@ from icechunk.storage import (
     tigris_storage,
 )
 from icechunk.store import IcechunkStore
+from icechunk.types import CommitMethod
 
 __all__ = [
     "AnyAzureCredential",
@@ -107,6 +111,7 @@ __all__ = [
     "BasicConflictSolver",
     "CachingConfig",
     "ChunkType",
+    "CommitMethod",
     "CompressionAlgorithm",
     "CompressionConfig",
     "Conflict",
@@ -131,6 +136,7 @@ __all__ = [
     "ManifestSplitCondition",
     "ManifestSplitDimCondition",
     "ManifestSplittingConfig",
+    "ManifestVirtualChunkLocationCompressionConfig",
     "ObjectStoreConfig",
     "RebaseFailedError",
     "Repository",
@@ -145,6 +151,7 @@ __all__ = [
     "StorageConcurrencySettings",
     "StorageRetriesSettings",
     "StorageSettings",
+    "StorageTimeoutSettings",
     "Update",
     "UpdateType",
     "VersionSelection",
@@ -182,6 +189,7 @@ __all__ = [
     "set_logs_filter",
     "spec_version",
     "tigris_storage",
+    "user_agent",
 ]
 
 
@@ -243,6 +251,7 @@ def upgrade_icechunk_repository(
     *,
     dry_run: bool,
     delete_unused_v1_files: bool = True,
+    prefetch_concurrency: int | None = None,
 ) -> Repository:
     """
     Migrate a repository to the latest version of Icechunk.
@@ -269,6 +278,10 @@ def upgrade_icechunk_repository(
         the upgrade.
     delete_unused_v1_files : bool, optional
         If True (the default), delete unused v1 files after upgrading.
+    prefetch_concurrency : int or None, optional
+        Number of snapshots to prefetch concurrently during migration.
+        Defaults to 64 if not specified. Lower this value for repos that
+        cannot fit many snapshots in memory.
 
     Returns
     -------
@@ -276,7 +289,10 @@ def upgrade_icechunk_repository(
         A freshly opened repository with the updated spec version.
     """
     new_repo = _upgrade_icechunk_repository(
-        repo._repository, dry_run=dry_run, delete_unused_v1_files=delete_unused_v1_files
+        repo._repository,
+        dry_run=dry_run,
+        delete_unused_v1_files=delete_unused_v1_files,
+        prefetch_concurrency=prefetch_concurrency,
     )
     if not dry_run:
         repo._repository = _InvalidatedRepository()  # type: ignore[assignment]

@@ -5,6 +5,10 @@ title: Contributing
 
 👋 Hi! Thanks for your interest in contributing to Icechunk!
 
+!!! note
+    Check the [latest version of this page](https://icechunk.io/en/latest/contributing/)
+    for the most up-to-date development environment setup instructions.
+
 Icechunk is an open source (Apache 2.0) project and welcomes contributions in the form of:
 
 - Usage questions - [open a GitHub issue](https://github.com/earth-mover/icechunk/issues)
@@ -12,6 +16,8 @@ Icechunk is an open source (Apache 2.0) project and welcomes contributions in th
 - Feature requests - [open a GitHub issue](https://github.com/earth-mover/icechunk/issues)
 - Documentation improvements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
 - Bug fixes and enhancements - [open a GitHub pull request](https://github.com/earth-mover/icechunk/pulls)
+
+🤖 Please review our [AI Usage Policy](ai-policy.md), which also serves as contribution guidelines, before submitting pull requests.
 
 ## Development
 
@@ -31,7 +37,14 @@ We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rus
 
     ```bash
     pixi shell -m icechunk-python/pyproject.toml
+    just develop
     ```
+
+    `just develop` will set up the `maturin-import-hook` for fast incremental Rust compilation
+    and do the first build with `maturin develop --uv`. `just develop` can be skipped in future
+    developer shell activations, but should also run fast after the first invocation (and if
+    there no changes in the Rust code).
+
     !!! Usage without pixi shell
         You could run all commands below using this pattern:
         ```shell
@@ -385,6 +398,20 @@ pre-commit run --all-files
 # Run full CI checks manually
 pre-commit run rust-pre-commit-ci --hook-stage manual
 ```
+
+#### Minimum supported Rust version
+
+The current MSRV is `1.91.1`.
+
+We maintain packages for [PyPI](https://pypi.org/project/icechunk)
+and [conda-forge](https://github.com/conda-forge/icechunk-feedstock)
+as part of the release process.
+As a rule of thumb we support an MSRV that can be installed from `conda-forge` (including the most recent Rust release),
+since we need it to build the package there.
+The latest official Rust release usually lags a couple of days before it is available in `conda-forge`.
+
+As Icechunk starts to be packaged for other distributions and package managers
+we might review this policy to include older Rust releases.
 
 ### Building Documentation
 

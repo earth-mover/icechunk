@@ -27,7 +27,7 @@ use crate::{
 #[derive(Clone)]
 pub struct PySession(pub Arc<RwLock<Session>>);
 
-#[pyclass(eq, eq_int, rename_all = "UPPERCASE")]
+#[pyclass(eq, eq_int, rename_all = "snake_case")]
 #[derive(PartialEq)]
 pub enum ChunkType {
     Uninitialized = 0,
@@ -37,7 +37,7 @@ pub enum ChunkType {
 }
 
 /// The mode of a session, determining what operations are allowed.
-#[pyclass(name = "SessionMode", module = "icechunk", eq, rename_all = "UPPERCASE")]
+#[pyclass(name = "SessionMode", module = "icechunk", eq, rename_all = "snake_case")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PySessionMode {
     Readonly,

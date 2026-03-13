@@ -68,7 +68,7 @@ pub const V1_REFS_FILE_PATH: &str = "refs";
 
 /// A normalized Zarr path: absolute (starts with `/`) and no trailing slash.
 #[serde_as]
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
 pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
 
 /// Marker trait for object ID type tags (sealed).
@@ -311,8 +311,12 @@ pub enum IcechunkFormatErrorKind {
     ManifestInfoNotFound { manifest_id: ManifestId },
     #[error("invalid magic numbers in file")]
     InvalidMagicNumbers, // TODO: add more info
-    #[error("Icechunk cannot read from repository written with a more modern version")]
-    InvalidSpecVersion, // TODO: add more info
+    #[error(
+        "this repository uses Icechunk format version {found}, but this library only supports up to version {max_supported}. Please upgrade the icechunk library"
+    )]
+    InvalidSpecVersion { found: u8, max_supported: u8 },
+    #[error("this operation is not supported for Icechunk format version {version}")]
+    UnsupportedOperationForVersion { version: u8 },
     #[error("Icechunk cannot read this file type, expected {expected:?} got {got}")]
     InvalidFileType { expected: FileTypeBin, got: u8 }, // TODO: add more info
     #[error("Icechunk cannot read file, invalid compression algorithm")]
@@ -343,6 +347,10 @@ pub enum IcechunkFormatErrorKind {
     InvalidFeatureFlagId { id: u16 },
     #[error("{feature_description} is disabled by a feature flag ({feature_flag})")]
     FeatureFlagDisabled { feature_description: String, feature_flag: String },
+    #[error(
+        "compressed chunk location present but no decompression dictionary available"
+    )]
+    MissingLocationCompressionDictionary,
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
@@ -503,6 +511,14 @@ pub mod format_constants {
     pub const ICECHUNK_COMPRESSION_ZSTD: &str = "zstd";
 }
 
+// The impl of Debug for Utf8UnixPathBuf is expensive and triggered often by tracing Spans
+// This implemnetation is much cheaper, and removes formatting from our samply profiles.
+impl fmt::Debug for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 impl Display for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -522,6 +538,11 @@ pub enum PathError {
 impl Path {
     pub fn root() -> Path {
         Path(Utf8UnixPathBuf::from("/".to_string()))
+    }
+
+    // Fast-path unvalidated constructor for use when reading from Snapshots
+    pub fn from_trusted(path: &str) -> Path {
+        Path(Utf8UnixPathBuf::from(path))
     }
 
     pub fn new(path: &str) -> Result<Path, PathError> {
@@ -638,6 +659,29 @@ mod tests {
             )
             .unwrap(),
             sid,
+        );
+    }
+
+    #[icechunk_macros::test]
+    fn test_unknown_spec_version_gives_nice_error() {
+        use format_constants::SpecVersionBin;
+
+        let future_version: u8 = 3;
+        let result = SpecVersionBin::try_from(future_version);
+        assert!(result.is_err());
+
+        let err = IcechunkFormatErrorKind::InvalidSpecVersion {
+            found: future_version,
+            max_supported: SpecVersionBin::current() as u8,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("format version 3"),
+            "Error should mention the found version: {msg}"
+        );
+        assert!(
+            msg.contains("upgrade the icechunk library"),
+            "Error should suggest upgrading: {msg}"
         );
     }
 }

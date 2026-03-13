@@ -27,6 +27,7 @@ use std::{
     cmp::{max, min},
     collections::HashMap,
     ffi::OsString,
+    fmt::Display,
     iter,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
@@ -167,6 +168,19 @@ impl VersionInfo {
     }
 }
 
+impl Display for VersionInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (&self.etag, &self.generation) {
+            (Some(etag), Some(generation)) => {
+                write!(f, "etag={}, generation={}", etag.0, generation.0)
+            }
+            (Some(etag), None) => write!(f, "etag={}", etag.0),
+            (None, Some(generation)) => write!(f, "generation={}", generation.0),
+            (None, None) => write!(f, "new"),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
 pub struct RetriesSettings {
     pub max_tries: Option<NonZeroU16>,
@@ -192,6 +206,29 @@ impl RetriesSettings {
             max_tries: other.max_tries.or(self.max_tries),
             initial_backoff_ms: other.initial_backoff_ms.or(self.initial_backoff_ms),
             max_backoff_ms: other.max_backoff_ms.or(self.max_backoff_ms),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+pub struct TimeoutSettings {
+    pub connect_timeout_ms: Option<u32>,
+    pub read_timeout_ms: Option<u32>,
+    pub operation_timeout_ms: Option<u32>,
+    pub operation_attempt_timeout_ms: Option<u32>,
+}
+
+impl TimeoutSettings {
+    pub fn merge(&self, other: Self) -> Self {
+        Self {
+            connect_timeout_ms: other.connect_timeout_ms.or(self.connect_timeout_ms),
+            read_timeout_ms: other.read_timeout_ms.or(self.read_timeout_ms),
+            operation_timeout_ms: other
+                .operation_timeout_ms
+                .or(self.operation_timeout_ms),
+            operation_attempt_timeout_ms: other
+                .operation_attempt_timeout_ms
+                .or(self.operation_attempt_timeout_ms),
         }
     }
 }
@@ -240,6 +277,9 @@ pub struct Settings {
     pub retries: Option<RetriesSettings>,
 
     #[serde(default)]
+    pub timeouts: Option<TimeoutSettings>,
+
+    #[serde(default)]
     pub unsafe_use_conditional_update: Option<bool>,
 
     #[serde(default)]
@@ -275,6 +315,10 @@ impl Settings {
         self.retries
             .as_ref()
             .unwrap_or_else(|| DEFAULT_RETRIES.get_or_init(Default::default))
+    }
+
+    pub fn timeouts(&self) -> Option<&TimeoutSettings> {
+        self.timeouts.as_ref()
     }
 
     pub fn unsafe_use_conditional_create(&self) -> bool {
@@ -315,6 +359,12 @@ impl Settings {
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
             retries: match (&self.retries, other.retries) {
+                (None, None) => None,
+                (None, Some(c)) => Some(c),
+                (Some(c), None) => Some(c.clone()),
+                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
+            },
+            timeouts: match (&self.timeouts, other.timeouts) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
                 (Some(c), None) => Some(c.clone()),

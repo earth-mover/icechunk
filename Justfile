@@ -1,48 +1,58 @@
 # Cargo profile: override with `just profile=ci test` (default: dev)
 profile := "dev"
 
+set positional-arguments
+
 alias fmt := format
 alias pre := pre-commit
 
 [doc("Run all Rust tests via cargo-nextest")]
-test *args='':
-  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples {{args}}
+test *args:
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples "$@"
+
+[doc("Run all Rust lib tests via cargo-nextest")]
+unit-test *args:
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-fail-fast --cargo-profile {{profile}} --lib "$@"
 
 [doc("Run Rust doc tests only")]
-doctest *args='':
-  cargo test --workspace --profile {{profile}} --doc {{args}}
+doctest *args:
+  cargo test --workspace --profile {{profile}} --doc "$@"
 
 [doc("Run all Rust tests with RUST_LOG enabled (e.g. `just test-logs debug`)")]
-test-logs level *args='':
-  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples --nocapture {{args}}
+test-logs level *args:
+  shift && export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && RUST_LOG=icechunk={{level}} cargo nextest run --no-fail-fast --cargo-profile {{profile}} --workspace --lib --bins --tests --examples --nocapture "$@"
 
 [doc("Compile tests without running them")]
-compile-tests *args='':
-  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-run --cargo-profile {{profile}} --workspace --all-targets {{args}}
+compile-tests *args:
+  export DYLD_LIBRARY_PATH="${CONDA_PREFIX:-}/lib" && cargo nextest run --no-run --cargo-profile {{profile}} --workspace --all-targets "$@"
 
 [doc("Build the Rust workspace (debug by default, override with `just profile=ci build`)")]
-build *args='':
-  cargo build --profile {{profile}} {{args}}
+build *args:
+  cargo build --profile {{profile}} "$@"
 
 [doc("Build the Rust workspace in release mode")]
-build-release *args='':
-  cargo build --release {{args}}
+build-release *args:
+  cargo build --release "$@"
+
+[doc("Prepare environment for development")]
+develop *args:
+  cd icechunk-python && uv run -m maturin_import_hook site install && maturin develop --uv --profile {{profile}} "$@"
 
 [doc("Run clippy lints on all features")]
-lint *args='':
-  cargo clippy --profile {{profile}} --all-features {{args}}
+lint *args:
+  cargo clippy --profile {{profile}} --all-features "$@"
 
 [doc("Format all Rust files (pass `--check` to verify only)")]
-format *args='':
-  cargo fmt --all {{args}}
+format *args:
+  cargo fmt --all "$@"
 
 [doc("Format all Nix files with alejandra")]
-format-nix *args='':
+format-nix *args:
   alejandra .
 
 [doc("Check dependencies for security/license issues via cargo-deny")]
-check-deps *args='':
-  cargo deny --all-features check {{args}}
+check-deps *args:
+  cargo deny --all-features check "$@"
 
 [doc("Run all Rust examples (skips limits_chunk_refs, large_manifests)")]
 run-all-examples:
@@ -79,19 +89,23 @@ pre-commit-python:
 
 [doc("Compare pytest-benchmark results")]
 bench-compare *args:
-  pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short {{args}}
+  pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short "$@"
 
 [doc("Run ruff formatter on Python code")]
 ruff-format *args:
-  ruff format
+  ruff format "$@"
 
 [doc("Run ruff linter on Python code (pass `--fix` for auto-fix)")]
 ruff *args:
-  ruff check --show-fixes icechunk-python/ {{args}}
+  ruff check --show-fixes icechunk-python/ "$@"
 
 [doc("Run mypy type checking on Python code")]
 mypy *args:
-  cd icechunk-python && mypy python tests {{args}}
+  cd icechunk-python && mypy python tests "$@"
+
+[doc("Run mypy stub checking on type stubs")]
+stubtest *args:
+  cd icechunk-python && python -m mypy.stubtest --ignore-disjoint-bases icechunk._icechunk_python --allowlist stubtest_allowlist.txt "$@"
 
 [doc("Run all Python pre-commit hooks (ruff, formatting, codespell, etc.)")]
 py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *args:
@@ -99,15 +113,15 @@ py-pre-commit $SKIP="rust-pre-commit-fast,rust-pre-commit,rust-pre-commit-ci" *a
 
 [doc("Run Python tests via pytest")]
 pytest *args:
-  cd icechunk-python && pytest {{args}}
+  cd icechunk-python && pytest "$@"
 
 [doc("Start MkDocs dev server with live reload")]
 docs-serve *args:
-  mkdocs serve -f icechunk-python/docs/mkdocs.yml --livereload {{args}}
+  mkdocs serve -f icechunk-python/docs/mkdocs.yml --livereload "$@"
 
 [doc("Build MkDocs static site")]
 docs-build *args:
-  mkdocs build -f icechunk-python/docs/mkdocs.yml {{args}}
+  mkdocs build -f icechunk-python/docs/mkdocs.yml "$@"
 
 [doc("Run all Python and Rust checks")]
 all-checks:

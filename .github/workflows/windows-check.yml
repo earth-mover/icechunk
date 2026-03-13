@@ -2,6 +2,7 @@ name: Windows tests
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
+  merge_group:
   push:
     branches:
       - main
@@ -29,7 +30,7 @@ jobs:
       #pull-requests: read
     env:
       #CC: deny_c
-      RUST_CHANNEL: '1.91.0'
+      RUST_CHANNEL: '1.91.1'
 
 
     steps:

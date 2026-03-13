@@ -22,6 +22,7 @@ from icechunk._icechunk_python import (
 from icechunk.credentials import AnyCredential
 from icechunk.session import Session
 from icechunk.store import IcechunkStore
+from icechunk.types import CommitMethod
 
 
 class Repository:
@@ -1596,7 +1597,12 @@ class Repository:
         )
 
     def rewrite_manifests(
-        self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
+        self,
+        message: str,
+        *,
+        branch: str,
+        metadata: dict[str, Any] | None = None,
+        commit_method: CommitMethod = "new_commit",
     ) -> str:
         """
         Rewrite manifests for all arrays.
@@ -1616,6 +1622,11 @@ class Repository:
             The branch to commit to.
         metadata : dict[str, Any] | None, optional
             Additional metadata to store with the commit snapshot.
+        commit_method : CommitMethod, optional
+            The commit method to use. Defaults to ``"new_commit"``.
+            Use ``"amend"`` to replace the previous commit.
+            Note that ``"amend"`` is only supported for spec version 2
+            repositories.
 
         Returns
         -------
@@ -1624,11 +1635,16 @@ class Repository:
 
         """
         return self._repository.rewrite_manifests(
-            message, branch=branch, metadata=metadata
+            message, branch=branch, metadata=metadata, commit_method=commit_method
         )
 
     async def rewrite_manifests_async(
-        self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
+        self,
+        message: str,
+        *,
+        branch: str,
+        metadata: dict[str, Any] | None = None,
+        commit_method: CommitMethod = "new_commit",
     ) -> str:
         """
         Rewrite manifests for all arrays (async version).
@@ -1648,6 +1664,11 @@ class Repository:
             The branch to commit to.
         metadata : dict[str, Any] | None, optional
             Additional metadata to store with the commit snapshot.
+        commit_method : CommitMethod, optional
+            The commit method to use. Defaults to ``"new_commit"``.
+            Use ``"amend"`` to replace the previous commit.
+            Note that ``"amend"`` is only supported for spec version 2
+            repositories.
 
         Returns
         -------
@@ -1656,7 +1677,7 @@ class Repository:
 
         """
         return await self._repository.rewrite_manifests_async(
-            message, branch=branch, metadata=metadata
+            message, branch=branch, metadata=metadata, commit_method=commit_method
         )
 
     def garbage_collect(
@@ -1918,6 +1939,14 @@ class Repository:
             await self._repository.inspect_repo_info_async()
         )
         return result
+
+    def inspect_manifest(self, manifest_id: str, *, pretty: bool = True) -> str:
+        return self._repository.inspect_manifest(manifest_id, pretty=pretty)
+
+    async def inspect_manifest_async(
+        self, manifest_id: str, *, pretty: bool = True
+    ) -> str:
+        return await self._repository.inspect_manifest_async(manifest_id, pretty=pretty)
 
     @property
     def spec_version(self) -> int:

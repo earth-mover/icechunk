@@ -660,9 +660,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     # TODO: update changes made rule depending on result of
     # https://github.com/earth-mover/icechunk/issues/1532
     @precondition(
-        lambda self: (self.model.changes_made)
-        and (self.model.spec_version >= 2)
-        and len(self.model.commits) > 1
+        lambda self: (
+            (self.model.changes_made)
+            and (self.model.spec_version >= 2)
+            and len(self.model.commits) > 1
+        )
     )
     def amend(self, message: str) -> str:
         branch = self.session.branch
@@ -911,16 +913,16 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             )
 
         expired_but_remaining = actual & remaining_snapshot_ids
-        assert (
-            not expired_but_remaining
-        ), f"Snapshots marked as expired but still in ancestry: {expired_but_remaining}"
+        assert not expired_but_remaining, (
+            f"Snapshots marked as expired but still in ancestry: {expired_but_remaining}"
+        )
 
-        assert (
-            actual_deleted_branches == expected.deleted_branches
-        ), f"deleted branches mismatch: actual={actual_deleted_branches}, expected={expected.deleted_branches}"
-        assert (
-            actual_deleted_tags == expected.deleted_tags
-        ), f"deleted tags mismatch: actual={actual_deleted_tags}, expected={expected.deleted_tags}"
+        assert actual_deleted_branches == expected.deleted_branches, (
+            f"deleted branches mismatch: actual={actual_deleted_branches}, expected={expected.deleted_branches}"
+        )
+        assert actual_deleted_tags == expected.deleted_tags, (
+            f"deleted tags mismatch: actual={actual_deleted_tags}, expected={expected.deleted_tags}"
+        )
 
         for branch in actual_deleted_branches:
             self.maybe_checkout_branch(branch)

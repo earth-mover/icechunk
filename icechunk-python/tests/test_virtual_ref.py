@@ -490,3 +490,120 @@ def test_cannot_write_invalid_urls(any_spec_version: int | None) -> None:
                 ),
             ],
         )
+
+
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
+async def test_write_minio_virtual_refs_with_vcc_urls(
+    any_spec_version: int | None,
+) -> None:
+    """Write virtual refs using vcc:// relative URLs and verify they resolve correctly."""
+    path = str(uuid.uuid4())
+    write_chunks_to_minio(
+        [
+            (f"{path}/chunk-1", b"first"),
+            (f"{path}/chunk-2", b"second"),
+        ],
+    )
+
+    config = RepositoryConfig.default()
+    store_config = s3_store(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        s3_compatible=True,
+        force_path_style=True,
+    )
+    container = VirtualChunkContainer("s3://testbucket/", store_config, name="minio-data")
+    config.set_virtual_chunk_container(container)
+    access_key_id, secret_access_key = Permission.MODIFY.keys()
+    credentials = containers_credentials(
+        {
+            "s3://testbucket": s3_credentials(
+                access_key_id=access_key_id, secret_access_key=secret_access_key
+            )
+        }
+    )
+
+    repo = Repository.open_or_create(
+        storage=in_memory_storage(),
+        config=config,
+        authorize_virtual_chunk_access=credentials,
+        create_version=any_spec_version,
+    )
+    session = repo.writable_session("main")
+    store = session.store
+
+    zarr.create_array(
+        store, shape=(3, 1, 1), chunks=(1, 1, 1), dtype="i4", compressors=None
+    )
+
+    # Write refs using vcc:// relative URLs
+    store.set_virtual_ref(
+        "c/0/0/0",
+        f"vcc://minio-data/{path}/chunk-1",
+        offset=0,
+        length=4,
+    )
+    store.set_virtual_ref(
+        "c/1/0/0",
+        f"vcc://minio-data/{path}/chunk-2",
+        offset=1,
+        length=4,
+    )
+
+    # Read back and verify bytes
+    buffer_prototype = zarr.core.buffer.default_buffer_prototype()
+    first = await store.get("c/0/0/0", prototype=buffer_prototype)
+    assert first is not None
+    assert first.to_bytes() == b"firs"  # codespell:ignore firs
+
+    second = await store.get("c/1/0/0", prototype=buffer_prototype)
+    assert second is not None
+    assert second.to_bytes() == b"econ"
+
+    # all_virtual_chunk_locations should return expanded absolute URLs
+    all_locations = set(session.all_virtual_chunk_locations())
+    assert f"s3://testbucket/{path}/chunk-1" in all_locations
+    assert f"s3://testbucket/{path}/chunk-2" in all_locations
+    # Should not contain vcc:// URLs
+    assert not any(loc.startswith("vcc://") for loc in all_locations)
+
+    # Batch set with a mix of vcc:// and absolute URLs
+    store.set_virtual_refs(
+        array_path="/",
+        validate_containers=True,
+        chunks=[
+            VirtualChunkSpec(
+                index=[0, 0, 0],
+                location=f"vcc://minio-data/{path}/chunk-1",
+                offset=0,
+                length=4,
+            ),
+            VirtualChunkSpec(
+                index=[1, 0, 0],
+                location=f"vcc://minio-data/{path}/chunk-2",
+                offset=0,
+                length=4,
+            ),
+            VirtualChunkSpec(
+                index=[2, 0, 0],
+                location=f"s3://testbucket/{path}/chunk-1",
+                offset=1,
+                length=4,
+            ),
+        ],
+    )
+
+    first = await store.get("c/0/0/0", prototype=buffer_prototype)
+    assert first is not None
+    assert first.to_bytes() == b"firs"  # codespell:ignore firs
+
+    second = await store.get("c/1/0/0", prototype=buffer_prototype)
+    assert second is not None
+    assert second.to_bytes() == b"seco"
+
+    third = await store.get("c/2/0/0", prototype=buffer_prototype)
+    assert third is not None
+    assert third.to_bytes() == b"irst"
+
+    session.commit("vcc test")
