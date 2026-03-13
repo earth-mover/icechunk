@@ -6,6 +6,10 @@
 
 - Fix `list_prefix` stopping too early when non-matching nodes precede valid children in sort order ([#1842](https://github.com/earth-mover/icechunk/pull/1842)).
 
+### Documentation
+
+- Updated [version policy](https://icechunk.io/version-policy) with support window, migration, and compatibility guarantees ([#1769](https://github.com/earth-mover/icechunk/pull/1769)).
+
 ## Python Icechunk Library 1.1.20
 
 ### Fixes
