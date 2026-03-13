@@ -3,6 +3,7 @@ name: Code Quality Checks
 on:
   pull_request:
     types: [opened, reopened, synchronize]
+  merge_group:
   push:
     branches:
       - main
@@ -55,7 +56,7 @@ jobs:
 
       - name: Run clippy linting
         run: |
-          just profile=ci lint --workspace
+          just profile=ci lint --workspace --all-targets
 
       - name: Run doc tests
         run: |

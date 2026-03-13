@@ -12,6 +12,7 @@ authors = ["Earthmover PBC"]
 edition.workspace = true
 publish = true
 rust-version.workspace = true
+autotests = false
 
 [dependencies]
 async-trait = "0.1.89"
@@ -130,6 +131,10 @@ cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs"]
 name = "icechunk"
 path = "src/bin/icechunk/main.rs"
 required-features = ["cli"]
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
 
 [[bench]]
 name = "manifest"
