@@ -36,9 +36,6 @@ async def collect_list_dir(store, prefix):
     return {k async for k in store.list_dir(prefix)}
 
 
-# -- store-level async methods --
-
-
 def precommit_postcommit_readonly(session, repo):
     """Yield (label, store) for the three icechunk lifecycle phases."""
     yield "pre-commit", session.store
@@ -47,20 +44,23 @@ def precommit_postcommit_readonly(session, repo):
     yield "readonly", repo.readonly_session(branch="main").store
 
 
+# -- store-level async methods --
+
+
 @pytest.mark.asyncio
 @given(tree=zarr_trees())
 @settings(max_examples=50, deadline=None)
 async def test_list_prefix(tree):
-    """list_prefix on each group path should match.
+    """list_prefix on each node path should match.
 
     Note: list_prefix('') on root passes even when sub-paths are broken,
-    so we must check every group path.
+    so we must check every node path.
     """
     model, session, repo = make_stores(tree)
 
     note(zarr.open_group(model).tree())
     for label, store in precommit_postcommit_readonly(session, repo):
-        for path in tree.nodes():
+        for path in [""] + tree.nodes():
             expected = await collect_list_prefix(model, path)
             # MemoryStore list_prefix does raw string matching, so
             # list_prefix("0") returns "0_c/zarr.json" too.
@@ -82,7 +82,7 @@ async def test_list_dir(tree, data):
     """list_dir on sampled group paths should match."""
     model, session, repo = make_stores(tree)
 
-    groups = tree.groups()
+    groups = [""] + tree.groups()
     paths = data.draw(st.lists(st.sampled_from(groups), min_size=1, max_size=len(groups)))
     for label, store in precommit_postcommit_readonly(session, repo):
         for path in paths:
@@ -102,7 +102,7 @@ async def test_exists(tree):
     model, session, repo = make_stores(tree)
 
     for label, store in precommit_postcommit_readonly(session, repo):
-        for path in tree.groups():
+        for path in [""] + tree.groups():
             key = f"{path}/zarr.json" if path else "zarr.json"
             expected = await model.exists(key)
             actual = await store.exists(key)
@@ -118,7 +118,7 @@ async def test_is_empty(tree):
     model, session, repo = make_stores(tree)
 
     for label, store in precommit_postcommit_readonly(session, repo):
-        for path in tree.groups():
+        for path in [""] + tree.groups():
             expected = await model.is_empty(path)
             actual = await store.is_empty(path)
             assert expected == actual, (
@@ -163,7 +163,7 @@ def test_contains(tree):
     model_group = zarr.open_group(model)
     for label, store in precommit_postcommit_readonly(session, repo):
         ice = zarr.open_group(store, mode="r")
-        for path in tree.groups()[1:] + tree.arrays():
+        for path in tree.nodes():
             expected = path in model_group
             actual = path in ice
             assert expected == actual, (
@@ -178,7 +178,7 @@ def test_getitem(tree):
     model_group = zarr.open_group(model)
     for label, store in precommit_postcommit_readonly(session, repo):
         ice = zarr.open_group(store, mode="r")
-        for path in tree.groups()[1:] + tree.arrays():
+        for path in tree.nodes():
             mem_val = model_group[path]
             ice_val = ice[path]
             assert type(mem_val).__name__ == type(ice_val).__name__, (
@@ -224,17 +224,15 @@ def test_group_keys_and_array_keys(tree):
 
 def update_paths(source, dest, arrays, groups):
     """Update path sets after a move, same logic as stateful test."""
-    return [
-        {
-            dest
-            if p == source
-            else dest + p[len(source) :]
-            if p.startswith(source + "/")
-            else p
-            for p in s
-        }
-        for s in (arrays, groups)
-    ]
+
+    def rename(p):
+        if p == source:
+            return dest
+        if p.startswith(source + "/"):
+            return dest + p[len(source) :]
+        return p
+
+    return [{rename(p) for p in s} for s in (arrays, groups)]
 
 
 async def compare_list_dir(model, store, paths):
@@ -259,7 +257,7 @@ async def test_move(tree, data):
     model, session, repo = make_stores(tree)
     session.commit("initial")
     arrays = set(tree.arrays())
-    groups = set(tree.groups()[1:])  # exclude root ""
+    groups = set(tree.groups())
 
     note(f"initial tree: {zarr.open_group(model).tree()}")
 
