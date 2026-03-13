@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt, TryStream, TryStreamExt, stream};
 use itertools::Itertools;
 use tokio::task::{self};
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, error, info, instrument, trace};
 
 use crate::{
     StorageError,
@@ -628,7 +628,7 @@ pub async fn gc_chunks(
     let to_delete = asset_manager
         .list_chunks()
         .await?
-        // TODO: don't skip over errors
+        .inspect_err(|e| error!("Deleting chunks: {e}"))
         .filter_map(move |chunk| {
             ready(chunk.ok().and_then(|chunk| {
                 if config.must_delete_chunk(&chunk) && !keep_ids.contains(&chunk.id) {
@@ -656,7 +656,7 @@ pub async fn gc_manifests(
     let to_delete = asset_manager
         .list_manifests()
         .await?
-        // TODO: don't skip over errors
+        .inspect_err(|e| error!("Deleting manifests: {e}"))
         .filter_map(move |manifest| {
             ready(manifest.ok().and_then(|manifest| {
                 if config.must_delete_manifest(&manifest)
@@ -687,7 +687,7 @@ pub async fn gc_snapshots(
     let to_delete = asset_manager
         .list_snapshots()
         .await?
-        // TODO: don't skip over errors
+        .inspect_err(|e| error!("Deleting snapshots: {e}"))
         .filter_map(move |snapshot| {
             ready(snapshot.ok().and_then(|snapshot| {
                 if config.must_delete_snapshot(&snapshot)
@@ -718,7 +718,7 @@ pub async fn gc_transaction_logs(
     let to_delete = asset_manager
         .list_transaction_logs()
         .await?
-        // TODO: don't skip over errors
+        .inspect_err(|e| error!("Deleting transaction logs: {e}"))
         .filter_map(move |tx| {
             ready(tx.ok().and_then(|tx| {
                 if config.must_delete_transaction_log(&tx) && !keep_ids.contains(&tx.id) {

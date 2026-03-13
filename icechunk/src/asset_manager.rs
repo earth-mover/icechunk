@@ -14,7 +14,6 @@ use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
 use std::sync::{LazyLock, RwLock};
 use std::{
-    io::{BufReader, Read},
     ops::Range,
     pin::Pin,
     sync::{Arc, atomic::AtomicBool},
@@ -28,12 +27,15 @@ static RETRYABLE_ERROR: LazyLock<regex::Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
+use async_compression::{
+    Level,
+    tokio::bufread::{ZstdDecoder, ZstdEncoder},
+};
 use tokio::{
     io::{AsyncBufRead, AsyncReadExt},
     sync::Semaphore,
 };
-use tokio_util::io::SyncIoBridge;
-use tracing::{Span, debug, instrument, trace, warn};
+use tracing::{debug, instrument, trace, warn};
 
 use crate::storage::GetModifiedResult;
 use crate::{
@@ -48,8 +50,7 @@ use crate::{
         repo_info::RepoInfo,
         serializers::{
             deserialize_manifest, deserialize_repo_info, deserialize_snapshot,
-            deserialize_transaction_log, serialize_manifest, serialize_repo_info,
-            serialize_snapshot, serialize_transaction_log,
+            deserialize_transaction_log,
         },
         snapshot::{Snapshot, SnapshotInfo},
         transaction_log::TransactionLog,
@@ -998,12 +999,12 @@ fn binary_file_header(
     buffer
 }
 
-fn check_header(
-    read: &mut dyn Read,
+async fn check_header(
+    read: &mut (dyn AsyncBufRead + Unpin + Send),
     file_type: FileTypeBin,
 ) -> RepositoryResult<(SpecVersionBin, CompressionAlgorithmBin)> {
     let mut buf = [0; 12];
-    read.read_exact(&mut buf)?;
+    read.read_exact(&mut buf).await?;
     // Magic numbers
     if format_constants::ICECHUNK_FORMAT_MAGIC_BYTES != buf {
         return Err(RepositoryErrorKind::FormatError(
@@ -1014,10 +1015,10 @@ fn check_header(
 
     let mut buf = [0; 24];
     // ignore implementation name
-    read.read_exact(&mut buf)?;
+    read.read_exact(&mut buf).await?;
 
     let mut spec_version = 0;
-    read.read_exact(std::slice::from_mut(&mut spec_version))?;
+    read.read_exact(std::slice::from_mut(&mut spec_version)).await?;
 
     let spec_version: SpecVersionBin = spec_version.try_into().map_err(|_| {
         RepositoryErrorKind::FormatError(IcechunkFormatErrorKind::InvalidSpecVersion {
@@ -1027,7 +1028,7 @@ fn check_header(
     })?;
 
     let mut actual_file_type_int = 0;
-    read.read_exact(std::slice::from_mut(&mut actual_file_type_int))?;
+    read.read_exact(std::slice::from_mut(&mut actual_file_type_int)).await?;
 
     let actual_file_type: FileTypeBin =
         actual_file_type_int.try_into().map_err(|_| {
@@ -1048,7 +1049,7 @@ fn check_header(
     }
 
     let mut compression = 0;
-    read.read_exact(std::slice::from_mut(&mut compression))?;
+    read.read_exact(std::slice::from_mut(&mut compression)).await?;
 
     let compression = compression.try_into().map_err(|_| {
         RepositoryErrorKind::FormatError(
@@ -1092,24 +1093,15 @@ async fn write_new_manifest(
 
     let id = new_manifest.id().clone();
 
-    let span = Span::current();
     // TODO: we should compress only when the manifest reaches a certain size
     // but then, we would need to include metadata to know if it's compressed or not
-    let buffer = tokio::task::spawn_blocking(move || {
-        let _entered = span.entered();
-        let buffer = binary_file_header(
-            spec_version,
-            FileTypeBin::Manifest,
-            CompressionAlgorithmBin::Zstd,
-        );
-        let mut compressor =
-            zstd::stream::Encoder::new(buffer, compression_level as i32)?;
-
-        serialize_manifest(new_manifest.as_ref(), spec_version, &mut compressor)?;
-
-        compressor.finish().map_err(RepositoryErrorKind::IOError)
-    })
-    .await??;
+    let buffer = compress_with_header(
+        new_manifest.bytes(),
+        spec_version,
+        FileTypeBin::Manifest,
+        compression_level,
+    )
+    .await?;
 
     let len = buffer.len() as u64;
     debug!(%id, size_bytes=len, "Writing manifest");
@@ -1143,30 +1135,38 @@ async fn fetch_manifest(
     let _permit = semaphore.acquire().await?;
 
     let (read, _) = storage.get_object(storage_settings, path.as_str(), range).await?;
-
-    let span = Span::current();
-    tokio::task::spawn_blocking(move || {
-        let _entered = span.entered();
-        let (spec_version, decompressor) =
-            check_and_get_decompressor(read, FileTypeBin::Manifest)?;
-        deserialize_manifest(spec_version, decompressor).map_err(RepositoryError::from)
-    })
-    .await?
-    .map(Arc::new)
+    let (spec_version, buffer) =
+        check_and_decompress(read, FileTypeBin::Manifest).await?;
+    deserialize_manifest(spec_version, buffer)
+        .map(Arc::new)
+        .map_err(RepositoryError::from)
 }
 
-fn check_and_get_decompressor(
-    read: Pin<Box<dyn AsyncBufRead + Send>>,
+async fn check_and_decompress(
+    mut read: Pin<Box<dyn AsyncBufRead + Send>>,
     file_type: FileTypeBin,
-) -> RepositoryResult<(SpecVersionBin, Box<dyn Read + Send>)> {
-    // TODO: use async compression
-    let mut sync_read = SyncIoBridge::new(read);
-    let (spec_version, compression) = check_header(&mut sync_read, file_type)?;
+) -> RepositoryResult<(SpecVersionBin, Vec<u8>)> {
+    let (spec_version, compression) = check_header(&mut read, file_type).await?;
     debug_assert_eq!(compression, CompressionAlgorithmBin::Zstd);
-    // We find a performance impact if we don't buffer here
-    let decompressor =
-        BufReader::with_capacity(1_024, zstd::stream::Decoder::new(sync_read)?);
-    Ok((spec_version, Box::new(decompressor)))
+    let mut decoder = ZstdDecoder::new(read);
+    let mut buffer = Vec::new();
+    decoder.read_to_end(&mut buffer).await?;
+    buffer.shrink_to_fit();
+    Ok((spec_version, buffer))
+}
+
+async fn compress_with_header(
+    data: &[u8],
+    spec_version: SpecVersionBin,
+    file_type: FileTypeBin,
+    compression_level: u8,
+) -> RepositoryResult<Vec<u8>> {
+    let mut buffer =
+        binary_file_header(spec_version, file_type, CompressionAlgorithmBin::Zstd);
+    let mut encoder =
+        ZstdEncoder::with_quality(data, Level::Precise(compression_level as i32));
+    encoder.read_to_end(&mut buffer).await.map_err(RepositoryErrorKind::IOError)?;
+    Ok(buffer)
 }
 
 async fn write_new_snapshot(
@@ -1201,22 +1201,13 @@ async fn write_new_snapshot(
     ];
 
     let id = new_snapshot.id().clone();
-    let span = Span::current();
-    let buffer = tokio::task::spawn_blocking(move || {
-        let _entered = span.entered();
-        let buffer = binary_file_header(
-            spec_version,
-            FileTypeBin::Snapshot,
-            CompressionAlgorithmBin::Zstd,
-        );
-        let mut compressor =
-            zstd::stream::Encoder::new(buffer, compression_level as i32)?;
-
-        serialize_snapshot(new_snapshot.as_ref(), spec_version, &mut compressor)?;
-
-        compressor.finish().map_err(RepositoryErrorKind::IOError)
-    })
-    .await??;
+    let buffer = compress_with_header(
+        new_snapshot.bytes(),
+        spec_version,
+        FileTypeBin::Snapshot,
+        compression_level,
+    )
+    .await?;
 
     debug!(%id, size_bytes=buffer.len(), "Writing snapshot");
     let path = format!("{SNAPSHOTS_FILE_PATH}/{id}");
@@ -1245,16 +1236,11 @@ async fn fetch_snapshot(
 
     let path = format!("{SNAPSHOTS_FILE_PATH}/{snapshot_id}");
     let (read, _) = storage.get_object(storage_settings, path.as_str(), None).await?;
-
-    let span = Span::current();
-    tokio::task::spawn_blocking(move || {
-        let _entered = span.entered();
-        let (spec_version, decompressor) =
-            check_and_get_decompressor(read, FileTypeBin::Snapshot)?;
-        deserialize_snapshot(spec_version, decompressor).map_err(RepositoryError::from)
-    })
-    .await?
-    .map(Arc::new)
+    let (spec_version, buffer) =
+        check_and_decompress(read, FileTypeBin::Snapshot).await?;
+    deserialize_snapshot(spec_version, buffer)
+        .map(Arc::new)
+        .map_err(RepositoryError::from)
 }
 
 async fn write_new_tx_log(
@@ -1289,20 +1275,13 @@ async fn write_new_tx_log(
         ),
     ];
 
-    let span = Span::current();
-    let buffer = tokio::task::spawn_blocking(move || {
-        let _entered = span.entered();
-        let buffer = binary_file_header(
-            spec_version,
-            FileTypeBin::TransactionLog,
-            CompressionAlgorithmBin::Zstd,
-        );
-        let mut compressor =
-            zstd::stream::Encoder::new(buffer, compression_level as i32)?;
-        serialize_transaction_log(new_log.as_ref(), spec_version, &mut compressor)?;
-        compressor.finish().map_err(RepositoryErrorKind::IOError)
-    })
-    .await??;
+    let buffer = compress_with_header(
+        new_log.bytes(),
+        spec_version,
+        FileTypeBin::TransactionLog,
+        compression_level,
+    )
+    .await?;
 
     debug!(%transaction_id, size_bytes=buffer.len(), "Writing transaction log");
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
@@ -1331,17 +1310,11 @@ async fn fetch_transaction_log(
     let path = format!("{TRANSACTION_LOGS_FILE_PATH}/{transaction_id}");
     let _permit = semaphore.acquire().await?;
     let (read, _) = storage.get_object(storage_settings, path.as_str(), None).await?;
-
-    let span = Span::current();
-    tokio::task::spawn_blocking(move || {
-        let _entered = span.entered();
-        let (spec_version, decompressor) =
-            check_and_get_decompressor(read, FileTypeBin::TransactionLog)?;
-        deserialize_transaction_log(spec_version, decompressor)
-            .map_err(RepositoryError::from)
-    })
-    .await?
-    .map(Arc::new)
+    let (spec_version, buffer) =
+        check_and_decompress(read, FileTypeBin::TransactionLog).await?;
+    deserialize_transaction_log(spec_version, buffer)
+        .map(Arc::new)
+        .map_err(RepositoryError::from)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1378,20 +1351,13 @@ pub async fn write_repo_info(
         ),
     ];
 
-    let span = Span::current();
-    let buffer = tokio::task::spawn_blocking(move || {
-        let _entered = span.entered();
-        let buffer = binary_file_header(
-            spec_version,
-            FileTypeBin::RepoInfo,
-            CompressionAlgorithmBin::Zstd,
-        );
-        let mut compressor =
-            zstd::stream::Encoder::new(buffer, compression_level as i32)?;
-        serialize_repo_info(info.as_ref(), spec_version, &mut compressor)?;
-        compressor.finish().map_err(RepositoryErrorKind::IOError)
-    })
-    .await??;
+    let buffer = compress_with_header(
+        info.bytes(),
+        spec_version,
+        FileTypeBin::RepoInfo,
+        compression_level,
+    )
+    .await?;
 
     debug!(size_bytes = buffer.len(), "Writing repo info");
 
@@ -1474,16 +1440,11 @@ pub async fn fetch_repo_info_from_path(
     debug!("Downloading repo info");
     match storage.get_object_conditional(storage_settings, path, previous_version).await {
         Ok(GetModifiedResult::Modified { data, new_version }) => {
-            let span = Span::current();
-            tokio::task::spawn_blocking(move || {
-                let _entered = span.entered();
-                let (spec_version, decompressor) =
-                    check_and_get_decompressor(data, FileTypeBin::RepoInfo)?;
-                deserialize_repo_info(spec_version, decompressor)
-                    .map(|ri| Some((Arc::new(ri), new_version)))
-                    .map_err(RepositoryError::from)
-            })
-            .await?
+            let (spec_version, buffer) =
+                check_and_decompress(data, FileTypeBin::RepoInfo).await?;
+            deserialize_repo_info(spec_version, buffer)
+                .map(|ri| Some((Arc::new(ri), new_version)))
+                .map_err(RepositoryError::from)
         }
         Ok(GetModifiedResult::OnLatestVersion) => Ok(None),
         Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {

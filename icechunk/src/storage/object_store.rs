@@ -57,6 +57,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::{OnceCell, RwLock};
+
 use tokio_util::io::StreamReader;
 use tracing::instrument;
 use url::Url;
@@ -407,23 +408,13 @@ impl Storage for ObjectStorage {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let prefix = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
-        let stream = self
-            .get_client(settings)
-            .await
-            .list(Some(&prefix))
-            // TODO: we should signal error instead of filtering
-            .try_filter_map(move |object| {
+        let stream =
+            self.get_client(settings).await.list(Some(&prefix)).map(move |object| {
                 let prefix = prefix.clone();
-                async move {
-                    let info = object_to_list_info(&prefix, &object);
-                    if info.is_none() {
-                        tracing::error!(object=?object, "Found bad object while listing");
-                    }
-                    Ok(info)
-                }
-            })
-            .map_err(Box::new)
-            .err_into();
+                object
+                    .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)).into())
+                    .and_then(|object| object_to_list_info(&prefix, &object))
+            });
         Ok(stream.boxed())
     }
 
@@ -719,12 +710,14 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
         &self,
         settings: &Settings,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
-        let builder = HttpBuilder::new().with_url(&self.url);
+        let builder = HttpBuilder::new()
+            .with_url(&self.url)
+            .with_config(ClientConfigKey::UserAgent, crate::user_agent());
 
         let empty = HashMap::new();
         let config = self.config.as_ref().unwrap_or(&empty);
 
-        // Add options
+        // Add options (user config takes precedence over defaults)
         let mut builder = config
             .iter()
             .fold(builder, |builder, (key, value)| builder.with_config(*key, value));
@@ -764,7 +757,6 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
     }
 
     fn can_write(&self) -> bool {
-        // TODO: Support write operations?
         false
     }
 }
@@ -840,7 +832,11 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
         // Defaults
         let builder = builder
             .with_bucket_name(&self.bucket)
-            .with_conditional_put(object_store::aws::S3ConditionalPut::ETagMatch);
+            .with_conditional_put(object_store::aws::S3ConditionalPut::ETagMatch)
+            .with_config(
+                object_store::aws::AmazonS3ConfigKey::Client(ClientConfigKey::UserAgent),
+                crate::user_agent(),
+            );
 
         let builder = builder.with_retry(RetryConfig {
             backoff: BackoffConfig {
@@ -916,9 +912,15 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
         };
 
         // Either the account name should be provided or user_emulator should be set to true to use the default account
-        let builder =
-            builder.with_account(&self.account).with_container_name(&self.container);
+        let builder = builder
+            .with_account(&self.account)
+            .with_container_name(&self.container)
+            .with_config(
+                AzureConfigKey::Client(ClientConfigKey::UserAgent),
+                crate::user_agent(),
+            );
 
+        // Add options (user config takes precedence over defaults)
         let builder = self
             .config
             .as_ref()
@@ -1017,9 +1019,12 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
             None | Some(GcsCredentials::FromEnv) => GoogleCloudStorageBuilder::from_env(),
         };
 
-        let builder = builder.with_bucket_name(&self.bucket);
+        let builder = builder.with_bucket_name(&self.bucket).with_config(
+            GoogleConfigKey::Client(ClientConfigKey::UserAgent),
+            crate::user_agent(),
+        );
 
-        // Add options
+        // Add options (user config takes precedence over defaults)
         let builder = self
             .config
             .as_ref()
@@ -1111,11 +1116,15 @@ impl CredentialProvider for GcsRefreshableCredentialProvider {
 fn object_to_list_info(
     prefix: &ObjectPath,
     object: &ObjectMeta,
-) -> Option<ListInfo<String>> {
+) -> StorageResult<ListInfo<String>> {
     let created_at = object.last_modified;
-    let id = ObjectPath::from_iter(object.location.prefix_match(prefix)?).to_string();
+    let id =
+        ObjectPath::from_iter(object.location.prefix_match(prefix).ok_or_else(|| {
+            StorageErrorKind::BadPrefix(object.location.to_string().into())
+        })?)
+        .to_string();
     let size_bytes = object.size;
-    Some(ListInfo { id, created_at, size_bytes })
+    Ok(ListInfo { id, created_at, size_bytes })
 }
 
 #[cfg(all(test, feature = "object-store-fs"))]

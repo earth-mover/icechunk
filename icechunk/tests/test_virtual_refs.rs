@@ -1,9 +1,3 @@
-#![allow(
-    clippy::panic,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::expect_fun_call
-)]
 use futures::TryStreamExt;
 use icechunk::{
     ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,

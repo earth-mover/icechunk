@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::{env, sync::Arc};
 
 use chrono::Utc;
@@ -10,8 +9,9 @@ use icechunk::{
 };
 
 pub(crate) enum Permission {
+    #[allow(dead_code)]
     ReadOnly, // GetObject
-    Modify,   // {Get,Put,Delete}Object, ListBucket
+    Modify, // {Get,Put,Delete}Object, ListBucket
 }
 
 impl Permission {

@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 use chrono::Utc;
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
@@ -18,8 +17,8 @@ use icechunk::{
 };
 use tokio::task::JoinSet;
 
-mod common;
-use common::Permission;
+use crate::common;
+use crate::common::Permission;
 
 #[template]
 #[rstest]

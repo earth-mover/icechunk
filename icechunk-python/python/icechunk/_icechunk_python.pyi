@@ -2988,6 +2988,15 @@ def spec_version() -> int:
     """
     ...
 
+def user_agent() -> str:
+    """
+    The user-agent string sent with icechunk storage requests.
+
+    Returns:
+        str: The user-agent string (e.g., "icechunk-rust-2.0.0-alpha.3")
+    """
+    ...
+
 def _upgrade_icechunk_repository(
     repo: PyRepository,
     *,

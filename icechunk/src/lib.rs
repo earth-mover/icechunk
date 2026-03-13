@@ -65,6 +65,13 @@ pub use storage::new_s3_storage;
 pub use storage::{ObjectStorage, Storage, StorageError, new_in_memory_storage};
 pub use store::Store;
 
+/// Returns the user-agent string for icechunk HTTP requests.
+///
+/// Format: `icechunk-rust-<version>` (e.g., `icechunk-rust-2.0.0-alpha.3`).
+pub fn user_agent() -> &'static str {
+    concat!("icechunk-rust-", env!("CARGO_PKG_VERSION"))
+}
+
 #[cfg(test)]
 pub(crate) mod test_utils {
     #[allow(unused_imports)]
