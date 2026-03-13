@@ -1843,6 +1843,11 @@ class UpdateType:
         def to_version(self) -> int: ...
 
     @final
+    class RepoStatusChanged(UpdateType):
+        @property
+        def status(self) -> RepoStatus: ...
+
+    @final
     class TagCreated(UpdateType):
         @property
         def name(self) -> str: ...
