@@ -17,7 +17,6 @@ use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
-    cmp::min,
     collections::{HashMap, HashSet},
     convert::Infallible,
     future::{Future, ready},
@@ -157,6 +156,8 @@ pub enum SessionErrorKind {
     NoAmendForInitialCommit,
     #[error("failed to create manifest from chunk stream")]
     ManifestCreationError(#[from] Box<SessionError>),
+    #[error("byte range {request:?} is out of bounds for chunk of length {chunk_length}")]
+    InvalidByteRange { request: ByteRange, chunk_length: u64 },
     #[error("unknown error: {0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -649,7 +650,7 @@ impl Session {
     pub async fn shift_array(
         &mut self,
         array_path: &Path,
-        chunk_offset: &[i64], // FIXME: overflow
+        chunk_offset: &[i64],
     ) -> SessionResult<()> {
         let node = self.get_array(array_path).await?;
         let num_chunks: Vec<u32> = match &node.node_data {
@@ -666,7 +667,12 @@ impl Session {
                 .enumerate()
                 .map(|(dim, &idx)| {
                     let n = num_chunks[dim] as i64;
-                    let new_idx = idx as i64 + chunk_offset[dim];
+                    // On overflow, checked_add returns None, which ? propagates
+                    // to the map closure, causing .collect() to yield None and
+                    // discarding the chunk
+                    // So, we are setting the semantics of this to
+                    // automatically discard out of bounds chunks
+                    let new_idx = (idx as i64).checked_add(chunk_offset[dim])?;
                     if new_idx < 0 || new_idx >= n { None } else { Some(new_idx as u32) }
                 })
                 .collect();
@@ -888,7 +894,7 @@ impl Session {
             Some(ChunkPayload::Ref(ChunkRef { id, offset, length })) => {
                 let byte_range = byte_range.clone();
                 let asset_manager = Arc::clone(&self.asset_manager);
-                let byte_range = construct_valid_byte_range(&byte_range, offset, length);
+                let byte_range = construct_valid_byte_range(&byte_range, offset, length)?;
                 Ok(Some(crate::compat::ic_boxed!(async move {
                     // TODO: we don't have a way to distinguish if we want to pass a range or not
                     asset_manager
@@ -899,7 +905,7 @@ impl Session {
             }
             Some(ChunkPayload::Inline(bytes)) => {
                 let byte_range =
-                    construct_valid_byte_range(byte_range, 0, bytes.len() as u64);
+                    construct_valid_byte_range(byte_range, 0, bytes.len() as u64)?;
                 trace!("fetching inline chunk for range {:?}.", &byte_range);
                 Ok(Some(crate::compat::ic_boxed!(ready(Ok(
                     bytes.slice(byte_range.start as usize..byte_range.end as usize)
@@ -911,7 +917,7 @@ impl Session {
                 length,
                 checksum,
             })) => {
-                let byte_range = construct_valid_byte_range(byte_range, offset, length);
+                let byte_range = construct_valid_byte_range(byte_range, offset, length)?;
                 let resolver = Arc::clone(&self.virtual_resolver);
                 Ok(Some(crate::compat::ic_boxed!(async move {
                     resolver
@@ -1964,29 +1970,44 @@ pub fn construct_valid_byte_range(
     request: &ByteRange,
     chunk_offset: u64,
     chunk_length: u64,
-) -> Range<ChunkOffset> {
-    // TODO: error for offset<0
-    // TODO: error if request.start > offset + length
+) -> SessionResult<Range<ChunkOffset>> {
+    let err = || -> SessionError {
+        SessionErrorKind::InvalidByteRange { request: request.clone(), chunk_length }
+            .into()
+    };
     match request {
         ByteRange::Bounded(std::ops::Range { start: req_start, end: req_end }) => {
-            let new_start =
-                min(chunk_offset + req_start, chunk_offset + chunk_length - 1);
-            let new_end = min(chunk_offset + req_end, chunk_offset + chunk_length);
-            new_start..new_end
+            let new_start = chunk_offset + req_start;
+            let new_end = chunk_offset + req_end;
+            if new_start >= chunk_offset + chunk_length
+                || new_end > chunk_offset + chunk_length
+            {
+                return Err(err());
+            }
+            Ok(new_start..new_end)
         }
         ByteRange::From(n) => {
-            let new_start = min(chunk_offset + n, chunk_offset + chunk_length - 1);
-            new_start..chunk_offset + chunk_length
+            let new_start = chunk_offset + n;
+            if new_start >= chunk_offset + chunk_length {
+                return Err(err());
+            }
+            Ok(new_start..chunk_offset + chunk_length)
         }
         ByteRange::Until(n) => {
+            if *n > chunk_length {
+                return Err(err());
+            }
             let new_end = chunk_offset + chunk_length;
             let new_start = new_end - n;
-            new_start..new_end
+            Ok(new_start..new_end)
         }
         ByteRange::Last(n) => {
+            if *n > chunk_length {
+                return Err(err());
+            }
             let new_end = chunk_offset + chunk_length;
             let new_start = new_end - n;
-            new_start..new_end
+            Ok(new_start..new_end)
         }
     }
 }
@@ -6080,6 +6101,104 @@ mod tests {
         );
         assert_eq!(attempts.into_inner(), 3);
         Ok(())
+    }
+
+    #[test]
+    fn test_construct_valid_byte_range() {
+        // chunk at offset 100, length 50 → valid absolute range is [100, 150]
+        let offset = 100u64;
+        let length = 50u64;
+
+        // Bounded: valid requests
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Bounded(0..50), offset, length)
+                .unwrap(),
+            100..150,
+        );
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Bounded(10..30), offset, length)
+                .unwrap(),
+            110..130,
+        );
+        // Bounded: empty range at start is ok
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Bounded(0..0), offset, length)
+                .unwrap(),
+            100..100,
+        );
+
+        // Bounded: end beyond chunk
+        assert!(
+            construct_valid_byte_range(&ByteRange::Bounded(0..51), offset, length)
+                .is_err()
+        );
+        // Bounded: start at chunk length
+        assert!(
+            construct_valid_byte_range(&ByteRange::Bounded(50..50), offset, length)
+                .is_err()
+        );
+        // Bounded: start beyond chunk length
+        assert!(
+            construct_valid_byte_range(&ByteRange::Bounded(60..70), offset, length)
+                .is_err()
+        );
+
+        // From: valid
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::From(0), offset, length).unwrap(),
+            100..150,
+        );
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::From(25), offset, length).unwrap(),
+            125..150,
+        );
+        // From: at chunk length
+        assert!(
+            construct_valid_byte_range(&ByteRange::From(50), offset, length).is_err()
+        );
+        // From: beyond chunk length
+        assert!(
+            construct_valid_byte_range(&ByteRange::From(60), offset, length).is_err()
+        );
+
+        // Until: valid (last n bytes)
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Until(50), offset, length).unwrap(),
+            100..150,
+        );
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Until(10), offset, length).unwrap(),
+            140..150,
+        );
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Until(0), offset, length).unwrap(),
+            150..150,
+        );
+        // Until: beyond chunk length
+        assert!(
+            construct_valid_byte_range(&ByteRange::Until(51), offset, length).is_err()
+        );
+
+        // Last: valid
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Last(50), offset, length).unwrap(),
+            100..150,
+        );
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Last(1), offset, length).unwrap(),
+            149..150,
+        );
+        // Last: beyond chunk length
+        assert!(
+            construct_valid_byte_range(&ByteRange::Last(51), offset, length).is_err()
+        );
+
+        // Edge case: chunk at offset 0
+        assert_eq!(
+            construct_valid_byte_range(&ByteRange::Bounded(0..10), 0, 10).unwrap(),
+            0..10,
+        );
+        assert!(construct_valid_byte_range(&ByteRange::Bounded(0..11), 0, 10).is_err());
     }
 
     #[cfg(test)]
