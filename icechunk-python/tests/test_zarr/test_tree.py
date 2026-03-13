@@ -60,7 +60,7 @@ async def test_list_prefix(tree):
 
     note(zarr.open_group(model).tree())
     for label, store in precommit_postcommit_readonly(session, repo):
-        for path in [""] + tree.nodes():
+        for path in tree.nodes(include_root=True):
             expected = await collect_list_prefix(model, path)
             # MemoryStore list_prefix does raw string matching, so
             # list_prefix("0") returns "0_c/zarr.json" too.
@@ -82,7 +82,7 @@ async def test_list_dir(tree, data):
     """list_dir on sampled group paths should match."""
     model, session, repo = make_stores(tree)
 
-    groups = [""] + tree.groups()
+    groups = tree.groups(include_root=True)
     paths = data.draw(st.lists(st.sampled_from(groups), min_size=1, max_size=len(groups)))
     for label, store in precommit_postcommit_readonly(session, repo):
         for path in paths:
@@ -102,7 +102,7 @@ async def test_exists(tree):
     model, session, repo = make_stores(tree)
 
     for label, store in precommit_postcommit_readonly(session, repo):
-        for path in [""] + tree.groups():
+        for path in tree.groups(include_root=True):
             key = f"{path}/zarr.json" if path else "zarr.json"
             expected = await model.exists(key)
             actual = await store.exists(key)
@@ -118,7 +118,7 @@ async def test_is_empty(tree):
     model, session, repo = make_stores(tree)
 
     for label, store in precommit_postcommit_readonly(session, repo):
-        for path in [""] + tree.groups():
+        for path in tree.groups(include_root=True):
             expected = await model.is_empty(path)
             actual = await store.is_empty(path)
             assert expected == actual, (

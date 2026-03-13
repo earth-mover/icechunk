@@ -36,13 +36,15 @@ class GroupNode:
             if isinstance(child, GroupNode):
                 yield from child._walk(p)
 
-    def nodes(self, prefix: str = "") -> list[str]:
-        """Return paths of all descendant nodes (excludes root)."""
-        return [p for p, _ in self._walk(prefix)]
+    def nodes(self, prefix: str = "", *, include_root: bool = False) -> list[str]:
+        """Return paths of all nodes, optionally including root."""
+        root = [prefix] if include_root else []
+        return root + [p for p, _ in self._walk(prefix)]
 
-    def groups(self, prefix: str = "") -> list[str]:
-        """Return paths of all descendant group nodes (excludes root)."""
-        return [p for p, c in self._walk(prefix) if isinstance(c, GroupNode)]
+    def groups(self, prefix: str = "", *, include_root: bool = False) -> list[str]:
+        """Return paths of all group nodes, optionally including root."""
+        root = [prefix] if include_root else []
+        return root + [p for p, c in self._walk(prefix) if isinstance(c, GroupNode)]
 
     def arrays(self, prefix: str = "") -> list[str]:
         """Return paths of all array nodes."""
