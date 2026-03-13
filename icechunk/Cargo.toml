@@ -60,6 +60,7 @@ flexbuffers = "25.12.19"
 flatbuffers = "25.12.19"
 urlencoding = "2.1.3"
 backon = "1.6.0"
+tokio = { package = "shuttle-tokio", git = "https://github.com/awslabs/shuttle", branch = "main", features = ["rt-multi-thread", "macros"] }
 
 # reqwest's default-features enables default-tls which ultimately leads to an openssl dependencies
 # which we are not including as it is not included in manylinux wheels. Instead depend on rustls-tls only
@@ -73,12 +74,6 @@ reqwest = { version = "0.12.28", default-features = false, features = [
 ], optional = true }
 async-compression = { version = "0.4.41", features = ["tokio", "zstd"] }
 serde_bytes = "0.11.19"
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
-tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros"] }
-
-[target.'cfg(target_family = "wasm")'.dependencies]
-tokio = { version = "1.50.0", features = ["rt", "macros"] }
 
 [dev-dependencies]
 clap = { version = "4.6", features = ["derive"] }
@@ -103,6 +98,7 @@ noxious-client = "1.0"
 reqwest = { version = "0.12", features = ["json"] }
 uuid = { version = "1.22", features = ["v4"] }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
+shuttle = { git = "https://github.com/awslabs/shuttle", branch = "main" }
 
 [lints]
 workspace = true
@@ -133,6 +129,7 @@ object-store-fs = ["object_store/fs"]
 redirect = ["dep:reqwest"]
 logs = ["dep:tracing-subscriber"]
 cli = ["dep:clap", "dep:anyhow", "dep:dialoguer", "dep:dirs"]
+shuttle = ["tokio/shuttle"]
 
 [[bin]]
 name = "icechunk"
