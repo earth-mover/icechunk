@@ -587,26 +587,37 @@ impl Iterator for NodeIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         let nodes = self.snapshot.root().nodes();
-        if self.next_index < nodes.len() {
+        loop {
+            // we need to loop over all nodes starting from the index
+            // until we are sure we'll see no more children
+            if self.next_index >= nodes.len() {
+                return None;
+            }
+
             let node: IcechunkResult<NodeSnapshot> =
                 nodes.get(self.next_index).try_into();
 
             match node {
                 Ok(res) => {
+                    let node_path = res.path.to_string();
                     if let Some(after_prefix) =
-                        res.path.to_string().strip_prefix(self.prefix.as_str())
+                        node_path.strip_prefix(self.prefix.as_str())
                         && (after_prefix.is_empty() || after_prefix.starts_with('/'))
                     {
                         self.next_index += 1;
-                        Some(Ok(res))
+                        return Some(Ok(res));
+                    } else if node_path.as_str() > self.prefix.as_str()
+                        && !node_path.starts_with(self.prefix.as_str())
+                    {
+                        // We've passed all possible children of the prefix
+                        return None;
                     } else {
-                        None
+                        // Not a match but there may be matches later (foo-bar" comes before "foo/bar")
+                        self.next_index += 1;
                     }
                 }
-                Err(err) => Some(Err(err)),
+                Err(err) => return Some(Err(err)),
             }
-        } else {
-            None
         }
     }
 }
