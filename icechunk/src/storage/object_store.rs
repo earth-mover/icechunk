@@ -407,23 +407,13 @@ impl Storage for ObjectStorage {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let prefix = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
-        let stream = self
-            .get_client(settings)
-            .await
-            .list(Some(&prefix))
-            // TODO: we should signal error instead of filtering
-            .try_filter_map(move |object| {
+        let stream =
+            self.get_client(settings).await.list(Some(&prefix)).map(move |object| {
                 let prefix = prefix.clone();
-                async move {
-                    let info = object_to_list_info(&prefix, &object);
-                    if info.is_none() {
-                        tracing::error!(object=?object, "Found bad object while listing");
-                    }
-                    Ok(info)
-                }
-            })
-            .map_err(Box::new)
-            .err_into();
+                object
+                    .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)).into())
+                    .and_then(|object| object_to_list_info(&prefix, &object))
+            });
         Ok(stream.boxed())
     }
 
@@ -764,7 +754,6 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
     }
 
     fn can_write(&self) -> bool {
-        // TODO: Support write operations?
         false
     }
 }
@@ -1111,11 +1100,15 @@ impl CredentialProvider for GcsRefreshableCredentialProvider {
 fn object_to_list_info(
     prefix: &ObjectPath,
     object: &ObjectMeta,
-) -> Option<ListInfo<String>> {
+) -> StorageResult<ListInfo<String>> {
     let created_at = object.last_modified;
-    let id = ObjectPath::from_iter(object.location.prefix_match(prefix)?).to_string();
+    let id =
+        ObjectPath::from_iter(object.location.prefix_match(prefix).ok_or_else(|| {
+            StorageErrorKind::BadPrefix(object.location.to_string().into())
+        })?)
+        .to_string();
     let size_bytes = object.size;
-    Some(ListInfo { id, created_at, size_bytes })
+    Ok(ListInfo { id, created_at, size_bytes })
 }
 
 #[cfg(all(test, feature = "object-store-fs"))]

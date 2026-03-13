@@ -741,15 +741,9 @@ impl Storage for S3Storage {
                 ready(Ok(contents))
             })
             .try_flatten()
-            .try_filter_map(move |object| {
+            .and_then(move |object| {
                 let prefix = prefix.clone();
-                async move {
-                    let info = object_to_list_info(prefix.as_str(), &object);
-                    if info.is_none() {
-                        tracing::error!(object=?object, "Found bad object while listing");
-                    }
-                    Ok(info)
-                }
+                ready(object_to_list_info(prefix.as_str(), &object))
             });
         Ok(stream.boxed())
     }
@@ -968,14 +962,17 @@ impl S3Storage {
     }
 }
 
-fn object_to_list_info(prefix: &str, object: &Object) -> Option<ListInfo<String>> {
-    let key = object.key()?;
-    let last_modified = object.last_modified()?;
-    let created_at = last_modified.to_chrono_utc().ok()?;
-    let prefix = Utf8UnixPath::new(prefix);
-    let id = Utf8UnixPath::new(key).strip_prefix(prefix).ok()?.to_string();
-    let size_bytes = object.size.unwrap_or(0) as u64;
-    Some(ListInfo { id, created_at, size_bytes })
+fn object_to_list_info(prefix: &str, object: &Object) -> StorageResult<ListInfo<String>> {
+    let inner = || {
+        let key = object.key()?;
+        let last_modified = object.last_modified()?;
+        let created_at = last_modified.to_chrono_utc().ok()?;
+        let prefix = Utf8UnixPath::new(prefix);
+        let id = Utf8UnixPath::new(key).strip_prefix(prefix).ok()?.to_string();
+        let size_bytes = object.size.unwrap_or(0) as u64;
+        Some(ListInfo { id, created_at, size_bytes })
+    };
+    inner().ok_or_else(|| StorageErrorKind::BadPrefix(prefix.into()).into())
 }
 
 #[derive(Debug)]

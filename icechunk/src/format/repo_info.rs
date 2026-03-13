@@ -13,7 +13,8 @@ use crate::{config::RepositoryConfig, format::snapshot::SnapshotProperties, refs
 
 use super::{
     IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
-    flatbuffers::generated, format_constants::SpecVersionBin, snapshot::SnapshotInfo,
+    flatbuffers::generated, format_constants::SpecVersionBin, lookup_index_by_key,
+    snapshot::SnapshotInfo,
 };
 
 use chrono::{DateTime, Utc};
@@ -1282,8 +1283,9 @@ impl RepoInfo {
     }
 
     fn resolve_snapshot_index(&self, id: &SnapshotId) -> IcechunkResult<Option<usize>> {
-        // TODO: replace by binary search
-        Ok(self.root()?.snapshots().iter().position(|snap| snap.id().0 == id.0))
+        Ok(lookup_index_by_key(self.root()?.snapshots(), &id.0, |snap, key| {
+            snap.id().0.cmp(key)
+        }))
     }
 }
 
