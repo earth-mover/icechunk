@@ -11,6 +11,8 @@ from collections.abc import (
 from enum import Enum
 from typing import Any, TypeAlias, final
 
+from icechunk.types import CommitMethod
+
 class S3Options:
     """Options for accessing an S3-compatible storage backend"""
     def __new__(
@@ -2043,10 +2045,20 @@ class PyRepository:
         delete_expired_tags: bool = False,
     ) -> set[str]: ...
     def rewrite_manifests(
-        self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
+        self,
+        message: str,
+        *,
+        branch: str,
+        metadata: dict[str, Any] | None = None,
+        commit_method: CommitMethod = "new_commit",
     ) -> str: ...
     async def rewrite_manifests_async(
-        self, message: str, *, branch: str, metadata: dict[str, Any] | None = None
+        self,
+        message: str,
+        *,
+        branch: str,
+        metadata: dict[str, Any] | None = None,
+        commit_method: CommitMethod = "new_commit",
     ) -> str: ...
     def garbage_collect(
         self,
@@ -2108,27 +2120,27 @@ class ChunkType(Enum):
         Chunk is store inline in the manifest
     """
 
-    UNINITIALIZED = 0
-    NATIVE = 1
-    VIRTUAL = 2
-    INLINE = 3
+    uninitialized = 0
+    native = 1
+    virtual = 2
+    inline = 3
 
 class SessionMode(Enum):
     """Enum for session access modes
 
     Attributes
     ----------
-    READONLY: int
+    readonly: int
         Session can only read data
-    WRITABLE: int
+    writable: int
         Session can read and write data
-    REARRANGE: int
+    rearrange: int
         Session can only move nodes and reindex arrays
     """
 
-    READONLY = 0
-    WRITABLE = 1
-    REARRANGE = 2
+    readonly = 0
+    writable = 1
+    rearrange = 2
 
 class PySession:
     @classmethod
@@ -2973,6 +2985,15 @@ def spec_version() -> int:
 
     Returns:
         int: The version of the Icechunk specification that the library is compatible with
+    """
+    ...
+
+def user_agent() -> str:
+    """
+    The user-agent string sent with icechunk storage requests.
+
+    Returns:
+        str: The user-agent string (e.g., "icechunk-rust-2.0.0-alpha.3")
     """
     ...
 

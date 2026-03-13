@@ -13,7 +13,8 @@ use crate::{config::RepositoryConfig, format::snapshot::SnapshotProperties, refs
 
 use super::{
     IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, SnapshotId,
-    flatbuffers::generated, format_constants::SpecVersionBin, snapshot::SnapshotInfo,
+    flatbuffers::generated, format_constants::SpecVersionBin, lookup_index_by_key,
+    snapshot::SnapshotInfo,
 };
 
 use chrono::{DateTime, Utc};
@@ -1094,10 +1095,12 @@ impl RepoInfo {
     }
 
     pub fn spec_version(&self) -> IcechunkResult<SpecVersionBin> {
-        self.root()?
-            .spec_version()
-            .try_into()
-            .map_err(|_| IcechunkFormatErrorKind::InvalidSpecVersion)
+        let raw = self.root()?.spec_version();
+        raw.try_into()
+            .map_err(|_| IcechunkFormatErrorKind::InvalidSpecVersion {
+                found: raw,
+                max_supported: SpecVersionBin::current() as u8,
+            })
             .err_into()
     }
 
@@ -1129,15 +1132,23 @@ impl RepoInfo {
             }
             generated::UpdateType::RepoMigratedUpdate => {
                 let up = update.update_type_as_repo_migrated_update().unwrap();
+                let from_raw = up.from_version();
+                let to_raw = up.to_version();
                 Ok(UpdateType::RepoMigratedUpdate {
-                    from_version: up.from_version().try_into().map_err(|_| {
+                    from_version: from_raw.try_into().map_err(|_| {
                         IcechunkFormatError::from(
-                            IcechunkFormatErrorKind::InvalidSpecVersion,
+                            IcechunkFormatErrorKind::InvalidSpecVersion {
+                                found: from_raw,
+                                max_supported: SpecVersionBin::current() as u8,
+                            },
                         )
                     })?,
-                    to_version: up.to_version().try_into().map_err(|_| {
+                    to_version: to_raw.try_into().map_err(|_| {
                         IcechunkFormatError::from(
-                            IcechunkFormatErrorKind::InvalidSpecVersion,
+                            IcechunkFormatErrorKind::InvalidSpecVersion {
+                                found: to_raw,
+                                max_supported: SpecVersionBin::current() as u8,
+                            },
                         )
                     })?,
                 })
@@ -1272,8 +1283,9 @@ impl RepoInfo {
     }
 
     fn resolve_snapshot_index(&self, id: &SnapshotId) -> IcechunkResult<Option<usize>> {
-        // TODO: replace by binary search
-        Ok(self.root()?.snapshots().iter().position(|snap| snap.id().0 == id.0))
+        Ok(lookup_index_by_key(self.root()?.snapshots(), &id.0, |snap, key| {
+            snap.id().0.cmp(key)
+        }))
     }
 }
 

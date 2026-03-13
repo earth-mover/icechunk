@@ -54,6 +54,7 @@ from icechunk._icechunk_python import (
     initialize_logs,
     set_logs_filter,
     spec_version,
+    user_agent,
 )
 from icechunk.credentials import (
     AnyAzureCredential,
@@ -95,6 +96,7 @@ from icechunk.storage import (
     tigris_storage,
 )
 from icechunk.store import IcechunkStore
+from icechunk.types import CommitMethod
 
 __all__ = [
     "AnyAzureCredential",
@@ -109,6 +111,7 @@ __all__ = [
     "BasicConflictSolver",
     "CachingConfig",
     "ChunkType",
+    "CommitMethod",
     "CompressionAlgorithm",
     "CompressionConfig",
     "Conflict",
@@ -186,6 +189,7 @@ __all__ = [
     "set_logs_filter",
     "spec_version",
     "tigris_storage",
+    "user_agent",
 ]
 
 

@@ -116,7 +116,7 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
 
 @pytest.mark.parametrize(
     "inline_threshold,chunk_type",
-    [(10_000, ChunkType.INLINE), (1, ChunkType.NATIVE)],
+    [(10_000, ChunkType.inline), (1, ChunkType.native)],
     ids=["inline", "native"],
 )
 async def test_chunk_type(
@@ -158,13 +158,13 @@ async def test_chunk_type(
     air_temp[0, 2] = 42
     assert air_temp[0, 2] == 42
 
-    assert session.chunk_type("/air_temp", [0, 0]) == ChunkType.VIRTUAL
+    assert session.chunk_type("/air_temp", [0, 0]) == ChunkType.virtual
     assert session.chunk_type("/air_temp", [0, 2]) == chunk_type
-    assert session.chunk_type("/air_temp", [0, 3]) == ChunkType.UNINITIALIZED
+    assert session.chunk_type("/air_temp", [0, 3]) == ChunkType.uninitialized
 
-    assert await session.chunk_type_async("/air_temp", [0, 0]) == ChunkType.VIRTUAL
+    assert await session.chunk_type_async("/air_temp", [0, 0]) == ChunkType.virtual
     assert await session.chunk_type_async("/air_temp", [0, 2]) == chunk_type
-    assert await session.chunk_type_async("/air_temp", [0, 3]) == ChunkType.UNINITIALIZED
+    assert await session.chunk_type_async("/air_temp", [0, 3]) == ChunkType.uninitialized
 
 
 def test_session_mode() -> None:
@@ -172,30 +172,30 @@ def test_session_mode() -> None:
 
     # writable session
     writable = repo.writable_session("main")
-    assert writable.mode == SessionMode.WRITABLE
+    assert writable.mode == SessionMode.writable
     assert not writable.read_only
 
     # readonly session from branch
     readonly = repo.readonly_session(branch="main")
-    assert readonly.mode == SessionMode.READONLY
+    assert readonly.mode == SessionMode.readonly
     assert readonly.read_only
 
     # readonly session from snapshot
     readonly_snap = repo.readonly_session(snapshot_id=writable.snapshot_id)
-    assert readonly_snap.mode == SessionMode.READONLY
+    assert readonly_snap.mode == SessionMode.readonly
     assert readonly_snap.read_only
 
     # rearrange session (requires spec_version >= 2)
     repo_v2 = Repository.create(storage=in_memory_storage(), spec_version=2)
     rearrange = repo_v2.rearrange_session("main")
-    assert rearrange.mode == SessionMode.REARRANGE
+    assert rearrange.mode == SessionMode.rearrange
     assert not rearrange.read_only
 
     # after commit, session becomes readonly
     writable = repo.writable_session("main")
-    assert writable.mode == SessionMode.WRITABLE
+    assert writable.mode == SessionMode.writable
     writable.commit("test", allow_empty=True)
-    assert writable.mode == SessionMode.READONLY  # type: ignore[comparison-overlap]
+    assert writable.mode == SessionMode.readonly  # type: ignore[comparison-overlap]
 
 
 def test_repository_open_no_list_bucket(any_spec_version: int | None) -> None:
