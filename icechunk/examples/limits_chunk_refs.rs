@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::vec;
@@ -62,10 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let split_sizes = Some(vec![(
         ManifestSplitCondition::PathMatches { regex: r".*".to_string() },
-        vec![ManifestSplitDim {
-            condition: ManifestSplitDimCondition::Any,
-            num_chunks: num_chunks,
-        }],
+        vec![ManifestSplitDim { condition: ManifestSplitDimCondition::Any, num_chunks }],
     )]);
     let manifest_config = ManifestConfig {
         splitting: Some(ManifestSplittingConfig { split_sizes }),

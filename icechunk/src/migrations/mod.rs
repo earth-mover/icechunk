@@ -796,10 +796,10 @@ mod tests {
         let deleted_tag_snap_id = ops_log
             .iter()
             .find_map(|(_, ut, _)| {
-                if let UpdateType::TagDeletedUpdate { name, previous_snap_id } = ut {
-                    if name == "deleted" {
-                        return Some(previous_snap_id.clone());
-                    }
+                if let UpdateType::TagDeletedUpdate { name, previous_snap_id } = ut
+                    && name == "deleted"
+                {
+                    return Some(previous_snap_id.clone());
                 }
                 None
             })

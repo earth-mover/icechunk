@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
-
 use std::{
     collections::HashMap,
     num::{NonZeroU16, NonZeroUsize},
@@ -28,8 +26,8 @@ use icechunk::{
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 
-mod common;
-use common::Permission;
+use crate::common;
+use crate::common::Permission;
 
 #[tokio_test]
 pub async fn test_gc_in_minio_spec_v1() -> Result<(), Box<dyn std::error::Error>> {
@@ -72,7 +70,7 @@ pub async fn test_gc_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
 /// Create a repo with two commits, reset the branch to "forget" the last commit, run gc
 ///
 /// It runs [`garbage_collect`] to verify it's doing its job.
-pub async fn do_test_gc(
+async fn do_test_gc(
     storage: Arc<dyn Storage + Send + Sync>,
     spec_version: Option<SpecVersionBin>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -352,7 +350,7 @@ pub async fn test_expire_and_garbage_collect_in_tigris()
 ///
 /// We then, expire old snapshots and garbage collect. We verify we end up
 /// with what is expected according to the design document.
-pub async fn do_test_expire_and_garbage_collect(
+async fn do_test_expire_and_garbage_collect(
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings().await?;

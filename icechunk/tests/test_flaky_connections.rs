@@ -22,8 +22,7 @@ use icechunk::{
 };
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 
-mod common;
-use common::Permission;
+use crate::common::Permission;
 
 /// Create S3 storage pointing to toxiproxy (which proxies to MinIO)
 fn create_proxied_storage(

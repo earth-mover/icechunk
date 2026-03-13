@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
-
 use std::{
     num::{NonZeroU16, NonZeroUsize},
     sync::Arc,
@@ -24,8 +22,8 @@ use icechunk_macros::tokio_test;
 use rstest::rstest;
 use rstest_reuse::{self, *};
 
-mod common;
-use common::Permission;
+use crate::common;
+use crate::common::Permission;
 
 #[template]
 #[rstest]
@@ -89,7 +87,7 @@ pub async fn test_repo_chunks_storage_in_r2(
     do_test_repo_chunks_storage(storage, spec_version).await
 }
 
-pub async fn do_test_repo_chunks_storage(
+async fn do_test_repo_chunks_storage(
     storage: Arc<dyn Storage + Send + Sync>,
     spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -180,7 +178,7 @@ pub async fn do_test_repo_chunks_storage(
 
     // 50 native chunks 6 bytes each, 10 inline chunks 1 byte each, 10 virtual chunks 100 bytes each
     assert_eq!(stats.native_bytes, 50 * 6);
-    assert_eq!(stats.inlined_bytes, 10 * 1);
+    assert_eq!(stats.inlined_bytes, 10);
     assert_eq!(stats.virtual_bytes, 10 * 100);
 
     // we do a new commit
@@ -207,7 +205,7 @@ pub async fn do_test_repo_chunks_storage(
     assert_eq!(stats.native_bytes, (50 + 10) * 6);
     // Inline chunks are NOT deduplicated - they're stored in each manifest
     // First manifest has 10, second manifest inherits 10 from parent = 20 total
-    assert_eq!(stats.inlined_bytes, (10 + 10) * 1);
+    assert_eq!(stats.inlined_bytes, 10 + 10);
     assert_eq!(stats.virtual_bytes, 10 * 100);
 
     // add more chunks in a different branch
@@ -242,7 +240,7 @@ pub async fn do_test_repo_chunks_storage(
     assert_eq!(stats.native_bytes, 50 * 6 + 10 * 6 + 5 * 6);
     // Inline chunks are stored in each manifest, so NOT deduplicated:
     // Manifest 1: 10 bytes, Manifest 2: 10 bytes (inherited), Manifest 3: 10 bytes (rewritten) = 30 total
-    assert_eq!(stats.inlined_bytes, (10 + 10 + 10) * 1);
+    assert_eq!(stats.inlined_bytes, 10 + 10 + 10);
     assert_eq!(stats.virtual_bytes, 10 * 100);
     Ok(())
 }
