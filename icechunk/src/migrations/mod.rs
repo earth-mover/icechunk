@@ -797,9 +797,10 @@ mod tests {
             .iter()
             .find_map(|(_, ut, _)| {
                 if let UpdateType::TagDeletedUpdate { name, previous_snap_id } = ut
-                    && name == "deleted" {
-                        return Some(previous_snap_id.clone());
-                    }
+                    && name == "deleted"
+                {
+                    return Some(previous_snap_id.clone());
+                }
                 None
             })
             .expect("TagDeletedUpdate for 'deleted' not found");
