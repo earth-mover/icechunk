@@ -1,0 +1,13 @@
+name: Detect unused Rust dependencies
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+
+jobs:
+  detect-unused-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Machete
+        uses: bnjbvr/cargo-machete@main
