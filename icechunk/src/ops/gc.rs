@@ -22,7 +22,7 @@ use crate::{
         ChunkId, FileTypeTag, IcechunkFormatError, ManifestId, ObjectId, SnapshotId,
         format_constants::SpecVersionBin,
         manifest::{ChunkPayload, Manifest},
-        repo_info::{RepoInfo, UpdateInfo, UpdateType},
+        repo_info::{RepoAvailability, RepoInfo, UpdateInfo, UpdateType},
         snapshot::{ManifestFileInfo, Snapshot, SnapshotInfo},
     },
     ops::pointed_snapshots,
@@ -330,6 +330,19 @@ pub async fn garbage_collect(
             RepositoryErrorKind::ReadonlyStorage("Cannot garbage collect".to_string())
                 .into(),
         ));
+    }
+
+    // Check repo status (only available on IC2)
+    if matches!(asset_manager.spec_version(), SpecVersionBin::V2dot0) {
+        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+        if repo_info.status()?.availability != RepoAvailability::Online {
+            return Err(GCError::Repository(
+                RepositoryErrorKind::ReadonlyRepository(
+                    "Cannot garbage collect".to_string(),
+                )
+                .into(),
+            ));
+        }
     }
 
     let default_retry_config = RepoUpdateRetryConfig::default();
@@ -782,6 +795,19 @@ pub async fn expire(
         return Err(GCError::Repository(
             RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into(),
         ));
+    }
+
+    // Check repo status (only available on IC2)
+    if matches!(asset_manager.spec_version(), SpecVersionBin::V2dot0) {
+        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+        if repo_info.status()?.availability != RepoAvailability::Online {
+            return Err(GCError::Repository(
+                RepositoryErrorKind::ReadonlyRepository(
+                    "Cannot garbage collect".to_string(),
+                )
+                .into(),
+            ));
+        }
     }
 
     match asset_manager.spec_version() {
