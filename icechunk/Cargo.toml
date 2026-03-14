@@ -140,6 +140,10 @@ required-features = ["cli"]
 name = "main"
 path = "tests/main.rs"
 
+[[test]]
+name = "test_shuttle"
+path = "tests/test_shuttle.rs"
+
 [[bench]]
 name = "manifest"
 harness = false
