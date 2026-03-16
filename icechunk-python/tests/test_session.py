@@ -1,6 +1,7 @@
 import pickle
 import tempfile
 import time
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
@@ -285,7 +286,7 @@ def test_readonly_repo_status_blocks_writable_session() -> None:
     )
 
     session = repo.writable_session("main")
-    session.commit("initial commit", allow_empty=True)
+    snapshot_id = session.commit("initial commit", allow_empty=True)
 
     # Writable session works before setting read_only
     session = repo.writable_session("main")
@@ -306,8 +307,34 @@ def test_readonly_repo_status_blocks_writable_session() -> None:
     repo.set_status(RepoStatus(availability=RepoAvailability.online))
     assert repo.status.availability == RepoAvailability.online  # type: ignore[comparison-overlap]
 
-    session = repo.writable_session("main")  # type: ignore[unreachable]
-    assert not session.read_only
+    # start a writable session, change status before committing. Should fail.
+    session = repo.writable_session("main")
+
+    repo.set_status(RepoStatus(availability=RepoAvailability.read_only))
+
+    with pytest.raises(IcechunkError) as e:
+        repo.create_branch("oops_read_only", snapshot_id=snapshot_id)
+        assert "repository status is read-only" in e.value.message
+
+    with pytest.raises(IcechunkError) as e:
+        repo.create_tag("oops_read_only", snapshot_id=snapshot_id)
+        assert "repository status is read-only" in e.value.message
+
+    with pytest.raises(IcechunkError) as e:
+        session.commit("commit after repo changed to read only", allow_empty=True)
+        assert "repository status is read-only" in e.value.message
+
+    with pytest.raises(IcechunkError) as e:
+        repo.garbage_collect(datetime.now(UTC))
+        assert "repository status is read-only" in e.value.message
+
+    # revert back to online. Operations should work now.
+    repo.set_status(RepoStatus(availability=RepoAvailability.online))
+    new_snapshot_id = session.commit("we can commit again", allow_empty=True)
+
+    repo.create_branch("not read-only anymore!", snapshot_id=new_snapshot_id)
+    repo.create_tag("an online tag", snapshot_id=new_snapshot_id)
+    repo.garbage_collect(datetime.now(UTC))
 
 
 def test_readonly_repo_status_blocks_rearrange_session() -> None:
@@ -317,7 +344,7 @@ def test_readonly_repo_status_blocks_rearrange_session() -> None:
     )
 
     session = repo.writable_session("main")
-    session.commit("initial commit", allow_empty=True)
+    snapshot_id = session.commit("initial commit", allow_empty=True)
 
     # Rearrange session works before setting read_only
     session = repo.rearrange_session("main")
@@ -338,8 +365,34 @@ def test_readonly_repo_status_blocks_rearrange_session() -> None:
     repo.set_status(RepoStatus(availability=RepoAvailability.online))
     assert repo.status.availability == RepoAvailability.online  # type: ignore[comparison-overlap]
 
-    session = repo.rearrange_session("main")  # type: ignore[unreachable]
-    assert not session.read_only
+    # start a rearrange session, change status before committing. Should fail.
+    session = repo.rearrange_session("main")
+
+    repo.set_status(RepoStatus(availability=RepoAvailability.read_only))
+
+    with pytest.raises(IcechunkError) as e:
+        repo.create_branch("oops_read_only", snapshot_id=snapshot_id)
+        assert "repository status is read-only" in e.value.message
+
+    with pytest.raises(IcechunkError) as e:
+        repo.create_tag("oops_read_only", snapshot_id=snapshot_id)
+        assert "repository status is read-only" in e.value.message
+
+    with pytest.raises(IcechunkError) as e:
+        session.commit("commit after repo changed to read only", allow_empty=True)
+        assert "repository status is read-only" in e.value.message
+
+    with pytest.raises(IcechunkError) as e:
+        repo.garbage_collect(datetime.now(UTC))
+        assert "repository status is read-only" in e.value.message
+
+    # revert back to online. Operations should work now.
+    repo.set_status(RepoStatus(availability=RepoAvailability.online))
+    new_snapshot_id = session.commit("we can commit again", allow_empty=True)
+
+    repo.create_branch("not read-only anymore!", snapshot_id=new_snapshot_id)
+    repo.create_tag("an online tag", snapshot_id=new_snapshot_id)
+    repo.garbage_collect(datetime.now(UTC))
 
 
 async def test_readonly_repo_status_blocks_rearrange_session_async() -> None:
@@ -349,7 +402,7 @@ async def test_readonly_repo_status_blocks_rearrange_session_async() -> None:
     )
 
     session = await repo.writable_session_async("main")
-    await session.commit_async("initial commit", allow_empty=True)
+    snapshot_id = await session.commit_async("initial commit", allow_empty=True)
 
     await repo.set_status_async(RepoStatus(availability=RepoAvailability.read_only))
     status = await repo.get_status_async()
@@ -368,6 +421,37 @@ async def test_readonly_repo_status_blocks_rearrange_session_async() -> None:
     session = await repo.rearrange_session_async("main")
     assert not session.read_only
 
+    # start a rearrange session, change status before committing. Should fail.
+    session = await repo.rearrange_session_async("main")
+
+    await repo.set_status_async(RepoStatus(availability=RepoAvailability.read_only))
+
+    with pytest.raises(IcechunkError) as e:
+        await repo.create_branch_async("oops_read_only", snapshot_id=snapshot_id)
+        assert "repository status is read-only" in e.value.message
+
+    with pytest.raises(IcechunkError) as e:
+        await repo.create_tag_async("oops_read_only", snapshot_id=snapshot_id)
+        assert "repository status is read-only" in e.value.message
+
+    with pytest.raises(IcechunkError) as e:
+        await session.commit_async(
+            "commit after repo changed to read only", allow_empty=True
+        )
+        assert "repository status is read-only" in e.value.message
+
+    with pytest.raises(IcechunkError) as e:
+        await repo.garbage_collect_async(datetime.now(UTC))
+        assert "repository status is read-only" in e.value.message
+
+    # revert back to online. Operations should work now.
+    await repo.set_status_async(RepoStatus(availability=RepoAvailability.online))
+    new_snapshot_id = await session.commit_async("we can commit again", allow_empty=True)
+
+    await repo.create_branch_async("not read-only anymore!", snapshot_id=new_snapshot_id)
+    await repo.create_tag_async("an online tag", snapshot_id=new_snapshot_id)
+    await repo.garbage_collect_async(datetime.now(UTC))
+
 
 async def test_readonly_repo_status_blocks_writable_session_async() -> None:
     repo = await Repository.create_async(
@@ -376,7 +460,7 @@ async def test_readonly_repo_status_blocks_writable_session_async() -> None:
     )
 
     session = await repo.writable_session_async("main")
-    await session.commit_async("initial commit", allow_empty=True)
+    snapshot_id = await session.commit_async("initial commit", allow_empty=True)
 
     await repo.set_status_async(RepoStatus(availability=RepoAvailability.read_only))
     status = await repo.get_status_async()
@@ -384,3 +468,36 @@ async def test_readonly_repo_status_blocks_writable_session_async() -> None:
 
     with pytest.raises(IcechunkError):
         await repo.writable_session_async("main")
+
+    await repo.set_status_async(RepoStatus(availability=RepoAvailability.online))
+
+    # start a writable session, change status before committing. Should fail.
+    session = await repo.writable_session_async("main")
+
+    await repo.set_status_async(RepoStatus(availability=RepoAvailability.read_only))
+
+    with pytest.raises(IcechunkError) as e:
+        await repo.create_branch_async("oops_read_only", snapshot_id=snapshot_id)
+        assert "repository status is read-only" in e.value.message
+
+    with pytest.raises(IcechunkError) as e:
+        await repo.create_tag_async("oops_read_only", snapshot_id=snapshot_id)
+        assert "repository status is read-only" in e.value.message
+
+    with pytest.raises(IcechunkError) as e:
+        await session.commit_async(
+            "commit after repo changed to read only", allow_empty=True
+        )
+        assert "repository status is read-only" in e.value.message
+
+    with pytest.raises(IcechunkError) as e:
+        await repo.garbage_collect_async(datetime.now(UTC))
+        assert "repository status is read-only" in e.value.message
+
+    # revert back to online. Operations should work now.
+    await repo.set_status_async(RepoStatus(availability=RepoAvailability.online))
+    new_snapshot_id = await session.commit_async("we can commit again", allow_empty=True)
+
+    await repo.create_branch_async("not read-only anymore!", snapshot_id=new_snapshot_id)
+    await repo.create_tag_async("an online tag", snapshot_id=new_snapshot_id)
+    await repo.garbage_collect_async(datetime.now(UTC))

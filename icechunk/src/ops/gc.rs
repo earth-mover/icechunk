@@ -332,8 +332,8 @@ pub async fn garbage_collect(
         ));
     }
 
-    // Check repo status (only available on IC2)
-    if matches!(asset_manager.spec_version(), SpecVersionBin::V2dot0) {
+    // Check repo status (only available on IC2+)
+    if asset_manager.spec_version() >= SpecVersionBin::V2dot0 {
         let (repo_info, _) = asset_manager.fetch_repo_info().await?;
         if repo_info.status()?.availability != RepoAvailability::Online {
             return Err(GCError::Repository(
@@ -797,8 +797,8 @@ pub async fn expire(
         ));
     }
 
-    // Check repo status (only available on IC2)
-    if matches!(asset_manager.spec_version(), SpecVersionBin::V2dot0) {
+    // Check repo status (only available on IC2+)
+    if asset_manager.spec_version() >= SpecVersionBin::V2dot0 {
         let (repo_info, _) = asset_manager.fetch_repo_info().await?;
         if repo_info.status()?.availability != RepoAvailability::Online {
             return Err(GCError::Repository(
