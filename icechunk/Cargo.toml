@@ -147,5 +147,9 @@ path = "tests/main.rs"
 name = "manifest"
 harness = false
 
+[[bench]]
+name = "asset_manager"
+harness = false
+
 [package.metadata.cargo-machete]
 ignored = ["serde_bytes"]

@@ -1399,6 +1399,7 @@ pub async fn write_repo_info(
     }
 }
 
+#[instrument(skip_all)]
 pub async fn fetch_repo_info(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -1412,6 +1413,7 @@ pub async fn fetch_repo_info(
         })
 }
 
+#[instrument(skip_all)]
 async fn fetch_repo_info_backup(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
@@ -1431,6 +1433,7 @@ async fn fetch_repo_info_backup(
     })
 }
 
+#[instrument(skip_all)]
 pub async fn fetch_repo_info_from_path(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
