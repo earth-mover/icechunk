@@ -46,7 +46,7 @@ impl CacheBackend for RedisCache { ... }
 
 **RedisCache** — uses `redis` crate with async connection pool. Config: connection URL, optional TTL, optional max memory hint.
 
-**SsdCache** (future) — local disk-backed cache using a path on a fast SSD. Config: directory path, max size.
+**FileCache** (future) — local disk-backed cache using a path on a local filesystem. Config: directory path, max size.
 
 ### 3. `CachingConfig` — Current State and Evolution
 
