@@ -1728,7 +1728,7 @@ class RepoAvailability(Enum):
     ----------
     online: int
         The repository is fully available for reads and writes.
-    readonly: int
+    read_only: int
         The repository is available for reads only.
     """
 

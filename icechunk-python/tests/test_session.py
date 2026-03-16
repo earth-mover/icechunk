@@ -305,7 +305,7 @@ def test_readonly_repo_status_blocks_writable_session() -> None:
 
     # Set back to online and verify writable session works again
     repo.set_status(RepoStatus(availability=RepoAvailability.online))
-    assert repo.status.availability == RepoAvailability.online  # type: ignore[comparison-overlap]
+    assert repo.status.availability.value == RepoAvailability.online.value
 
     # start a writable session, change status before committing. Should fail.
     session = repo.writable_session("main")
@@ -351,7 +351,7 @@ def test_readonly_repo_status_blocks_rearrange_session() -> None:
     assert not session.read_only
 
     repo.set_status(RepoStatus(availability=RepoAvailability.read_only))
-    assert repo.status.availability == RepoAvailability.read_only
+    assert repo.status.availability.value == RepoAvailability.read_only.value
 
     # Rearrange session should fail when repo is read_only
     with pytest.raises(IcechunkError):
@@ -363,7 +363,7 @@ def test_readonly_repo_status_blocks_rearrange_session() -> None:
 
     # Set back to online and verify rearrange session works again
     repo.set_status(RepoStatus(availability=RepoAvailability.online))
-    assert repo.status.availability == RepoAvailability.online  # type: ignore[comparison-overlap]
+    assert repo.status.availability.value == RepoAvailability.online.value
 
     # start a rearrange session, change status before committing. Should fail.
     session = repo.rearrange_session("main")
