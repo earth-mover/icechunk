@@ -2612,6 +2612,46 @@ class Credentials:
 
 _AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
 
+class LatencyStorage(Storage):
+    """Storage wrapper that adds artificial read/write latency for testing.
+
+    Wraps any ``Storage`` backend and injects configurable delays before
+    write and read operations. Useful for reproducing timing-sensitive bugs
+    or for benchmarking.
+
+    Parameters
+    ----------
+    inner : Storage
+        The storage backend to wrap.
+    write_latency_ms : int, default 0
+        Delay in milliseconds before each write operation.
+    read_latency_ms : int, default 0
+        Delay in milliseconds before each read operation.
+
+    Examples
+    --------
+    >>> from icechunk.testing import LatencyStorage
+    >>> storage = LatencyStorage(ic.in_memory_storage(), write_latency_ms=15)
+    >>> repo = ic.Repository.create(storage=storage, ...)
+    >>> storage.write_latency_ms = 50  # adjust at runtime
+    """
+
+    def __init__(
+        self,
+        inner: Storage,
+        *,
+        write_latency_ms: int = 0,
+        read_latency_ms: int = 0,
+    ) -> None: ...
+    @property
+    def write_latency_ms(self) -> int: ...
+    @write_latency_ms.setter
+    def write_latency_ms(self, ms: int) -> None: ...
+    @property
+    def read_latency_ms(self) -> int: ...
+    @read_latency_ms.setter
+    def read_latency_ms(self, ms: int) -> None: ...
+
 class Storage:
     """Storage configuration for an IcechunkStore
 
