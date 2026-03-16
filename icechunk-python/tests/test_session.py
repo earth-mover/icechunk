@@ -286,7 +286,7 @@ def test_readonly_repo_status_blocks_writable_session() -> None:
     )
 
     session = repo.writable_session("main")
-    snapshot_id = session.commit("initial commit", allow_empty=True)
+    session.commit("initial commit", allow_empty=True)
 
     # Writable session works before setting read_only
     session = repo.writable_session("main")
@@ -305,7 +305,17 @@ def test_readonly_repo_status_blocks_writable_session() -> None:
 
     # Set back to online and verify writable session works again
     repo.set_status(RepoStatus(availability=RepoAvailability.online))
-    assert repo.status.availability.value == RepoAvailability.online.value
+    assert repo.status.availability == RepoAvailability.online  # type: ignore[comparison-overlap]
+
+
+def test_readonly_repo_status_change_during_writable_session() -> None:
+    repo = Repository.create(
+        storage=in_memory_storage(),
+        spec_version=2,
+    )
+
+    session = repo.writable_session("main")
+    snapshot_id = session.commit("initial commit", allow_empty=True)
 
     # start a writable session, change status before committing. Should fail.
     session = repo.writable_session("main")
@@ -344,14 +354,14 @@ def test_readonly_repo_status_blocks_rearrange_session() -> None:
     )
 
     session = repo.writable_session("main")
-    snapshot_id = session.commit("initial commit", allow_empty=True)
+    session.commit("initial commit", allow_empty=True)
 
     # Rearrange session works before setting read_only
     session = repo.rearrange_session("main")
     assert not session.read_only
 
     repo.set_status(RepoStatus(availability=RepoAvailability.read_only))
-    assert repo.status.availability.value == RepoAvailability.read_only.value
+    assert repo.status.availability == RepoAvailability.read_only
 
     # Rearrange session should fail when repo is read_only
     with pytest.raises(IcechunkError):
@@ -363,7 +373,17 @@ def test_readonly_repo_status_blocks_rearrange_session() -> None:
 
     # Set back to online and verify rearrange session works again
     repo.set_status(RepoStatus(availability=RepoAvailability.online))
-    assert repo.status.availability.value == RepoAvailability.online.value
+    assert repo.status.availability == RepoAvailability.online  # type: ignore[comparison-overlap]
+
+
+def test_readonly_repo_status_change_during_rearrange_session() -> None:
+    repo = Repository.create(
+        storage=in_memory_storage(),
+        spec_version=2,
+    )
+
+    session = repo.writable_session("main")
+    snapshot_id = session.commit("initial commit", allow_empty=True)
 
     # start a rearrange session, change status before committing. Should fail.
     session = repo.rearrange_session("main")
