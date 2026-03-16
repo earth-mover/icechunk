@@ -73,6 +73,15 @@ impl TryFrom<generated::RepoStatus<'_>> for RepoStatus {
     }
 }
 
+impl RepoStatus {
+    pub(crate) fn error_msg(&self) -> String {
+        format!(
+            "Repo status is {0:?}, set at {1}, reason: {2:?}",
+            self.availability, self.set_at, self.limited_availability_reason
+        )
+    }
+}
+
 // TODO: should we not implement serialize and let the session fetch the repo info?
 #[derive(PartialEq, Serialize, Deserialize)]
 pub struct RepoInfo {

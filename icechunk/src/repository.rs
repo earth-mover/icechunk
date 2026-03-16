@@ -792,6 +792,9 @@ impl Repository {
             .update_repo_info(
                 self.config.repo_update_retries().retries(),
                 do_update,
+                // This must be set to true here because we would block any changes
+                // otherwise, and never be able to set a new status...
+                // In almost all other cases this should be set to false
                 true,
             )
             .await?;
@@ -1854,9 +1857,10 @@ impl Repository {
         if self.spec_version() >= SpecVersionBin::V2dot0 {
             let status = self.get_status().await?;
             if status.availability != RepoAvailability::Online {
-                return Err(RepositoryErrorKind::ReadonlyRepository(
-                    error_msg.to_string(),
-                )
+                return Err(RepositoryErrorKind::ReadonlyRepository(format!(
+                    "{error_msg}; {0}",
+                    status.error_msg()
+                ))
                 .into());
             }
         }
