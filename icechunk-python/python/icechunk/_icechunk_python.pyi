@@ -2652,6 +2652,26 @@ class LatencyStorage(Storage):
     @read_latency_ms.setter
     def read_latency_ms(self, ms: int) -> None: ...
 
+class StorageObjectInfo:
+    """Metadata for an object in storage.
+
+    Parameters
+    ----------
+    key : str
+        The object key (path relative to the storage prefix).
+    size_bytes : int
+        Size of the object in bytes.
+    created_at : datetime.datetime
+        Timestamp when the object was written to storage.
+    """
+
+    @property
+    def key(self) -> str: ...
+    @property
+    def size_bytes(self) -> int: ...
+    @property
+    def created_at(self) -> datetime.datetime: ...
+
 class Storage:
     """Storage configuration for an IcechunkStore
 
@@ -2743,6 +2763,9 @@ class Storage:
     ) -> list[tuple[str, int]]:
         """List objects in the storage backend, optionally filtered by a key prefix.
 
+        Deprecated: use ``list_objects_metadata`` instead, which also returns
+        the ``created_at`` timestamp.
+
         Parameters
         ----------
         settings : StorageSettings | None
@@ -2755,6 +2778,24 @@ class Storage:
         -------
         list[tuple[str, int]]
             A list of ``(key, size_in_bytes)`` tuples for each object found.
+        """
+        ...
+    def list_objects_metadata(
+        self, settings: StorageSettings | None = None, prefix: str | None = None
+    ) -> list[StorageObjectInfo]:
+        """List objects with full metadata, optionally filtered by a key prefix.
+
+        Parameters
+        ----------
+        settings : StorageSettings | None
+            Optional storage settings to override the defaults.
+        prefix : str | None
+            If provided, only objects whose keys start with this prefix are returned.
+
+        Returns
+        -------
+        list[StorageObjectInfo]
+            A list of :class:`StorageObjectInfo` objects.
         """
         ...
 

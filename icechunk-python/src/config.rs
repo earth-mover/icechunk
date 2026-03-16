@@ -1920,6 +1920,28 @@ impl PyRepositoryConfig {
     }
 }
 
+/// Metadata for an object in storage.
+#[pyclass(name = "StorageObjectInfo", frozen, eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PyStorageObjectInfo {
+    #[pyo3(get)]
+    pub key: String,
+    #[pyo3(get)]
+    pub size_bytes: u64,
+    #[pyo3(get)]
+    pub created_at: DateTime<Utc>,
+}
+
+#[pymethods]
+impl PyStorageObjectInfo {
+    fn __repr__(&self) -> String {
+        format!(
+            "StorageObjectInfo(key='{}', size_bytes={}, created_at={})",
+            self.key, self.size_bytes, self.created_at,
+        )
+    }
+}
+
 #[pyclass(name = "Storage", subclass)]
 #[derive(Clone, Debug)]
 pub(crate) struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
@@ -2224,9 +2246,8 @@ impl PyStorage {
 
     /// List objects in the storage backend, optionally filtered by a key prefix.
     ///
-    /// Returns a list of ``(key, size_in_bytes)`` tuples for each object found.
-    /// When ``prefix`` is ``None`` or empty, all objects under the repository root are listed.
-    /// Custom ``settings`` can be provided to override the storage's default settings.
+    /// Deprecated: use ``list_objects_metadata`` instead, which also returns
+    /// the ``created_at`` timestamp.
     #[pyo3(signature = (settings=None, prefix=None))]
     pub(crate) fn list_objects(
         &self,
@@ -2252,6 +2273,48 @@ impl PyStorage {
                 .map_err(PyIcechunkStoreError::StorageError)?;
             let results: Vec<(String, u64)> = stream
                 .map_ok(|info| (info.id, info.size_bytes))
+                .try_collect()
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
+            Ok(results)
+        })
+    }
+
+    /// List objects with full metadata, optionally filtered by a key prefix.
+    ///
+    /// Returns
+    /// -------
+    /// list[StorageObjectInfo]
+    ///     A list of :class:`StorageObjectInfo` objects.
+    #[pyo3(signature = (settings=None, prefix=None))]
+    pub(crate) fn list_objects_metadata(
+        &self,
+        settings: Option<&PyStorageSettings>,
+        prefix: Option<String>,
+    ) -> PyResult<Vec<PyStorageObjectInfo>> {
+        let prefix = prefix.unwrap_or_default();
+        let settings: Option<storage::Settings> = settings.map(|s| s.into());
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async {
+            let defaults = self
+                .0
+                .default_settings()
+                .await
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            let settings = match settings {
+                Some(s) => s.merge(defaults),
+                None => defaults,
+            };
+            let stream = self
+                .0
+                .list_objects(&settings, &prefix)
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
+            let results: Vec<PyStorageObjectInfo> = stream
+                .map_ok(|info| PyStorageObjectInfo {
+                    key: info.id,
+                    size_bytes: info.size_bytes,
+                    created_at: info.created_at,
+                })
                 .try_collect()
                 .await
                 .map_err(PyIcechunkStoreError::StorageError)?;

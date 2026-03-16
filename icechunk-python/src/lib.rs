@@ -17,7 +17,7 @@ use config::{
     PyManifestPreloadCondition, PyManifestPreloadConfig,
     PyManifestVirtualChunkLocationCompressionConfig, PyObjectStoreConfig,
     PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials, PyS3Options,
-    PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings,
+    PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings, PyStorageObjectInfo,
     PyStorageRetriesSettings, PyStorageSettings, PyStorageTimeoutSettings,
     PyVirtualChunkContainer,
 };
@@ -191,6 +191,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCredentials>()?;
     m.add_class::<PyS3Options>()?;
     m.add_class::<PyObjectStoreConfig>()?;
+    m.add_class::<PyStorageObjectInfo>()?;
     m.add_class::<PyStorage>()?;
     m.add_class::<PyLatencyStorage>()?;
     m.add_class::<PyVirtualChunkContainer>()?;
