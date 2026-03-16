@@ -615,7 +615,7 @@ async fn delete_snapshots_from_repo_info(
         max_tries: Some(NonZeroU16::MIN),
         ..Default::default()
     };
-    let _ = asset_manager.update_repo_info(&retry_settings, do_update, false).await?;
+    let _ = asset_manager.update_repo_info(&retry_settings, do_update).await?;
 
     Ok(())
 }
@@ -1092,7 +1092,7 @@ async fn expire_v2_one_attempt(
         max_tries: Some(NonZeroU16::MIN),
         ..Default::default()
     };
-    let _ = asset_manager.update_repo_info(&retry_settings, do_update, false).await?;
+    let _ = asset_manager.update_repo_info(&retry_settings, do_update).await?;
 
     deleted_tags.extend(deleted_branches);
 

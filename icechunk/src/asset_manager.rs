@@ -615,6 +615,36 @@ impl AssetManager {
     pub async fn update_repo_info(
         &self,
         retry_settings: &storage::RetriesSettings,
+        update: impl FnMut(
+            Arc<RepoInfo>,
+            &str,
+            VersionInfo,
+        ) -> RepositoryResult<Arc<RepoInfo>>,
+    ) -> RepositoryResult<VersionInfo> {
+        self.update_repo_info_internal(retry_settings, update, false).await
+    }
+
+    /// # Safety
+    ///
+    /// This overrides any checks on the repo status, and force
+    /// an update.
+    #[instrument(skip(self, retry_settings, update))]
+    pub async unsafe fn update_repo_info_unchecked(
+        &self,
+        retry_settings: &storage::RetriesSettings,
+        update: impl FnMut(
+            Arc<RepoInfo>,
+            &str,
+            VersionInfo,
+        ) -> RepositoryResult<Arc<RepoInfo>>,
+    ) -> RepositoryResult<VersionInfo> {
+        self.update_repo_info_internal(retry_settings, update, true).await
+    }
+
+    #[instrument(skip(self, retry_settings, update))]
+    async fn update_repo_info_internal(
+        &self,
+        retry_settings: &storage::RetriesSettings,
         mut update: impl FnMut(
             Arc<RepoInfo>,
             &str,
