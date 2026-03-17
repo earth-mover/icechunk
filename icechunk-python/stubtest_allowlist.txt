@@ -154,7 +154,6 @@ icechunk._icechunk_python.SessionMode.readonly
 icechunk._icechunk_python.SessionMode.rearrange
 icechunk._icechunk_python.SessionMode.writable
 icechunk._icechunk_python.SnapshotInfo
-icechunk._icechunk_python.Storage
 icechunk._icechunk_python.StorageConcurrencySettings
 icechunk._icechunk_python.StorageRetriesSettings
 icechunk._icechunk_python.StorageSettings
