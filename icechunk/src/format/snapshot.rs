@@ -1127,7 +1127,7 @@ mod tests {
 
         // max valid coord is in bounds
         let max_valid =
-            ChunkIndices(shape.num_chunks().map(|nc| (nc - 1).min(0)).collect());
+            ChunkIndices(shape.num_chunks().map(|nc| nc.saturating_sub(1)).collect());
         prop_assert!(shape.valid_chunk_coord(&max_valid));
 
         // bumping one axis out of bounds is rejected

@@ -1818,7 +1818,7 @@ mod tests {
         // these should work
         let actual = meta
             .get_chunk_shapes(
-                vec![
+                [
                     ChunkIndices(vec![0, 0, 0, 0, 0, 0]),
                     ChunkIndices(vec![1, 1, 1, 0, 0, 0]),
                     ChunkIndices(vec![0, 1, 1, 1, 1, 0]),
@@ -1833,7 +1833,7 @@ mod tests {
         // these should fail
         let actual = meta
             .get_chunk_shapes(
-                vec![
+                [
                     ChunkIndices(vec![6, 0, 0, 0, 0, 0]),
                     ChunkIndices(vec![0, 3, 0, 0, 0, 0]),
                     ChunkIndices(vec![0, 0, 4, 0, 0, 0]),
@@ -1874,7 +1874,7 @@ mod tests {
         // these should work
         let actual = meta
             .get_chunk_shapes(
-                vec![
+                [
                     ChunkIndices(vec![0, 0, 0, 0, 0, 0]),
                     ChunkIndices(vec![0, 1, 2, 2, 3, 0]),
                 ]
@@ -1887,7 +1887,7 @@ mod tests {
         // these should fail
         let actual = meta
             .get_chunk_shapes(
-                vec![
+                [
                     ChunkIndices(vec![3, 0, 0, 0, 0, 0]),
                     ChunkIndices(vec![0, 3, 0, 0, 0, 0]),
                     ChunkIndices(vec![0, 0, 6, 0, 0, 0]),
