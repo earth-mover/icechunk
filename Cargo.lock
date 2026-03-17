@@ -2262,6 +2262,7 @@ dependencies = [
  "test-log",
  "test-strategy",
  "thiserror 2.0.18",
+ "tokio",
  "tokio-util 0.7.18",
  "tracing",
  "tracing-error",
