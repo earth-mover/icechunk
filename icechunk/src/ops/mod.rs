@@ -170,11 +170,11 @@ mod tests {
             Repository::create(None, storage.clone(), HashMap::new(), None, true).await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::new()).await?;
-        let snap = session.commit("commit", None).await?;
+        let snap = session.commit("commit", 8, None).await?;
         repo.create_tag("tag1", &snap).await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group("/foo".try_into().unwrap(), Bytes::new()).await?;
-        let snap = session.commit("commit", None).await?;
+        let snap = session.commit("commit", 8, None).await?;
         repo.create_tag("tag2", &snap).await?;
 
         let all_snaps = pointed_snapshots(repo.asset_manager().clone(), &HashSet::new())

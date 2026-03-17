@@ -434,13 +434,14 @@ impl PySession {
                             solver.as_ref(),
                             rebase_tries.unwrap_or(1_000),
                             message,
+                            1,
                             metadata,
                             |_| async {},
                             |_| async {},
                         )
                         .await
                 } else {
-                    session.commit_with_options(message, metadata, allow_empty).await
+                    session.commit_with_options(message, 1, metadata, allow_empty).await
                 }
                 .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())
@@ -470,13 +471,14 @@ impl PySession {
                         solver.as_ref(),
                         rebase_tries.unwrap_or(1_000),
                         &message,
+                        1,
                         metadata,
                         |_| async {},
                         |_| async {},
                     )
                     .await
             } else {
-                session.commit_with_options(&message, metadata, allow_empty).await
+                session.commit_with_options(&message, 1, metadata, allow_empty).await
             }
             .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(snapshot_id.to_string())
@@ -497,7 +499,7 @@ impl PySession {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
                 let snapshot_id = session
-                    .amend(message, metadata, allow_empty)
+                    .amend(message, 1, metadata, allow_empty)
                     .await
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())
@@ -520,7 +522,7 @@ impl PySession {
             let metadata = metadata.map(|m| m.into());
             let mut session = session.write().await;
             let snapshot_id = session
-                .amend(&message, metadata, allow_empty)
+                .amend(&message, 1, metadata, allow_empty)
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(snapshot_id.to_string())
@@ -540,7 +542,7 @@ impl PySession {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
                 let snapshot_id = session
-                    .flush(message, metadata)
+                    .flush(message, 1, metadata)
                     .await
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())
@@ -561,7 +563,7 @@ impl PySession {
             let metadata = metadata.map(|m| m.into());
             let mut session = session.write().await;
             let snapshot_id = session
-                .flush(&message, metadata)
+                .flush(&message, 1, metadata)
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(snapshot_id.to_string())

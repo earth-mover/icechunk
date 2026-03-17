@@ -166,7 +166,7 @@ async fn do_test_repo_chunks_storage(
     assert_eq!(stats.virtual_bytes, 0);
     assert_eq!(stats.inlined_bytes, 0);
 
-    let _ = session.commit("first", None).await?;
+    let _ = session.commit("first", 8, None).await?;
     let stats = repo_chunks_storage(
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
@@ -192,7 +192,7 @@ async fn do_test_repo_chunks_storage(
             .await?;
     }
 
-    let second_commit = session.commit("second", None).await?;
+    let second_commit = session.commit("second", 8, None).await?;
     let stats = repo_chunks_storage(
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
@@ -227,7 +227,7 @@ async fn do_test_repo_chunks_storage(
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
     }
-    let _ = session.commit("third", None).await?;
+    let _ = session.commit("third", 8, None).await?;
     let stats = repo_chunks_storage(
         Arc::clone(&asset_manager),
         NonZeroU16::new(5).unwrap(),
@@ -305,7 +305,7 @@ pub async fn test_virtual_chunk_deduplication(
             .await?;
     }
 
-    session.commit("first", None).await?;
+    session.commit("first", 8, None).await?;
 
     let stats = repo_chunks_storage(
         Arc::clone(&asset_manager),

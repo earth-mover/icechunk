@@ -103,7 +103,7 @@ ds.add_array(array1_path.clone(), zarr_meta1).await?;
     print_nodes(&ds).await?;
 
     println!("## Committing");
-    let v1_id = ds.commit("some message", Default::default()).await?;
+    let v1_id = ds.commit("some message", 8, Default::default()).await?;
     println!(
         r#"
 ```
@@ -149,7 +149,7 @@ let chunk = ds.get_chunk_ref(&array1_path, &ChunkIndices(vec![0])).await.unwrap(
 
     println!();
     println!("## Committing");
-    let v2_id = ds.commit("a message", Default::default()).await?;
+    let v2_id = ds.commit("a message", 8, Default::default()).await?;
     println!(
         r#"
 ```
@@ -202,7 +202,7 @@ ds.set_chunk(
 
     println!();
     println!("## Committing");
-    let v3_id = ds.commit("commit", Default::default()).await?;
+    let v3_id = ds.commit("commit", 8, Default::default()).await?;
     println!(
         r#"
 ```

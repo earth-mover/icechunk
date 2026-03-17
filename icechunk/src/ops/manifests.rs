@@ -24,6 +24,7 @@ pub async fn rewrite_manifests(
     repository: &Repository,
     branch: &str,
     message: &str,
+    max_concurrent_manifests: usize,
     properties: Option<SnapshotProperties>,
     commit_method: CommitMethod,
 ) -> ManifestOpsResult<SnapshotId> {
@@ -39,7 +40,7 @@ pub async fn rewrite_manifests(
         .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e.into())))?;
 
     session
-        .rewrite_manifests(message, properties, commit_method)
+        .rewrite_manifests(message, max_concurrent_manifests, properties, commit_method)
         .await
         .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e)))
 }

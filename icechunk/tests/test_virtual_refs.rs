@@ -533,7 +533,7 @@ async fn test_repository_with_minio_virtual_refs(
     }
 
     // check if we can fetch the virtual chunks in multiple small requests
-    ds.commit("done", None).await?;
+    ds.commit("done", 8, None).await?;
 
     let mut config = repo.config().clone();
     config.storage = Some(storage::Settings {
@@ -1224,7 +1224,7 @@ async fn test_virtual_refs_with_vcc_relative_urls(
     }
 
     // Commit and verify all_virtual_chunk_locations returns expanded absolute URLs
-    store.session().write().await.commit("vcc test", None).await?;
+    store.session().write().await.commit("vcc test", 8, None).await?;
 
     let session =
         repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;

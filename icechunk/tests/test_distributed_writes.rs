@@ -187,7 +187,7 @@ where
 
     let new_array_path: Path = "/array".try_into().unwrap();
     ds1.add_array(new_array_path.clone(), shape, None, user_data).await?;
-    ds1.commit("create array", None).await?;
+    ds1.commit("create array", 8, None).await?;
 
     let repo2 = mk_repo(storage2, false, spec_version).await?;
     let repo3 = mk_repo(storage3, false, spec_version).await?;
@@ -243,7 +243,7 @@ where
 
     // Distributed commit now, using arbitrarily one of the repos as base and the others as extra
     // changesets
-    let _new_snapshot = ds1.commit("distributed commit", None).await?;
+    let _new_snapshot = ds1.commit("distributed commit", 8, None).await?;
 
     // We check we can read all chunks correctly
     verify(ds1).await?;

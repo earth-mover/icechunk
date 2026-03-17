@@ -1137,33 +1137,52 @@ impl Session {
     pub async fn commit(
         &mut self,
         message: &str,
+        max_concurrent_manifests: usize,
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
-        self.commit_with_options(message, properties, false).await
+        self.commit_with_options(message, max_concurrent_manifests, properties, false)
+            .await
     }
 
     #[instrument(skip(self, properties))]
     pub async fn commit_with_options(
         &mut self,
         message: &str,
+        max_concurrent_manifests: usize,
         properties: Option<SnapshotProperties>,
         allow_empty: bool,
     ) -> SessionResult<SnapshotId> {
-        self._commit(message, properties, false, CommitMethod::NewCommit, allow_empty)
-            .await
+        self._commit(
+            message,
+            max_concurrent_manifests,
+            properties,
+            false,
+            CommitMethod::NewCommit,
+            allow_empty,
+        )
+        .await
     }
 
     #[instrument(skip(self, properties))]
     pub async fn amend(
         &mut self,
         message: &str,
+        max_concurrent_manifests: usize,
         properties: Option<SnapshotProperties>,
         allow_empty: bool,
     ) -> SessionResult<SnapshotId> {
         // Icechunk 1 doesn't support amend
         self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
 
-        self._commit(message, properties, false, CommitMethod::Amend, allow_empty).await
+        self._commit(
+            message,
+            max_concurrent_manifests,
+            properties,
+            false,
+            CommitMethod::Amend,
+            allow_empty,
+        )
+        .await
     }
 
     async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
@@ -1213,6 +1232,7 @@ impl Session {
     pub async fn flush(
         &mut self,
         message: &str,
+        max_concurrent_manifests: usize,
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
         info!(old_snapshot_id=%self.snapshot_id(), "Flush started");
@@ -1235,6 +1255,7 @@ impl Session {
         let new_snap = do_flush(
             flush_data,
             message,
+            max_concurrent_manifests,
             properties,
             false,
             CommitMethod::NewCommit,
@@ -1267,6 +1288,7 @@ impl Session {
     pub async fn rewrite_manifests(
         &mut self,
         message: &str,
+        max_concurrent_manifests: usize,
         properties: Option<SnapshotProperties>,
         commit_method: CommitMethod,
     ) -> SessionResult<SnapshotId> {
@@ -1293,13 +1315,22 @@ impl Session {
             splitting_config_serialized,
         );
 
-        self._commit(message, Some(properties), true, commit_method, true).await
+        self._commit(
+            message,
+            max_concurrent_manifests,
+            Some(properties),
+            true,
+            commit_method,
+            true,
+        )
+        .await
     }
 
     #[instrument(skip(self, properties))]
     async fn _commit(
         &mut self,
         message: &str,
+        max_concurrent_manifests: usize,
         properties: Option<SnapshotProperties>,
         rewrite_manifests: bool,
         commit_method: CommitMethod,
@@ -1344,6 +1375,7 @@ impl Session {
             &self.snapshot_id,
             change_set,
             message,
+            max_concurrent_manifests,
             Some(properties),
             rewrite_manifests,
             commit_method,
@@ -1366,11 +1398,13 @@ impl Session {
         Ok(id)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn commit_rebasing<F1, F2, Fut1, Fut2>(
         &mut self,
         solver: &(dyn ConflictSolver + Send + Sync),
         rebase_attempts: u16,
         message: &str,
+        max_concurrent_manifests: usize,
         properties: Option<SnapshotProperties>,
         // We would prefer to make this argument optional, but passing None
         // for this argument is so hard. Callers should just pass noop closure like
@@ -1391,7 +1425,7 @@ impl Session {
                 "rebase_attempts",
                 serde_json::Value::from(attempt),
             );
-            match self.commit(message, Some(props)).await {
+            match self.commit(message, max_concurrent_manifests, Some(props)).await {
                 Ok(snap) => return Ok(snap),
                 Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) => {
                     before_rebase(attempt + 1).await;
@@ -1407,7 +1441,7 @@ impl Session {
             "rebase_attempts",
             serde_json::Value::from(rebase_attempts),
         );
-        self.commit(message, Some(props)).await
+        self.commit(message, max_concurrent_manifests, Some(props)).await
     }
 
     /// Detect and optionally fix conflicts between the current [`ChangeSet`] (or session) and
@@ -2037,276 +2071,232 @@ impl<'a> FlushProcess<'a> {
             manifest_files: Default::default(),
         }
     }
+}
 
-    async fn write_manifest_from_iterator(
-        &mut self,
-        chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
-    ) -> SessionResult<Option<ManifestRef>> {
-        let mut from = vec![];
-        let mut to = vec![];
-        let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
+struct NodeFlushResult {
+    node_id: NodeId,
+    manifest_refs: Vec<ManifestRef>,
+    manifest_files: Vec<ManifestFileInfo>,
+}
 
-        let compression_config =
-            if self.asset_manager.spec_version() >= SpecVersionBin::V2dot0 {
-                Some(self.manifest_config.virtual_chunk_location_compression())
-            } else {
-                None
-            };
-        if let Some(new_manifest) =
-            Manifest::from_stream(&ManifestId::random(), chunks, compression_config)
-                .await
-                .map_err(|e| SessionErrorKind::ManifestCreationError(Box::new(e)))?
-        {
-            let new_manifest = Arc::new(new_manifest);
-            let new_manifest_size =
-                self.asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
+async fn write_manifest_from_stream(
+    asset_manager: &AssetManager,
+    manifest_config: &ManifestConfig,
+    chunks: impl Stream<Item = SessionResult<ChunkInfo>>,
+) -> SessionResult<Option<(ManifestRef, ManifestFileInfo)>> {
+    let mut from = vec![];
+    let mut to = vec![];
+    let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-            let file_info =
-                ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
-            self.manifest_files.insert(file_info);
+    let compression_config = if asset_manager.spec_version() >= SpecVersionBin::V2dot0 {
+        Some(manifest_config.virtual_chunk_location_compression())
+    } else {
+        None
+    };
+    if let Some(new_manifest) =
+        Manifest::from_stream(&ManifestId::random(), chunks, compression_config)
+            .await
+            .map_err(|e| SessionErrorKind::ManifestCreationError(Box::new(e)))?
+    {
+        let new_manifest = Arc::new(new_manifest);
+        let new_manifest_size =
+            asset_manager.write_manifest(Arc::clone(&new_manifest)).await?;
 
-            let new_ref = ManifestRef {
-                object_id: new_manifest.id().clone(),
-                extents: ManifestExtents::new(&from, &to),
-            };
-            Ok(Some(new_ref))
-        } else {
-            Ok(None)
-        }
+        let file_info = ManifestFileInfo::new(new_manifest.as_ref(), new_manifest_size);
+        let new_ref = ManifestRef {
+            object_id: new_manifest.id().clone(),
+            extents: ManifestExtents::new(&from, &to),
+        };
+        Ok(Some((new_ref, file_info)))
+    } else {
+        Ok(None)
     }
+}
 
-    /// Write a manifest for a node that was created in this session
-    /// It doesn't need to look at previous manifests because the node is new
-    async fn write_manifest_for_new_node(
-        &mut self,
-        node_id: &NodeId,
-        node_path: &Path,
-        splits: &ManifestSplits,
-    ) -> SessionResult<()> {
-        #[allow(clippy::expect_used)]
-        for extent in splits.iter() {
-            if self.change_set.array_manifest(node_id).is_some() {
-                let chunks = stream::iter(
-                    self.change_set
-                        .array_chunks_iterator(node_id, node_path)
-                        // FIXME: do we need to optimize this so we don't need multiple passes over all chunks calling
-                        // contains?
-                        .filter_map(|(coord, payload)| {
-                            if let Some(payload) = payload
-                                && extent.contains(&coord.0)
-                            {
-                                Some(ChunkInfo {
-                                    node: node_id.clone(),
-                                    coord: coord.clone(),
-                                    payload: payload.clone(),
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                        .map(Ok),
-                );
-                let new_ref = self.write_manifest_from_iterator(chunks).await?;
-                // new_ref is None if there were no chunks in the iterator
-                if let Some(new_ref) = new_ref {
-                    self.manifest_refs.entry(node_id.clone()).or_default().push(new_ref);
-                }
-            }
-        }
-        Ok(())
-    }
+/// Creates a new manifest for the node, by obtaining all previous chunks coming from
+/// `previous_manifests`, filtering those that are in the `extent`, and overriding them
+/// with any changes in `modified_chunks`
+async fn write_manifest_with_changes(
+    asset_manager: &AssetManager,
+    manifest_config: &ManifestConfig,
+    previous_manifests: impl Iterator<Item = &ManifestRef>,
+    modified_chunks: ChunkTable,
+    extent: &ManifestExtents,
+    node_id: &NodeId,
+    old_snapshot_id: &SnapshotId,
+) -> SessionResult<Option<(ManifestRef, ManifestFileInfo)>> {
+    // First add chunks from previous manifests that are not modified
+    let futs = previous_manifests
+        .map(|mref| fetch_manifest(&mref.object_id, old_snapshot_id, asset_manager))
+        .collect::<Vec<_>>();
 
-    /// Creates a new manifest for the node, by obtaining all previous chunks coming from
-    /// `previous_manifests`, filtering those that are in the `extent`, and overriding them
-    /// with any changes in `modified_chunks`
-    async fn write_manifest_with_changes(
-        &mut self,
-        previous_manifests: impl Iterator<Item = &ManifestRef>,
-        modified_chunks: ChunkTable,
-        extent: &ManifestExtents,
-        node_id: &NodeId,
-        old_snapshot: &SnapshotId,
-    ) -> SessionResult<Option<ManifestRef>> {
-        // Collect unmodified chunks from all intersecting manifests
-
-        // First add chunks from previous manifests that are not modified
-        let futs = previous_manifests
-            .map(|mref| {
-                fetch_manifest(&mref.object_id, old_snapshot, &self.asset_manager)
-            })
-            .collect::<Vec<_>>();
-
-        // We could be more clever here by considering size of manifests and fetching more in parallel if they are small
-        // but for now we concurrently fetch one manifess as we iterate through another one.
-        let mut all_chunks_vec = stream::iter(futs)
-            .buffer_unordered(1)
-            .try_fold(
-                Vec::with_capacity(modified_chunks.len()),
-                |mut acc, manifest| async {
-                    acc.extend(manifest.iter(node_id.clone())?.filter_map_ok(
-                        |(idx, payload)| {
-                            // we expect that most users have no splitting
-                            // and so the first condition here is most restrictive.
-                            if !modified_chunks.contains_key(&idx)
-                                && extent.contains(&idx.0)
-                            {
-                                Some(ChunkInfo {
-                                    node: node_id.clone(),
-                                    coord: idx,
-                                    payload,
-                                })
-                            } else {
-                                None
-                            }
-                        },
-                    ));
-                    Ok(acc)
+    // We could be more clever here by considering size of manifests and fetching more in parallel if they are small
+    // but for now we concurrently fetch one manifess as we iterate through another one.
+    let mut all_chunks_vec = stream::iter(futs)
+        .buffer_unordered(1)
+        .try_fold(Vec::with_capacity(modified_chunks.len()), |mut acc, manifest| async {
+            acc.extend(manifest.iter(node_id.clone())?.filter_map_ok(
+                |(idx, payload)| {
+                    if !modified_chunks.contains_key(&idx) && extent.contains(&idx.0) {
+                        Some(ChunkInfo { node: node_id.clone(), coord: idx, payload })
+                    } else {
+                        None
+                    }
                 },
-            )
-            .await?;
+            ));
+            Ok(acc)
+        })
+        .await?;
 
-        // Then add modified chunks from ChangeSet
-        all_chunks_vec.extend(modified_chunks.into_iter().filter_map(
-            |(idx, maybe_payload)| {
-                maybe_payload.map(|payload| {
-                    Ok(ChunkInfo { node: node_id.clone(), coord: idx, payload })
-                })
-            },
-        ));
+    // Then add modified chunks from ChangeSet
+    all_chunks_vec.extend(modified_chunks.into_iter().filter_map(
+        |(idx, maybe_payload)| {
+            maybe_payload.map(|payload| {
+                Ok(ChunkInfo { node: node_id.clone(), coord: idx, payload })
+            })
+        },
+    ));
 
-        self.write_manifest_from_iterator(stream::iter(all_chunks_vec).err_into()).await
+    write_manifest_from_stream(
+        asset_manager,
+        manifest_config,
+        stream::iter(all_chunks_vec).err_into(),
+    )
+    .await
+}
+
+/// Process a single existing array node during flush.
+///
+/// Returns `None` if the node was deleted or is not an array.
+/// Otherwise returns the manifest refs and files for this node.
+#[allow(clippy::too_many_arguments)]
+async fn flush_existing_node(
+    asset_manager: &AssetManager,
+    manifest_config: &ManifestConfig,
+    change_set: &ChangeSet,
+    parent_id: &SnapshotId,
+    old_snapshot: &Snapshot,
+    split_config: &ManifestSplittingConfig,
+    rewrite_manifests: bool,
+    node: NodeSnapshot,
+) -> SessionResult<Option<NodeFlushResult>> {
+    let node_id = &node.id;
+
+    if change_set.array_is_deleted(&(node.path.clone(), node_id.clone())) {
+        trace!(path=%node.path, "Node deleted, not writing a manifest");
+        return Ok(None);
     }
 
-    /// Write a manifest for a node that was modified in this session
-    /// It needs to update the chunks according to the change set
-    /// and record the new manifest
-    async fn write_manifest_for_existing_node(
-        &mut self,
-        node: &NodeSnapshot,
-        existing_manifests: &[ManifestRef],
-        old_snapshot: &Snapshot,
-        rewrite_manifests: bool,
-        splits: &ManifestSplits,
-    ) -> SessionResult<()> {
-        // Some points to take into account to understand this algorithm:
-        // * The `splits` could have changed, so the `existing_manifests` not necessarily were
-        // created with the same splits, they could be widely different
-        // * In general we don't want to rewrite past manifests if we don't have to, we just
-        // try to reuse them, but if user says `rewrite_manifests=true` we'll rewrite everything
-        // * This function needs to work in the scenario where there are multiple past manifests
-        // for the node, and there are also session changes to chunks. These changes can be
-        // modifying, adding or deleting existing chunks.
-        // * We want this function to take time and space proportional to the size of the split,
-        // and not to the total size of the array.
-        //
-        // The algorithm:
-        //
-        // * Analyze all chunks in the changeset to understand what splits have been changed, this
-        // is a full pass through the changeset. Results are put in `update_chunks_by_extent`.
-        // new snapshot
-        // * For each (current) extent `extent` in the array splits:
-        //     * find intersecting_manifests, all manifests in existing_manifests that have non-empty
-        //       intersection with `extent`
-        //     * if there are changes in this session to `extent` or we wants to rewrite manifests:
-        //         * create a new manifest with all chunks in `extent` from all
-        //           `intersecting_manifests`, overriding chunks with those coming from the change
-        //           set, add the new manifest to the list of refs
-        //     * else (no changes in this session to `extent`)
-        //         * for each intersecting manifest:
-        //             * if it's fully contained in the extent, we can reuse it, just add it to th
-        //             elist of refs
-        //             * else create a new manifest filtering out the chunks that are outside of
-        //             the extent
-        let mut updated_chunks_by_extent: HashMap<ManifestExtents, ChunkTable> = self
-            .change_set
-            .array_chunks_iterator(&node.id, &node.path)
-            .fold(HashMap::new(), |mut res, (idx, payload)| {
-                if let Some(extents) = splits.find(idx) {
-                    let entry = res.entry(extents).or_default();
-                    entry.insert(idx.clone(), payload.clone());
-                }
-                res
-            });
-        let snapshot_id = &old_snapshot.id();
+    if rewrite_manifests
+        || change_set.is_updated_array(node_id)
+        || change_set.has_chunk_changes(node_id)
+    {
+        trace!(path=%node.path, "Node has changes, writing a new manifest");
+        let new_node =
+            get_existing_node(asset_manager, change_set, parent_id, &node.path).await?;
 
-        for extent in splits.iter() {
-            let intersecting_manifests: Vec<(&ManifestRef, Overlap)> = existing_manifests
-                .iter()
-                .filter_map(|mr| {
-                    // order is critical here, `overlap_with` is not symmetric
-                    match mr.extents.overlap_with(&extent) {
+        if let NodeData::Array { manifests, shape, dimension_names } = new_node.node_data
+        {
+            let splits =
+                split_config.get_split_sizes(&new_node.path, &shape, &dimension_names);
+
+            let mut result = NodeFlushResult {
+                node_id: node_id.clone(),
+                manifest_refs: Vec::new(),
+                manifest_files: Vec::new(),
+            };
+
+            // Some points to take into account to understand this algorithm:
+            // * The `splits` could have changed, so the `manifests` not necessarily were
+            // created with the same splits, they could be widely different
+            // * In general we don't want to rewrite past manifests if we don't have to, we just
+            // try to reuse them, but if user says `rewrite_manifests=true` we'll rewrite everything
+            // * This function needs to work in the scenario where there are multiple past manifests
+            // for the node, and there are also session changes to chunks. These changes can be
+            // modifying, adding or deleting existing chunks.
+            // * We want this function to take time and space proportional to the size of the split,
+            // and not to the total size of the array.
+            let mut updated_chunks_by_extent: HashMap<ManifestExtents, ChunkTable> =
+                change_set.array_chunks_iterator(&node.id, &node.path).fold(
+                    HashMap::new(),
+                    |mut res, (idx, payload)| {
+                        if let Some(extents) = splits.find(idx) {
+                            let entry = res.entry(extents).or_default();
+                            entry.insert(idx.clone(), payload.clone());
+                        }
+                        res
+                    },
+                );
+            let snapshot_id = old_snapshot.id();
+
+            for extent in splits.iter() {
+                let intersecting_manifests: Vec<(&ManifestRef, Overlap)> = manifests
+                    .iter()
+                    .filter_map(|mr| match mr.extents.overlap_with(&extent) {
                         Overlap::None => None,
                         ov => Some((mr, ov)),
-                    }
-                })
-                .collect();
+                    })
+                    .collect();
 
-            let modified_chunks =
-                updated_chunks_by_extent.remove(&extent).unwrap_or_default();
+                let modified_chunks =
+                    updated_chunks_by_extent.remove(&extent).unwrap_or_default();
 
-            if !modified_chunks.is_empty() || rewrite_manifests {
-                // if we were ask to rewrite manifests, or there are modified chunks in this split
-                // we need to create a new manifest for the split, previous manifests are of no use
-                if let Some(new_ref) = self
-                    .write_manifest_with_changes(
+                if !modified_chunks.is_empty() || rewrite_manifests {
+                    if let Some((new_ref, file_info)) = write_manifest_with_changes(
+                        asset_manager,
+                        manifest_config,
                         intersecting_manifests.iter().map(|(mr, _)| *mr),
                         modified_chunks,
                         &extent,
                         &node.id,
-                        snapshot_id,
+                        &snapshot_id,
                     )
                     .await?
-                {
-                    self.manifest_refs.entry(node.id.clone()).or_default().push(new_ref);
-                }
-            } else {
-                // the session made no changes to this split, so we may have opportunity to reuse
-                // the previous manifests
-                for (mref, overlap) in intersecting_manifests {
-                    if overlap == Overlap::Complete {
-                        // only if the full manifest overlaps with the current split we can reuse
-                        // it, otherwise it could have "extra stuff" we don't want. Remember splits
-                        // can be different now than when the manifest was first written
-                        self.manifest_refs
-                            .entry(node.id.clone())
-                            .or_default()
-                            .push(mref.clone());
-                        // OK to unwrap here since this manifest file must exist in the old snapshot
-                        #[allow(clippy::expect_used)]
-                            self.manifest_files.insert(
+                    {
+                        result.manifest_refs.push(new_ref);
+                        result.manifest_files.push(file_info);
+                    }
+                } else {
+                    for (mref, overlap) in intersecting_manifests {
+                        if overlap == Overlap::Complete {
+                            result.manifest_refs.push(mref.clone());
+                            #[allow(clippy::expect_used)]
+                            result.manifest_files.push(
                                 old_snapshot.manifest_info(&mref.object_id).expect("logic bug. creating manifest file info for an existing manifest failed."),
                             );
-                    } else if let Some(new_ref) = self
-                        // if the existing manifest only partially overlaps, we need to write a new
-                        // one that contains only the chunks we want
-                        .write_manifest_with_changes(
-                            std::iter::once(mref),
-                            Default::default(),
-                            &extent,
-                            &node.id,
-                            snapshot_id,
-                        )
-                        .await?
-                    {
-                        self.manifest_refs
-                            .entry(node.id.clone())
-                            .or_default()
-                            .push(new_ref);
+                        } else if let Some((new_ref, file_info)) =
+                            write_manifest_with_changes(
+                                asset_manager,
+                                manifest_config,
+                                std::iter::once(mref),
+                                Default::default(),
+                                &extent,
+                                &node.id,
+                                &snapshot_id,
+                            )
+                            .await?
+                        {
+                            result.manifest_refs.push(new_ref);
+                            result.manifest_files.push(file_info);
+                        }
                     }
                 }
             }
+
+            Ok(Some(result))
+        } else {
+            Ok(None)
         }
-
-        Ok(())
-    }
-
-    /// Record the previous manifests for an array that was not modified in the session
-    fn copy_previous_manifest(&mut self, node: &NodeSnapshot, old_snapshot: &Snapshot) {
+    } else {
+        trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
         match &node.node_data {
             NodeData::Array { manifests: array_refs, .. } => {
-                self.manifest_files.extend(array_refs.iter().map(|mr| {
-                    // It's ok to unwrap here, the snapshot had the node, it has to have the
-                    // manifest file info
+                let mut result = NodeFlushResult {
+                    node_id: node_id.clone(),
+                    manifest_refs: Vec::new(),
+                    manifest_files: Vec::new(),
+                };
+                result.manifest_files.extend(array_refs.iter().map(|mr| {
                     #[allow(clippy::expect_used)]
                     old_snapshot
                         .get_manifest_file(&mr.object_id)
@@ -2315,17 +2305,61 @@ impl<'a> FlushProcess<'a> {
                         )
                         .clone()
                 }));
-                for mr in array_refs.iter() {
-                    let new_ref = mr.clone();
-                    self.manifest_refs
-                        .entry(node.id.clone())
-                        .and_modify(|v| v.push(new_ref.clone()))
-                        .or_insert_with(|| vec![new_ref]);
-                }
+                result.manifest_refs.extend(array_refs.iter().cloned());
+                Ok(Some(result))
             }
-            NodeData::Group => {}
+            NodeData::Group => Ok(None),
         }
     }
+}
+
+/// Process a single new array node during flush.
+async fn flush_new_node(
+    asset_manager: &AssetManager,
+    manifest_config: &ManifestConfig,
+    change_set: &ChangeSet,
+    node_id: &NodeId,
+    node_path: &Path,
+    splits: &ManifestSplits,
+) -> SessionResult<NodeFlushResult> {
+    let mut result = NodeFlushResult {
+        node_id: node_id.clone(),
+        manifest_refs: Vec::new(),
+        manifest_files: Vec::new(),
+    };
+
+    for extent in splits.iter() {
+        if change_set.array_manifest(node_id).is_some() {
+            let chunks = stream::iter(
+                change_set
+                    .array_chunks_iterator(node_id, node_path)
+                    // FIXME: do we need to optimize this so we don't need multiple passes over all chunks calling
+                    // contains?
+                    .filter_map(|(coord, payload)| {
+                        if let Some(payload) = payload
+                            && extent.contains(&coord.0)
+                        {
+                            Some(ChunkInfo {
+                                node: node_id.clone(),
+                                coord: coord.clone(),
+                                payload: payload.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .map(Ok),
+            );
+            if let Some((new_ref, file_info)) =
+                write_manifest_from_stream(asset_manager, manifest_config, chunks).await?
+            {
+                result.manifest_refs.push(new_ref);
+                result.manifest_files.push(file_info);
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 impl ManifestSplitDimCondition {
@@ -2416,6 +2450,7 @@ pub enum CommitMethod {
 async fn do_flush(
     mut flush_data: FlushProcess<'_>,
     message: &str,
+    max_concurrent_manifests: usize,
     properties: SnapshotProperties,
     rewrite_manifests: bool,
     commit_method: CommitMethod,
@@ -2448,69 +2483,87 @@ async fn do_flush(
 
     // We first go through all existing nodes to see if we need to rewrite any manifests
 
-    for node in old_snapshot.iter().filter_ok(|node| node.node_type() == NodeType::Array)
-    {
-        let node = node?;
-        trace!(path=%node.path, "Flushing node");
-        let node_id = &node.id;
+    let change_set = flush_data.change_set;
+    let manifest_config = flush_data.manifest_config;
+    let parent_id = flush_data.parent_id;
 
-        if flush_data.change_set.array_is_deleted(&(node.path.clone(), node_id.clone())) {
-            trace!(path=%node.path, "Node deleted, not writing a manifest");
-            continue;
-        }
+    let array_nodes: Vec<NodeSnapshot> = old_snapshot
+        .iter()
+        .filter_ok(|node| node.node_type() == NodeType::Array)
+        .try_collect()?;
 
-        if rewrite_manifests
-        // metadata change might have shrunk the array
-        || flush_data.change_set.is_updated_array(node_id)
-            || flush_data.change_set.has_chunk_changes(node_id)
-        {
-            trace!(path=%node.path, "Node has changes, writing a new manifest");
-            // Array wasn't deleted and has changes in this session
-            // get the new node to handle changes in size, e.g. appends.
-            let new_node = get_existing_node(
-                flush_data.asset_manager.as_ref(),
-                flush_data.change_set,
-                flush_data.parent_id,
-                &node.path,
-            )
-            .await?;
-
-            if let NodeData::Array { manifests, shape, dimension_names } =
-                new_node.node_data
-            {
-                let splits = split_config.get_split_sizes(
-                    &new_node.path,
-                    &shape,
-                    &dimension_names,
-                );
-                flush_data
-                    .write_manifest_for_existing_node(
-                        &node,
-                        manifests.as_slice(),
-                        old_snapshot.as_ref(),
-                        rewrite_manifests,
-                        &splits,
-                    )
-                    .await?;
+    let existing_results: Vec<Option<NodeFlushResult>> =
+        stream::iter(array_nodes.into_iter().map(|node| {
+            let asset_manager = Arc::clone(&flush_data.asset_manager);
+            let old_snapshot = Arc::clone(&old_snapshot);
+            async move {
+                flush_existing_node(
+                    asset_manager.as_ref(),
+                    manifest_config,
+                    change_set,
+                    parent_id,
+                    old_snapshot.as_ref(),
+                    split_config,
+                    rewrite_manifests,
+                    node,
+                )
+                .await
             }
-        } else {
-            trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
-            // Array wasn't deleted but has no changes in this session
-            flush_data.copy_previous_manifest(&node, old_snapshot.as_ref());
-        }
+        }))
+        .buffer_unordered(max_concurrent_manifests)
+        .try_collect()
+        .await?;
+
+    for result in existing_results.into_iter().flatten() {
+        flush_data
+            .manifest_refs
+            .entry(result.node_id)
+            .or_default()
+            .extend(result.manifest_refs);
+        flush_data.manifest_files.extend(result.manifest_files);
     }
 
     // Now we need to go through all the new arrays, and generate manifests for them
 
-    for (node_path, node_id, array_data) in flush_data.change_set.new_arrays() {
-        let splits = split_config.get_split_sizes(
-            node_path,
-            &array_data.shape,
-            &array_data.dimension_names,
-        );
+    let new_arrays: Vec<(Path, NodeId, ManifestSplits)> = change_set
+        .new_arrays()
+        .map(|(node_path, node_id, array_data)| {
+            let splits = split_config.get_split_sizes(
+                node_path,
+                &array_data.shape,
+                &array_data.dimension_names,
+            );
+            trace!(path=%node_path, "New node, writing a manifest");
+            (node_path.clone(), node_id.clone(), splits)
+        })
+        .collect();
 
-        trace!(path=%node_path, "New node, writing a manifest");
-        flush_data.write_manifest_for_new_node(node_id, node_path, &splits).await?;
+    let new_node_results: Vec<NodeFlushResult> =
+        stream::iter(new_arrays.into_iter().map(|(node_path, node_id, splits)| {
+            let asset_manager = Arc::clone(&flush_data.asset_manager);
+            async move {
+                flush_new_node(
+                    asset_manager.as_ref(),
+                    manifest_config,
+                    change_set,
+                    &node_id,
+                    &node_path,
+                    &splits,
+                )
+                .await
+            }
+        }))
+        .buffer_unordered(max_concurrent_manifests)
+        .try_collect()
+        .await?;
+
+    for result in new_node_results {
+        flush_data
+            .manifest_refs
+            .entry(result.node_id)
+            .or_default()
+            .extend(result.manifest_refs);
+        flush_data.manifest_files.extend(result.manifest_files);
     }
 
     // manifest_files & manifest_refs _must_ be consistent
@@ -2663,6 +2716,7 @@ async fn do_commit(
     snapshot_id: &SnapshotId,
     change_set: &ChangeSet,
     message: &str,
+    max_concurrent_manifests: usize,
     properties: Option<SnapshotProperties>,
     rewrite_manifests: bool,
     commit_method: CommitMethod,
@@ -2693,6 +2747,7 @@ async fn do_commit(
     let new_snapshot = do_flush(
         flush_data,
         message,
+        max_concurrent_manifests,
         properties,
         rewrite_manifests,
         commit_method,
@@ -3211,7 +3266,7 @@ mod tests {
         let mut repo = create_memory_store_repository(spec_version).await;
         let mut ds = repo.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::new()).await?;
-        let snapshot = ds.commit("commit 1", None).await?;
+        let snapshot = ds.commit("commit 1", 8, None).await?;
 
         // Verify that the first commit has no metadata
         let v = VersionInfo::SnapshotId(snapshot.clone());
@@ -3227,7 +3282,7 @@ mod tests {
 
         let mut ds = repo.writable_session("main").await?;
         ds.add_group("/group".try_into().unwrap(), Bytes::new()).await?;
-        let snapshot = ds.commit("commit 2", None).await?;
+        let snapshot = ds.commit("commit 2", 8, None).await?;
 
         let v = VersionInfo::SnapshotId(snapshot.clone());
         let snapshot_info = repo.ancestry(&v).await?;
@@ -3240,7 +3295,7 @@ mod tests {
         metadata.insert("id".to_string(), "ideded".to_string().into());
         let mut ds = repo.writable_session("main").await?;
         ds.add_group("/group2".try_into().unwrap(), Bytes::new()).await?;
-        let snapshot = ds.commit("commit", Some(metadata.clone())).await?;
+        let snapshot = ds.commit("commit", 8, Some(metadata.clone())).await?;
 
         let v = VersionInfo::SnapshotId(snapshot.clone());
         let snapshot_info = repo.ancestry(&v).await?;
@@ -3310,7 +3365,7 @@ mod tests {
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
                 .await?;
         }
-        let first_snapshot = session.commit("None", None).await?;
+        let first_snapshot = session.commit("None", 8, None).await?;
         let _session = repo
             .readonly_session(&VersionInfo::SnapshotId(first_snapshot.clone()))
             .await?;
@@ -3366,7 +3421,7 @@ mod tests {
         );
 
         // write manifests, check number of references in manifest
-        let _updated_snapshot = session.commit("updated", None).await?;
+        let _updated_snapshot = session.commit("updated", 8, None).await?;
 
         // should still be deleted
         assert!(
@@ -3382,7 +3437,7 @@ mod tests {
         // empty commit should not alter manifests
         let mut session = repo.writable_session("main").await?;
         let _empty_snapshot =
-            session.commit_with_options("empty commit", None, true).await?;
+            session.commit_with_options("empty commit", 8, None, true).await?;
         assert_manifest_count(repo.asset_manager(), initial_manifest_count).await;
 
         Ok(())
@@ -3669,7 +3724,7 @@ mod tests {
         .await?;
         assert_eq!(chunk, Some(data.clone()));
 
-        ds.commit("commit", Some(SnapshotProperties::default())).await?;
+        ds.commit("commit", 8, Some(SnapshotProperties::default())).await?;
 
         let chunk = get_chunk(
             ds.get_chunk_reader(&new_array_path, &ChunkIndices(vec![1]), &ByteRange::ALL)
@@ -3720,7 +3775,7 @@ mod tests {
         assert_eq!(diff.new_groups, [Path::root()].into());
 
         let first_commit =
-            ds.commit("commit", Some(SnapshotProperties::default())).await?;
+            ds.commit("commit", 8, Some(SnapshotProperties::default())).await?;
 
         // We need a new session after the commit
         let mut ds = repository.writable_session("main").await?;
@@ -3736,7 +3791,7 @@ mod tests {
         let user_data2 = Bytes::copy_from_slice(b"bar");
         ds.add_group("/group".try_into().unwrap(), user_data2.clone()).await?;
         let _snapshot_id =
-            ds.commit("commit", Some(SnapshotProperties::default())).await?;
+            ds.commit("commit", 8, Some(SnapshotProperties::default())).await?;
 
         let mut ds = repository.writable_session("main").await?;
         assert!(matches!(
@@ -3770,7 +3825,7 @@ mod tests {
 
         // wo commit to test the case of a chunkless array
         let _snapshot_id =
-            ds.commit("commit", Some(SnapshotProperties::default())).await?;
+            ds.commit("commit", 8, Some(SnapshotProperties::default())).await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -3803,7 +3858,7 @@ mod tests {
         );
 
         let _snapshot_id =
-            ds.commit("commit", Some(SnapshotProperties::default())).await?;
+            ds.commit("commit", 8, Some(SnapshotProperties::default())).await?;
 
         let mut ds = repository.writable_session("main").await?;
         assert!(matches!(
@@ -3850,7 +3905,7 @@ mod tests {
         )
         .await?;
 
-        let previous_snapshot_id = ds.commit("commit", None).await?;
+        let previous_snapshot_id = ds.commit("commit", 8, None).await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -3893,7 +3948,7 @@ mod tests {
         )
         .await?;
 
-        let snapshot_id = ds.commit("commit", None).await?;
+        let snapshot_id = ds.commit("commit", 8, None).await?;
 
         let snap = repository.asset_manager().fetch_snapshot(&snapshot_id).await?;
         match &snap.get_node(&new_array_path)?.node_data {
@@ -4041,7 +4096,7 @@ mod tests {
         ds.add_group("/1".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
         ds.delete_group("/1".try_into().unwrap()).await?;
         assert_eq!(ds.list_nodes(&Path::root()).await?.count(), 1);
-        ds.commit("commit", None).await?;
+        ds.commit("commit", 8, None).await?;
 
         let ds = repository
             .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
@@ -4061,7 +4116,7 @@ mod tests {
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         ds.add_group("/1".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
-        ds.commit("commit", None).await?;
+        ds.commit("commit", 8, None).await?;
 
         let mut ds = repository.writable_session("main").await?;
         ds.delete_group("/1".try_into().unwrap()).await?;
@@ -4079,11 +4134,11 @@ mod tests {
         let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        ds.commit("commit", None).await?;
+        ds.commit("commit", 8, None).await?;
 
         let mut ds = repository.writable_session("main").await?;
         ds.delete_group(Path::root()).await?;
-        ds.commit("commit", None).await?;
+        ds.commit("commit", 8, None).await?;
 
         let ds = repository
             .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
@@ -4101,7 +4156,7 @@ mod tests {
         let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), def.clone()).await?;
-        ds.commit("initialize", None).await?;
+        ds.commit("initialize", 8, None).await?;
 
         let mut ds = repository.writable_session("main").await?;
         ds.add_group("/a".try_into().unwrap(), def.clone()).await?;
@@ -4135,7 +4190,7 @@ mod tests {
         ds.add_group("/a".try_into().unwrap(), def.clone()).await?;
         ds.add_group("/b".try_into().unwrap(), def.clone()).await?;
         ds.add_group("/b/bb".try_into().unwrap(), def.clone()).await?;
-        ds.commit("commit", None).await?;
+        ds.commit("commit", 8, None).await?;
 
         let mut ds = repository.writable_session("main").await?;
         ds.delete_group("/b".try_into().unwrap()).await?;
@@ -4195,7 +4250,7 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        let snapshot_id = ds.commit("commit", None).await?;
+        let snapshot_id = ds.commit("commit", 8, None).await?;
         let ds = repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
 
         let coords = ds
@@ -4265,7 +4320,7 @@ mod tests {
         ds.add_array(a2path.clone(), shape.clone(), dimension_names.clone(), def.clone())
             .await?;
 
-        let _ = ds.commit("first commit", None).await?;
+        let _ = ds.commit("first commit", 8, None).await?;
 
         // there should be no manifests yet because we didn't add any chunks
         assert_eq!(
@@ -4311,7 +4366,7 @@ mod tests {
         )
         .await?;
 
-        let _snap_id = ds.commit("commit", None).await?;
+        let _snap_id = ds.commit("commit", 8, None).await?;
 
         // there should be two manifest now, one per array
         assert_eq!(
@@ -4339,7 +4394,7 @@ mod tests {
 
         let mut ds = repo.writable_session("main").await?;
         ds.delete_array(a2path).await?;
-        let _snap_id = ds.commit("array2 deleted", None).await?;
+        let _snap_id = ds.commit("array2 deleted", 8, None).await?;
 
         // we should still have two manifests, the same as before because only array deletes happened
         assert_eq!(
@@ -4368,7 +4423,7 @@ mod tests {
         // delete a chunk
         let mut ds = repo.writable_session("main").await?;
         ds.set_chunk_ref(a1path.clone(), ChunkIndices(vec![0, 0]), None).await?;
-        let _snap_id = ds.commit("chunk deleted", None).await?;
+        let _snap_id = ds.commit("chunk deleted", 8, None).await?;
 
         // there should be three manifests
         assert_eq!(
@@ -4405,7 +4460,7 @@ mod tests {
         // delete the second chunk, now there are no chunks, so there should be no manifests either
         let mut ds = repo.writable_session("main").await?;
         ds.set_chunk_ref(a1path.clone(), ChunkIndices(vec![0, 1]), None).await?;
-        let _snap_id = ds.commit("chunk deleted", None).await?;
+        let _snap_id = ds.commit("chunk deleted", 8, None).await?;
 
         let manifests = match ds.get_array(&a1path).await?.node_data {
             NodeData::Array { manifests, .. } => manifests,
@@ -4449,7 +4504,7 @@ mod tests {
 
         // add a new array and retrieve its node
         ds.add_group(Path::root(), def.clone()).await?;
-        let new_snapshot_id = ds.commit("first commit", None).await?;
+        let new_snapshot_id = ds.commit("first commit", 8, None).await?;
         assert_eq!(new_snapshot_id, repo.lookup_branch("main").await?);
         assert_eq!(&new_snapshot_id, ds.snapshot_id());
 
@@ -4488,7 +4543,7 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        let new_snapshot_id = ds.commit("second commit", None).await?;
+        let new_snapshot_id = ds.commit("second commit", 8, None).await?;
         assert_eq!(new_snapshot_id, repo.lookup_branch("main").await?);
 
         let parents = repo
@@ -4515,26 +4570,27 @@ mod tests {
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         let amend_result =
-            session.amend("cannot amend initial commit", None, false).await;
+            session.amend("cannot amend initial commit", 8, None, false).await;
         assert!(amend_result.is_err());
         assert!(amend_result.unwrap_err().to_string().contains("first commit"));
 
         let mut session = repo.writable_session("main").await?;
-        let amend_result = session.amend("cannot amend initial commit", None, true).await;
+        let amend_result =
+            session.amend("cannot amend initial commit", 8, None, true).await;
         assert!(amend_result.is_err());
         assert!(amend_result.unwrap_err().to_string().contains("first commit"));
 
         // Now make a proper first commit
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        let snap1 = session.commit("make root", None).await?;
+        let snap1 = session.commit("make root", 8, None).await?;
 
         let mut session = repo.writable_session("main").await?;
         session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
-        let before_amend1 = session.commit("will be amended", None).await?;
+        let before_amend1 = session.commit("will be amended", 8, None).await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
-        let before_amend2 = session.amend("first amend", None, false).await?;
+        let before_amend2 = session.amend("first amend", 8, None, false).await?;
 
         let main_version = VersionInfo::BranchTipRef("main".to_string());
         let anc: Vec<_> = repo
@@ -4562,7 +4618,7 @@ mod tests {
         session
             .add_group("/error".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        let after_amend2 = session.amend("second amend", None, false).await?;
+        let after_amend2 = session.amend("second amend", 8, None, false).await?;
 
         let anc_from_tag: Vec<_> = repo
             .ancestry(&VersionInfo::TagRef("tag".to_string()))
@@ -4629,21 +4685,21 @@ mod tests {
         session
             .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        session.commit("setup", None).await?;
+        session.commit("setup", 8, None).await?;
 
         // Rearrange session, only has a move: should be fine
         let mut session = repo.rearrange_session("main").await?;
         session
             .move_node("/source".try_into().unwrap(), "/dest".try_into().unwrap())
             .await?;
-        session.commit("move commit", None).await?;
+        session.commit("move commit", 8, None).await?;
 
         // Amend on top of a move commit: should fail
         let mut session = repo.writable_session("main").await?;
         session
             .add_group("/fail".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        let result = session.amend("amend after move", None, false).await;
+        let result = session.amend("amend after move", 8, None, false).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err.kind, SessionErrorKind::RearrangeSessionOnly));
@@ -4653,7 +4709,8 @@ mod tests {
         session
             .move_node("/dest".try_into().unwrap(), "/another_dest".try_into().unwrap())
             .await?;
-        let result = session.amend("amend after move, only new moves", None, false).await;
+        let result =
+            session.amend("amend after move, only new moves", 8, None, false).await;
         assert!(result.is_ok());
         let snapshot_id = result.unwrap();
 
@@ -4679,7 +4736,7 @@ mod tests {
                 Bytes::copy_from_slice(b""),
             )
             .await?;
-        session.commit("add nested groups", None).await?;
+        session.commit("add nested groups", 8, None).await?;
 
         let mut session = repo.rearrange_session("main").await?;
         session
@@ -4694,7 +4751,7 @@ mod tests {
                 "/new_dest".try_into().unwrap(),
             )
             .await?;
-        let snapshot_id = session.commit("move nested groups", None).await?;
+        let snapshot_id = session.commit("move nested groups", 8, None).await?;
 
         // Check if moved nested groups still shows up properly after commit
         let session =
@@ -4711,7 +4768,8 @@ mod tests {
                 "/moved_again".try_into().unwrap(),
             )
             .await?;
-        let snapshot_id = session.amend("amend nested groups move ", None, false).await?;
+        let snapshot_id =
+            session.amend("amend nested groups move ", 8, None, false).await?;
 
         // Check if moved nested groups still shows up properly after amend
         let session =
@@ -4741,7 +4799,7 @@ mod tests {
         // Non-initial snapshot should NOT be marked as initial
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        let snap1 = session.commit("first commit", None).await?;
+        let snap1 = session.commit("first commit", 8, None).await?;
 
         let snap1_info = asset_manager.fetch_snapshot_info(&snap1).await?;
         assert!(!snap1_info.is_initial());
@@ -4784,7 +4842,7 @@ mod tests {
         // Diff from initial snapshot to first real commit should show the new group
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        let snap1 = session.commit("first commit", None).await?;
+        let snap1 = session.commit("first commit", 8, None).await?;
 
         let diff = repo
             .diff(
@@ -4812,17 +4870,17 @@ mod tests {
         let repo = create_memory_store_repository(spec_version).await;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        let snap1 = session.commit("make root", None).await?;
+        let snap1 = session.commit("make root", 8, None).await?;
 
         let mut session = repo.writable_session("main").await?;
-        let result = session.commit("an empty commit", None).await;
+        let result = session.commit("an empty commit", 8, None).await;
         assert!(matches!(
             result,
             Err(SessionError { kind: SessionErrorKind::NoChangesToCommit, .. })
         ));
 
         let mut session = repo.writable_session("main").await?;
-        let snap2 = session.commit_with_options("an empty commit", None, true).await?;
+        let snap2 = session.commit_with_options("an empty commit", 8, None, true).await?;
         let snap2_info = repo.lookup_snapshot(&snap2).await?;
         assert_eq!(snap2_info.parent_id, Some(snap1.clone()));
 
@@ -4866,12 +4924,12 @@ mod tests {
 
         let handle1 = tokio::spawn(async move {
             let _ = barrier_c.wait().await;
-            ds1.commit("from 1", None).await
+            ds1.commit("from 1", 8, None).await
         });
 
         let handle2 = tokio::spawn(async move {
             let _ = barrier_cc.wait().await;
-            ds2.commit("from 2", None).await
+            ds2.commit("from 2", 8, None).await
         });
 
         let res1 = handle1.await.unwrap();
@@ -4934,7 +4992,7 @@ mod tests {
         session.add_group(Path::new("/foo/old").unwrap(), Bytes::new()).await?;
         let apath: Path = "/foo/old/array".try_into()?;
         session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
-        session.commit("first commit", None).await?;
+        session.commit("first commit", 8, None).await?;
 
         let mut session = repo.rearrange_session("main").await?;
         session
@@ -4965,7 +5023,7 @@ mod tests {
             ],
         );
 
-        session.commit("moved", None).await?;
+        session.commit("moved", 8, None).await?;
 
         let session =
             repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
@@ -4999,7 +5057,7 @@ mod tests {
         session.add_group(Path::root(), Bytes::new()).await?;
         let apath: Path = "/foo/old/array".try_into()?;
         session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
-        session.commit("first commit", None).await?;
+        session.commit("first commit", 8, None).await?;
 
         let mut session = repo.rearrange_session("main").await?;
         assert!(matches!(
@@ -5042,7 +5100,7 @@ mod tests {
 
         ds.add_array(apath.clone(), shape, None, Bytes::new()).await?;
 
-        ds.commit("first commit", None).await?;
+        ds.commit("first commit", 8, None).await?;
 
         // add 3 chunks
         // First 2 chunks are valid, third will be invalid chunk indices
@@ -5120,7 +5178,7 @@ mod tests {
                 .await?;
         }
 
-        session.commit("first commit", None).await?;
+        session.commit("first commit", 8, None).await?;
 
         let mut session = repo.writable_session("main").await?;
         session.shift_array(&apath, &[-1]).await?;
@@ -5163,7 +5221,7 @@ mod tests {
             )
             .await?;
         let meta: SnapshotProperties = [("test".to_string(), 42.into())].into();
-        let snap_id = session.flush("flush", Some(meta.clone())).await?;
+        let snap_id = session.flush("flush", 8, Some(meta.clone())).await?;
 
         let chunk = get_chunk(
             session
@@ -5218,7 +5276,7 @@ mod tests {
             Bytes::new(),
         )
         .await?;
-        ds.commit("create directory", None).await?;
+        ds.commit("create directory", 8, None).await?;
 
         Ok(repository)
     }
@@ -5262,10 +5320,10 @@ mod tests {
 
         let conflict_path: Path = "/foo/bar/conflict".try_into().unwrap();
         ds1.add_group(conflict_path.clone(), user_data()).await?;
-        ds1.commit("create group", None).await?;
+        ds1.commit("create group", 8, None).await?;
 
         ds2.add_array(conflict_path.clone(), basic_shape(), None, user_data()).await?;
-        ds2.commit("create array", None).await.unwrap_err();
+        ds2.commit("create array", 8, None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::NewNodeConflictsWithExistingNode(conflict_path),
             ds2.rebase(&ConflictDetector).await,
@@ -5284,12 +5342,12 @@ mod tests {
 
         let path: Path = "/foo/bar".try_into().unwrap();
         ds1.add_group("/foo/quux".try_into().unwrap(), user_data()).await?;
-        ds1.commit("add sibling group", None).await?;
+        ds1.commit("add sibling group", 8, None).await?;
 
         ds2.delete_group(path.clone()).await?;
         ds2.add_group(path.clone(), Bytes::new()).await?;
         assert!(matches!(
-            ds2.commit("delete+re-add group", None).await,
+            ds2.commit("delete+re-add group", 8, None).await,
             Err(SessionError {
                 kind: SessionErrorKind::Conflict {
                     expected_parent, actual_parent
@@ -5298,7 +5356,7 @@ mod tests {
         ));
 
         ds2.rebase(&ConflictDetector).await?;
-        ds2.commit("delete+re-add group", None).await?;
+        ds2.commit("delete+re-add group", 8, None).await?;
 
         Ok(())
     }
@@ -5315,13 +5373,13 @@ mod tests {
 
         let path: Path = "/foo/bar".try_into().unwrap();
         ds1.update_group(&path, Bytes::from("updated")).await?;
-        ds1.commit("update group metadata", None).await?;
+        ds1.commit("update group metadata", 8, None).await?;
 
         let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_group(path.clone()).await?;
         ds2.add_group(path.clone(), user_data()).await?;
         assert!(matches!(
-            ds2.commit("delete+re-add group", None).await,
+            ds2.commit("delete+re-add group", 8, None).await,
             Err(SessionError {
                 kind: SessionErrorKind::Conflict {
                     expected_parent, actual_parent
@@ -5348,11 +5406,11 @@ mod tests {
 
         let conflict_path: Path = "/foo/bar/conflict".try_into().unwrap();
         ds1.add_array(conflict_path.clone(), basic_shape(), None, user_data()).await?;
-        ds1.commit("create array", None).await?;
+        ds1.commit("create array", 8, None).await?;
 
         let inner_path: Path = "/foo/bar/conflict/inner".try_into().unwrap();
         ds2.add_array(inner_path.clone(), basic_shape(), None, user_data()).await?;
-        ds2.commit("create inner array", None).await.unwrap_err();
+        ds2.commit("create inner array", 8, None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::NewNodeInInvalidGroup(conflict_path),
             ds2.rebase(&ConflictDetector).await,
@@ -5371,10 +5429,10 @@ mod tests {
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         ds1.update_array(&path.clone(), basic_shape(), None, user_data()).await?;
-        ds1.commit("update array", None).await?;
+        ds1.commit("update array", 8, None).await?;
 
         ds2.update_array(&path.clone(), basic_shape(), None, user_data()).await?;
-        ds2.commit("update array again", None).await.unwrap_err();
+        ds2.commit("update array again", 8, None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::ZarrMetadataDoubleUpdate(path),
             ds2.rebase(&ConflictDetector).await,
@@ -5393,10 +5451,10 @@ mod tests {
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         ds1.delete_array(path.clone()).await?;
-        ds1.commit("delete array", None).await?;
+        ds1.commit("delete array", 8, None).await?;
 
         ds2.update_array(&path.clone(), basic_shape(), None, user_data()).await?;
-        ds2.commit("update array again", None).await.unwrap_err();
+        ds2.commit("update array again", 8, None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::ZarrMetadataUpdateOfDeletedArray(path),
             ds2.rebase(&ConflictDetector).await,
@@ -5415,11 +5473,11 @@ mod tests {
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         ds1.update_array(&path.clone(), basic_shape(), None, user_data()).await?;
-        ds1.commit("update array", None).await?;
+        ds1.commit("update array", 8, None).await?;
 
         let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_array(path.clone()).await?;
-        ds2.commit("delete array", None).await.unwrap_err();
+        ds2.commit("delete array", 8, None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             ds2.rebase(&ConflictDetector).await,
@@ -5443,11 +5501,11 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        ds1.commit("update chunks", None).await?;
+        ds1.commit("update chunks", 8, None).await?;
 
         let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_array(path.clone()).await?;
-        ds2.commit("delete array", None).await.unwrap_err();
+        ds2.commit("delete array", 8, None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             ds2.rebase(&ConflictDetector).await,
@@ -5466,11 +5524,11 @@ mod tests {
 
         let path: Path = "/foo/bar".try_into().unwrap();
         ds1.update_group(&path, Bytes::new()).await?;
-        ds1.commit("update user attributes", None).await?;
+        ds1.commit("update user attributes", 8, None).await?;
 
         let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_group(path.clone()).await?;
-        ds2.commit("delete group", None).await.unwrap_err();
+        ds2.commit("delete group", 8, None).await.unwrap_err();
         assert_has_conflict(
             &Conflict::DeleteOfUpdatedGroup { path, node_id: node.id },
             ds2.rebase(&ConflictDetector).await,
@@ -5491,7 +5549,7 @@ mod tests {
 
         let new_array_path: Path = "/array".try_into().unwrap();
         ds.add_array(new_array_path.clone(), basic_shape(), None, user_data()).await?;
-        ds.commit("create array", None).await?;
+        ds.commit("create array", 8, None).await?;
 
         // one writer sets chunks
         // other writer sets the same chunks, generating a conflict
@@ -5511,7 +5569,8 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        let conflicting_snap = ds1.commit("write two chunks with repo 1", None).await?;
+        let conflicting_snap =
+            ds1.commit("write two chunks with repo 1", 8, None).await?;
 
         ds2.set_chunk_ref(
             new_array_path.clone(),
@@ -5522,7 +5581,7 @@ mod tests {
 
         // verify we cannot commit
         if let Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) =
-            ds2.commit("write one chunk with repo2", None).await
+            ds2.commit("write one chunk with repo2", 8, None).await
         {
             // detect conflicts using rebase
             let result = ds2.rebase(&ConflictDetector).await;
@@ -5554,7 +5613,7 @@ mod tests {
         ds.add_group("/".try_into().unwrap(), user_data()).await?;
         let new_array_path: Path = "/array".try_into().unwrap();
         ds.add_array(new_array_path.clone(), basic_shape(), None, user_data()).await?;
-        let _array_created_snap = ds.commit("create array", None).await?;
+        let _array_created_snap = ds.commit("create array", 8, None).await?;
 
         let mut ds1 = repo.writable_session("main").await?;
         let mut ds2 = repo.writable_session("main").await?;
@@ -5581,7 +5640,8 @@ mod tests {
         )
         .await?;
 
-        let _conflicting_snap = ds1.commit("write two chunks with repo 1", None).await?;
+        let _conflicting_snap =
+            ds1.commit("write two chunks with repo 1", 8, None).await?;
 
         // let's try to create a new commit, that conflicts with the previous one but writes to
         // different chunks
@@ -5592,12 +5652,12 @@ mod tests {
         )
         .await?;
         if let Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) =
-            ds2.commit("write one chunk with repo2", None).await
+            ds2.commit("write one chunk with repo2", 8, None).await
         {
             let solver = BasicConflictSolver::default();
             // different chunks were written so this should fast forward
             ds2.rebase(&solver).await?;
-            let snapshot = ds2.commit("after conflict", None).await?;
+            let snapshot = ds2.commit("after conflict", 8, None).await?;
             let data = ds2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![2])).await?;
             assert_eq!(data, Some(ChunkPayload::Inline("hello2".into())));
 
@@ -5757,13 +5817,13 @@ mod tests {
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         ds1.update_array(&path, basic_shape(), None, user_data()).await?;
-        ds1.commit("update array", None).await?;
+        ds1.commit("update array", 8, None).await?;
 
         ds2.delete_array(path.clone()).await?;
-        ds2.commit("delete array", None).await.unwrap_err();
+        ds2.commit("delete array", 8, None).await.unwrap_err();
 
         ds2.rebase(&BasicConflictSolver::default()).await?;
-        ds2.commit("after conflict", None).await?;
+        ds2.commit("after conflict", 8, None).await?;
 
         assert!(matches!(
             ds2.get_node(&path).await,
@@ -5794,7 +5854,7 @@ mod tests {
                 Some(ChunkPayload::Inline("repo 1".into())),
             )
             .await?;
-            ds1.commit(format!("update chunk {coord}").as_str(), None).await?;
+            ds1.commit(format!("update chunk {coord}").as_str(), 8, None).await?;
         }
 
         // write the same chunks with repo 2
@@ -5807,7 +5867,7 @@ mod tests {
             .await?;
         }
 
-        ds2.commit("update chunk on repo 2", None).await.unwrap_err();
+        ds2.commit("update chunk on repo 2", 8, None).await.unwrap_err();
 
         let solver = BasicConflictSolver {
             on_chunk_conflict: VersionSelection::UseTheirs,
@@ -5815,7 +5875,7 @@ mod tests {
         };
 
         ds2.rebase(&solver).await?;
-        ds2.commit("after conflict", None).await?;
+        ds2.commit("after conflict", 8, None).await?;
         for coord in [0, 1, 2] {
             let payload = ds2.get_chunk_ref(&path, &ChunkIndices(vec![coord])).await?;
             assert_eq!(payload, Some(ChunkPayload::Inline("repo 1".into())));
@@ -5841,7 +5901,8 @@ mod tests {
             Some(ChunkPayload::Inline("repo 1".into())),
         )
         .await?;
-        let non_conflicting_snap = ds1.commit("updated non-conflict chunk", None).await?;
+        let non_conflicting_snap =
+            ds1.commit("updated non-conflict chunk", 8, None).await?;
 
         let mut ds1 = repo.writable_session("main").await?;
         ds1.set_chunk_ref(
@@ -5851,7 +5912,7 @@ mod tests {
         )
         .await?;
 
-        let conflicting_snap = ds1.commit("update chunk ref", None).await?;
+        let conflicting_snap = ds1.commit("update chunk ref", 8, None).await?;
 
         ds2.set_chunk_ref(
             path.clone(),
@@ -5860,7 +5921,7 @@ mod tests {
         )
         .await?;
 
-        ds2.commit("update chunk ref", None).await.unwrap_err();
+        ds2.commit("update chunk ref", 8, None).await.unwrap_err();
         // we setup a [`ConflictSolver`]` that can recover from the first but not the second
         // conflict
         let solver = BasicConflictSolver {
@@ -5929,7 +5990,7 @@ mod tests {
             Some(ChunkPayload::Inline("repo 1".into())),
         )
         .await?;
-        ds1.commit("writer 1 updated non-conflict chunk", None).await?;
+        ds1.commit("writer 1 updated non-conflict chunk", 8, None).await?;
 
         let mut ds1 = repo.writable_session("main").await?;
         ds1.update_array(
@@ -5946,7 +6007,7 @@ mod tests {
             Some(ChunkPayload::Inline("repo 1 chunk 10".into())),
         )
         .await?;
-        ds1.commit("writer 1 updates array size and adds chunk 10", None).await?;
+        ds1.commit("writer 1 updates array size and adds chunk 10", 8, None).await?;
 
         // now set a chunk ref that is valid with both old and new shape.
         ds2.set_chunk_ref(
@@ -5959,6 +6020,7 @@ mod tests {
             &YoloSolver,
             1u16,
             "writer 2 writes chunk 0",
+            8,
             None,
             async |_| {},
             async |_| {},
@@ -5992,7 +6054,7 @@ mod tests {
         session
             .add_array("/array".try_into().unwrap(), basic_shape(), None, Bytes::new())
             .await?;
-        session.commit("create array", None).await?;
+        session.commit("create array", 8, None).await?;
 
         // This is the main session we'll be trying to commit (and rebase)
         let mut session = repo.writable_session("main").await?;
@@ -6016,7 +6078,7 @@ mod tests {
             )
             .await
             .unwrap();
-        session2.commit("conflicting", None).await.unwrap();
+        session2.commit("conflicting", 8, None).await.unwrap();
 
         let repo_ref = &repo;
         let attempts = AtomicU16::new(0);
@@ -6038,7 +6100,7 @@ mod tests {
             )
             .await
             .unwrap();
-            s.commit("conflicting", None).await.unwrap();
+            s.commit("conflicting", 8, None).await.unwrap();
         };
 
         let res = session
@@ -6046,6 +6108,7 @@ mod tests {
                 &ConflictDetector,
                 3,
                 "updated non-conflict chunk",
+                8,
                 None,
                 |_| async {},
                 conflicting,
@@ -6079,7 +6142,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                s.commit("conflicting", None).await.unwrap();
+                s.commit("conflicting", 8, None).await.unwrap();
             }
         };
 
@@ -6088,6 +6151,7 @@ mod tests {
                 &ConflictDetector,
                 42,
                 "updated non-conflict chunk",
+                8,
                 None,
                 |_| async {},
                 conflicting_twice,

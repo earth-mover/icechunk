@@ -69,7 +69,7 @@ async fn setup_repo(
     let defn = Bytes::from_static(br#"{"this":"array"}"#);
     session.add_group(Path::root(), defn.clone()).await?;
     session.add_array(path, shape, dimension_names, defn.clone()).await?;
-    session.commit("initialized", None).await?;
+    session.commit("initialized", 8, None).await?;
 
     Ok(repository)
 }
@@ -198,7 +198,7 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                 )
                 .await
                 .unwrap();
-                write_session.commit("data", None).await.unwrap();
+                write_session.commit("data", 8, None).await.unwrap();
                 repo.storage().clone()
             })
         });
@@ -224,7 +224,7 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                     .unwrap();
             let mut session = repo.writable_session("main").await.unwrap();
             session
-                .rewrite_manifests("rewrite", None, CommitMethod::Amend)
+                .rewrite_manifests("rewrite", 8, None, CommitMethod::Amend)
                 .await
                 .unwrap();
 
@@ -335,7 +335,7 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
                         },
                         |mut session| {
                             rt.block_on(async {
-                                session.commit("foo", None).await.unwrap();
+                                session.commit("foo", 8, None).await.unwrap();
                             })
                         },
                         // Make sure we run the set up before every iteration
@@ -406,7 +406,7 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
 
                             let start_commit = std::time::Instant::now();
                             rt.block_on(async {
-                                session.commit("commit", None).await.unwrap();
+                                session.commit("commit", 8, None).await.unwrap();
                             });
                             let commit_elapsed = start_commit.elapsed();
 
@@ -483,6 +483,7 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
                                     &ConflictDetector,
                                     10,
                                     "foo",
+                                    8,
                                     None,
                                     |_| async {},
                                     |_| async {},
