@@ -102,6 +102,7 @@ impl Storage for LatencyStorage {
         content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
+        tokio::time::sleep(Duration::from_millis(self.write_delay_ms())).await;
         self.backend.copy_object(settings, from, to, content_type, version).await
     }
 
@@ -110,6 +111,7 @@ impl Storage for LatencyStorage {
         settings: &Settings,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        tokio::time::sleep(Duration::from_millis(self.read_delay_ms())).await;
         self.backend.list_objects(settings, prefix).await
     }
 
@@ -119,6 +121,7 @@ impl Storage for LatencyStorage {
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
+        tokio::time::sleep(Duration::from_millis(self.write_delay_ms())).await;
         self.backend.delete_batch(settings, prefix, batch).await
     }
 
@@ -127,6 +130,7 @@ impl Storage for LatencyStorage {
         path: &str,
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
+        tokio::time::sleep(Duration::from_millis(self.read_delay_ms())).await;
         self.backend.get_object_last_modified(path, settings).await
     }
 
@@ -181,7 +185,7 @@ mod tests {
         let write_baseline = start.elapsed();
 
         let start = std::time::Instant::now();
-        storage.get_object_range(&settings, "test/key", None).await.unwrap();
+        let _ = storage.get_object_range(&settings, "test/key", None).await.unwrap();
         let read_baseline = start.elapsed();
 
         // Add 50ms write latency, 30ms read latency
@@ -196,7 +200,7 @@ mod tests {
         let write_with_latency = start.elapsed();
 
         let start = std::time::Instant::now();
-        storage.get_object_range(&settings, "test/key", None).await.unwrap();
+        let _ = storage.get_object_range(&settings, "test/key", None).await.unwrap();
         let read_with_latency = start.elapsed();
 
         let write_added = write_with_latency.saturating_sub(write_baseline);
