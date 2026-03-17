@@ -3,6 +3,10 @@
 // Only compiles when the `shuttle` feature is active:
 //   cargo test -p icechunk --features shuttle --test test_shuttle -- --nocapture
 
+// TODO: Make repo_info_num_updates tiny?
+// TODO: assert that ops log contains Action
+// 
+
 #![cfg(feature = "shuttle")]
 
 use bytes::Bytes;
@@ -161,8 +165,8 @@ enum Action {
     DeleteBranch,
     AddTag,
     DeleteTag,
-    // Amend,
-    // ResetBranch,
+    Amend,
+    ResetBranch,
 }
 
 #[derive(Debug, Clone)]
@@ -172,8 +176,8 @@ enum ActionResult {
     DeleteBranch(String),
     AddTag(String, SnapshotId),
     DeleteTag(String),
-    // Amend(SnapshotId),
-    // ResetBranch(???),
+    Amend(String, SnapshotId),
+    ResetBranch(String, SnapshotId),
 }
 
 fn actions(
@@ -187,6 +191,8 @@ fn actions(
             DeleteBranch,
             AddTag,
             DeleteTag,
+            Amend,
+            ResetBranch,
         ]),
         range,
     )
@@ -197,9 +203,19 @@ async fn setup_branches(
     actions: &[Action],
     branches: &[String],
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let path: Path = "/array".try_into()?;
     for (action, branch) in actions.iter().zip(branches.iter()) {
         match action {
             Action::AddBranch => {}
+            Action::Amend => {
+                repo.create_branch(branch, &repo.lookup_branch("main").await?).await?;
+                mk_commit(repo.clone(), path.clone(), branch, 3).await?;
+            }
+            Action::ResetBranch => {
+                repo.create_branch(branch, &repo.lookup_branch("main").await?).await?;
+                mk_commit(repo.clone(), path.clone(), branch, 2).await?;
+                mk_commit(repo.clone(), path.clone(), branch, 3).await?;
+            }
             _ => {
                 repo.create_branch(branch, &repo.lookup_branch("main").await?).await?;
                 repo.create_tag(
@@ -247,6 +263,23 @@ async fn execute_action(
             repo.delete_tag(&tag).await?;
             ActionResult::DeleteTag(tag)
         }
+        Amend => {
+            let mut session = repo.writable_session(&branch).await?;
+            session
+                .set_chunk_ref(
+                    "/array".try_into()?,
+                    ChunkIndices(vec![4]),
+                    Some(ChunkPayload::Inline("amend".into())),
+                )
+                .await?;
+            let snap = session.amend("amend commit", None, false).await?;
+            ActionResult::Amend(branch, snap)
+        }
+        ResetBranch => {
+            let snap = repo.lookup_branch("main").await?;
+            repo.reset_branch(&branch, &snap, None).await?;
+            ActionResult::ResetBranch(branch, snap)
+        }
     };
 
     Ok(res)
@@ -283,6 +316,14 @@ async fn assert_action_postcondition(
         }
         DeleteTag(tag) => {
             assert!(!repo.list_tags().await?.contains(&tag));
+        }
+        Amend(branch, snap) => {
+            let tip = repo.lookup_branch(&branch).await?;
+            assert_eq!(tip, snap, "amend snapshot should be branch tip for {branch}");
+        }
+        ResetBranch(branch, snap) => {
+            let tip = repo.lookup_branch(&branch).await?;
+            assert_eq!(tip, snap, "branch {branch} should be reset to {snap:?}");
         }
     };
     Ok(())
