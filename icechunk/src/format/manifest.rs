@@ -288,14 +288,19 @@ impl VirtualChunkLocation {
             )
             .into());
         }
-        let path: String = relative_path
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join("/");
-        Ok(VirtualChunkLocation(format!(
-            "{VCC_RELATIVE_URL_SCHEME}{container_name}/{path}"
-        )))
+        let mut result = String::with_capacity(
+            VCC_RELATIVE_URL_SCHEME.len()
+                + container_name.len()
+                + 1
+                + relative_path.len(),
+        );
+        result.push_str(VCC_RELATIVE_URL_SCHEME);
+        result.push_str(container_name);
+        for segment in relative_path.split('/').filter(|s| !s.is_empty()) {
+            result.push('/');
+            result.push_str(segment);
+        }
+        Ok(VirtualChunkLocation(result))
     }
 
     /// Parse a location that may be either `vcc://` relative or an absolute URL.
@@ -314,17 +319,14 @@ impl VirtualChunkLocation {
             VirtualReferenceErrorKind::CannotParseUrl { cause: e, url: path.to_string() }
         })?;
         let scheme = url.scheme();
-        let new_path: String = url
+        let segments = url
             .path_segments()
-            .ok_or(VirtualReferenceErrorKind::NoPathSegments(path.into()))?
-            // strip empty segments here, object_store cannot handle them.
-            .filter(|x| !x.is_empty())
-            .join("/");
+            .ok_or(VirtualReferenceErrorKind::NoPathSegments(path.into()))?;
 
         let host = if let Some(host) = url.host() {
             host.to_string()
         } else if scheme == "file" {
-            "".to_string()
+            String::new()
         } else if scheme == "vcc" {
             return Err(VirtualReferenceErrorKind::NoContainerForName(path.into()).into());
         } else {
@@ -333,9 +335,16 @@ impl VirtualChunkLocation {
             );
         };
 
-        let location = format!("{scheme}://{host}/{new_path}",);
+        let mut result = String::with_capacity(path.len());
+        result.push_str(scheme);
+        result.push_str("://");
+        result.push_str(&host);
+        for segment in segments.filter(|x| !x.is_empty()) {
+            result.push('/');
+            result.push_str(segment);
+        }
 
-        Ok(VirtualChunkLocation(location))
+        Ok(VirtualChunkLocation(result))
     }
 }
 
