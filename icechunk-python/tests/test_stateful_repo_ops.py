@@ -872,9 +872,15 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
     def _draw_older_than(self, data: st.DataObject) -> datetime.datetime:
         # Draw cutoffs from storage-level created_at (not written_at/flushed_at)
-        # because that is what Rust GC compares against. The +10ms offset is
-        # past the concurrent snapshot/transaction write gap (sub-ms) but tight
-        # enough that not all snapshots fall below the cutoff.
+        # because that is what Rust GC compares against.
+        #
+        # The +10ms offset must be large enough to land past both the snapshot
+        # and transaction log writes for the same commit. These are written
+        # concurrently (session.rs) and get slightly different
+        # created_at timestamps. If the cutoff lands between them, GC deletes
+        # one file but not the other, breaking check_file_invariants.
+        # 10ms seems to be safely past this gap, but does not accidentally grab
+        # other commits. See: https://github.com/earth-mover/icechunk/pull/1846
         created_at_times = sorted(
             obj.created_at
             for obj in self.storage.list_objects_metadata(prefix="snapshots")
