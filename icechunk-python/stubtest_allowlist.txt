@@ -178,6 +178,8 @@ icechunk._icechunk_python.UpdateType.NewDetachedSnapshot.__new__
 icechunk._icechunk_python.UpdateType.RepoInitialized.__match_args__
 icechunk._icechunk_python.UpdateType.RepoMigrated.__match_args__
 icechunk._icechunk_python.UpdateType.RepoMigrated.__new__
+icechunk._icechunk_python.UpdateType.RepoStatusChanged.__match_args__
+icechunk._icechunk_python.UpdateType.RepoStatusChanged.__new__
 icechunk._icechunk_python.UpdateType.TagCreated.__match_args__
 icechunk._icechunk_python.UpdateType.TagCreated.__new__
 icechunk._icechunk_python.UpdateType.TagDeleted.__match_args__

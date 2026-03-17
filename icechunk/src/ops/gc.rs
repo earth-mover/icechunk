@@ -22,7 +22,7 @@ use crate::{
         ChunkId, FileTypeTag, IcechunkFormatError, ManifestId, ObjectId, SnapshotId,
         format_constants::SpecVersionBin,
         manifest::{ChunkPayload, Manifest},
-        repo_info::{RepoInfo, UpdateInfo, UpdateType},
+        repo_info::{RepoAvailability, RepoInfo, UpdateInfo, UpdateType},
         snapshot::{ManifestFileInfo, Snapshot, SnapshotInfo},
     },
     ops::pointed_snapshots,
@@ -332,6 +332,19 @@ pub async fn garbage_collect(
         ));
     }
 
+    // Check repo status (only available on IC2+)
+    if asset_manager.spec_version() >= SpecVersionBin::V2dot0 {
+        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+        if repo_info.status()?.availability != RepoAvailability::Online {
+            return Err(GCError::Repository(
+                RepositoryErrorKind::ReadonlyRepository(
+                    "Cannot garbage collect".to_string(),
+                )
+                .into(),
+            ));
+        }
+    }
+
     let default_retry_config = RepoUpdateRetryConfig::default();
     let retry_config = repo_update_retries.unwrap_or(&default_retry_config).retries();
 
@@ -592,6 +605,7 @@ async fn delete_snapshots_from_repo_info(
             config_bytes.as_deref(),
             repo_info.enabled_feature_flags()?,
             repo_info.disabled_feature_flags()?,
+            &repo_info.status()?,
         )?;
 
         Ok(Arc::new(new_repo_info))
@@ -781,6 +795,19 @@ pub async fn expire(
         return Err(GCError::Repository(
             RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into(),
         ));
+    }
+
+    // Check repo status (only available on IC2+)
+    if asset_manager.spec_version() >= SpecVersionBin::V2dot0 {
+        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+        if repo_info.status()?.availability != RepoAvailability::Online {
+            return Err(GCError::Repository(
+                RepositoryErrorKind::ReadonlyRepository(
+                    "Cannot garbage collect".to_string(),
+                )
+                .into(),
+            ));
+        }
     }
 
     match asset_manager.spec_version() {
@@ -1055,6 +1082,7 @@ async fn expire_v2_one_attempt(
             config_bytes.as_deref(),
             repo_info.enabled_feature_flags()?,
             repo_info.disabled_feature_flags()?,
+            &repo_info.status()?,
         )?;
 
         Ok(Arc::new(new_repo_info))

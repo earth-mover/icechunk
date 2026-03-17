@@ -14,6 +14,7 @@ from icechunk._icechunk_python import (
     ManifestFileInfo,
     PyRepository,
     RepositoryConfig,
+    RepoStatus,
     SnapshotInfo,
     Storage,
     StorageSettings,
@@ -691,6 +692,62 @@ class Repository:
             The dict to merge into the repository metadata.
         """
         return await self._repository.update_metadata_async(metadata)
+
+    def get_status(self) -> RepoStatus:
+        """
+        Get the current repository status.
+
+        Returns
+        -------
+        RepoStatus
+            The current status of the repository.
+        """
+        return self._repository.get_status()
+
+    @property
+    def status(self) -> RepoStatus:
+        """
+        Get the current repository status.
+
+        Returns
+        -------
+        RepoStatus
+            The current status of the repository.
+        """
+        return self._repository.get_status()
+
+    async def get_status_async(self) -> RepoStatus:
+        """
+        Get the current repository status (async version).
+
+        Returns
+        -------
+        RepoStatus
+            The current status of the repository.
+        """
+        return await self._repository.get_status_async()
+
+    def set_status(self, status: RepoStatus) -> None:
+        """
+        Set the repository status.
+
+        Parameters
+        ----------
+        status : RepoStatus
+            The new status for the repository.
+        """
+        self._repository.set_status(status)
+
+    async def set_status_async(self, status: RepoStatus) -> None:
+        """
+        Set the repository status (async version).
+
+        Parameters
+        ----------
+        status : RepoStatus
+            The new status for the repository.
+        """
+        await self._repository.set_status_async(status)
 
     def feature_flags(self) -> list[FeatureFlag]:
         """

@@ -37,6 +37,7 @@ use tokio::{
 };
 use tracing::{debug, instrument, trace, warn};
 
+use crate::format::repo_info::RepoAvailability;
 use crate::storage::GetModifiedResult;
 use crate::{
     RepositoryConfig, Storage, StorageError,
@@ -614,11 +615,42 @@ impl AssetManager {
     pub async fn update_repo_info(
         &self,
         retry_settings: &storage::RetriesSettings,
+        update: impl FnMut(
+            Arc<RepoInfo>,
+            &str,
+            VersionInfo,
+        ) -> RepositoryResult<Arc<RepoInfo>>,
+    ) -> RepositoryResult<VersionInfo> {
+        self.update_repo_info_internal(retry_settings, update, false).await
+    }
+
+    /// # Safety
+    ///
+    /// This overrides any checks on the repo status, and force
+    /// an update.
+    #[instrument(skip(self, retry_settings, update))]
+    pub async unsafe fn update_repo_info_unchecked(
+        &self,
+        retry_settings: &storage::RetriesSettings,
+        update: impl FnMut(
+            Arc<RepoInfo>,
+            &str,
+            VersionInfo,
+        ) -> RepositoryResult<Arc<RepoInfo>>,
+    ) -> RepositoryResult<VersionInfo> {
+        self.update_repo_info_internal(retry_settings, update, true).await
+    }
+
+    #[instrument(skip(self, retry_settings, update))]
+    async fn update_repo_info_internal(
+        &self,
+        retry_settings: &storage::RetriesSettings,
         mut update: impl FnMut(
             Arc<RepoInfo>,
             &str,
             VersionInfo,
         ) -> RepositoryResult<Arc<RepoInfo>>,
+        skip_online_check: bool,
     ) -> RepositoryResult<VersionInfo> {
         let max_attempts = retry_settings.max_tries().get() as usize;
 
@@ -640,6 +672,12 @@ impl AssetManager {
         let mut attempts: u64 = 1;
         loop {
             let (repo_info, repo_version) = self.fetch_repo_info().await?;
+            let status = repo_info.status()?;
+            if !skip_online_check && status.availability != RepoAvailability::Online {
+                return Err(
+                    RepositoryErrorKind::ReadonlyRepository(status.error_msg()).into()
+                );
+            }
             let backup_path = self.backup_path_for_repo_info();
             let new_repo = update(repo_info, backup_path.as_str(), repo_version.clone())?;
             trace!(attempts, "Attempting to update repo object");
