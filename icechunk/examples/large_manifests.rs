@@ -30,7 +30,7 @@ mod inner {
     const NUM_TASKS: usize = TOTAL_NUM_REFS / TASK_CHUNK_SIZE;
     const MAX_CONCURRENT_TASKS: usize = 100;
 
-    pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let storage = new_in_memory_storage().await?;
         let config = RepositoryConfig {
             inline_chunk_threshold_bytes: Some(128),
