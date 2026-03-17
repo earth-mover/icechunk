@@ -881,6 +881,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # one file but not the other, breaking check_file_invariants.
         # 10ms seems to be safely past this gap, but does not accidentally grab
         # other commits. See: https://github.com/earth-mover/icechunk/pull/1846
+        assert self.storage is not None
         created_at_times = sorted(
             obj.created_at
             for obj in self.storage.list_objects_metadata(prefix="snapshots")
