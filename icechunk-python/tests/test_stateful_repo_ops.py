@@ -552,11 +552,15 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         latency: tuple[int, int] = (0, 0),
     ) -> str:
         write_latency_ms, read_latency_ms = latency
-        self.storage = LatencyStorage(
-            self._make_storage(),
-            write_latency_ms=write_latency_ms,
-            read_latency_ms=read_latency_ms,
-        )
+        inner = self._make_storage()
+        if write_latency_ms or read_latency_ms:
+            self.storage = LatencyStorage(
+                inner,
+                write_latency_ms=write_latency_ms,
+                read_latency_ms=read_latency_ms,
+            )
+        else:
+            self.storage = inner
         config = data.draw(repository_configs(ic_module=self.ic))
         self.model.initial_spec_version = spec_version
         self.model.spec_version = spec_version
