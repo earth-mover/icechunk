@@ -17,6 +17,7 @@ from icechunk import (
     RepositoryConfig,
     RepoStatus,
     SessionMode,
+    UpdateType,
     VirtualChunkContainer,
     VirtualChunkSpec,
     in_memory_storage,
@@ -361,6 +362,9 @@ def test_readonly_repo_status_blocks_rearrange_session() -> None:
     assert not session.read_only
 
     repo.set_status(RepoStatus(availability=RepoAvailability.read_only))
+    # Check ops log to see if status was updated
+    last_op = next(repo.ops_log())
+    assert isinstance(last_op.kind, UpdateType.RepoStatusChanged)
     assert repo.status.availability == RepoAvailability.read_only
 
     # Rearrange session should fail when repo is read_only
@@ -373,6 +377,9 @@ def test_readonly_repo_status_blocks_rearrange_session() -> None:
 
     # Set back to online and verify rearrange session works again
     repo.set_status(RepoStatus(availability=RepoAvailability.online))
+    # Check ops log to see if status was updated
+    last_op = next(repo.ops_log())
+    assert isinstance(last_op.kind, UpdateType.RepoStatusChanged)
     assert repo.status.availability == RepoAvailability.online  # type: ignore[comparison-overlap]
 
 
@@ -389,6 +396,9 @@ def test_readonly_repo_status_change_during_rearrange_session() -> None:
     session = repo.rearrange_session("main")
 
     repo.set_status(RepoStatus(availability=RepoAvailability.read_only))
+    # Check ops log to see if status was updated
+    last_op = next(repo.ops_log())
+    assert isinstance(last_op.kind, UpdateType.RepoStatusChanged)
 
     with pytest.raises(IcechunkError) as e:
         repo.create_branch("oops_read_only", snapshot_id=snapshot_id)
@@ -408,6 +418,10 @@ def test_readonly_repo_status_change_during_rearrange_session() -> None:
 
     # revert back to online. Operations should work now.
     repo.set_status(RepoStatus(availability=RepoAvailability.online))
+    # Check ops log to see if status was updated
+    last_op = next(repo.ops_log())
+    assert isinstance(last_op.kind, UpdateType.RepoStatusChanged)
+
     new_snapshot_id = session.commit("we can commit again", allow_empty=True)
 
     repo.create_branch("not read-only anymore!", snapshot_id=new_snapshot_id)
