@@ -48,6 +48,9 @@ use thiserror::Error;
 #[cfg(test)]
 pub mod logging;
 
+/// Storage wrapper that adds artificial read/write latency (for testing).
+pub mod latency;
+
 /// Storage using the `object_store` crate (local, in-memory, Azure, GCS).
 pub mod object_store;
 /// HTTP redirect-based storage for read-only access.
