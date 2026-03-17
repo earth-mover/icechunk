@@ -270,10 +270,10 @@ def test_repository_open_no_list_bucket(any_spec_version: int | None) -> None:
         # repo_info like in a v2 repo
         with pytest.raises(IcechunkError) as e:
             assert repo.list_branches() == set(["main"])
-            assert "error listing objects" in e.value.message
+        assert "error listing objects" in e.value.message
         with pytest.raises(IcechunkError) as e:
             assert len(list(repo.list_tags())) == 1
-            assert "error listing objects" in e.value.message
+        assert "error listing objects" in e.value.message
         # skip ops log check, need repo v2
     else:
         assert repo.list_branches() == set(["main", "new_branch"])
@@ -326,19 +326,19 @@ def test_repo_status_readonly_change_during_writable_session() -> None:
 
     with pytest.raises(IcechunkError) as e:
         repo.create_branch("oops_read_only", snapshot_id=snapshot_id)
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     with pytest.raises(IcechunkError) as e:
         repo.create_tag("oops_read_only", snapshot_id=snapshot_id)
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     with pytest.raises(IcechunkError) as e:
         session.commit("commit after repo changed to read only", allow_empty=True)
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     with pytest.raises(IcechunkError) as e:
         repo.garbage_collect(datetime.now(UTC))
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     # revert back to online. Operations should work now.
     repo.set_status(RepoStatus(availability=RepoAvailability.online))
