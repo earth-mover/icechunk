@@ -2130,8 +2130,9 @@ async fn write_manifest_with_changes(
         .map(|mref| fetch_manifest(&mref.object_id, old_snapshot_id, asset_manager))
         .collect::<Vec<_>>();
 
-    // We could be more clever here by considering size of manifests and fetching more in parallel if they are small
-    // but for now we concurrently fetch one manifess as we iterate through another one.
+    // Hardcoded to 1: this fetches manifests for a single extent within a single node.
+    // Node-level parallelism is already controlled by max_concurrent_manifests in the
+    // caller (do_flush), so adding concurrency here would compound it.
     let mut all_chunks_vec = stream::iter(futs)
         .buffer_unordered(1)
         .try_fold(Vec::with_capacity(modified_chunks.len()), |mut acc, manifest| async {
