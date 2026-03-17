@@ -24,6 +24,7 @@ from icechunk import (
     local_filesystem_storage,
     local_filesystem_store,
     s3_storage,
+    upgrade_icechunk_repository,
 )
 from icechunk.distributed import merge_sessions
 from tests.conftest import Permission
@@ -280,7 +281,7 @@ def test_repository_open_no_list_bucket(any_spec_version: int | None) -> None:
         assert len(list(repo.ops_log())) == 5
 
 
-def test_readonly_repo_status_blocks_writable_session() -> None:
+def test_repo_status_readonly_blocks_writable_session() -> None:
     repo = Repository.create(
         storage=in_memory_storage(),
         spec_version=2,
@@ -309,7 +310,7 @@ def test_readonly_repo_status_blocks_writable_session() -> None:
     assert repo.status.availability == RepoAvailability.online  # type: ignore[comparison-overlap]
 
 
-def test_readonly_repo_status_change_during_writable_session() -> None:
+def test_repo_status_readonly_change_during_writable_session() -> None:
     repo = Repository.create(
         storage=in_memory_storage(),
         spec_version=2,
@@ -348,7 +349,7 @@ def test_readonly_repo_status_change_during_writable_session() -> None:
     repo.garbage_collect(datetime.now(UTC))
 
 
-def test_readonly_repo_status_blocks_rearrange_session() -> None:
+def test_repo_status_readonly_blocks_rearrange_session() -> None:
     repo = Repository.create(
         storage=in_memory_storage(),
         spec_version=2,
@@ -383,7 +384,26 @@ def test_readonly_repo_status_blocks_rearrange_session() -> None:
     assert repo.status.availability == RepoAvailability.online  # type: ignore[comparison-overlap]
 
 
-def test_readonly_repo_status_change_during_rearrange_session() -> None:
+def test_repo_status_change_migration() -> None:
+    repo = Repository.create(
+        storage=in_memory_storage(),
+        spec_version=1,
+    )
+
+    session = repo.writable_session("main")
+    session.commit("initial commit", allow_empty=True)
+
+    repo = upgrade_icechunk_repository(repo, dry_run=False)
+
+    # After repo migration the status should be online,
+    # with set_at matching the repo creation time
+    init_op = list(repo.ops_log())[-1]
+
+    assert isinstance(init_op.kind, UpdateType.RepoInitialized)
+    assert repo.status.set_at == init_op.updated_at
+
+
+def test_repo_status_readonly_change_during_rearrange_session() -> None:
     repo = Repository.create(
         storage=in_memory_storage(),
         spec_version=2,
@@ -402,19 +422,19 @@ def test_readonly_repo_status_change_during_rearrange_session() -> None:
 
     with pytest.raises(IcechunkError) as e:
         repo.create_branch("oops_read_only", snapshot_id=snapshot_id)
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     with pytest.raises(IcechunkError) as e:
         repo.create_tag("oops_read_only", snapshot_id=snapshot_id)
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     with pytest.raises(IcechunkError) as e:
         session.commit("commit after repo changed to read only", allow_empty=True)
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     with pytest.raises(IcechunkError) as e:
         repo.garbage_collect(datetime.now(UTC))
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     # revert back to online. Operations should work now.
     repo.set_status(RepoStatus(availability=RepoAvailability.online))
@@ -429,7 +449,7 @@ def test_readonly_repo_status_change_during_rearrange_session() -> None:
     repo.garbage_collect(datetime.now(UTC))
 
 
-async def test_readonly_repo_status_blocks_rearrange_session_async() -> None:
+async def test_repo_status_readonly_blocks_rearrange_session_async() -> None:
     repo = await Repository.create_async(
         storage=in_memory_storage(),
         spec_version=2,
@@ -462,21 +482,21 @@ async def test_readonly_repo_status_blocks_rearrange_session_async() -> None:
 
     with pytest.raises(IcechunkError) as e:
         await repo.create_branch_async("oops_read_only", snapshot_id=snapshot_id)
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     with pytest.raises(IcechunkError) as e:
         await repo.create_tag_async("oops_read_only", snapshot_id=snapshot_id)
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     with pytest.raises(IcechunkError) as e:
         await session.commit_async(
             "commit after repo changed to read only", allow_empty=True
         )
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     with pytest.raises(IcechunkError) as e:
         await repo.garbage_collect_async(datetime.now(UTC))
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     # revert back to online. Operations should work now.
     await repo.set_status_async(RepoStatus(availability=RepoAvailability.online))
@@ -487,7 +507,7 @@ async def test_readonly_repo_status_blocks_rearrange_session_async() -> None:
     await repo.garbage_collect_async(datetime.now(UTC))
 
 
-async def test_readonly_repo_status_blocks_writable_session_async() -> None:
+async def test_repo_status_readonly_blocks_writable_session_async() -> None:
     repo = await Repository.create_async(
         storage=in_memory_storage(),
         spec_version=2,
@@ -512,21 +532,21 @@ async def test_readonly_repo_status_blocks_writable_session_async() -> None:
 
     with pytest.raises(IcechunkError) as e:
         await repo.create_branch_async("oops_read_only", snapshot_id=snapshot_id)
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     with pytest.raises(IcechunkError) as e:
         await repo.create_tag_async("oops_read_only", snapshot_id=snapshot_id)
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     with pytest.raises(IcechunkError) as e:
         await session.commit_async(
             "commit after repo changed to read only", allow_empty=True
         )
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     with pytest.raises(IcechunkError) as e:
         await repo.garbage_collect_async(datetime.now(UTC))
-        assert "repository status is read-only" in e.value.message
+    assert "repository status is read-only" in e.value.message
 
     # revert back to online. Operations should work now.
     await repo.set_status_async(RepoStatus(availability=RepoAvailability.online))
