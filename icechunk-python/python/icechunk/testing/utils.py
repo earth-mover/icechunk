@@ -6,7 +6,7 @@ from icechunk import Repository, in_memory_storage
 from icechunk.testing.models import ModelStore
 
 
-def tree_to_model_and_icechunk(tree):
+def tree_to_model_and_icechunk(tree, add_hypothesis_note=True):
     """Materialize tree into ModelStore + IcechunkStore (uncommitted)."""
     model = ModelStore()
     tree.materialize(model)
@@ -14,6 +14,12 @@ def tree_to_model_and_icechunk(tree):
     repo = Repository.create(storage=in_memory_storage())
     session = repo.writable_session("main")
     tree.materialize(session.store)
+    if add_hypothesis_note:
+        from hypothesis import note
+
+        import zarr
+
+        note(zarr.open_group(model).tree())
 
     return model, session, repo
 
@@ -27,16 +33,6 @@ def precommit_postcommit_readonly(session, repo):
     session.commit("commit")
     yield "post-commit", session.store
     yield "readonly", repo.readonly_session(branch="main").store
-
-
-async def collect_list_prefix(store, prefix=""):
-    """Collect all keys from store.list_prefix into a set."""
-    return {k async for k in store.list_prefix(prefix)}
-
-
-async def collect_list_dir(store, prefix):
-    """Collect all entries from store.list_dir into a set."""
-    return {k async for k in store.list_dir(prefix)}
 
 
 def assert_list_dir_equal(path, expected, actual):
@@ -70,6 +66,6 @@ def update_paths_after_move(source, dest, arrays, groups):
 async def compare_list_dir(model, store, paths):
     """Compare list_dir results between model and store for given paths."""
     for path in sorted(paths):
-        expected = sorted(await collect_list_dir(model, path))
-        actual = sorted(await collect_list_dir(store, path))
+        expected = sorted([k async for k in model.list_dir(path)])
+        actual = sorted([k async for k in store.list_dir(path)])
         assert_list_dir_equal(path, expected, actual)
