@@ -180,7 +180,9 @@ where
 
     let mut ds1 = repo1.writable_session("main").await?;
 
-    let shape = ArrayShape::new(vec![(SIZE as u64, 1), (SIZE as u64, 1)]).unwrap();
+    let shape =
+        ArrayShape::new(vec![(SIZE as u64, SIZE as u32), (SIZE as u64, SIZE as u32)])
+            .unwrap();
     let user_data = Bytes::new();
 
     let new_array_path: Path = "/array".try_into().unwrap();

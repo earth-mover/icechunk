@@ -117,7 +117,7 @@ async fn do_test_repo_chunks_storage(
     let user_data = Bytes::new();
     session.add_group(Path::root(), user_data.clone()).await?;
 
-    let shape = ArrayShape::new(vec![(100, 1)]).unwrap();
+    let shape = ArrayShape::new(vec![(100, 100)]).unwrap();
 
     let array_path: Path = "/array".try_into().unwrap();
     session.add_array(array_path.clone(), shape, None, user_data.clone()).await?;
@@ -275,7 +275,7 @@ pub async fn test_virtual_chunk_deduplication(
     let mut session = repo.writable_session("main").await?;
     let user_data = Bytes::new();
     session.add_group(Path::root(), user_data.clone()).await?;
-    let shape = ArrayShape::new(vec![(100, 1)]).unwrap();
+    let shape = ArrayShape::new(vec![(100, 100)]).unwrap();
     let array_path: Path = "/array".try_into().unwrap();
     session.add_array(array_path.clone(), shape, None, user_data.clone()).await?;
 
