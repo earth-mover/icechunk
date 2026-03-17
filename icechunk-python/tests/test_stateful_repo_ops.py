@@ -879,7 +879,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             st.one_of(
                 st.just(max(created_at_times) + datetime.timedelta(seconds=1)),
                 st.sampled_from(created_at_times).map(
-                    lambda time: time + datetime.timedelta(milliseconds=1)
+                    lambda time: time + datetime.timedelta(milliseconds=10)
                 ),
                 st.just(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
             )
