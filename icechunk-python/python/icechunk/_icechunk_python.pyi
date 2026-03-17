@@ -2612,6 +2612,7 @@ class Credentials:
 
 _AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
 
+@final
 class LatencyStorage(Storage):
     """Storage wrapper that adds artificial read/write latency for testing.
 
@@ -2636,13 +2637,13 @@ class LatencyStorage(Storage):
     >>> storage.write_latency_ms = 50  # adjust at runtime
     """
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         inner: Storage,
         *,
         write_latency_ms: int = 0,
         read_latency_ms: int = 0,
-    ) -> None: ...
+    ) -> LatencyStorage: ...
     @property
     def write_latency_ms(self) -> int: ...
     @write_latency_ms.setter
@@ -2652,6 +2653,7 @@ class LatencyStorage(Storage):
     @read_latency_ms.setter
     def read_latency_ms(self, ms: int) -> None: ...
 
+@final
 class StorageObjectInfo:
     """Metadata for an object in storage.
 
