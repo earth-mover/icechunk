@@ -4,8 +4,6 @@
 //   cargo test -p icechunk --features shuttle --test test_shuttle -- --nocapture
 
 // TODO: Make repo_info_num_updates tiny?
-// TODO: assert that ops log contains Action
-// 
 
 #![cfg(feature = "shuttle")]
 
@@ -173,11 +171,11 @@ enum Action {
 enum ActionResult {
     Commit(String, SnapshotId),
     AddBranch(String, SnapshotId),
-    DeleteBranch(String),
+    DeleteBranch { branch: String, previous_snap: SnapshotId },
     AddTag(String, SnapshotId),
-    DeleteTag(String),
-    Amend(String, SnapshotId),
-    ResetBranch(String, SnapshotId),
+    DeleteTag { tag: String, previous_snap: SnapshotId },
+    Amend { branch: String, new_snap: SnapshotId, previous_snap: SnapshotId },
+    ResetBranch { branch: String, to_snap: SnapshotId, previous_snap: SnapshotId },
 }
 
 fn actions(
@@ -247,8 +245,9 @@ async fn execute_action(
             ActionResult::AddBranch(branch, snap)
         }
         DeleteBranch => {
+            let previous_snap = repo.lookup_branch(&branch).await?;
             repo.delete_branch(&branch).await?;
-            ActionResult::DeleteBranch(branch)
+            ActionResult::DeleteBranch { branch, previous_snap }
         }
         AddTag => {
             let snap = repo.lookup_branch(&branch).await?;
@@ -260,10 +259,12 @@ async fn execute_action(
         DeleteTag => {
             // stick `branch` in to avoid conflicts
             let tag = format!("tag-to-delete-{branch}");
+            let previous_snap = repo.lookup_tag(&tag).await?;
             repo.delete_tag(&tag).await?;
-            ActionResult::DeleteTag(tag)
+            ActionResult::DeleteTag { tag, previous_snap }
         }
         Amend => {
+            let previous_snap = repo.lookup_branch(&branch).await?;
             let mut session = repo.writable_session(&branch).await?;
             session
                 .set_chunk_ref(
@@ -272,13 +273,14 @@ async fn execute_action(
                     Some(ChunkPayload::Inline("amend".into())),
                 )
                 .await?;
-            let snap = session.amend("amend commit", None, false).await?;
-            ActionResult::Amend(branch, snap)
+            let new_snap = session.amend("amend commit", None, false).await?;
+            ActionResult::Amend { branch, new_snap, previous_snap }
         }
         ResetBranch => {
-            let snap = repo.lookup_branch("main").await?;
-            repo.reset_branch(&branch, &snap, None).await?;
-            ActionResult::ResetBranch(branch, snap)
+            let previous_snap = repo.lookup_branch(&branch).await?;
+            let to_snap = repo.lookup_branch("main").await?;
+            repo.reset_branch(&branch, &to_snap, None).await?;
+            ActionResult::ResetBranch { branch, to_snap, previous_snap }
         }
     };
 
@@ -307,26 +309,51 @@ async fn assert_action_postcondition(
             assert!(repo.list_branches().await?.contains(&branch));
             assert_eq!(repo.lookup_branch(&branch).await?, snap);
         }
-        DeleteBranch(branch) => {
+        DeleteBranch { branch, .. } => {
             assert!(!repo.list_branches().await?.contains(&branch));
         }
         AddTag(tag, snap) => {
             assert!(repo.list_tags().await?.contains(&tag));
             assert_eq!(repo.lookup_tag(&tag).await?, snap);
         }
-        DeleteTag(tag) => {
+        DeleteTag { tag, .. } => {
             assert!(!repo.list_tags().await?.contains(&tag));
         }
-        Amend(branch, snap) => {
+        Amend { branch, new_snap, .. } => {
             let tip = repo.lookup_branch(&branch).await?;
-            assert_eq!(tip, snap, "amend snapshot should be branch tip for {branch}");
+            assert_eq!(tip, new_snap, "amend snapshot should be branch tip for {branch}");
         }
-        ResetBranch(branch, snap) => {
+        ResetBranch { branch, to_snap, .. } => {
             let tip = repo.lookup_branch(&branch).await?;
-            assert_eq!(tip, snap, "branch {branch} should be reset to {snap:?}");
+            assert_eq!(tip, to_snap, "branch {branch} should be reset to {to_snap:?}");
         }
     };
     Ok(())
+}
+
+fn assert_ops_log_contains(
+    entries: &[(DateTime<Utc>, UpdateType, Option<String>)],
+    result: &ActionResult,
+) {
+    use ActionResult::*;
+    let found = entries.iter().any(|(_, update_type, _)| match (result, update_type) {
+        (Commit(branch, snap), UpdateType::NewCommitUpdate { branch: b, new_snap_id })
+            => b == branch && new_snap_id == snap,
+        (AddBranch(branch, _), UpdateType::BranchCreatedUpdate { name })
+            => name == branch,
+        (DeleteBranch { branch, previous_snap }, UpdateType::BranchDeletedUpdate { name, previous_snap_id })
+            => name == branch && previous_snap_id == previous_snap,
+        (AddTag(tag, _), UpdateType::TagCreatedUpdate { name })
+            => name == tag,
+        (DeleteTag { tag, previous_snap }, UpdateType::TagDeletedUpdate { name, previous_snap_id })
+            => name == tag && previous_snap_id == previous_snap,
+        (Amend { branch, new_snap, previous_snap }, UpdateType::CommitAmendedUpdate { branch: b, new_snap_id, previous_snap_id })
+            => b == branch && new_snap_id == new_snap && previous_snap_id == previous_snap,
+        (ResetBranch { branch, previous_snap, .. }, UpdateType::BranchResetUpdate { name, previous_snap_id })
+            => name == branch && previous_snap_id == previous_snap,
+        _ => false,
+    });
+    assert!(found, "no ops log entry found for action result {result:?}");
 }
 
 async fn execute_concurrent_actions(
@@ -371,8 +398,13 @@ async fn execute_concurrent_actions(
     let (stream, _, _) = repo.ops_log().await?;
     let log: Vec<_> = stream.try_collect().await?;
 
-    assert_eq!(log.len() - ops_count_before, actions.len());
+    let new_entries: Vec<_> = log[..log.len() - ops_count_before].to_vec();
+    assert_eq!(new_entries.len(), actions.len());
     assert_ops_log_invariants(&log);
+
+    for r in &results {
+        assert_ops_log_contains(&new_entries, r);
+    }
 
     for r in results {
         assert_action_postcondition(repo.clone(), r).await?;
