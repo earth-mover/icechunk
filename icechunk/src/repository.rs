@@ -334,6 +334,8 @@ impl Repository {
             }
             .in_current_span();
 
+            // Note that for V1 repos we don't actually create a repo info file despite the name here.
+            // We are (writing the snap; then updating the branch pointer) & writing config.yaml concurrently.
             let (_, config_version) = try_join!(create_repo_info, update_config)?;
             config_version
         };
@@ -517,7 +519,7 @@ impl Repository {
         let storage_c = Arc::clone(&storage);
         let settings_c = settings.clone();
         let is_v1 = async move {
-            match refs::fetch_branch_tip(
+            match refs::fetch_branch_tip_v1(
                 storage_c.as_ref(),
                 &settings_c,
                 Ref::DEFAULT_BRANCH,
@@ -1156,9 +1158,12 @@ impl Repository {
     /// Get the snapshot id of the tip of a branch
     #[instrument(skip(self))]
     async fn lookup_branch_v1(&self, branch: &str) -> RepositoryResult<SnapshotId> {
-        let branch_version =
-            refs::fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
-                .await?;
+        let branch_version = refs::fetch_branch_tip_v1(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            branch,
+        )
+        .await?;
         Ok(branch_version.snapshot)
     }
 
@@ -1590,7 +1595,7 @@ impl Repository {
                 Ok(ref_data.snapshot)
             }
             RefVersionInfo::BranchTipRef(branch) => {
-                let ref_data = refs::fetch_branch_tip(
+                let ref_data = refs::fetch_branch_tip_v1(
                     self.storage.as_ref(),
                     &self.storage_settings,
                     branch,

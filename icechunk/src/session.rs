@@ -56,7 +56,7 @@ use crate::{
         },
         transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
-    refs::{RefError, RefErrorKind, fetch_branch_tip, update_branch},
+    refs::{RefError, RefErrorKind, fetch_branch_tip_v1, update_branch},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
@@ -1538,7 +1538,7 @@ impl Session {
         &self,
         branch_name: &str,
     ) -> SessionResult<Vec<SnapshotId>> {
-        let ref_data = match fetch_branch_tip(
+        let ref_data = match fetch_branch_tip_v1(
             self.storage.as_ref(),
             self.storage_settings.as_ref(),
             branch_name,
