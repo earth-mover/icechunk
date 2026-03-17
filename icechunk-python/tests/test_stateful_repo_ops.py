@@ -549,7 +549,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self,
         data: st.DataObject,
         spec_version: Literal[1, 2],
-        latency: tuple[int, int],
+        latency: tuple[int, int] = (0, 0),
     ) -> str:
         write_latency_ms, read_latency_ms = latency
         self.storage = LatencyStorage(
