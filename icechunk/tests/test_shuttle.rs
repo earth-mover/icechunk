@@ -98,7 +98,7 @@ async fn mk_concurrent_commits_same_branch() -> Result<(), Box<dyn Error + Send 
     );
 
     let mut session = repo.writable_session("main").await?;
-    let shape = ArrayShape::new(vec![(10, 1)]).unwrap();
+    let shape = ArrayShape::new(vec![(10, 10)]).unwrap();
     let path: Path = "/array".try_into()?;
     session.add_array(path.clone(), shape, None, Bytes::new()).await?;
 
@@ -367,7 +367,7 @@ async fn execute_concurrent_actions(
     );
 
     let mut session = repo.writable_session("main").await?;
-    let shape = ArrayShape::new(vec![(10, 1)]).unwrap();
+    let shape = ArrayShape::new(vec![(10, 10)]).unwrap();
     let path: Path = "/array".try_into()?;
     session.add_array(path.clone(), shape, None, Bytes::new()).await?;
     session.commit("foo", None).await?;
