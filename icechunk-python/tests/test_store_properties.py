@@ -8,7 +8,7 @@ import pytest
 from hypothesis import given
 
 import zarr
-from icechunk.testing.trees import zarr_trees_strategy
+from icechunk.testing.trees import trees
 from icechunk.testing.utils import (
     precommit_postcommit_readonly,
     tree_to_model_and_icechunk,
@@ -16,7 +16,7 @@ from icechunk.testing.utils import (
 
 
 @pytest.mark.asyncio
-@given(tree=zarr_trees_strategy())
+@given(tree=trees())
 async def test_list_prefix(tree):
     """list_prefix on each node path should match."""
     model, session, repo = tree_to_model_and_icechunk(tree)
@@ -37,7 +37,7 @@ async def test_list_prefix(tree):
 
 
 @pytest.mark.asyncio
-@given(tree=zarr_trees_strategy())
+@given(tree=trees())
 async def test_list_dir(tree):
     """list_dir on every group path should match."""
     model, session, repo = tree_to_model_and_icechunk(tree)
@@ -51,7 +51,7 @@ async def test_list_dir(tree):
 
 
 @pytest.mark.asyncio
-@given(tree=zarr_trees_strategy())
+@given(tree=trees())
 async def test_exists(tree):
     model, session, repo = tree_to_model_and_icechunk(tree)
 
@@ -65,7 +65,7 @@ async def test_exists(tree):
 
 
 @pytest.mark.asyncio
-@given(tree=zarr_trees_strategy())
+@given(tree=trees())
 async def test_is_empty(tree):
     model, session, repo = tree_to_model_and_icechunk(tree)
 
@@ -77,7 +77,7 @@ async def test_is_empty(tree):
             assert expected == actual, f"is_empty({path!r}) [{label}]"
 
 
-@given(tree=zarr_trees_strategy())
+@given(tree=trees())
 def test_keys(tree):
     model, session, repo = tree_to_model_and_icechunk(tree)
     model_group = zarr.open_group(model)
@@ -87,7 +87,7 @@ def test_keys(tree):
         assert expected == set(ice.keys()), f"keys [{label}]"
 
 
-@given(tree=zarr_trees_strategy())
+@given(tree=trees())
 def test_members(tree):
     model, session, repo = tree_to_model_and_icechunk(tree)
     model_group = zarr.open_group(model)
@@ -98,7 +98,7 @@ def test_members(tree):
         assert expected == actual, f"members [{label}]"
 
 
-@given(tree=zarr_trees_strategy())
+@given(tree=trees())
 def test_contains(tree):
     model, session, repo = tree_to_model_and_icechunk(tree)
     model_group = zarr.open_group(model)
@@ -111,7 +111,7 @@ def test_contains(tree):
             )
 
 
-@given(tree=zarr_trees_strategy())
+@given(tree=trees())
 def test_getitem(tree):
     model, session, repo = tree_to_model_and_icechunk(tree)
     model_group = zarr.open_group(model)
@@ -129,7 +129,7 @@ def test_getitem(tree):
                 assert mem_val.dtype == ice_val.dtype
 
 
-@given(tree=zarr_trees_strategy())
+@given(tree=trees())
 def test_group_keys_and_array_keys(tree):
     model, session, repo = tree_to_model_and_icechunk(tree)
     model_group = zarr.open_group(model)

@@ -154,7 +154,7 @@ def skeletons(*, max_leaves: int = 50, max_children: int = 4) -> st.SearchStrate
 
 
 @st.composite
-def zarr_trees_strategy(
+def trees(
     draw: st.DrawFn,
     *,
     max_leaves: st.SearchStrategy[int] = st.integers(min_value=5, max_value=50),  # noqa: B008
