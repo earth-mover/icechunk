@@ -31,6 +31,9 @@ table RepoMigratedUpdate {
   from_version: uint8;
   to_version: uint8;
 }
+table RepoStatusChangedUpdate{
+  status: RepoStatus;
+}
 table ConfigChangedUpdate {
 }
 table MetadataChangedUpdate {
@@ -92,6 +95,7 @@ union UpdateType {
   GCRanUpdate,
   ExpirationRanUpdate,
   FeatureFlagChangedUpdate,
+  RepoStatusChangedUpdate,
 }
 
 table Update {

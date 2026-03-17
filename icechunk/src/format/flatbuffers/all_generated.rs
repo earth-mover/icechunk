@@ -217,13 +217,13 @@ pub mod generated {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_UPDATE_TYPE: u8 = 15;
+    pub const ENUM_MAX_UPDATE_TYPE: u8 = 16;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 16] = [
+    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 17] = [
         UpdateType::NONE,
         UpdateType::RepoInitializedUpdate,
         UpdateType::RepoMigratedUpdate,
@@ -240,6 +240,7 @@ pub mod generated {
         UpdateType::GCRanUpdate,
         UpdateType::ExpirationRanUpdate,
         UpdateType::FeatureFlagChangedUpdate,
+        UpdateType::RepoStatusChangedUpdate,
     ];
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -263,9 +264,10 @@ pub mod generated {
         pub const GCRanUpdate: Self = Self(13);
         pub const ExpirationRanUpdate: Self = Self(14);
         pub const FeatureFlagChangedUpdate: Self = Self(15);
+        pub const RepoStatusChangedUpdate: Self = Self(16);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 15;
+        pub const ENUM_MAX: u8 = 16;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::NONE,
             Self::RepoInitializedUpdate,
@@ -283,6 +285,7 @@ pub mod generated {
             Self::GCRanUpdate,
             Self::ExpirationRanUpdate,
             Self::FeatureFlagChangedUpdate,
+            Self::RepoStatusChangedUpdate,
         ];
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
@@ -303,6 +306,7 @@ pub mod generated {
                 Self::GCRanUpdate => Some("GCRanUpdate"),
                 Self::ExpirationRanUpdate => Some("ExpirationRanUpdate"),
                 Self::FeatureFlagChangedUpdate => Some("FeatureFlagChangedUpdate"),
+                Self::RepoStatusChangedUpdate => Some("RepoStatusChangedUpdate"),
                 _ => None,
             }
         }
@@ -4771,6 +4775,121 @@ pub mod generated {
             ds.finish()
         }
     }
+    pub enum RepoStatusChangedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct RepoStatusChangedUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for RepoStatusChangedUpdate<'a> {
+        type Inner = RepoStatusChangedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+        }
+    }
+
+    impl<'a> RepoStatusChangedUpdate<'a> {
+        pub const VT_STATUS: flatbuffers::VOffsetT = 4;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            RepoStatusChangedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args RepoStatusChangedUpdateArgs<'args>,
+        ) -> flatbuffers::WIPOffset<RepoStatusChangedUpdate<'bldr>> {
+            let mut builder = RepoStatusChangedUpdateBuilder::new(_fbb);
+            if let Some(x) = args.status {
+                builder.add_status(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn status(&self) -> Option<RepoStatus<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<RepoStatus>>(
+                    RepoStatusChangedUpdate::VT_STATUS,
+                    None,
+                )
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for RepoStatusChangedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<RepoStatus>>(
+                    "status",
+                    Self::VT_STATUS,
+                    false,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct RepoStatusChangedUpdateArgs<'a> {
+        pub status: Option<flatbuffers::WIPOffset<RepoStatus<'a>>>,
+    }
+    impl<'a> Default for RepoStatusChangedUpdateArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            RepoStatusChangedUpdateArgs { status: None }
+        }
+    }
+
+    pub struct RepoStatusChangedUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a>
+        RepoStatusChangedUpdateBuilder<'a, 'b, A>
+    {
+        #[inline]
+        pub fn add_status(&mut self, status: flatbuffers::WIPOffset<RepoStatus<'b>>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<RepoStatus>>(
+                RepoStatusChangedUpdate::VT_STATUS,
+                status,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> RepoStatusChangedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            RepoStatusChangedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<RepoStatusChangedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for RepoStatusChangedUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("RepoStatusChangedUpdate");
+            ds.field("status", &self.status());
+            ds.finish()
+        }
+    }
     pub enum ConfigChangedUpdateOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -6704,6 +6823,22 @@ pub mod generated {
                 None
             }
         }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_repo_status_changed_update(
+            &self,
+        ) -> Option<RepoStatusChangedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::RepoStatusChangedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { RepoStatusChangedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for Update<'_> {
@@ -6731,6 +6866,7 @@ pub mod generated {
           UpdateType::GCRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<GCRanUpdate>>("UpdateType::GCRanUpdate", pos),
           UpdateType::ExpirationRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ExpirationRanUpdate>>("UpdateType::ExpirationRanUpdate", pos),
           UpdateType::FeatureFlagChangedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<FeatureFlagChangedUpdate>>("UpdateType::FeatureFlagChangedUpdate", pos),
+          UpdateType::RepoStatusChangedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RepoStatusChangedUpdate>>("UpdateType::RepoStatusChangedUpdate", pos),
           _ => Ok(()),
         }
      })?
@@ -6912,6 +7048,13 @@ pub mod generated {
                 }
                 UpdateType::FeatureFlagChangedUpdate => {
                     if let Some(x) = self.update_type_as_feature_flag_changed_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::RepoStatusChangedUpdate => {
+                    if let Some(x) = self.update_type_as_repo_status_changed_update() {
                         ds.field("update_type", &x)
                     } else {
                         ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")

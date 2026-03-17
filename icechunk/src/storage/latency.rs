@@ -175,32 +175,14 @@ mod tests {
     use crate::storage::new_in_memory_storage;
 
     #[tokio::test]
-    async fn test_latency() {
+    async fn storage_with_latency() {
         let backend = new_in_memory_storage().await.unwrap();
         let storage = LatencyStorage::new(backend, 0, 0);
         let settings = storage.default_settings().await.unwrap();
 
-        // Write a test object so we can read it back
-        storage
-            .put_object(&settings, "test/key", "hello".into(), None, vec![], None)
-            .await
-            .unwrap();
-
-        // Baseline: measure write and read with no latency
-        let start = std::time::Instant::now();
-        storage
-            .put_object(&settings, "test/key", "hello".into(), None, vec![], None)
-            .await
-            .unwrap();
-        let write_baseline = start.elapsed();
-
-        let start = std::time::Instant::now();
-        let _ = storage.get_object_range(&settings, "test/key", None).await.unwrap();
-        let read_baseline = start.elapsed();
-
-        // Add 50ms write latency, 30ms read latency
-        storage.set_write_delay_ms(50);
-        storage.set_read_delay_ms(30);
+        // Add 500ms write latency, 300ms read latency
+        storage.set_write_delay_ms(500);
+        storage.set_read_delay_ms(300);
 
         let start = std::time::Instant::now();
         storage
@@ -213,17 +195,14 @@ mod tests {
         let _ = storage.get_object_range(&settings, "test/key", None).await.unwrap();
         let read_with_latency = start.elapsed();
 
-        let write_added = write_with_latency.saturating_sub(write_baseline);
-        let read_added = read_with_latency.saturating_sub(read_baseline);
-
         // Allow some wiggle room for scheduling jitter
         assert!(
-            write_added.as_millis() >= 45,
-            "expected ~50ms write latency, got {write_added:?}"
+            write_with_latency.as_millis() >= 500,
+            "expected ~500ms write latency, got {write_with_latency:?}"
         );
         assert!(
-            read_added.as_millis() >= 25,
-            "expected ~30ms read latency, got {read_added:?}"
+            read_with_latency.as_millis() >= 300,
+            "expected ~300ms read latency, got {read_with_latency:?}"
         );
     }
 }
