@@ -47,6 +47,7 @@ from icechunk import (
     SnapshotInfo,
     Storage,
 )
+from icechunk.testing import LatencyStorage
 from icechunk.testing.strategies import repository_configs
 from zarr.testing.stateful import SyncStoreWrapper
 
@@ -463,11 +464,22 @@ class Model:
                 commit_id = self.commits[commit_id].parent_id  # type: ignore[assignment]
         return reachable_snaps
 
-    def garbage_collect(self, older_than: datetime.datetime) -> set[str]:
+    def garbage_collect(
+        self,
+        older_than: datetime.datetime,
+        created_at_by_id: dict[str, datetime.datetime],
+    ) -> set[str]:
+        """Predict which snapshots Rust GC will delete.
+
+        Uses storage-level created_at (not written_at/flushed_at) to match
+        Rust's gc_snapshots which checks ``snapshot.created_at < cutoff``.
+        The created_at_by_id dict must be captured *before* calling Rust GC,
+        since GC deletes the files from storage.
+        """
         reachable_snaps = self.reachable_snapshots()
         deleted = set()
         for k in set(self.ondisk_snaps) - reachable_snaps:
-            if self.ondisk_snaps[k].written_at < older_than:
+            if created_at_by_id[k] < older_than:
                 self.commits.pop(k, None)
                 self.ondisk_snaps.pop(k, None)
                 deleted.add(k)
@@ -520,9 +532,31 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def _make_storage(self) -> Storage:
         return self.ic.in_memory_storage()  # type: ignore[no-any-return]
 
-    @initialize(data=st.data(), target=branches, spec_version=st.sampled_from([1, 2]))
-    def initialize(self, data: st.DataObject, spec_version: Literal[1, 2]) -> str:
-        self.storage = self._make_storage()
+    @initialize(
+        data=st.data(),
+        target=branches,
+        spec_version=st.sampled_from([1, 2]),
+        # Both latencies are zero (~75%) or both non-zero (~25%)
+        # to exercise the flushed_at vs created_at timing gap in GC.
+        latency=st.one_of(
+            st.just((0, 0)),
+            st.just((0, 0)),
+            st.just((0, 0)),
+            st.tuples(st.integers(5, 10), st.just(0)),
+        ),
+    )
+    def initialize(
+        self,
+        data: st.DataObject,
+        spec_version: Literal[1, 2],
+        latency: tuple[int, int],
+    ) -> str:
+        write_latency_ms, read_latency_ms = latency
+        self.storage = LatencyStorage(
+            self._make_storage(),
+            write_latency_ms=write_latency_ms,
+            read_latency_ms=read_latency_ms,
+        )
         config = data.draw(repository_configs(ic_module=self.ic))
         self.model.initial_spec_version = spec_version
         self.model.spec_version = spec_version
@@ -833,13 +867,19 @@ class VersionControlStateMachine(RuleBasedStateMachine):
             self.model.delete_tag(tag)
 
     def _draw_older_than(self, data: st.DataObject) -> datetime.datetime:
+        # Draw cutoffs from storage-level created_at (not written_at/flushed_at)
+        # because that is what Rust GC compares against. The +10ms offset is
+        # past the concurrent snapshot/transaction write gap (sub-ms) but tight
+        # enough that not all snapshots fall below the cutoff.
+        created_at_times = sorted(
+            obj.created_at
+            for obj in self.storage.list_objects_metadata(prefix="snapshots")
+        )
         return data.draw(
             st.one_of(
-                st.just(max(self.model.commit_times) + datetime.timedelta(seconds=1)),
-                # In the model, we delete based on snapshot created_at time, not flushed_at time (as in Rust)
-                # so we offset the commit_time by a small amount to account for the difference
-                st.sampled_from(self.model.commit_times).map(
-                    lambda time: time + datetime.timedelta(milliseconds=200)
+                st.just(max(created_at_times) + datetime.timedelta(seconds=1)),
+                st.sampled_from(created_at_times).map(
+                    lambda time: time + datetime.timedelta(milliseconds=10)
                 ),
                 st.just(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
             )
@@ -934,9 +974,15 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def garbage_collect(self, data: st.DataObject) -> None:
         older_than = self._draw_older_than(data)
         note(f"running garbage_collect for {older_than=!r}")
+        # Snapshot created_at before Rust GC deletes files from storage
+        assert self.storage is not None
+        created_at_by_id = {
+            obj.key.removeprefix("snapshots/"): obj.created_at
+            for obj in self.storage.list_objects_metadata(prefix="snapshots")
+        }
         summary = self.repo.garbage_collect(older_than)
         note(f"actual GC result {summary=!r}")
-        expected = self.model.garbage_collect(older_than)
+        expected = self.model.garbage_collect(older_than, created_at_by_id)
         assert summary.snapshots_deleted == len(expected), (
             summary.snapshots_deleted,
             expected,
@@ -967,6 +1013,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # It cannot be called `check_invariants` because that clashes
         # with an existing method on the superclass
 
+        # Temporarily disable read latency during invariant checks for speed
+        if isinstance(self.storage, LatencyStorage):
+            saved = self.storage.read_latency_ms
+            self.storage.read_latency_ms = 0
+
         assert self.model.spec_version == getattr(self.repo, "spec_version", 1)
         self.check_list_prefix_from_root()
         self.check_tags()
@@ -975,6 +1026,9 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.check_ops_log()
         self.check_repo_info()
         self.check_file_invariants()
+
+        if isinstance(self.storage, LatencyStorage):
+            self.storage.read_latency_ms = saved
 
     def check_list_prefix_from_root(self) -> None:
         model_list = self.model.list_prefix("")
