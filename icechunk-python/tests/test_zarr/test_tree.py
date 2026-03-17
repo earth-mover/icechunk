@@ -10,8 +10,7 @@ from hypothesis import given, note, settings
 
 import zarr
 from icechunk import Repository, in_memory_storage
-from icechunk.testing.strategies_trees import zarr_trees
-from icechunk.testing.zarr_tree import materialize
+from icechunk.testing.trees import zarr_trees_strategy
 from tests.test_zarr.test_stateful import ModelStore
 from zarr.testing.strategies import node_names
 
@@ -19,11 +18,11 @@ from zarr.testing.strategies import node_names
 def make_stores(tree):
     """Materialize tree into ModelStore + IcechunkStore (uncommitted)."""
     model = ModelStore()
-    materialize(tree, model)
+    tree.materialize(model)
 
     repo = Repository.create(storage=in_memory_storage())
     session = repo.writable_session("main")
-    materialize(tree, session.store)
+    tree.materialize(session.store)
 
     return model, session, repo
 
@@ -48,7 +47,7 @@ def precommit_postcommit_readonly(session, repo):
 
 
 @pytest.mark.asyncio
-@given(tree=zarr_trees())
+@given(tree=zarr_trees_strategy())
 @settings(max_examples=50, deadline=None)
 async def test_list_prefix(tree):
     """list_prefix on each node path should match.
@@ -59,8 +58,9 @@ async def test_list_prefix(tree):
     model, session, repo = make_stores(tree)
 
     note(zarr.open_group(model).tree())
+    all_nodes = tree.nodes(include_root=True)
     for label, store in precommit_postcommit_readonly(session, repo):
-        for path in tree.nodes(include_root=True):
+        for path in all_nodes:
             expected = await collect_list_prefix(model, path)
             # MemoryStore list_prefix does raw string matching, so
             # list_prefix("0") returns "0_c/zarr.json" too.
@@ -76,7 +76,7 @@ async def test_list_prefix(tree):
 
 
 @pytest.mark.asyncio
-@given(tree=zarr_trees(), data=st.data())
+@given(tree=zarr_trees_strategy(), data=st.data())
 @settings(max_examples=50, deadline=None)
 async def test_list_dir(tree, data):
     """list_dir on sampled group paths should match."""
@@ -96,13 +96,14 @@ async def test_list_dir(tree, data):
 
 
 @pytest.mark.asyncio
-@given(tree=zarr_trees())
+@given(tree=zarr_trees_strategy())
 @settings(max_examples=50, deadline=None)
 async def test_exists(tree):
     model, session, repo = make_stores(tree)
 
+    groups = tree.groups(include_root=True)
     for label, store in precommit_postcommit_readonly(session, repo):
-        for path in tree.groups(include_root=True):
+        for path in groups:
             key = f"{path}/zarr.json" if path else "zarr.json"
             expected = await model.exists(key)
             actual = await store.exists(key)
@@ -112,13 +113,14 @@ async def test_exists(tree):
 
 
 @pytest.mark.asyncio
-@given(tree=zarr_trees())
+@given(tree=zarr_trees_strategy())
 @settings(max_examples=50, deadline=None)
 async def test_is_empty(tree):
     model, session, repo = make_stores(tree)
 
+    groups = tree.groups(include_root=True)
     for label, store in precommit_postcommit_readonly(session, repo):
-        for path in tree.groups(include_root=True):
+        for path in groups:
             expected = await model.is_empty(path)
             actual = await store.is_empty(path)
             assert expected == actual, (
@@ -129,7 +131,7 @@ async def test_is_empty(tree):
 # -- zarr Group API methods --
 
 
-@given(tree=zarr_trees())
+@given(tree=zarr_trees_strategy())
 @settings(max_examples=50, deadline=None)
 def test_keys(tree):
     model, session, repo = make_stores(tree)
@@ -142,7 +144,7 @@ def test_keys(tree):
         )
 
 
-@given(tree=zarr_trees())
+@given(tree=zarr_trees_strategy())
 @settings(max_examples=50, deadline=None)
 def test_members(tree):
     model, session, repo = make_stores(tree)
@@ -156,14 +158,15 @@ def test_members(tree):
         )
 
 
-@given(tree=zarr_trees())
+@given(tree=zarr_trees_strategy())
 @settings(max_examples=50, deadline=None)
 def test_contains(tree):
     model, session, repo = make_stores(tree)
     model_group = zarr.open_group(model)
+    all_nodes = tree.nodes()
     for label, store in precommit_postcommit_readonly(session, repo):
         ice = zarr.open_group(store, mode="r")
-        for path in tree.nodes():
+        for path in all_nodes:
             expected = path in model_group
             actual = path in ice
             assert expected == actual, (
@@ -171,14 +174,15 @@ def test_contains(tree):
             )
 
 
-@given(tree=zarr_trees())
+@given(tree=zarr_trees_strategy())
 @settings(max_examples=50, deadline=None)
 def test_getitem(tree):
     model, session, repo = make_stores(tree)
     model_group = zarr.open_group(model)
+    all_nodes = tree.nodes()
     for label, store in precommit_postcommit_readonly(session, repo):
         ice = zarr.open_group(store, mode="r")
-        for path in tree.nodes():
+        for path in all_nodes:
             mem_val = model_group[path]
             ice_val = ice[path]
             assert type(mem_val).__name__ == type(ice_val).__name__, (
@@ -189,7 +193,7 @@ def test_getitem(tree):
                 assert mem_val.dtype == ice_val.dtype
 
 
-@given(tree=zarr_trees())
+@given(tree=zarr_trees_strategy())
 @settings(max_examples=50, deadline=None)
 def test_nmembers(tree):
     model, session, repo = make_stores(tree)
@@ -202,7 +206,7 @@ def test_nmembers(tree):
         )
 
 
-@given(tree=zarr_trees())
+@given(tree=zarr_trees_strategy())
 @settings(max_examples=50, deadline=None)
 def test_group_keys_and_array_keys(tree):
     model, session, repo = make_stores(tree)
@@ -250,7 +254,7 @@ async def compare_list_dir(model, store, paths):
 
 
 @pytest.mark.asyncio
-@given(tree=zarr_trees(), data=st.data())
+@given(tree=zarr_trees_strategy(), data=st.data())
 @settings(max_examples=50, deadline=None)
 async def test_move(tree, data):
     """Generate a tree, apply random moves, compare ModelStore vs IcechunkStore."""
