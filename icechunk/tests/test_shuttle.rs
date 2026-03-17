@@ -111,7 +111,7 @@ async fn mk_concurrent_commits_same_branch() -> Result<(), Box<dyn Error + Send 
 
     // repo.create_branch("feature", &snaps[2]).await?;
 
-    eprintln!("starting new run");
+    // eprintln!("starting new run");
 
     let repo1 = repo.clone();
     let path1 = path.clone();

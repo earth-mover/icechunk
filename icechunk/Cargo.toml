@@ -76,10 +76,10 @@ async-compression = { version = "0.4.41", features = ["tokio", "zstd"] }
 serde_bytes = "0.11.19"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "rt"] }
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "rt"] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-tokio = { version = "1", features = ["rt", "macros", "sync", "time", "io-util"] }
+tokio = { version = "1.50.0", features = ["rt", "macros", "sync", "time", "io-util"] }
 
 [dev-dependencies]
 clap = { version = "4.6", features = ["derive"] }
