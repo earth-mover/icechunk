@@ -265,6 +265,7 @@ impl AssetManager {
         self.chunk_cache.clear();
     }
 
+    #[instrument(skip_all)]
     pub async fn fetch_config(
         &self,
     ) -> RepositoryResult<Option<(RepositoryConfig, VersionInfo)>> {
