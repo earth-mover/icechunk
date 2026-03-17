@@ -882,11 +882,11 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         # 10ms seems to be safely past this gap, but does not accidentally grab
         # other commits. See: https://github.com/earth-mover/icechunk/pull/1846
         assert self.storage is not None
-        created_at_times = sorted(
+        created_at_times: list[datetime.datetime] = sorted(
             obj.created_at
             for obj in self.storage.list_objects_metadata(prefix="snapshots")
         )
-        return data.draw(
+        result: datetime.datetime = data.draw(
             st.one_of(
                 st.just(max(created_at_times) + datetime.timedelta(seconds=1)),
                 st.sampled_from(created_at_times).map(
@@ -895,6 +895,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
                 st.just(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
             )
         )
+        return result
 
     # TODO: v1 has bugs in expire_snapshots, only test for v2
     # https://github.com/earth-mover/icechunk/issues/1520
