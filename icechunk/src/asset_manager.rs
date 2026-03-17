@@ -939,18 +939,10 @@ impl AssetManager {
         backup_destination(REPO_INFO_FILE_PATH)
     }
 
-    #[deprecated(
-        since = "2.0.0",
-        note = "Shouldn't be necessary after 2.0, only to support Icechunk 1 repos"
-    )]
     pub fn storage(&self) -> &Arc<dyn Storage + Send + Sync> {
         &self.storage
     }
 
-    #[deprecated(
-        since = "2.0.0",
-        note = "Shouldn't be necessary after 2.0, only to support Icechunk 1 repos"
-    )]
     pub fn storage_settings(&self) -> &storage::Settings {
         &self.storage_settings
     }
