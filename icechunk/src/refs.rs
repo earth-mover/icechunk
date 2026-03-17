@@ -122,7 +122,9 @@ impl Ref {
     ) -> RefResult<RefData> {
         match self {
             Ref::Tag(name) => fetch_tag(storage, storage_settings, name).await,
-            Ref::Branch(name) => fetch_branch_tip(storage, storage_settings, name).await,
+            Ref::Branch(name) => {
+                fetch_branch_tip_v1(storage, storage_settings, name).await
+            }
         }
     }
 }
@@ -355,7 +357,7 @@ pub async fn delete_branch(
     branch: &str,
 ) -> RefResult<()> {
     // we make sure the branch exists
-    _ = fetch_branch_tip(storage, storage_settings, branch).await?;
+    _ = fetch_branch_tip_v1(storage, storage_settings, branch).await?;
 
     let key = branch_key(branch)?;
     storage
@@ -481,7 +483,7 @@ async fn fetch_branch(
 }
 
 #[instrument(skip(storage, storage_settings))]
-pub async fn fetch_branch_tip(
+pub async fn fetch_branch_tip_v1(
     storage: &(dyn Storage + Send + Sync),
     storage_settings: &storage::Settings,
     name: &str,
@@ -581,7 +583,7 @@ mod tests {
 
 
             assert_eq!(
-                fetch_branch_tip(storage.as_ref(), &storage_settings, "branch1").await?,
+                fetch_branch_tip_v1(storage.as_ref(), &storage_settings, "branch1").await?,
                 RefData { snapshot: s1.clone() }
             );
 
@@ -605,7 +607,7 @@ mod tests {
             .await?;
 
             assert_eq!(
-                fetch_branch_tip(storage.as_ref(), &storage_settings, "branch1").await?,
+                fetch_branch_tip_v1(storage.as_ref(), &storage_settings, "branch1").await?,
                 RefData { snapshot: s2.clone() }
             );
 
@@ -624,7 +626,7 @@ mod tests {
                 .await?;
 
             assert_eq!(
-                fetch_branch_tip(storage.as_ref(), &storage_settings, "branch1").await?,
+                fetch_branch_tip_v1(storage.as_ref(), &storage_settings, "branch1").await?,
                 RefData { snapshot: sid.clone() }
             );
 
@@ -632,7 +634,7 @@ mod tests {
             // delete a branch
             delete_branch(storage.as_ref(), &storage_settings, "branch1").await?;
             assert!(matches!(
-                fetch_branch_tip(storage.as_ref(), &storage_settings, "branch1").await,
+                fetch_branch_tip_v1(storage.as_ref(), &storage_settings, "branch1").await,
                 Err(RefError{kind: RefErrorKind::RefNotFound(name),..}) if name == "branch1"
             ));
 
