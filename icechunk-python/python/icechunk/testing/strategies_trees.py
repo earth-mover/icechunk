@@ -13,6 +13,7 @@ from __future__ import annotations
 import hypothesis.strategies as st
 import numpy as np
 
+import zarr.testing.strategies as zrst
 from icechunk.testing.zarr_tree import ArrayNode, GroupNode, Node
 from zarr.testing.strategies import node_names
 
@@ -25,24 +26,8 @@ SHAPE = (1,)
 # Name strategies — pool-based derivation for prefix collisions
 # ---------------------------------------------------------------------------
 
-suffixes = st.sampled_from(
-    [
-        "_c",
-        "-c",
-        "_0",
-        "_1",
-        "_new",
-        "_old",
-        "_v2",
-        "2",
-        "_copy",
-        "_raw",
-        "_bnds",
-        "-Veg",
-        "-CC",
-    ]
-)
-prefixes = st.sampled_from(["new_", "old_", "v2_", "raw_", "proc_", "orig_"])
+# Short affix drawn from the zarr key alphabet for prefix/suffix collisions.
+affix = st.text(zrst.zarr_key_chars, min_size=1, max_size=3)
 separators = st.sampled_from(["_", "-", "."])
 
 
@@ -52,9 +37,9 @@ def derived_name(draw: st.DrawFn, pool: list[str]) -> str:
     base = draw(st.sampled_from(pool))
     mutation = draw(st.sampled_from(["suffix", "prefix", "compound"]))
     if mutation == "suffix":
-        result = base + draw(suffixes)
+        result = base + draw(affix)
     elif mutation == "prefix":
-        result = draw(prefixes) + base
+        result = draw(affix) + base
     else:
         other = draw(st.sampled_from(pool))
         result = base + draw(separators) + other
@@ -100,7 +85,7 @@ def skeletons(*, max_leaves: int = 50, max_children: int = 4) -> st.SearchStrate
     leaves = st.just(ArrayNode(shape=SHAPE, dtype=DTYPE))
     return st.recursive(
         leaves,
-        lambda children: st.lists(children, max_size=max_children).map(
+        lambda children: st.lists(children, min_size=1, max_size=max_children).map(
             lambda cs: GroupNode(children={str(i): c for i, c in enumerate(cs)})
         ),
         max_leaves=max_leaves,
