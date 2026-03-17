@@ -107,32 +107,13 @@ async fn mk_concurrent_commits_same_branch() -> Result<(), Box<dyn Error + Send 
 
     repo.create_branch("feature", &snaps[0]).await?;
 
-    // for c in 0..3u32 {
-    //     snaps.push(mk_commit(repo.clone(), path.clone(), c).await?);
-    // }
-
-    // repo.create_branch("feature", &snaps[2]).await?;
-
-    // eprintln!("starting new run");
-
     let repo1 = repo.clone();
     let path1 = path.clone();
-    let handle1 = spawn(async move {
-        mk_commit(repo1, path1, "main", 2).await
-        // repo1
-        //     .diff(
-        //         &VersionInfo::BranchTipRef("main".into()),
-        //         &VersionInfo::BranchTipRef("feature".into()),
-        //     )
-        //     .await
-    });
+    let handle1 = spawn(async move { mk_commit(repo1, path1, "main", 2).await });
 
     let repo2 = repo.clone();
     let path2 = path.clone();
-    let handle2 = spawn(async move {
-        mk_commit(repo2, path2, "feature", 1).await
-        // repo2.reset_branch("main", &snaps[1], None).await
-    });
+    let handle2 = spawn(async move { mk_commit(repo2, path2, "feature", 1).await });
 
     handle1.await??;
     handle2.await??;
@@ -144,6 +125,7 @@ async fn mk_concurrent_commits_same_branch() -> Result<(), Box<dyn Error + Send 
     Ok(())
 }
 
+// Regression test for https://github.com/earth-mover/icechunk/pull/1798
 #[test]
 fn concurrent_commits_same_branch() {
     check_random(
@@ -337,20 +319,30 @@ fn assert_ops_log_contains(
 ) {
     use ActionResult::*;
     let found = entries.iter().any(|(_, update_type, _)| match (result, update_type) {
-        (Commit(branch, snap), UpdateType::NewCommitUpdate { branch: b, new_snap_id })
-            => b == branch && new_snap_id == snap,
-        (AddBranch(branch, _), UpdateType::BranchCreatedUpdate { name })
-            => name == branch,
-        (DeleteBranch { branch, previous_snap }, UpdateType::BranchDeletedUpdate { name, previous_snap_id })
-            => name == branch && previous_snap_id == previous_snap,
-        (AddTag(tag, _), UpdateType::TagCreatedUpdate { name })
-            => name == tag,
-        (DeleteTag { tag, previous_snap }, UpdateType::TagDeletedUpdate { name, previous_snap_id })
-            => name == tag && previous_snap_id == previous_snap,
-        (Amend { branch, new_snap, previous_snap }, UpdateType::CommitAmendedUpdate { branch: b, new_snap_id, previous_snap_id })
-            => b == branch && new_snap_id == new_snap && previous_snap_id == previous_snap,
-        (ResetBranch { branch, previous_snap, .. }, UpdateType::BranchResetUpdate { name, previous_snap_id })
-            => name == branch && previous_snap_id == previous_snap,
+        (
+            Commit(branch, snap),
+            UpdateType::NewCommitUpdate { branch: b, new_snap_id },
+        ) => b == branch && new_snap_id == snap,
+        (AddBranch(branch, _), UpdateType::BranchCreatedUpdate { name }) => {
+            name == branch
+        }
+        (
+            DeleteBranch { branch, previous_snap },
+            UpdateType::BranchDeletedUpdate { name, previous_snap_id },
+        ) => name == branch && previous_snap_id == previous_snap,
+        (AddTag(tag, _), UpdateType::TagCreatedUpdate { name }) => name == tag,
+        (
+            DeleteTag { tag, previous_snap },
+            UpdateType::TagDeletedUpdate { name, previous_snap_id },
+        ) => name == tag && previous_snap_id == previous_snap,
+        (
+            Amend { branch, new_snap, previous_snap },
+            UpdateType::CommitAmendedUpdate { branch: b, new_snap_id, previous_snap_id },
+        ) => b == branch && new_snap_id == new_snap && previous_snap_id == previous_snap,
+        (
+            ResetBranch { branch, previous_snap, .. },
+            UpdateType::BranchResetUpdate { name, previous_snap_id },
+        ) => name == branch && previous_snap_id == previous_snap,
         _ => false,
     });
     assert!(found, "no ops log entry found for action result {result:?}");
