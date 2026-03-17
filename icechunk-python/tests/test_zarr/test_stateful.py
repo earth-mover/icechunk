@@ -21,6 +21,7 @@ import zarr
 from icechunk import Repository, Storage, in_memory_storage
 from icechunk.testing import strategies as icst
 from icechunk.testing.models import ModelStore
+from icechunk.testing.utils import assert_list_dir_equal, update_paths_after_move
 from zarr import Array
 from zarr.core.buffer import default_buffer_prototype
 from zarr.testing.stateful import ZarrHierarchyStateMachine, split_prefix_name
@@ -244,17 +245,9 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             session.move(f"/{source}", f"/{dest}")
             self._sync(pending_model.move(source, dest))
 
-            pending_arrays, pending_groups = [
-                {
-                    dest
-                    if p == source
-                    else dest + p[len(source) :]
-                    if p.startswith(source + "/")
-                    else p
-                    for p in s
-                }
-                for s in (pending_arrays, pending_groups)
-            ]
+            pending_arrays, pending_groups = update_paths_after_move(
+                source, dest, pending_arrays, pending_groups
+            )
 
             # Verify store matches pending model after each move
             # failing due to https://github.com/earth-mover/icechunk/issues/1562#issuecomment-3755544352
@@ -336,17 +329,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         for path in paths:
             model_ls = sorted(self._sync_iter(model.list_dir(path)))
             store_ls = sorted(self._sync_iter(store.list_dir(path)))
-            if model_ls != store_ls and set(model_ls).symmetric_difference(
-                set(store_ls)
-            ) != {"c"}:
-                # Consider .list_dir("path/to/array") for an array with a single chunk.
-                # The MemoryStore model will return `"c", "zarr.json"` only if the chunk exists
-                # If that chunk was deleted, then `"c"` is not returned.
-                # LocalStore will not have this behaviour :/
-                # In Icechunk, we always return the `c` so ignore this inconsistency.
-                raise AssertionError(
-                    f"list_dir mismatch for {path=}: {model_ls=} != {store_ls=}"
-                )
+            assert_list_dir_equal(path, model_ls, store_ls)
 
     @invariant()
     def check_list_dir(self) -> None:

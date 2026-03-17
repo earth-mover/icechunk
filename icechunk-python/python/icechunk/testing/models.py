@@ -39,7 +39,7 @@ class ModelStore(MemoryStore):
             ):
                 continue
             data = await self.get(key, prototype=_PROTOTYPE)
-            if data:
+            if data is not None:
                 chunk_data[new_idx] = data
 
         # Write chunks at new positions
