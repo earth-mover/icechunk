@@ -58,6 +58,14 @@ impl LatencyStorage {
     pub fn read_delay_ms(&self) -> u64 {
         self.read_delay_ms.load(Ordering::Relaxed)
     }
+
+    async fn sleep_for_read(&self) {
+        tokio::time::sleep(Duration::from_millis(self.read_delay_ms())).await;
+    }
+
+    async fn sleep_for_write(&self) {
+        tokio::time::sleep(Duration::from_millis(self.write_delay_ms())).await;
+    }
 }
 
 impl fmt::Display for LatencyStorage {
@@ -88,7 +96,7 @@ impl Storage for LatencyStorage {
         metadata: Vec<(String, String)>,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
-        tokio::time::sleep(Duration::from_millis(self.write_delay_ms())).await;
+        self.sleep_for_write().await;
         self.backend
             .put_object(settings, path, bytes, content_type, metadata, previous_version)
             .await
@@ -102,7 +110,7 @@ impl Storage for LatencyStorage {
         content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
-        tokio::time::sleep(Duration::from_millis(self.write_delay_ms())).await;
+        self.sleep_for_write().await;
         self.backend.copy_object(settings, from, to, content_type, version).await
     }
 
@@ -111,7 +119,9 @@ impl Storage for LatencyStorage {
         settings: &Settings,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        tokio::time::sleep(Duration::from_millis(self.read_delay_ms())).await;
+        // NOTE: this only sleeps on the initial call. The underlying stream
+        // pages back to storage every ~1k keys without additional delays.
+        self.sleep_for_read().await;
         self.backend.list_objects(settings, prefix).await
     }
 
@@ -121,7 +131,7 @@ impl Storage for LatencyStorage {
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
-        tokio::time::sleep(Duration::from_millis(self.write_delay_ms())).await;
+        self.sleep_for_write().await;
         self.backend.delete_batch(settings, prefix, batch).await
     }
 
@@ -130,7 +140,7 @@ impl Storage for LatencyStorage {
         path: &str,
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
-        tokio::time::sleep(Duration::from_millis(self.read_delay_ms())).await;
+        self.sleep_for_read().await;
         self.backend.get_object_last_modified(path, settings).await
     }
 
@@ -140,7 +150,7 @@ impl Storage for LatencyStorage {
         path: &str,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
-        tokio::time::sleep(Duration::from_millis(self.read_delay_ms())).await;
+        self.sleep_for_read().await;
         self.backend.get_object_conditional(settings, path, previous_version).await
     }
 
@@ -153,7 +163,7 @@ impl Storage for LatencyStorage {
         Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
         VersionInfo,
     )> {
-        tokio::time::sleep(Duration::from_millis(self.read_delay_ms())).await;
+        self.sleep_for_read().await;
         self.backend.get_object_range(settings, path, range).await
     }
 }
