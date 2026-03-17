@@ -157,6 +157,32 @@ jobs:
         run: |
           cargo test --profile ci --workspace --all-targets -- --ignored
 
+  shuttle:
+    name: Shuttle concurrency tests
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
+          rustup default ${{ env.RUST_CHANNEL }}
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: shuttle-${{ env.RUST_CHANNEL }}
+
+      - name: Compile shuttle tests
+        run: cargo test -p icechunk --features shuttle --test test_shuttle --no-run
+
+      - name: Run shuttle tests
+        run: cargo test -p icechunk --features shuttle --test test_shuttle -- --nocapture
+
   wasm-build:
     name: WASM Build
     timeout-minutes: 15
