@@ -69,7 +69,8 @@ async fn test_concurrency_in_tigris() -> Result<(), Box<dyn std::error::Error>> 
 async fn do_test_concurrency(
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let shape = ArrayShape::new(vec![(N as u64, 1), (N as u64, 1)]).unwrap();
+    let shape =
+        ArrayShape::new(vec![(N as u64, N as u32), (N as u64, N as u32)]).unwrap();
 
     let config = RepositoryConfig {
         manifest: Some(ManifestConfig {
