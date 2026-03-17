@@ -2246,6 +2246,10 @@ impl PyStorage {
 
     /// List objects in the storage backend, optionally filtered by a key prefix.
     ///
+    /// Returns a list of ``(key, size_in_bytes)`` tuples for each object found.
+    /// When ``prefix`` is ``None`` or empty, all objects under the repository root are listed.
+    /// Custom ``settings`` can be provided to override the storage's default settings.
+    ///
     /// Deprecated: use ``list_objects_metadata`` instead, which also returns
     /// the ``created_at`` timestamp.
     #[pyo3(signature = (settings=None, prefix=None))]
@@ -2281,6 +2285,9 @@ impl PyStorage {
     }
 
     /// List objects with full metadata, optionally filtered by a key prefix.
+    ///
+    /// When ``prefix`` is ``None`` or empty, all objects under the repository root are listed.
+    /// Custom ``settings`` can be provided to override the storage's default settings.
     ///
     /// Returns
     /// -------
