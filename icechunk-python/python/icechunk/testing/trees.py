@@ -11,12 +11,14 @@ that produces realistic prefix collisions (e.g. ``EC-Earth3`` / ``EC-Earth3-Veg`
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import hypothesis.strategies as st
 import numpy as np
 
 import zarr
+import zarr.abc.store
 import zarr.testing.strategies as zrst
 from zarr.testing.strategies import node_names
 
@@ -35,7 +37,7 @@ class ArrayNode:
 class GroupNode:
     children: dict[str, ArrayNode | GroupNode] = field(default_factory=dict)
 
-    def _walk(self, prefix: str = ""):
+    def _walk(self, prefix: str = "") -> Iterator[tuple[str, Node]]:
         """Yield ``(path, child)`` for every node, depth-first."""
         for name, child in self.children.items():
             p = f"{prefix}/{name}" if prefix else name
@@ -57,7 +59,7 @@ class GroupNode:
         """Return paths of all array nodes."""
         return [p for p, c in self._walk(prefix) if isinstance(c, ArrayNode)]
 
-    def materialize(self, store) -> zarr.Group:
+    def materialize(self, store: zarr.abc.store.Store) -> zarr.Group:
         """Write this tree into *store* and return the root group."""
         root = zarr.open_group(store, mode="w")
 
@@ -117,7 +119,11 @@ def unique_sibling_names(draw: st.DrawFn, name_pool: list[str], n: int) -> list[
         name = draw(strategy)
         # On collision, fall back to a guaranteed-fresh name instead of rejection sampling.
         if name in seen:
-            name = draw(node_names.filter(lambda nm, _seen=seen: nm not in _seen))
+
+            def _not_in_seen(nm: str) -> bool:
+                return nm not in seen
+
+            name = draw(node_names.filter(_not_in_seen))
         names.append(name)
         seen.add(name)
         name_pool.append(name)
