@@ -152,6 +152,10 @@ impl From<UpdateType> for UpdateTypeInspect {
                     "to_version": to_version.to_string(),
                 }),
             },
+            UpdateType::RepoStatusChangedUpdate { status } => Self {
+                type_name: "RepoStatusChangedUpdate".into(),
+                details: serde_json::json!({ "status": status }),
+            },
             UpdateType::ConfigChangedUpdate => Self {
                 type_name: "ConfigChangedUpdate".into(),
                 details: serde_json::json!({}),

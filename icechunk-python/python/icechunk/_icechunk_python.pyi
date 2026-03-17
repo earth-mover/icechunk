@@ -1721,6 +1721,49 @@ class GCSummary:
         ...
 
 @final
+class RepoAvailability(Enum):
+    """The availability status of a repository.
+
+    Attributes
+    ----------
+    online: int
+        The repository is fully available for reads and writes.
+    read_only: int
+        The repository is available for reads only.
+    """
+
+    online = 0
+    read_only = 1
+
+@final
+class RepoStatus:
+    """The current status of a repository."""
+
+    availability: RepoAvailability
+    set_at: datetime.datetime
+    limited_availability_reason: str | None
+
+    def __new__(
+        cls,
+        availability: RepoAvailability,
+        set_at: datetime.datetime | None = None,
+        limited_availability_reason: str | None = None,
+    ) -> RepoStatus:
+        """
+        Create a new `RepoStatus` object
+
+        Parameters
+        ----------
+        availability: RepoAvailability
+            The availability status of the repository.
+        set_at: datetime.datetime | None
+            The time at which the status was set. Defaults to the current time.
+        limited_availability_reason: str | None
+            An optional reason for limited availability.
+        """
+        ...
+
+@final
 class Update:
     @property
     def kind(self) -> UpdateType: ...
@@ -1798,6 +1841,11 @@ class UpdateType:
         def from_version(self) -> int: ...
         @property
         def to_version(self) -> int: ...
+
+    @final
+    class RepoStatusChanged(UpdateType):
+        @property
+        def status(self) -> RepoStatus: ...
 
     @final
     class TagCreated(UpdateType):
@@ -1946,6 +1994,10 @@ class PyRepository:
     async def set_metadata_async(self, metadata: dict[str, Any]) -> None: ...
     def update_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]: ...
     async def update_metadata_async(self, metadata: dict[str, Any]) -> dict[str, Any]: ...
+    def get_status(self) -> RepoStatus: ...
+    async def get_status_async(self) -> RepoStatus: ...
+    def set_status(self, status: RepoStatus) -> None: ...
+    async def set_status_async(self, status: RepoStatus) -> None: ...
     def feature_flags(self) -> list[FeatureFlag]: ...
     async def feature_flags_async(self) -> list[FeatureFlag]: ...
     def enabled_feature_flags(self) -> list[FeatureFlag]: ...

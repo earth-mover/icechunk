@@ -46,7 +46,7 @@ use crate::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
         format_constants::SpecVersionBin,
-        repo_info::{RepoInfo, UpdateType},
+        repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateType},
         snapshot::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
@@ -137,6 +137,8 @@ pub enum RepositoryErrorKind {
     CannotDeleteMain,
     #[error("the storage used by this Icechunk repository is read-only: {0}")]
     ReadonlyStorage(String),
+    #[error("the repository status is read-only: {0}")]
+    ReadonlyRepository(String),
     #[error(
         "the first commit in the repository cannot be an amend, create a new commit instead"
     )]
@@ -743,6 +745,48 @@ impl Repository {
             .asset_manager
             .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn get_status(&self) -> RepositoryResult<RepoStatus> {
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        let (repo, _) = self.asset_manager().fetch_repo_info().await?;
+        Ok(repo.status()?)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn set_status(&self, status: &RepoStatus) -> RepositoryResult<()> {
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot set status".to_string(),
+            )
+            .into());
+        }
+
+        let num_updates = self.config().num_updates_per_repo_info_file();
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            Ok(Arc::new(repo_info.set_status(
+                self.spec_version(),
+                status,
+                backup_path,
+                num_updates,
+            )?))
+        };
+
+        // This is the only place where this method should be called,
+        // because otherwise we wouldn't be able to change the repo
+        // status.
+        unsafe {
+            let _ = self
+                .asset_manager
+                .update_repo_info_unchecked(
+                    self.config.repo_update_retries().retries(),
+                    do_update,
+                )
+                .await?;
+        }
         Ok(())
     }
 
@@ -1774,6 +1818,20 @@ impl Repository {
         Ok(session)
     }
 
+    async fn fail_unless_online_status(&self, error_msg: &str) -> RepositoryResult<()> {
+        if self.spec_version() >= SpecVersionBin::V2dot0 {
+            let status = self.get_status().await?;
+            if status.availability != RepoAvailability::Online {
+                return Err(RepositoryErrorKind::ReadonlyRepository(format!(
+                    "{error_msg}; {0}",
+                    status.error_msg()
+                ))
+                .into());
+            }
+        }
+        Ok(())
+    }
+
     #[instrument(skip(self))]
     pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
         if !self.storage.can_write().await? {
@@ -1782,6 +1840,9 @@ impl Repository {
             )
             .into());
         }
+
+        self.fail_unless_online_status("Cannot create writable session").await?;
+
         let snapshot_id = self.lookup_branch(branch).await?;
 
         let session = Session::create_writable_session(
@@ -1808,8 +1869,11 @@ impl Repository {
             )
             .into());
         }
+
         // this feature is only available in IC2
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+
+        self.fail_unless_online_status("Cannot create rearrange session").await?;
 
         let (ri, _) = self.asset_manager().fetch_repo_info().await?;
         let snapshot_id = self.lookup_branch_v2(branch, Some(&ri)).await?;

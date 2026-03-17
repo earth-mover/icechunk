@@ -23,7 +23,7 @@ use crate::{
         CONFIG_FILE_PATH, IcechunkFormatError, IcechunkFormatErrorKind,
         REPO_INFO_FILE_PATH, SnapshotId, V1_REFS_FILE_PATH,
         format_constants::SpecVersionBin,
-        repo_info::{RepoInfo, UpdateInfo, UpdateType},
+        repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateInfo, UpdateType},
         snapshot::SnapshotInfo,
     },
     refs::{
@@ -511,6 +511,11 @@ pub async fn migrate_1_to_2(
             Box::new(e),
         ))
     })?;
+
+    // main_ancestry is tip-to-root, so last element is the root
+    let root = &main_ancestry[main_ancestry.len() - 1];
+    let root_time = root.flushed_at;
+
     let repo_info = Arc::new(RepoInfo::new(
         SpecVersionBin::V2dot0,
         tags,
@@ -532,6 +537,11 @@ pub async fn migrate_1_to_2(
         Some(config_bytes.as_slice()),
         None::<std::iter::Empty<u16>>,
         None::<std::iter::Empty<u16>>,
+        &RepoStatus {
+            availability: RepoAvailability::Online,
+            set_at: root_time,
+            limited_availability_reason: None,
+        },
     )?);
 
     if dry_run {
