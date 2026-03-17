@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::error::Error;
+use std::io::Write;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -14,6 +15,7 @@ use criterion::{
     BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
 };
 use futures::{StreamExt, stream};
+use icechunk::ObjectStoreConfig;
 use icechunk::config::{ManifestConfig, ManifestPreloadConfig, ManifestSplittingConfig};
 use icechunk::conflicts::detector::ConflictDetector;
 use icechunk::format::manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef};
@@ -24,13 +26,17 @@ use icechunk::initialize_tracing;
 use icechunk::repository::{Repository, VersionInfo};
 use icechunk::session::{CommitMethod, Session, get_chunk};
 use icechunk::storage::new_in_memory_storage;
+use icechunk::virtual_chunks::VirtualChunkContainer;
 use icechunk::{RepositoryConfig, Storage};
+use rand::RngExt;
+use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 #[derive(Clone, Copy)]
 enum ChunkKind {
     Inline,
     Virtual,
+    VirtualWithPrefixes,
 }
 
 impl std::fmt::Display for ChunkKind {
@@ -38,16 +44,20 @@ impl std::fmt::Display for ChunkKind {
         match self {
             ChunkKind::Inline => write!(f, "inline"),
             ChunkKind::Virtual => write!(f, "virtual"),
+            ChunkKind::VirtualWithPrefixes => write!(f, "virtual-prefixes"),
         }
     }
 }
 
+/// Returns `(Repository, TempDir)` — the `TempDir` must be kept alive by the caller
+/// because it holds the on-disk files that virtual chunk containers reference.
+/// Dropping it would delete the files and break virtual chunk reads.
 async fn setup_repo(
     path: Path,
     shape: ArrayShape,
     dimension_names: Option<Vec<DimensionName>>,
     split_config: Option<ManifestSplittingConfig>,
-) -> Result<Repository, Box<dyn Error>> {
+) -> Result<(Repository, TempDir), Box<dyn Error>> {
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
     let man_config = ManifestConfig {
@@ -59,10 +69,31 @@ async fn setup_repo(
         splitting: split_config,
         virtual_chunk_location_compression: None,
     };
-    let config =
+
+    let mut config =
         RepositoryConfig { manifest: Some(man_config), ..RepositoryConfig::default() };
-    let repository =
-        Repository::create(Some(config), storage, HashMap::new(), None, false).await?;
+
+    // Create 100 subdirectories, each with a chunk.dat file, as separate VCC containers
+    let mut auth: HashMap<String, Option<icechunk::config::Credentials>> = HashMap::new();
+    let tmpdir = TempDir::new().unwrap();
+    for i in 0..100u32 {
+        let subdir = tmpdir.path().join(format!("prefix-{i}"));
+        std::fs::create_dir_all(&subdir)?;
+        let mut f = std::fs::File::create(subdir.join("chunk.dat"))?;
+        f.write_all(&[42u8; 64])?;
+
+        let url_prefix = format!("file://{}/", subdir.display());
+        let cont = VirtualChunkContainer::new_named(
+            format!("prefix-{i}"),
+            url_prefix.clone(),
+            ObjectStoreConfig::LocalFileSystem(subdir.clone()),
+        )
+        .unwrap();
+        config.set_virtual_chunk_container(cont).unwrap();
+        auth.insert(url_prefix, None);
+    }
+
+    let repository = Repository::create(Some(config), storage, auth, None, false).await?;
 
     let mut session = repository.writable_session("main").await?;
 
@@ -71,7 +102,7 @@ async fn setup_repo(
     session.add_array(path, shape, dimension_names, defn.clone()).await?;
     session.commit("initialized", None).await?;
 
-    Ok(repository)
+    Ok((repository, tmpdir))
 }
 
 async fn set_chunks(
@@ -105,6 +136,27 @@ async fn set_chunks(
                     .await?;
             }
         }
+        ChunkKind::VirtualWithPrefixes => {
+            let mut rng = rand::rng();
+            for idx in chunks {
+                let prefix_idx = rng.random_range(0..100u32);
+                let location = VirtualChunkLocation::from_vcc_path(
+                    &format!("prefix-{prefix_idx}"),
+                    "chunk.dat",
+                )
+                .unwrap();
+                let payload = ChunkPayload::Virtual(VirtualChunkRef {
+                    location,
+                    offset: 0,
+                    length: 64,
+                    checksum: None,
+                });
+                session
+                    .set_chunk_ref(path.clone(), ChunkIndices(vec![idx]), Some(payload))
+                    .await
+                    .unwrap();
+            }
+        }
     }
     Ok(())
 }
@@ -117,7 +169,7 @@ fn benchmark_set_chunks(c: &mut Criterion) {
 
     let rt = Runtime::new().unwrap();
 
-    for kind in [ChunkKind::Inline, ChunkKind::Virtual] {
+    for kind in [ChunkKind::Inline, ChunkKind::Virtual, ChunkKind::VirtualWithPrefixes] {
         for num_chunks in [1_000, 10_000, 100_000, 1_000_000] {
             group.throughput(Throughput::Elements(num_chunks as u64));
             group.bench_with_input(
@@ -131,9 +183,10 @@ fn benchmark_set_chunks(c: &mut Criterion) {
                                 ArrayShape::new(vec![(num_chunks.into(), num_chunks)])
                                     .unwrap();
                             rt.block_on(async move {
-                                let repo = setup_repo(path.clone(), shape, None, None)
-                                    .await
-                                    .unwrap();
+                                let (repo, _tmpdir) =
+                                    setup_repo(path.clone(), shape, None, None)
+                                        .await
+                                        .unwrap();
                                 repo.writable_session("main").await.unwrap()
                             })
                         },
@@ -157,134 +210,131 @@ fn benchmark_set_chunks(c: &mut Criterion) {
 }
 
 /// Benchmarks getting of a random sequence of `nget` = 1000 chunks
-/// from a million chunks split across 1-1000 manifests.
+/// from a million chunks split across 1-1000 manifests, for both inline
+/// and virtual-with-prefixes chunk kinds.
 /// We always get the first and last chunk; the rest are randomly sampled.
 ///
-/// The repo and chunks are created once, then `rewrite_manifests` is used
-/// to re-split for each `num_manifests` value.
+/// The repo and chunks are created once per kind, then `rewrite_manifests`
+/// is used to re-split for each `num_manifests` value.
 fn benchmark_get_chunks(c: &mut Criterion) {
     let mut group = c.benchmark_group("get_chunks");
+    group.sample_size(10).sampling_mode(criterion::SamplingMode::Flat);
 
     let path: Path = "/temperature".try_into().unwrap();
     let rt = Runtime::new().unwrap();
 
-    // grab 1000 chunks
     let nget = 1000;
-    // form a total of a million chunks
     let num_chunks: u32 = 1_000_000;
 
-    // One-time setup: create repo and write all chunks (no splitting).
-    let mut storage_cache: Option<Arc<dyn Storage + Send + Sync>> = None;
+    for kind in [ChunkKind::Inline, ChunkKind::VirtualWithPrefixes] {
+        // One-time setup per kind: create repo and write all chunks (no splitting).
+        // We keep TempDir alive so virtual chunk files on disk remain accessible.
+        let mut storage_cache: Option<(TempDir, Arc<dyn Storage + Send + Sync>)> = None;
 
-    // split across this many manifests
-    for num_manifests in [1u32, 10, 100, 1_000] {
-        group.throughput(Throughput::Elements(num_manifests as u64));
+        for num_manifests in [1u32, 10, 100, 1_000] {
+            group.throughput(Throughput::Elements(num_manifests as u64));
 
-        let split_size = num_chunks.div_ceil(num_manifests);
-        let split_config = ManifestSplittingConfig::with_size(split_size);
+            let split_size = num_chunks.div_ceil(num_manifests);
+            let split_config = ManifestSplittingConfig::with_size(split_size);
 
-        // Lazy init: write chunks once, then rewrite manifests for each split config.
-        let storage = storage_cache.get_or_insert_with(|| {
-            rt.block_on(async {
-                let shape =
-                    ArrayShape::new(vec![(num_chunks.into(), num_chunks)]).unwrap();
-                let repo = setup_repo(path.clone(), shape, None, None).await.unwrap();
-                let mut write_session = repo.writable_session("main").await.unwrap();
-                set_chunks(
-                    path.clone(),
-                    &mut write_session,
-                    0..num_chunks,
-                    ChunkKind::Inline,
-                )
-                .await
-                .unwrap();
-                write_session.commit("data", None).await.unwrap();
-                repo.storage().clone()
-            })
-        });
+            let (_tmpdir, storage) = storage_cache.get_or_insert_with(|| {
+                rt.block_on(async {
+                    let shape =
+                        ArrayShape::new(vec![(num_chunks.into(), num_chunks)]).unwrap();
+                    let (repo, tmpdir) =
+                        setup_repo(path.clone(), shape, None, None).await.unwrap();
+                    let mut session = repo.writable_session("main").await.unwrap();
+                    set_chunks(path.clone(), &mut session, 0..num_chunks, kind)
+                        .await
+                        .unwrap();
+                    session.commit("data", None).await.unwrap();
+                    (tmpdir, repo.storage().clone())
+                })
+            });
 
-        // Re-open with the new splitting config and rewrite manifests.
-        let session = rt.block_on(async {
-            let man_config = ManifestConfig {
-                preload: Some(ManifestPreloadConfig {
-                    max_total_refs: None,
-                    preload_if: None,
-                    max_arrays_to_scan: None,
-                }),
-                splitting: Some(split_config),
-                virtual_chunk_location_compression: None,
-            };
-            let config = RepositoryConfig {
-                manifest: Some(man_config),
-                ..RepositoryConfig::default()
-            };
-            let repo =
-                Repository::open(Some(config), Arc::clone(storage), HashMap::new())
+            // Re-open with the new splitting config and rewrite manifests.
+            let session = rt.block_on(async {
+                let man_config = ManifestConfig {
+                    preload: Some(ManifestPreloadConfig {
+                        max_total_refs: None,
+                        preload_if: None,
+                        max_arrays_to_scan: None,
+                    }),
+                    splitting: Some(split_config),
+                    virtual_chunk_location_compression: None,
+                };
+                let config = RepositoryConfig {
+                    manifest: Some(man_config),
+                    ..RepositoryConfig::default()
+                };
+                let repo =
+                    Repository::open(Some(config), Arc::clone(storage), HashMap::new())
+                        .await
+                        .unwrap();
+                let mut session = repo.writable_session("main").await.unwrap();
+                session
+                    .rewrite_manifests("rewrite", None, CommitMethod::Amend)
                     .await
                     .unwrap();
-            let mut session = repo.writable_session("main").await.unwrap();
-            session
-                .rewrite_manifests("rewrite", None, CommitMethod::Amend)
-                .await
-                .unwrap();
 
-            Arc::new(
-                repo.readonly_session(&VersionInfo::BranchTipRef("main".into()))
-                    .await
-                    .unwrap(),
-            )
-        });
-
-        group.bench_with_input(
-            BenchmarkId::from_parameter(num_manifests),
-            &num_manifests,
-            |b, _| {
-                b.iter_batched(
-                    || {
-                        // Generate a fresh random sample per iteration
-                        let mut rng = rand::rng();
-                        let mut get_chunks: Vec<usize> = Vec::with_capacity(nget);
-                        get_chunks.push(0);
-                        get_chunks.append(
-                            &mut rand::seq::index::sample(
-                                &mut rng,
-                                (num_chunks - 1) as usize,
-                                nget - 2,
-                            )
-                            .into_vec(),
-                        );
-                        get_chunks.push((num_chunks - 1) as usize);
-                        get_chunks
-                    },
-                    |get_chunks| {
-                        rt.block_on(async {
-                            stream::iter(get_chunks.into_iter())
-                                .for_each(|idx| {
-                                    let session = session.clone();
-                                    let path = path.clone();
-                                    async move {
-                                        get_chunk(
-                                            session
-                                                .get_chunk_reader(
-                                                    &path,
-                                                    &ChunkIndices(vec![idx as u32]),
-                                                    &ByteRange::ALL,
-                                                )
-                                                .await
-                                                .unwrap(),
-                                        )
-                                        .await
-                                        .unwrap()
-                                        .unwrap();
-                                    }
-                                })
-                                .await
-                        })
-                    },
-                    BatchSize::SmallInput,
+                Arc::new(
+                    repo.readonly_session(&VersionInfo::BranchTipRef("main".into()))
+                        .await
+                        .unwrap(),
                 )
-            },
-        );
+            });
+
+            group.bench_with_input(
+                BenchmarkId::new(kind.to_string(), num_manifests),
+                &num_manifests,
+                |b, _| {
+                    b.iter_batched(
+                        || {
+                            // Generate a fresh random sample per iteration
+                            let mut rng = rand::rng();
+                            let mut get_chunks: Vec<usize> = Vec::with_capacity(nget);
+                            get_chunks.push(0);
+                            get_chunks.append(
+                                &mut rand::seq::index::sample(
+                                    &mut rng,
+                                    (num_chunks - 1) as usize,
+                                    nget - 2,
+                                )
+                                .into_vec(),
+                            );
+                            get_chunks.push((num_chunks - 1) as usize);
+                            get_chunks
+                        },
+                        |get_chunks| {
+                            rt.block_on(async {
+                                stream::iter(get_chunks.into_iter())
+                                    .for_each(|idx| {
+                                        let session = session.clone();
+                                        let path = path.clone();
+                                        async move {
+                                            get_chunk(
+                                                session
+                                                    .get_chunk_reader(
+                                                        &path,
+                                                        &ChunkIndices(vec![idx as u32]),
+                                                        &ByteRange::ALL,
+                                                    )
+                                                    .await
+                                                    .unwrap(),
+                                            )
+                                            .await
+                                            .unwrap()
+                                            .unwrap();
+                                        }
+                                    })
+                                    .await
+                            })
+                        },
+                        BatchSize::SmallInput,
+                    )
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -317,7 +367,7 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
                                     .unwrap();
                             let split_config = split_config.clone();
                             rt.block_on(async move {
-                                let repo = setup_repo(
+                                let (repo, _tmpdir) = setup_repo(
                                     path.clone(),
                                     shape,
                                     None,
@@ -375,7 +425,7 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
                         let shape =
                             ArrayShape::new(vec![(num_chunks.into(), num_chunks)])
                                 .unwrap();
-                        let repo = rt.block_on(async {
+                        let (repo, _tmpdir) = rt.block_on(async {
                             setup_repo(
                                 path.clone(),
                                 shape,
@@ -449,7 +499,7 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
                     // Fresh repo per sample
                     let shape =
                         ArrayShape::new(vec![(num_chunks.into(), num_chunks)]).unwrap();
-                    let repo = rt.block_on(async {
+                    let (repo, _tmpdir) = rt.block_on(async {
                         setup_repo(path.clone(), shape, None, Some(split_config.clone()))
                             .await
                             .unwrap()
@@ -511,4 +561,4 @@ criterion_group!(
 criterion_main!(benches);
 
 // TODO: open repo with large number of snapshots
-// TODO: latency store
+// TODO: IFS style rebasing workload
