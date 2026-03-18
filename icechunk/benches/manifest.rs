@@ -18,7 +18,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
+    BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group,
+    criterion_main,
 };
 use futures::{StreamExt, stream};
 use icechunk::ObjectStoreConfig;
@@ -44,6 +45,11 @@ use rand::RngExt;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
+const RUSTFS_PORT: u16 = 9000;
+const TOXIPROXY_PORT: u16 = 9002;
+const TOXIPROXY_PROXY_NAME: &str = "bench-latency";
+const NUM_VCCS: usize = 20;
+
 #[derive(Clone, Copy)]
 enum ChunkKind {
     Inline,
@@ -58,7 +64,9 @@ impl std::fmt::Display for ChunkKind {
             ChunkKind::Inline => write!(f, "inline"),
             ChunkKind::Native => write!(f, "native"),
             ChunkKind::Virtual => write!(f, "virtual"),
-            ChunkKind::VirtualWithPrefixes => write!(f, "virtual-prefixes"),
+            ChunkKind::VirtualWithPrefixes => {
+                write!(f, "virtual-{}-prefixes", NUM_VCCS)
+            }
         }
     }
 }
@@ -66,26 +74,21 @@ impl std::fmt::Display for ChunkKind {
 #[derive(Clone, Copy)]
 enum StorageKind {
     InMemory,
-    Minio,
+    Rustfs,
 }
 
 impl std::fmt::Display for StorageKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StorageKind::InMemory => write!(f, "memory"),
-            StorageKind::Minio => write!(f, "minio"),
+            StorageKind::Rustfs => write!(f, "rustfs"),
         }
     }
 }
 
-const MINIO_PORT: u16 = 9000;
-const TOXIPROXY_PORT: u16 = 9002;
-const TOXIPROXY_PROXY_NAME: &str = "bench-latency";
-const NUM_VCCS: usize = 20;
-
 fn default_storage_kind() -> StorageKind {
     match toxiproxy_latency_ms() {
-        Some(_) => StorageKind::Minio,
+        Some(_) => StorageKind::Rustfs,
         None => StorageKind::InMemory,
     }
 }
@@ -97,7 +100,7 @@ fn toxiproxy_latency_ms() -> Option<u64> {
         .map(|v| v.parse::<u64>().expect("ICECHUNK_BENCH_LATENCY_MS must be an integer"))
 }
 
-/// Set up toxiproxy: create a proxy on `TOXIPROXY_PORT` forwarding to MinIO at
+/// Set up toxiproxy: create a proxy on `TOXIPROXY_PORT` forwarding to RustFS at
 /// `rustfs:9000`. Does NOT add any toxics — those are managed separately so that
 /// latency is only injected during the timed portion of benchmarks.
 async fn setup_toxiproxy() -> Result<(), Box<dyn Error>> {
@@ -140,7 +143,7 @@ async fn remove_latency_toxic() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn minio_s3_options(endpoint_port: u16) -> S3Options {
+fn rustfs_s3_options(endpoint_port: u16) -> S3Options {
     S3Options {
         region: Some("us-east-1".to_string()),
         endpoint_url: Some(format!("http://localhost:{endpoint_port}")),
@@ -152,7 +155,7 @@ fn minio_s3_options(endpoint_port: u16) -> S3Options {
     }
 }
 
-fn minio_credentials() -> S3Credentials {
+fn rustfs_credentials() -> S3Credentials {
     S3Credentials::Static(S3StaticCredentials {
         access_key_id: "modify".into(),
         secret_access_key: "modifydata".into(),
@@ -161,16 +164,21 @@ fn minio_credentials() -> S3Credentials {
     })
 }
 
-/// Create S3 storage pointing at toxiproxy (which proxies to MinIO).
-fn make_s3_proxied_storage() -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn Error>> {
+/// Create S3 storage pointing at RustFS, optionally through toxiproxy.
+fn make_s3_storage(
+    latency_ms: Option<u64>,
+) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn Error>> {
+    let port = if latency_ms.is_some() { TOXIPROXY_PORT } else { RUSTFS_PORT };
     let storage = new_s3_storage(
-        minio_s3_options(TOXIPROXY_PORT),
+        rustfs_s3_options(port),
         "testbucket".to_string(),
         Some(format!("bench-{}", uuid::Uuid::new_v4())),
-        Some(minio_credentials()),
+        Some(rustfs_credentials()),
     )?;
     Ok(storage)
 }
+
+type Type = icechunk::config::Credentials;
 
 /// Returns `(Repository, TempDir)` — the `TempDir` must be kept alive by the caller
 /// because it holds the on-disk files that virtual chunk containers reference.
@@ -182,10 +190,13 @@ async fn setup_repo(
     split_config: Option<ManifestSplittingConfig>,
     storage_kind: StorageKind,
 ) -> Result<(Repository, TempDir), Box<dyn Error>> {
+    let latency_ms = toxiproxy_latency_ms();
     let storage: Arc<dyn Storage + Send + Sync> = match storage_kind {
-        StorageKind::Minio => {
-            setup_toxiproxy().await?;
-            make_s3_proxied_storage()?
+        StorageKind::Rustfs => {
+            if latency_ms.is_some() {
+                setup_toxiproxy().await?;
+            }
+            make_s3_storage(latency_ms)?
         }
         StorageKind::InMemory => new_in_memory_storage().await?,
     };
@@ -216,15 +227,15 @@ async fn setup_repo(
     // Create 20 VCCs, each with a chunk file.
     // When using toxiproxy/S3, files live in MinIO and reads go through the proxy.
     // Otherwise, files live in a local TempDir.
-    let use_s3 = matches!(storage_kind, StorageKind::Minio);
-    let mut auth: HashMap<String, Option<icechunk::config::Credentials>> = HashMap::new();
+    let use_s3 = matches!(storage_kind, StorageKind::Rustfs);
+    let mut auth: HashMap<String, Option<Type>> = HashMap::new();
     let tmpdir = TempDir::new().unwrap();
     let chunk_data = Bytes::from(vec![42u8; 8 * 1024 * 1024]);
 
     if use_s3 {
-        // Upload chunk objects to MinIO (direct, not through toxiproxy).
+        // Upload chunk objects to RustFS (direct, not through toxiproxy).
         let s3_store = object_store::aws::AmazonS3Builder::new()
-            .with_endpoint(format!("http://localhost:{MINIO_PORT}"))
+            .with_endpoint(format!("http://localhost:{RUSTFS_PORT}"))
             .with_bucket_name("testbucket")
             .with_region("us-east-1")
             .with_access_key_id("modify")
@@ -247,11 +258,13 @@ async fn setup_repo(
 
     for i in 0..NUM_VCCS {
         let (url_prefix, obj_store_config, cred) = if use_s3 {
-            // VCC reads go through toxiproxy for realistic latency.
+            // VCC reads go through toxiproxy when latency is configured, else direct.
+            let vcc_port =
+                if latency_ms.is_some() { TOXIPROXY_PORT } else { RUSTFS_PORT };
             let url_prefix = format!("s3://testbucket/bench-vcc/prefix-{i}/");
             let obj_store_config =
-                ObjectStoreConfig::S3Compatible(minio_s3_options(TOXIPROXY_PORT));
-            let cred = Some(icechunk::config::Credentials::S3(minio_credentials()));
+                ObjectStoreConfig::S3Compatible(rustfs_s3_options(vcc_port));
+            let cred = Some(icechunk::config::Credentials::S3(rustfs_credentials()));
             (url_prefix, obj_store_config, cred)
         } else {
             let subdir = tmpdir.path().join(format!("prefix-{i}"));
@@ -312,10 +325,12 @@ async fn set_chunks(
             }
         }
         ChunkKind::Virtual => {
+            let mut rng = rand::rng();
             for idx in chunks {
+                let prefix_idx = rng.random_range(0..NUM_VCCS);
                 let payload = ChunkPayload::Virtual(VirtualChunkRef {
                     location: VirtualChunkLocation::from_url(&format!(
-                        "s3://bucket/chunk_{idx}"
+                        "s3://testbucket/bench-vcc/prefix-{prefix_idx}/chunk"
                     ))?,
                     offset: 0,
                     length: 8 * 1024 * 1024,
@@ -332,7 +347,7 @@ async fn set_chunks(
                 let prefix_idx = rng.random_range(0..NUM_VCCS);
                 let location = VirtualChunkLocation::from_vcc_path(
                     &format!("prefix-{prefix_idx}"),
-                    "chunk.dat",
+                    "chunk",
                 )
                 .unwrap();
                 let payload = ChunkPayload::Virtual(VirtualChunkRef {
@@ -413,7 +428,7 @@ fn benchmark_set_chunks(c: &mut Criterion) {
 /// is used to re-split for each `num_manifests` value.
 fn benchmark_get_chunks(c: &mut Criterion) {
     let mut group = c.benchmark_group("get_chunks");
-    group.sample_size(10).sampling_mode(criterion::SamplingMode::Flat);
+    group.sample_size(10).sampling_mode(SamplingMode::Flat);
 
     let path: Path = "/temperature".try_into().unwrap();
     let rt = Runtime::new().unwrap();
@@ -421,8 +436,9 @@ fn benchmark_get_chunks(c: &mut Criterion) {
     let nget = 1000;
     let num_chunks: u32 = 1_000_000;
 
-    for storage_kind in [StorageKind::InMemory, StorageKind::Minio] {
-        for kind in [ChunkKind::Inline, ChunkKind::Native, ChunkKind::VirtualWithPrefixes]
+    for storage_kind in [StorageKind::InMemory, StorageKind::Rustfs] {
+        for kind in
+            [ChunkKind::Native, ChunkKind::Virtual, ChunkKind::VirtualWithPrefixes]
         {
             // One-time setup per kind: create repo and write all chunks (no splitting).
             // We keep TempDir alive so virtual chunk files on disk remain accessible.
@@ -548,7 +564,7 @@ fn benchmark_get_chunks(c: &mut Criterion) {
 /// split across 1-1000 manifests
 fn benchmark_commit_split_manifests(c: &mut Criterion) {
     let mut group = c.benchmark_group("commit_split_manifests");
-    group.sample_size(20).sampling_mode(criterion::SamplingMode::Flat);
+    group.sample_size(20).sampling_mode(SamplingMode::Flat);
 
     let path: Path = "/temperature".try_into().unwrap();
 
@@ -609,7 +625,7 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
 /// The sequential repeated commit really stresses `get_existing_node` and flatbuffer decoding.
 fn benchmark_append_split_manifests(c: &mut Criterion) {
     let mut group = c.benchmark_group("append_split_manifests");
-    group.sample_size(10).sampling_mode(criterion::SamplingMode::Flat);
+    group.sample_size(10).sampling_mode(SamplingMode::Flat);
 
     let rt = Runtime::new().unwrap();
 
@@ -686,7 +702,7 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
     #[cfg(feature = "logs")]
     initialize_tracing(None);
     let mut group = c.benchmark_group("commit_rebase_split_manifests");
-    group.sample_size(10).sampling_mode(criterion::SamplingMode::Flat);
+    group.sample_size(10).sampling_mode(SamplingMode::Flat);
 
     let rt = Runtime::new().unwrap();
 
