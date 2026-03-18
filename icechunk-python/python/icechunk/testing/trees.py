@@ -4,7 +4,7 @@ The tree descriptor (GroupNode / ArrayNode) is a pure data structure.
 Materialization writes it into any zarr store, so the same tree can be
 written to MemoryStore, IcechunkStore, etc. for comparison testing.
 
-The ``zarr_trees_strategy`` strategy uses st.recursive for tree structure (good
+The ``trees`` strategy uses st.recursive for tree structure (good
 structural shrinking) and @composite for pool-based name assignment
 that produces realistic prefix collisions (e.g. ``EC-Earth3`` / ``EC-Earth3-Veg``).
 """
@@ -108,25 +108,22 @@ def derived_name(draw: st.DrawFn, name_pool: list[str]) -> str:
 
 
 @st.composite
-def unique_sibling_names(draw: st.DrawFn, name_pool: list[str], n: int) -> list[str]:
+def unique_sibling_names(draw: st.DrawFn, name_pool: set[str], n: int) -> list[str]:
     """Draw *n* names unique among themselves, feeding each into the shared pool."""
     names: list[str] = []
     seen: set[str] = set()
+
     for _ in range(n):
+        available_pool = sorted(name_pool - seen)
         strategy = (
-            st.one_of(node_names, derived_name(name_pool)) if name_pool else node_names
+            st.one_of(node_names, derived_name(available_pool))
+            if available_pool
+            else node_names
         )
-        name = draw(strategy)
-        # On collision, fall back to a guaranteed-fresh name instead of rejection sampling.
-        if name in seen:
-
-            def _not_in_seen(nm: str) -> bool:
-                return nm not in seen
-
-            name = draw(node_names.filter(_not_in_seen))
+        name = draw(strategy.filter(lambda name_: name_ not in seen))
         names.append(name)
         seen.add(name)
-        name_pool.append(name)
+        name_pool.add(name)
     return names
 
 
@@ -139,7 +136,7 @@ def skeletons(*, max_leaves: int = 50, max_children: int = 4) -> st.SearchStrate
     """Unnamed tree skeletons via st.recursive.
 
     Produces trees with placeholder index keys ("0", "1", ...) as child names.
-    Real names are assigned later by zarr_trees_strategy.
+    Real names are assigned later by ``trees``.
     """
     leaves = st.just(ArrayNode(shape=SHAPE, dtype=DTYPE))
 
@@ -167,13 +164,13 @@ def trees(
 
     Examples
     --------
-    >>> @given(tree=zarr_trees_strategy())
+    >>> @given(tree=trees())
     ... def test_something(tree):
     ...     reference = tree.materialize(zarr.storage.MemoryStore())
     ...     under_test = tree.materialize(my_icechunk_store())
     ...     # compare...
     """
-    name_pool: list[str] = []
+    name_pool: set[str] = set()
 
     def assign_names(node: Node) -> Node:
         if isinstance(node, ArrayNode):

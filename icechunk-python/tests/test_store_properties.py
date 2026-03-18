@@ -8,7 +8,7 @@ import pytest
 from hypothesis import given
 
 import zarr
-from icechunk.testing.trees import trees
+from icechunk.testing.trees import GroupNode, trees
 from icechunk.testing.utils import (
     precommit_postcommit_readonly,
     tree_to_model_and_icechunk,
@@ -17,7 +17,7 @@ from icechunk.testing.utils import (
 
 @pytest.mark.asyncio
 @given(tree=trees())
-async def test_list_prefix(tree):
+async def test_list_prefix(tree: GroupNode) -> None:
     """list_prefix on each node path should match."""
     model, session, repo = tree_to_model_and_icechunk(tree)
 
@@ -38,7 +38,7 @@ async def test_list_prefix(tree):
 
 @pytest.mark.asyncio
 @given(tree=trees())
-async def test_list_dir(tree):
+async def test_list_dir(tree: GroupNode) -> None:
     """list_dir on every group path should match."""
     model, session, repo = tree_to_model_and_icechunk(tree)
 
@@ -52,7 +52,7 @@ async def test_list_dir(tree):
 
 @pytest.mark.asyncio
 @given(tree=trees())
-async def test_exists(tree):
+async def test_exists(tree: GroupNode) -> None:
     model, session, repo = tree_to_model_and_icechunk(tree)
 
     groups = tree.groups(include_root=True)
@@ -66,7 +66,7 @@ async def test_exists(tree):
 
 @pytest.mark.asyncio
 @given(tree=trees())
-async def test_is_empty(tree):
+async def test_is_empty(tree: GroupNode) -> None:
     model, session, repo = tree_to_model_and_icechunk(tree)
 
     groups = tree.groups(include_root=True)
@@ -78,7 +78,7 @@ async def test_is_empty(tree):
 
 
 @given(tree=trees())
-def test_keys(tree):
+def test_keys(tree: GroupNode) -> None:
     model, session, repo = tree_to_model_and_icechunk(tree)
     model_group = zarr.open_group(model)
     expected = set(model_group.keys())
@@ -88,7 +88,7 @@ def test_keys(tree):
 
 
 @given(tree=trees())
-def test_members(tree):
+def test_members(tree: GroupNode) -> None:
     model, session, repo = tree_to_model_and_icechunk(tree)
     model_group = zarr.open_group(model)
     expected = {(name, type(v).__name__) for name, v in model_group.members()}
@@ -99,7 +99,7 @@ def test_members(tree):
 
 
 @given(tree=trees())
-def test_contains(tree):
+def test_contains(tree: GroupNode) -> None:
     model, session, repo = tree_to_model_and_icechunk(tree)
     model_group = zarr.open_group(model)
     all_nodes = tree.nodes()
@@ -112,7 +112,7 @@ def test_contains(tree):
 
 
 @given(tree=trees())
-def test_getitem(tree):
+def test_getitem(tree: GroupNode) -> None:
     model, session, repo = tree_to_model_and_icechunk(tree)
     model_group = zarr.open_group(model)
     all_nodes = tree.nodes()
@@ -124,13 +124,13 @@ def test_getitem(tree):
             assert type(mem_val).__name__ == type(ice_val).__name__, (
                 f"__getitem__({path!r}) [{label}]: type mismatch"
             )
-            if isinstance(mem_val, zarr.Array):
+            if isinstance(mem_val, zarr.Array) and isinstance(ice_val, zarr.Array):
                 assert mem_val.shape == ice_val.shape
                 assert mem_val.dtype == ice_val.dtype
 
 
 @given(tree=trees())
-def test_group_keys_and_array_keys(tree):
+def test_group_keys_and_array_keys(tree: GroupNode) -> None:
     model, session, repo = tree_to_model_and_icechunk(tree)
     model_group = zarr.open_group(model)
     expected_gk = set(model_group.group_keys())
