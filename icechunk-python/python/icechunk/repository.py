@@ -13,6 +13,7 @@ from icechunk._icechunk_python import (
     GCSummary,
     ManifestFileInfo,
     PyRepository,
+    PySpecVersion,
     RepositoryConfig,
     RepoStatus,
     SnapshotInfo,
@@ -40,7 +41,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
-        spec_version: int | None = None,
+        spec_version: PySpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> Self:
         """

@@ -8,7 +8,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from enum import Enum
+from enum import Enum, IntEnum
 from typing import Any, TypeAlias, final
 
 from icechunk.types import CommitMethod
@@ -1896,6 +1896,11 @@ class ManifestFileInfo:
         """The number of chunk references contained in this manifest"""
         ...
 
+@final
+class PySpecVersion(IntEnum):
+    v1dot0 = 1
+    v2dot0 = 2
+
 class PyRepository:
     @classmethod
     def create(
@@ -1904,7 +1909,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        spec_version: int | None = None,
+        spec_version: PySpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1914,7 +1919,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        spec_version: int | None = None,
+        spec_version: PySpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1964,11 +1969,11 @@ class PyRepository:
     @staticmethod
     def fetch_spec_version(
         storage: Storage, storage_settings: StorageSettings | None = None
-    ) -> int | None: ...
+    ) -> PySpecVersion | int | None: ...
     @staticmethod
     async def fetch_spec_version_async(
         storage: Storage, storage_settings: StorageSettings | None = None
-    ) -> int | None: ...
+    ) -> PySpecVersion | int | None: ...
     @classmethod
     def from_bytes(cls, bytes: bytes) -> PyRepository: ...
     def as_bytes(self) -> bytes: ...
@@ -2164,7 +2169,7 @@ class PyRepository:
         self, manifest_id: str, *, pretty: bool = True
     ) -> str: ...
     @property
-    def spec_version(self) -> int: ...
+    def spec_version(self) -> PySpecVersion: ...
 
 class ChunkType(Enum):
     """Enum for Zarr chunk types
@@ -3123,7 +3128,7 @@ def set_logs_filter(log_filter_directive: str | None) -> None:
     """
     ...
 
-def spec_version() -> int:
+def spec_version() -> PySpecVersion:
     """
     The version of the Icechunk specification that the library is compatible with.
 

@@ -887,6 +887,44 @@ fn mk_update(
     })
 }
 
+#[repr(u8)]
+#[pyclass(eq, eq_int, ord, rename_all = "snake_case", skip_from_py_object)]
+#[derive(PartialEq, Default, Clone, PartialOrd)]
+pub enum PySpecVersion {
+    V1dot0 = 1u8,
+    #[default]
+    V2dot0 = 2u8,
+}
+
+impl<'py> FromPyObject<'_, 'py> for PySpecVersion {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        let value = if let Ok(v) = ob.extract::<u8>() {
+            match v {
+                1 => PySpecVersion::V1dot0,
+                2 => PySpecVersion::V2dot0,
+                _ => todo!(), //Err(PyValueError::new_err("")),
+            }
+        } else if let Ok(spec) = ob.extract::<PySpecVersion>() {
+            spec
+        } else {
+            todo!("throw error")
+        };
+
+        Ok(value)
+    }
+}
+
+impl From<PySpecVersion> for SpecVersionBin {
+    fn from(value: PySpecVersion) -> Self {
+        match value {
+            PySpecVersion::V1dot0 => Self::V1dot0,
+            PySpecVersion::V2dot0 => Self::V2dot0,
+        }
+    }
+}
+
 #[pyclass]
 pub(crate) struct PyRepository(Arc<RwLock<Repository>>);
 
@@ -939,7 +977,7 @@ impl PyRepository {
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
-        spec_version: Option<u8>,
+        spec_version: Option<PySpecVersion>,
         check_clean_root: bool,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
@@ -949,12 +987,7 @@ impl PyRepository {
                     let config = config
                         .map(|c| c.try_into().map_err(PyValueError::new_err))
                         .transpose()?;
-                    let version = match spec_version {
-                        Some(n) => Some(
-                            SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?,
-                        ),
-                        None => None,
-                    };
+                    let version = spec_version.map(|v| v.into());
                     Repository::create(
                         config,
                         storage.0,
