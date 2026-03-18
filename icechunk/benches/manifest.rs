@@ -49,6 +49,7 @@ const RUSTFS_PORT: u16 = 9000;
 const TOXIPROXY_PORT: u16 = 9002;
 const TOXIPROXY_PROXY_NAME: &str = "bench-latency";
 const NUM_VCCS: usize = 20;
+const CHUNK_SIZE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Copy)]
 enum ChunkKind {
@@ -230,7 +231,7 @@ async fn setup_repo(
     let use_s3 = matches!(storage_kind, StorageKind::Rustfs);
     let mut auth: HashMap<String, Option<Type>> = HashMap::new();
     let tmpdir = TempDir::new().unwrap();
-    let chunk_data = Bytes::from(vec![42u8; 8 * 1024 * 1024]);
+    let chunk_data = Bytes::from(vec![42u8; CHUNK_SIZE_BYTES as usize]);
 
     if use_s3 {
         // Upload chunk objects to RustFS (direct, not through toxiproxy).
@@ -312,7 +313,7 @@ async fn set_chunks(
             }
         }
         ChunkKind::Native => {
-            let bytes = Bytes::from(vec![42u8; 8 * 1024 * 1024]);
+            let bytes = Bytes::from(vec![42u8; CHUNK_SIZE_BYTES as usize]);
             let payload = session.get_chunk_writer().unwrap()(bytes).await?;
             for idx in chunks {
                 session
@@ -333,7 +334,7 @@ async fn set_chunks(
                         "s3://testbucket/bench-vcc/prefix-{prefix_idx}/chunk"
                     ))?,
                     offset: 0,
-                    length: 8 * 1024 * 1024,
+                    length: CHUNK_SIZE_BYTES,
                     checksum: None,
                 });
                 session
@@ -353,7 +354,7 @@ async fn set_chunks(
                 let payload = ChunkPayload::Virtual(VirtualChunkRef {
                     location,
                     offset: 0,
-                    length: 8 * 1024 * 1024,
+                    length: CHUNK_SIZE_BYTES,
                     checksum: None,
                 });
                 session
@@ -419,8 +420,8 @@ fn benchmark_set_chunks(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmarks getting of a random sequence of `nget` = 1000 chunks
-/// from a million chunks split across 1 or 1000 manifests, for both inline, native,
+/// Benchmarks getting of a random sequence of `nget` = 500 chunks
+/// from a million chunks split across 1 or 500 manifests, for both inline, native,
 /// and virtual-with-prefixes chunk kinds.
 /// We always get the first and last chunk; the rest are randomly sampled.
 ///
@@ -433,10 +434,10 @@ fn benchmark_get_chunks(c: &mut Criterion) {
     let path: Path = "/temperature".try_into().unwrap();
     let rt = Runtime::new().unwrap();
 
-    let nget = 1000;
+    let nget = 500;
     let num_chunks: u32 = 1_000_000;
 
-    for storage_kind in [StorageKind::InMemory, StorageKind::Rustfs] {
+    for storage_kind in [StorageKind::Rustfs] {
         for kind in
             [ChunkKind::Native, ChunkKind::Virtual, ChunkKind::VirtualWithPrefixes]
         {
@@ -445,7 +446,7 @@ fn benchmark_get_chunks(c: &mut Criterion) {
             // We keep Repository so we can `reopen` it (preserving VCC auth).
             let mut repo_cache: Option<(TempDir, Repository)> = None;
 
-            for num_manifests in [1u32, 1_000] {
+            for num_manifests in [1u32, 500] {
                 group.throughput(Throughput::Elements(num_manifests as u64));
 
                 let split_size = num_chunks.div_ceil(num_manifests);
@@ -486,17 +487,16 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                         ..RepositoryConfig::default()
                     };
                     let repo = base_repo.reopen(Some(config), None).await.unwrap();
-                    let mut session = repo.writable_session("main").await.unwrap();
-                    session
-                        .rewrite_manifests("rewrite", None, CommitMethod::Amend)
-                        .await
-                        .unwrap();
-
-                    Arc::new(
-                        repo.readonly_session(&VersionInfo::BranchTipRef("main".into()))
+                    if num_manifests > 1 {
+                        let mut session = repo.writable_session("main").await.unwrap();
+                        session
+                            .rewrite_manifests("rewrite", None, CommitMethod::Amend)
                             .await
-                            .unwrap(),
-                    )
+                            .unwrap();
+                    }
+                    repo.readonly_session(&VersionInfo::BranchTipRef("main".into()))
+                        .await
+                        .unwrap()
                 });
 
                 // If specified, enable the latency toxic only for the timed iterations.
