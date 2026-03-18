@@ -64,6 +64,7 @@ impl std::fmt::Display for ChunkKind {
 const MINIO_PORT: u16 = 9000;
 const TOXIPROXY_PORT: u16 = 9002;
 const TOXIPROXY_PROXY_NAME: &str = "bench-latency";
+const NUM_VCCS: usize = 20;
 
 /// Parse `ICECHUNK_BENCH_LATENCY_MS` env var; returns `Some(ms)` if set.
 fn toxiproxy_latency_ms() -> Option<u64> {
@@ -176,7 +177,7 @@ async fn setup_repo(
     let mut config =
         RepositoryConfig { manifest: Some(man_config), ..RepositoryConfig::default() };
 
-    // Create 100 VCC containers, each with a chunk.dat file.
+    // Create 20 VCCs, each with a chunk file.
     // When using toxiproxy/S3, files live in MinIO and reads go through the proxy.
     // Otherwise, files live in a local TempDir.
     let use_s3 = toxiproxy_latency_ms().is_some();
@@ -185,7 +186,7 @@ async fn setup_repo(
     let chunk_data = Bytes::from_static(&[42u8; 64]);
 
     if use_s3 {
-        // Upload chunk.dat objects to MinIO (direct, not through toxiproxy).
+        // Upload chunk objects to MinIO (direct, not through toxiproxy).
         let s3_store = object_store::aws::AmazonS3Builder::new()
             .with_endpoint(format!("http://localhost:{MINIO_PORT}"))
             .with_bucket_name("testbucket")
@@ -194,21 +195,21 @@ async fn setup_repo(
             .with_secret_access_key("modifydata")
             .with_allow_http(true)
             .build()?;
-        for i in 0..100u32 {
+        for i in 0..NUM_VCCS {
             let obj_path: object_store::path::Path =
-                format!("bench-vcc/prefix-{i}/chunk.dat").into();
+                format!("bench-vcc/prefix-{i}/chunk").into();
             s3_store.put(&obj_path, chunk_data.clone().into()).await?;
         }
     } else {
-        for i in 0..100u32 {
+        for i in 0..NUM_VCCS {
             let subdir = tmpdir.path().join(format!("prefix-{i}"));
             std::fs::create_dir_all(&subdir)?;
-            let mut f = std::fs::File::create(subdir.join("chunk.dat"))?;
+            let mut f = std::fs::File::create(subdir.join("chunk"))?;
             f.write_all(&chunk_data)?;
         }
     }
 
-    for i in 0..100u32 {
+    for i in 0..NUM_VCCS {
         let (url_prefix, obj_store_config, cred) = if use_s3 {
             // VCC reads go through toxiproxy for realistic latency.
             let url_prefix = format!("s3://testbucket/bench-vcc/prefix-{i}/");
@@ -279,7 +280,7 @@ async fn set_chunks(
         ChunkKind::VirtualWithPrefixes => {
             let mut rng = rand::rng();
             for idx in chunks {
-                let prefix_idx = rng.random_range(0..100u32);
+                let prefix_idx = rng.random_range(0..NUM_VCCS);
                 let location = VirtualChunkLocation::from_vcc_path(
                     &format!("prefix-{prefix_idx}"),
                     "chunk.dat",
