@@ -494,38 +494,37 @@ impl RepoInfo {
         let mut repo_before_updates = previous_info;
 
         let num_updates = num_updates_per_file as usize;
-        let updates: Vec<_> = all_updates
-            .take(num_updates + 1)
-            .enumerate()
-            .map(|(idx, maybe_data)| maybe_data.map(|(d1, d2, d3)| (idx, d1, d2, d3)))
-            .map(|maybe_data| {
-                let (idx, u_type, u_time, file) = maybe_data?;
-                if idx == num_updates {
-                    repo_before_updates = file;
-                }
-                let (update_type_type, update_type) =
-                    update_type_to_fb(builder, &u_type)?;
-                let file = file.map(|file| builder.create_string(file));
-                let res = generated::Update::create(
-                    builder,
-                    &generated::UpdateArgs {
-                        update_type_type,
-                        update_type: Some(update_type),
-                        updated_at: u_time.timestamp_micros() as u64,
-                        backup_path: file,
-                    },
-                );
-                Ok::<_, IcechunkFormatError>(res)
-            })
-            .try_collect()?;
+        let mut updates = Vec::new();
+        for maybe_data in all_updates {
+            let (u_type, u_time, file) = maybe_data?;
 
-        debug_assert!(
-            updates.len() <= num_updates + 1,
-            "Too many latest updates in repo file"
-        );
+            // Once we've reached the target file size, look for a valid overflow
+            // point: an entry whose backup_path we can use as the chain pointer.
+            // Entries without a backup_path (e.g. synthetic migration entries)
+            // can't serve as overflow — keep them in the file instead.
+            if updates.len() >= num_updates
+                && let Some(bp) = file
+            {
+                repo_before_updates = Some(bp);
+                break;
+            }
 
-        let size = (num_updates - 1).min(updates.len() - 1);
-        let updates = builder.create_vector(&updates[0..=size]);
+            let (update_type_type, update_type) = update_type_to_fb(builder, &u_type)?;
+            let file = file.map(|file| builder.create_string(file));
+            updates.push(generated::Update::create(
+                builder,
+                &generated::UpdateArgs {
+                    update_type_type,
+                    update_type: Some(update_type),
+                    updated_at: u_time.timestamp_micros() as u64,
+                    backup_path: file,
+                },
+            ));
+        }
+
+        debug_assert!(!updates.is_empty(), "Must have at least one update in repo file");
+
+        let updates = builder.create_vector(&updates);
         let repo_before_updates = repo_before_updates.map(|s| builder.create_string(s));
         Ok((updates, repo_before_updates))
     }
