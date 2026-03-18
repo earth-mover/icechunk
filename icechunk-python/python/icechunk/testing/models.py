@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from typing import Any
 
 from zarr.core.buffer import default_buffer_prototype
@@ -21,31 +22,30 @@ class ModelStore(MemoryStore):
     ) -> None:
         """Shift chunk indices for an array.
 
-        This simulates what shift_array does to the chunk store keys.
         Out-of-bounds chunks are dropped, vacated positions retain stale data.
         """
         prefix = f"{array_path}/c/"
 
-        # Read all chunks keyed by their new indices, discarding out-of-bounds
-        chunk_data: dict[tuple[int, ...], Any] = {}
-        async for key in self.list_prefix(prefix):
-            parts = key.split("/")
-            idx_start = parts.index("c") + 1
-            old_idx = tuple(int(p) for p in parts[idx_start:])
-            new_idx = tuple(idx + off for idx, off in zip(old_idx, offset, strict=True))
+        # Collect mutations before applying any, to avoid read-after-write.
+        mutations: dict[str, Any] = {}
+        for dst_idx in itertools.product(*(range(n) for n in num_chunks)):
+            src_idx = tuple(dst - off for dst, off in zip(dst_idx, offset, strict=True))
             if any(
-                idx < 0 or idx >= nchunks
-                for idx, nchunks in zip(new_idx, num_chunks, strict=True)
+                src < 0 or src >= size
+                for src, size in zip(src_idx, num_chunks, strict=True)
             ):
                 continue
-            data = await self.get(key, prototype=_PROTOTYPE)
-            if data is not None:
-                chunk_data[new_idx] = data
+            src_key = f"{prefix}{'/'.join(str(i) for i in src_idx)}"
+            dst_key = f"{prefix}{'/'.join(str(i) for i in dst_idx)}"
+            mutations[dst_key] = await self.get(src_key, prototype=_PROTOTYPE)
 
-        # Write chunks at new positions
-        for new_idx, data in chunk_data.items():
-            new_key = f"{prefix}{'/'.join(str(idx) for idx in new_idx)}"
-            await self.set(new_key, data)
+        for dst_key, data in mutations.items():
+            if data is not None:
+                await self.set(dst_key, data)
+            else:
+                # we end up here if the source chunk was in t he bounds of the array
+                # but was deleted by an operation in this session prior to the shift.
+                await self.delete(dst_key)
 
     spec_version: int
 
