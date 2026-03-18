@@ -280,10 +280,7 @@ async fn assert_action_postcondition(
                 .map_ok(|info| info.id)
                 .try_collect()
                 .await?;
-            assert!(
-                anc.contains(&snap),
-                "commit {snap:?} not found in ancestry of branch {branch:?}"
-            );
+            assert!(anc.contains(&snap));
         }
         AddBranch(branch, snap) => {
             assert!(repo.list_branches().await?.contains(&branch));
@@ -299,9 +296,17 @@ async fn assert_action_postcondition(
         DeleteTag { tag, .. } => {
             assert!(!repo.list_tags().await?.contains(&tag));
         }
-        Amend { branch, new_snap, .. } => {
+        Amend { branch, new_snap, previous_snap } => {
             let tip = repo.lookup_branch(&branch).await?;
             assert_eq!(tip, new_snap, "amend snapshot should be branch tip for {branch}");
+            let anc: HashSet<SnapshotId> = repo
+                .ancestry(&VersionInfo::BranchTipRef(branch.clone()))
+                .await?
+                .map_ok(|info| info.id)
+                .try_collect()
+                .await?;
+            assert!(anc.contains(&new_snap));
+            assert!(!anc.contains(&previous_snap));
         }
         ResetBranch { branch, to_snap, .. } => {
             let tip = repo.lookup_branch(&branch).await?;
