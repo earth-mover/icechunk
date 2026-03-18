@@ -265,6 +265,11 @@ impl VirtualChunkLocation {
         self.0.as_str()
     }
 
+    /// Wrap a pre-validated location string without re-parsing.
+    fn from_trusted(s: String) -> Self {
+        VirtualChunkLocation(s)
+    }
+
     /// Returns true if this is a relative `vcc://` location.
     pub fn is_relative(&self) -> bool {
         self.0.starts_with(VCC_RELATIVE_URL_SCHEME)
@@ -710,7 +715,7 @@ fn ref_to_payload(
                 e,
             ))
         })?;
-        let location = VirtualChunkLocation::from_url(location_str)?;
+        let location = VirtualChunkLocation::from_trusted(location_str.to_string());
         Ok(ChunkPayload::Virtual(VirtualChunkRef {
             location,
             checksum: checksum(&chunk_ref),
@@ -718,7 +723,7 @@ fn ref_to_payload(
             length: chunk_ref.length(),
         }))
     } else if let Some(location) = chunk_ref.location() {
-        let location = VirtualChunkLocation::from_url(location)?;
+        let location = VirtualChunkLocation::from_trusted(location.to_string());
         Ok(ChunkPayload::Virtual(VirtualChunkRef {
             location,
             checksum: checksum(&chunk_ref),
