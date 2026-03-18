@@ -63,10 +63,32 @@ impl std::fmt::Display for ChunkKind {
     }
 }
 
+#[derive(Clone, Copy)]
+enum StorageKind {
+    InMemory,
+    Minio,
+}
+
+impl std::fmt::Display for StorageKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StorageKind::InMemory => write!(f, "memory"),
+            StorageKind::Minio => write!(f, "minio"),
+        }
+    }
+}
+
 const MINIO_PORT: u16 = 9000;
 const TOXIPROXY_PORT: u16 = 9002;
 const TOXIPROXY_PROXY_NAME: &str = "bench-latency";
 const NUM_VCCS: usize = 20;
+
+fn default_storage_kind() -> StorageKind {
+    match toxiproxy_latency_ms() {
+        Some(_) => StorageKind::Minio,
+        None => StorageKind::InMemory,
+    }
+}
 
 /// Parse `ICECHUNK_BENCH_LATENCY_MS` env var; returns `Some(ms)` if set.
 fn toxiproxy_latency_ms() -> Option<u64> {
@@ -158,12 +180,14 @@ async fn setup_repo(
     shape: ArrayShape,
     dimension_names: Option<Vec<DimensionName>>,
     split_config: Option<ManifestSplittingConfig>,
+    storage_kind: StorageKind,
 ) -> Result<(Repository, TempDir), Box<dyn Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> = if toxiproxy_latency_ms().is_some() {
-        setup_toxiproxy().await?;
-        make_s3_proxied_storage()?
-    } else {
-        new_in_memory_storage().await?
+    let storage: Arc<dyn Storage + Send + Sync> = match storage_kind {
+        StorageKind::Minio => {
+            setup_toxiproxy().await?;
+            make_s3_proxied_storage()?
+        }
+        StorageKind::InMemory => new_in_memory_storage().await?,
     };
 
     let man_config = ManifestConfig {
@@ -192,7 +216,7 @@ async fn setup_repo(
     // Create 20 VCCs, each with a chunk file.
     // When using toxiproxy/S3, files live in MinIO and reads go through the proxy.
     // Otherwise, files live in a local TempDir.
-    let use_s3 = toxiproxy_latency_ms().is_some();
+    let use_s3 = matches!(storage_kind, StorageKind::Minio);
     let mut auth: HashMap<String, Option<icechunk::config::Credentials>> = HashMap::new();
     let tmpdir = TempDir::new().unwrap();
     let chunk_data = Bytes::from(vec![42u8; 8 * 1024 * 1024]);
@@ -349,10 +373,15 @@ fn benchmark_set_chunks(c: &mut Criterion) {
                                 ArrayShape::new(vec![(num_chunks.into(), num_chunks)])
                                     .unwrap();
                             rt.block_on(async move {
-                                let (repo, _tmpdir) =
-                                    setup_repo(path.clone(), shape, None, None)
-                                        .await
-                                        .unwrap();
+                                let (repo, _tmpdir) = setup_repo(
+                                    path.clone(),
+                                    shape,
+                                    None,
+                                    None,
+                                    default_storage_kind(),
+                                )
+                                .await
+                                .unwrap();
                                 repo.writable_session("main").await.unwrap()
                             })
                         },
@@ -376,7 +405,7 @@ fn benchmark_set_chunks(c: &mut Criterion) {
 }
 
 /// Benchmarks getting of a random sequence of `nget` = 1000 chunks
-/// from a million chunks split across 1-1000 manifests, for both inline
+/// from a million chunks split across 1 or 1000 manifests, for both inline, native,
 /// and virtual-with-prefixes chunk kinds.
 /// We always get the first and last chunk; the rest are randomly sampled.
 ///
@@ -392,117 +421,123 @@ fn benchmark_get_chunks(c: &mut Criterion) {
     let nget = 1000;
     let num_chunks: u32 = 1_000_000;
 
-    for kind in [ChunkKind::Inline, ChunkKind::VirtualWithPrefixes] {
-        // One-time setup per kind: create repo and write all chunks (no splitting).
-        // We keep TempDir alive so virtual chunk files on disk remain accessible.
-        // We keep Repository so we can `reopen` it (preserving VCC auth).
-        let mut repo_cache: Option<(TempDir, Repository)> = None;
+    for storage_kind in [StorageKind::InMemory, StorageKind::Minio] {
+        for kind in [ChunkKind::Inline, ChunkKind::Native, ChunkKind::VirtualWithPrefixes]
+        {
+            // One-time setup per kind: create repo and write all chunks (no splitting).
+            // We keep TempDir alive so virtual chunk files on disk remain accessible.
+            // We keep Repository so we can `reopen` it (preserving VCC auth).
+            let mut repo_cache: Option<(TempDir, Repository)> = None;
 
-        for num_manifests in [1u32, 10, 100, 1_000] {
-            group.throughput(Throughput::Elements(num_manifests as u64));
+            for num_manifests in [1u32, 1_000] {
+                group.throughput(Throughput::Elements(num_manifests as u64));
 
-            let split_size = num_chunks.div_ceil(num_manifests);
-            let split_config = ManifestSplittingConfig::with_size(split_size);
+                let split_size = num_chunks.div_ceil(num_manifests);
+                let split_config = ManifestSplittingConfig::with_size(split_size);
 
-            let (_tmpdir, base_repo) = repo_cache.get_or_insert_with(|| {
-                rt.block_on(async {
-                    let shape =
-                        ArrayShape::new(vec![(num_chunks.into(), num_chunks)]).unwrap();
-                    let (repo, tmpdir) =
-                        setup_repo(path.clone(), shape, None, None).await.unwrap();
+                let (_tmpdir, base_repo) = repo_cache.get_or_insert_with(|| {
+                    rt.block_on(async {
+                        let shape =
+                            ArrayShape::new(vec![(num_chunks.into(), num_chunks)])
+                                .unwrap();
+                        let (repo, tmpdir) =
+                            setup_repo(path.clone(), shape, None, None, storage_kind)
+                                .await
+                                .unwrap();
+                        let mut session = repo.writable_session("main").await.unwrap();
+                        set_chunks(path.clone(), &mut session, 0..num_chunks, kind)
+                            .await
+                            .unwrap();
+                        session.commit("data", None).await.unwrap();
+                        (tmpdir, repo)
+                    })
+                });
+
+                // Re-open with the new splitting config and rewrite manifests.
+                // Using reopen() preserves VCC auth from the original repo.
+                let session = rt.block_on(async {
+                    let man_config = ManifestConfig {
+                        preload: Some(ManifestPreloadConfig {
+                            max_total_refs: None,
+                            preload_if: None,
+                            max_arrays_to_scan: None,
+                        }),
+                        splitting: Some(split_config),
+                        virtual_chunk_location_compression: None,
+                    };
+                    let config = RepositoryConfig {
+                        manifest: Some(man_config),
+                        ..RepositoryConfig::default()
+                    };
+                    let repo = base_repo.reopen(Some(config), None).await.unwrap();
                     let mut session = repo.writable_session("main").await.unwrap();
-                    set_chunks(path.clone(), &mut session, 0..num_chunks, kind)
+                    session
+                        .rewrite_manifests("rewrite", None, CommitMethod::Amend)
                         .await
                         .unwrap();
-                    session.commit("data", None).await.unwrap();
-                    (tmpdir, repo)
-                })
-            });
 
-            // Re-open with the new splitting config and rewrite manifests.
-            // Using reopen() preserves VCC auth from the original repo.
-            let session = rt.block_on(async {
-                let man_config = ManifestConfig {
-                    preload: Some(ManifestPreloadConfig {
-                        max_total_refs: None,
-                        preload_if: None,
-                        max_arrays_to_scan: None,
-                    }),
-                    splitting: Some(split_config),
-                    virtual_chunk_location_compression: None,
-                };
-                let config = RepositoryConfig {
-                    manifest: Some(man_config),
-                    ..RepositoryConfig::default()
-                };
-                let repo = base_repo.reopen(Some(config), None).await.unwrap();
-                let mut session = repo.writable_session("main").await.unwrap();
-                session
-                    .rewrite_manifests("rewrite", None, CommitMethod::Amend)
-                    .await
-                    .unwrap();
-
-                Arc::new(
-                    repo.readonly_session(&VersionInfo::BranchTipRef("main".into()))
-                        .await
-                        .unwrap(),
-                )
-            });
-
-            // Enable the latency toxic only for the timed iterations.
-            if let Some(ms) = toxiproxy_latency_ms() {
-                rt.block_on(add_latency_toxic(ms)).unwrap();
-            }
-
-            group.bench_with_input(
-                BenchmarkId::new(kind.to_string(), num_manifests),
-                &num_manifests,
-                |b, _| {
-                    b.iter_batched(
-                        || {
-                            // Generate a fresh random sample per iteration
-                            let mut rng = rand::rng();
-                            let mut get_chunks: Vec<usize> = Vec::with_capacity(nget);
-                            get_chunks.push(0);
-                            get_chunks.append(
-                                &mut rand::seq::index::sample(
-                                    &mut rng,
-                                    (num_chunks - 1) as usize,
-                                    nget - 2,
-                                )
-                                .into_vec(),
-                            );
-                            get_chunks.push((num_chunks - 1) as usize);
-                            get_chunks
-                        },
-                        |get_chunks| {
-                            rt.block_on(async {
-                                stream::iter(get_chunks.into_iter())
-                                    .for_each(|idx| {
-                                        let session = session.clone();
-                                        let path = path.clone();
-                                        async move {
-                                            let reader = session
-                                                .get_chunk_reader(
-                                                    &path,
-                                                    &ChunkIndices(vec![idx as u32]),
-                                                    &ByteRange::ALL,
-                                                )
-                                                .await
-                                                .unwrap();
-                                            get_chunk(reader).await.unwrap().unwrap();
-                                        }
-                                    })
-                                    .await
-                            })
-                        },
-                        BatchSize::SmallInput,
+                    Arc::new(
+                        repo.readonly_session(&VersionInfo::BranchTipRef("main".into()))
+                            .await
+                            .unwrap(),
                     )
-                },
-            );
+                });
 
-            if toxiproxy_latency_ms().is_some() {
-                rt.block_on(remove_latency_toxic()).unwrap();
+                // If specified, enable the latency toxic only for the timed iterations.
+                if let Some(ms) = toxiproxy_latency_ms() {
+                    rt.block_on(add_latency_toxic(ms)).unwrap();
+                }
+
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{storage_kind}/{kind}"), num_manifests),
+                    &num_manifests,
+                    |b, _| {
+                        b.iter_batched(
+                            || {
+                                // Generate a fresh random sample per iteration
+                                let mut rng = rand::rng();
+                                let mut get_chunks: Vec<usize> = Vec::with_capacity(nget);
+                                get_chunks.push(0);
+                                get_chunks.append(
+                                    &mut rand::seq::index::sample(
+                                        &mut rng,
+                                        (num_chunks - 1) as usize,
+                                        nget - 2,
+                                    )
+                                    .into_vec(),
+                                );
+                                get_chunks.push((num_chunks - 1) as usize);
+                                get_chunks
+                            },
+                            |get_chunks| {
+                                rt.block_on(async {
+                                    stream::iter(get_chunks.into_iter())
+                                        .for_each(|idx| {
+                                            let session = session.clone();
+                                            let path = path.clone();
+                                            async move {
+                                                let reader = session
+                                                    .get_chunk_reader(
+                                                        &path,
+                                                        &ChunkIndices(vec![idx as u32]),
+                                                        &ByteRange::ALL,
+                                                    )
+                                                    .await
+                                                    .unwrap();
+                                                get_chunk(reader).await.unwrap().unwrap();
+                                            }
+                                        })
+                                        .await
+                                })
+                            },
+                            BatchSize::SmallInput,
+                        )
+                    },
+                );
+
+                if toxiproxy_latency_ms().is_some() {
+                    rt.block_on(remove_latency_toxic()).unwrap();
+                }
             }
         }
     }
@@ -542,6 +577,7 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
                                     shape,
                                     None,
                                     Some(split_config),
+                                    default_storage_kind(),
                                 )
                                 .await
                                 .unwrap();
@@ -601,6 +637,7 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
                                 shape,
                                 None,
                                 Some(split_config.clone()),
+                                default_storage_kind(),
                             )
                             .await
                             .unwrap()
@@ -670,9 +707,15 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
                     let shape =
                         ArrayShape::new(vec![(num_chunks.into(), num_chunks)]).unwrap();
                     let (repo, _tmpdir) = rt.block_on(async {
-                        setup_repo(path.clone(), shape, None, Some(split_config.clone()))
-                            .await
-                            .unwrap()
+                        setup_repo(
+                            path.clone(),
+                            shape,
+                            None,
+                            Some(split_config.clone()),
+                            default_storage_kind(),
+                        )
+                        .await
+                        .unwrap()
                     });
 
                     // Create all sessions from the same branch tip
