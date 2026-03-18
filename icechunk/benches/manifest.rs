@@ -465,8 +465,6 @@ fn benchmark_get_chunks(c: &mut Criterion) {
             [ChunkKind::Native, ChunkKind::Virtual, ChunkKind::VirtualWithPrefixes]
         {
             for num_manifests in [1u32, 500] {
-                group.throughput(Throughput::Elements(num_manifests as u64));
-
                 let session_cell: OnceCell<Session> = OnceCell::new();
 
                 group.bench_with_input(
@@ -611,7 +609,6 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
         for num_manifests in [1, 10, 100, 1_000] {
             let split_config =
                 ManifestSplittingConfig::with_size(num_chunks.div_ceil(num_manifests));
-            group.throughput(Throughput::Elements(num_manifests as u64));
             group.bench_with_input(
                 BenchmarkId::new(kind.to_string(), num_manifests),
                 &num_chunks,
