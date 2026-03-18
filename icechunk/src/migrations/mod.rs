@@ -690,7 +690,9 @@ mod tests {
     use icechunk_macros::tokio_test;
     use tempfile::{TempDir, tempdir};
 
-    use crate::{new_local_filesystem_storage, refs};
+    use futures::TryStreamExt as _;
+
+    use crate::{RepositoryConfig, new_local_filesystem_storage, refs};
 
     use super::*;
 
@@ -912,6 +914,70 @@ mod tests {
             refs::list_branches(repo.storage().as_ref(), repo.storage_settings()).await?,
             ["main".to_string(), "my-branch".to_string()].into()
         );
+        Ok(())
+    }
+
+    #[tokio_test]
+    /// Verify the ops log chain isn't broken when post-migration writes overflow
+    /// synthetic (backup_path=None) entries.
+    async fn test_ops_log_chain_after_migration() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let (repo, _tmp) = prepare_v1_repo().await?;
+        let storage = repo.storage().clone();
+
+        migrate_1_to_2(repo, false, true, None).await.unwrap();
+
+        // Reopen with a very small num_updates_per_file to force overflow
+        // of synthetic migration entries immediately.
+        let config = RepositoryConfig {
+            num_updates_per_repo_info_file: Some(3),
+            ..Default::default()
+        };
+        let repo =
+            Repository::open(Some(config), storage.clone(), Default::default()).await?;
+
+        // Record initial ops log length after migration
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        let mut expected_len = ops.len();
+
+        // The last entry must be RepoInitializedUpdate
+        assert!(
+            matches!(ops.last().unwrap().1, UpdateType::RepoInitializedUpdate),
+            "ops log chain broken after migration: last entry is not RepoInitializedUpdate"
+        );
+
+        let snap_id = repo.lookup_branch("main").await?;
+
+        for i in 0..5 {
+            repo.create_tag(&format!("post-migration-tag-{i}"), &snap_id).await?;
+            expected_len += 1;
+
+            let (stream, _, _) = repo.ops_log().await?;
+            let ops: Vec<_> = stream.try_collect().await?;
+
+            assert_eq!(
+                ops.len(),
+                expected_len,
+                "ops log length mismatch on iteration {i}"
+            );
+
+            assert!(
+                matches!(ops.last().unwrap().1, UpdateType::RepoInitializedUpdate),
+                "ops log chain broken on iteration {i}: last entry is not RepoInitializedUpdate"
+            );
+
+            // Verify timestamps are strictly decreasing
+            for window in ops.windows(2) {
+                let (time_a, _, _) = &window[0];
+                let (time_b, _, _) = &window[1];
+                assert!(
+                    time_a > time_b,
+                    "ops log timestamps must be strictly decreasing: {time_a} should be > {time_b}"
+                );
+            }
+        }
+
         Ok(())
     }
 }
