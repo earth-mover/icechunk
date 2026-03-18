@@ -709,13 +709,13 @@ fn ref_to_payload(
         let decompressed = decompressor
             .decompress(compressed.bytes(), MAX_DECOMPRESSED_LOCATION_SIZE)
             .map_err(IcechunkFormatErrorKind::IO)?;
-        let location_str = std::str::from_utf8(&decompressed).map_err(|e| {
+        let location_string = String::from_utf8(decompressed).map_err(|e| {
             IcechunkFormatErrorKind::IO(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 e,
             ))
         })?;
-        let location = VirtualChunkLocation::from_trusted(location_str.to_string());
+        let location = VirtualChunkLocation::from_trusted(location_string);
         Ok(ChunkPayload::Virtual(VirtualChunkRef {
             location,
             checksum: checksum(&chunk_ref),
