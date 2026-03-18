@@ -402,10 +402,10 @@ impl Storage for ObjectStorage {
             let result = self.get_client(settings).await.get_opts(&from, opts).await;
             match result {
                 Ok(result) => {
-                    let bytes =
-                        result.bytes().await.map_err(|e| -> StorageError {
-                            Box::new(e).into()
-                        })?;
+                    let bytes = result
+                        .bytes()
+                        .await
+                        .map_err(|e| -> StorageError { Box::new(e).into() })?;
                     self.get_client(settings)
                         .await
                         .put(&to, bytes.into())
