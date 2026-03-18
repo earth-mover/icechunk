@@ -323,10 +323,10 @@ impl VirtualChunkLocation {
             .path_segments()
             .ok_or(VirtualReferenceErrorKind::NoPathSegments(path.into()))?;
 
-        let host = if let Some(host) = url.host() {
-            host.to_string()
+        let host = if let Some(host) = url.host_str() {
+            host
         } else if scheme == "file" {
-            String::new()
+            ""
         } else if scheme == "vcc" {
             return Err(VirtualReferenceErrorKind::NoContainerForName(path.into()).into());
         } else {
@@ -338,7 +338,7 @@ impl VirtualChunkLocation {
         let mut result = String::with_capacity(path.len());
         result.push_str(scheme);
         result.push_str("://");
-        result.push_str(&host);
+        result.push_str(host);
         result.push('/');
         let mut sep = "";
         for segment in segments.filter(|x| !x.is_empty()) {
