@@ -23,8 +23,8 @@ use criterion::{
 use futures::{StreamExt, stream};
 use icechunk::ObjectStoreConfig;
 use icechunk::config::{
-    ManifestConfig, ManifestPreloadConfig, ManifestSplittingConfig, S3Credentials,
-    S3Options, S3StaticCredentials,
+    CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestSplittingConfig,
+    S3Credentials, S3Options, S3StaticCredentials,
 };
 use icechunk::conflicts::detector::ConflictDetector;
 use icechunk::format::manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef};
@@ -47,6 +47,7 @@ use tokio::runtime::Runtime;
 #[derive(Clone, Copy)]
 enum ChunkKind {
     Inline,
+    Native,
     Virtual,
     VirtualWithPrefixes,
 }
@@ -55,6 +56,7 @@ impl std::fmt::Display for ChunkKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ChunkKind::Inline => write!(f, "inline"),
+            ChunkKind::Native => write!(f, "native"),
             ChunkKind::Virtual => write!(f, "virtual"),
             ChunkKind::VirtualWithPrefixes => write!(f, "virtual-prefixes"),
         }
@@ -165,6 +167,7 @@ async fn setup_repo(
     };
 
     let man_config = ManifestConfig {
+        // turn off preloading so the profiles show us where things are loaded.
         preload: Some(ManifestPreloadConfig {
             max_total_refs: None,
             preload_if: None,
@@ -174,8 +177,17 @@ async fn setup_repo(
         virtual_chunk_location_compression: None,
     };
 
-    let mut config =
-        RepositoryConfig { manifest: Some(man_config), ..RepositoryConfig::default() };
+    let mut config = RepositoryConfig {
+        manifest: Some(man_config),
+        caching: Some(CachingConfig {
+            // we only write 1 native chunk
+            // & point a million chunk refs at it.
+            // so turn off chunk caching.
+            num_bytes_chunks: Some(0),
+            ..CachingConfig::default()
+        }),
+        ..RepositoryConfig::default()
+    };
 
     // Create 20 VCCs, each with a chunk file.
     // When using toxiproxy/S3, files live in MinIO and reads go through the proxy.
@@ -183,7 +195,7 @@ async fn setup_repo(
     let use_s3 = toxiproxy_latency_ms().is_some();
     let mut auth: HashMap<String, Option<icechunk::config::Credentials>> = HashMap::new();
     let tmpdir = TempDir::new().unwrap();
-    let chunk_data = Bytes::from_static(&[42u8; 64]);
+    let chunk_data = Bytes::from(vec![42u8; 8 * 1024 * 1024]);
 
     if use_s3 {
         // Upload chunk objects to MinIO (direct, not through toxiproxy).
@@ -262,6 +274,19 @@ async fn set_chunks(
                     .await?;
             }
         }
+        ChunkKind::Native => {
+            let bytes = Bytes::from(vec![42u8; 8 * 1024 * 1024]);
+            let payload = session.get_chunk_writer().unwrap()(bytes).await?;
+            for idx in chunks {
+                session
+                    .set_chunk_ref(
+                        path.clone(),
+                        ChunkIndices(vec![idx]),
+                        Some(payload.clone()),
+                    )
+                    .await?;
+            }
+        }
         ChunkKind::Virtual => {
             for idx in chunks {
                 let payload = ChunkPayload::Virtual(VirtualChunkRef {
@@ -269,7 +294,7 @@ async fn set_chunks(
                         "s3://bucket/chunk_{idx}"
                     ))?,
                     offset: 0,
-                    length: 1,
+                    length: 8 * 1024 * 1024,
                     checksum: None,
                 });
                 session
@@ -289,7 +314,7 @@ async fn set_chunks(
                 let payload = ChunkPayload::Virtual(VirtualChunkRef {
                     location,
                     offset: 0,
-                    length: 64,
+                    length: 8 * 1024 * 1024,
                     checksum: None,
                 });
                 session
