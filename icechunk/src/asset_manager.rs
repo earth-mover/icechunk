@@ -6,7 +6,7 @@
 //! transaction logs, and chunks.
 
 use async_stream::try_stream;
-use backon::{BackoffBuilder, ExponentialBuilder, Retryable};
+use backon::{BackoffBuilder, ConstantBuilder, ExponentialBuilder, Retryable};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
@@ -37,6 +37,7 @@ use tokio::{
 };
 use tracing::{debug, instrument, trace, warn};
 
+use crate::format::repo_info::RepoAvailability;
 use crate::storage::GetModifiedResult;
 use crate::{
     RepositoryConfig, Storage, StorageError,
@@ -265,6 +266,7 @@ impl AssetManager {
         self.chunk_cache.clear();
     }
 
+    #[instrument(skip_all)]
     pub async fn fetch_config(
         &self,
     ) -> RepositoryResult<Option<(RepositoryConfig, VersionInfo)>> {
@@ -614,32 +616,74 @@ impl AssetManager {
     pub async fn update_repo_info(
         &self,
         retry_settings: &storage::RetriesSettings,
+        update: impl FnMut(
+            Arc<RepoInfo>,
+            &str,
+            VersionInfo,
+        ) -> RepositoryResult<Arc<RepoInfo>>,
+    ) -> RepositoryResult<VersionInfo> {
+        self.update_repo_info_internal(retry_settings, update, false).await
+    }
+
+    /// # Safety
+    ///
+    /// This overrides any checks on the repo status, and force
+    /// an update.
+    #[instrument(skip(self, retry_settings, update))]
+    pub async unsafe fn update_repo_info_unchecked(
+        &self,
+        retry_settings: &storage::RetriesSettings,
+        update: impl FnMut(
+            Arc<RepoInfo>,
+            &str,
+            VersionInfo,
+        ) -> RepositoryResult<Arc<RepoInfo>>,
+    ) -> RepositoryResult<VersionInfo> {
+        self.update_repo_info_internal(retry_settings, update, true).await
+    }
+
+    #[instrument(skip(self, retry_settings, update))]
+    async fn update_repo_info_internal(
+        &self,
+        retry_settings: &storage::RetriesSettings,
         mut update: impl FnMut(
             Arc<RepoInfo>,
             &str,
             VersionInfo,
         ) -> RepositoryResult<Arc<RepoInfo>>,
+        skip_online_check: bool,
     ) -> RepositoryResult<VersionInfo> {
         let max_attempts = retry_settings.max_tries().get() as usize;
 
         // The first few retries are immediate (no delay) since brief contention
         // typically resolves within one or two attempts. After that, we switch to
         // exponential backoff with jitter.
-        let immediate_retries: u64 = 5;
-        let mut backoff = ExponentialBuilder::new()
+        let immediate_retries = 5;
+        let const_backoff = ConstantBuilder::new()
+            .with_delay(Duration::ZERO)
+            .with_max_times(immediate_retries)
+            .build();
+        let exp_backoff = ExponentialBuilder::new()
             .with_min_delay(std::time::Duration::from_millis(
                 retry_settings.initial_backoff_ms() as u64,
             ))
             .with_max_delay(std::time::Duration::from_millis(
                 retry_settings.max_backoff_ms() as u64,
             ))
-            .with_max_times(max_attempts.saturating_sub(immediate_retries as usize))
+            .with_max_times(max_attempts.saturating_sub(immediate_retries))
             .with_jitter()
             .build();
+        let mut backoff = const_backoff.chain(exp_backoff);
 
         let mut attempts: u64 = 1;
         loop {
             let (repo_info, repo_version) = self.fetch_repo_info().await?;
+            let status = repo_info.status()?;
+            if !skip_online_check && status.availability != RepoAvailability::Online {
+                return Err(
+                    RepositoryErrorKind::ReadonlyRepository(status.error_msg()).into()
+                );
+            }
             let backup_path = self.backup_path_for_repo_info();
             let new_repo = update(repo_info, backup_path.as_str(), repo_version.clone())?;
             trace!(attempts, "Attempting to update repo object");
@@ -670,31 +714,15 @@ impl AssetManager {
                     kind: RepositoryErrorKind::RepoInfoUpdated,
                     ..
                 }) => {
-                    if attempts <= immediate_retries {
-                        debug!(
-                            attempts,
-                            "Repo info object was updated concurrently, retrying immediately..."
-                        );
-                    } else {
-                        match backoff.next() {
-                            Some(delay) => {
-                                debug!(
-                                    attempts,
-                                    ?delay,
-                                    "Repo info object was updated concurrently, retrying with backoff..."
-                                );
-                                tokio::time::sleep(delay).await;
-                            }
-                            None => {
-                                return Err(
-                                    RepositoryErrorKind::RepoUpdateAttemptsLimit(
-                                        max_attempts as u64,
-                                    )
-                                    .into(),
-                                );
-                            }
-                        }
-                    }
+                    let delay = backoff.next().ok_or(
+                        RepositoryErrorKind::RepoUpdateAttemptsLimit(max_attempts as u64),
+                    )?;
+                    debug!(
+                        attempts,
+                        ?delay,
+                        "Repo info updated concurrently, retrying..."
+                    );
+                    tokio::time::sleep(delay).await;
                     attempts += 1;
                 }
                 err @ Err(_) => {

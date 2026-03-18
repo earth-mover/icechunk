@@ -13,11 +13,11 @@ use std::env;
 use config::{
     PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
     PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsBearerCredential,
-    PyGcsCredentials, PyGcsStaticCredentials, PyManifestConfig,
+    PyGcsCredentials, PyGcsStaticCredentials, PyLatencyStorage, PyManifestConfig,
     PyManifestPreloadCondition, PyManifestPreloadConfig,
     PyManifestVirtualChunkLocationCompressionConfig, PyObjectStoreConfig,
     PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials, PyS3Options,
-    PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings,
+    PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings, PyStorageObjectInfo,
     PyStorageRetriesSettings, PyStorageSettings, PyStorageTimeoutSettings,
     PyVirtualChunkContainer,
 };
@@ -34,8 +34,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
 use repository::{
-    PyDiff, PyFeatureFlag, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo,
-    PyUpdate, PyUpdateType,
+    PyDiff, PyFeatureFlag, PyGCSummary, PyManifestFileInfo, PyRepoAvailability,
+    PyRepoStatus, PyRepository, PySnapshotInfo, PyUpdate, PyUpdateType,
 };
 use session::{ChunkType, PySession, PySessionMode};
 use stats::PyChunkStorageStats;
@@ -191,7 +191,9 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCredentials>()?;
     m.add_class::<PyS3Options>()?;
     m.add_class::<PyObjectStoreConfig>()?;
+    m.add_class::<PyStorageObjectInfo>()?;
     m.add_class::<PyStorage>()?;
+    m.add_class::<PyLatencyStorage>()?;
     m.add_class::<PyVirtualChunkContainer>()?;
     m.add_class::<PyCompressionAlgorithm>()?;
     m.add_class::<PyCompressionConfig>()?;
@@ -210,6 +212,8 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStorageSettings>()?;
     m.add_class::<PyGCSummary>()?;
     m.add_class::<PyDiff>()?;
+    m.add_class::<PyRepoAvailability>()?;
+    m.add_class::<PyRepoStatus>()?;
     m.add_class::<PyUpdateType>()?;
     m.add_class::<PyUpdate>()?;
     m.add_class::<PyFeatureFlag>()?;

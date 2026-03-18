@@ -1920,9 +1920,105 @@ impl PyRepositoryConfig {
     }
 }
 
-#[pyclass(name = "Storage")]
+/// Metadata for an object in storage.
+#[pyclass(name = "StorageObjectInfo", frozen, eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PyStorageObjectInfo {
+    #[pyo3(get)]
+    pub key: String,
+    #[pyo3(get)]
+    pub size_bytes: u64,
+    #[pyo3(get)]
+    pub created_at: DateTime<Utc>,
+}
+
+#[pymethods]
+impl PyStorageObjectInfo {
+    fn __repr__(&self) -> String {
+        format!(
+            "StorageObjectInfo(key='{}', size_bytes={}, created_at={})",
+            self.key, self.size_bytes, self.created_at,
+        )
+    }
+}
+
+#[pyclass(name = "Storage", subclass)]
 #[derive(Clone, Debug)]
 pub(crate) struct PyStorage(pub Arc<dyn Storage + Send + Sync>);
+
+/// Storage wrapper that adds artificial read/write latency for testing.
+///
+/// Wraps any Storage backend and injects configurable delays before write
+/// and read operations. Useful for reproducing timing-sensitive bugs
+/// or for benchmarking.
+///
+/// Parameters
+/// ----------
+/// inner : Storage
+///     The storage backend to wrap.
+/// write_latency_ms : int, default 0
+///     Delay in milliseconds before each write operation.
+/// read_latency_ms : int, default 0
+///     Delay in milliseconds before each read operation.
+///
+/// Examples
+/// --------
+/// >>> from icechunk.testing import LatencyStorage
+/// >>> storage = LatencyStorage(ic.in_memory_storage(), write_latency_ms=15)
+/// >>> repo = ic.Repository.create(storage=storage, ...)
+/// >>> storage.write_latency_ms = 50  # adjust at runtime
+#[pyclass(name = "LatencyStorage", extends = PyStorage)]
+#[derive(Clone, Debug)]
+pub(crate) struct PyLatencyStorage {
+    latency: Arc<icechunk::storage::latency::LatencyStorage>,
+}
+
+#[pymethods]
+impl PyLatencyStorage {
+    #[new]
+    #[pyo3(signature = (inner, *, write_latency_ms = 0, read_latency_ms = 0))]
+    fn new(
+        inner: PyStorage,
+        write_latency_ms: u64,
+        read_latency_ms: u64,
+    ) -> (Self, PyStorage) {
+        let latency = Arc::new(icechunk::storage::latency::LatencyStorage::new(
+            inner.0,
+            write_latency_ms,
+            read_latency_ms,
+        ));
+        let base = PyStorage(latency.clone() as Arc<dyn Storage + Send + Sync>);
+        (Self { latency }, base)
+    }
+
+    #[getter]
+    fn write_latency_ms(&self) -> u64 {
+        self.latency.write_delay_ms()
+    }
+
+    #[setter]
+    fn set_write_latency_ms(&self, ms: u64) {
+        self.latency.set_write_delay_ms(ms);
+    }
+
+    #[getter]
+    fn read_latency_ms(&self) -> u64 {
+        self.latency.read_delay_ms()
+    }
+
+    #[setter]
+    fn set_read_latency_ms(&self, ms: u64) {
+        self.latency.set_read_delay_ms(ms);
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "LatencyStorage(write_latency_ms={}, read_latency_ms={})",
+            self.latency.write_delay_ms(),
+            self.latency.read_delay_ms(),
+        )
+    }
+}
 
 #[pymethods]
 impl PyStorage {
@@ -2153,6 +2249,9 @@ impl PyStorage {
     /// Returns a list of ``(key, size_in_bytes)`` tuples for each object found.
     /// When ``prefix`` is ``None`` or empty, all objects under the repository root are listed.
     /// Custom ``settings`` can be provided to override the storage's default settings.
+    ///
+    /// Deprecated: use ``list_objects_metadata`` instead, which also returns
+    /// the ``created_at`` timestamp.
     #[pyo3(signature = (settings=None, prefix=None))]
     pub(crate) fn list_objects(
         &self,
@@ -2178,6 +2277,51 @@ impl PyStorage {
                 .map_err(PyIcechunkStoreError::StorageError)?;
             let results: Vec<(String, u64)> = stream
                 .map_ok(|info| (info.id, info.size_bytes))
+                .try_collect()
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
+            Ok(results)
+        })
+    }
+
+    /// List objects with full metadata, optionally filtered by a key prefix.
+    ///
+    /// When ``prefix`` is ``None`` or empty, all objects under the repository root are listed.
+    /// Custom ``settings`` can be provided to override the storage's default settings.
+    ///
+    /// Returns
+    /// -------
+    /// list[StorageObjectInfo]
+    ///     A list of :class:`StorageObjectInfo` objects.
+    #[pyo3(signature = (settings=None, prefix=None))]
+    pub(crate) fn list_objects_metadata(
+        &self,
+        settings: Option<&PyStorageSettings>,
+        prefix: Option<String>,
+    ) -> PyResult<Vec<PyStorageObjectInfo>> {
+        let prefix = prefix.unwrap_or_default();
+        let settings: Option<storage::Settings> = settings.map(|s| s.into());
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async {
+            let defaults = self
+                .0
+                .default_settings()
+                .await
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            let settings = match settings {
+                Some(s) => s.merge(defaults),
+                None => defaults,
+            };
+            let stream = self
+                .0
+                .list_objects(&settings, &prefix)
+                .await
+                .map_err(PyIcechunkStoreError::StorageError)?;
+            let results: Vec<PyStorageObjectInfo> = stream
+                .map_ok(|info| PyStorageObjectInfo {
+                    key: info.id,
+                    size_bytes: info.size_bytes,
+                    created_at: info.created_at,
+                })
                 .try_collect()
                 .await
                 .map_err(PyIcechunkStoreError::StorageError)?;

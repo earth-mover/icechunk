@@ -50,8 +50,20 @@ table ManifestRef {
 
 // the shape of the array along a given dimension
 struct DimensionShape {
-    array_length: uint64;
-    chunk_length: uint64;
+  array_length: uint64;
+  // When IC2+ writes an IC1 repo, this field may be wrong.
+  // In IC2 we only track `num_chunks` --- the number of chunks along an axis ---
+  // and not the actual chunk size.
+  // At write time we calculate `chunk_length = array_length.div_ceil(num_chunks)`
+  // for populating this field.
+  // Note that this field is NOT returned to Zarr, so it doesn't matter.
+  // It was only ever used to estimate `num_chunks`.
+  chunk_length: uint64;
+}
+
+table DimensionShapeV2 {
+  array_length: uint64;
+  num_chunks: uint32;
 }
 
 table DimensionName {
@@ -70,6 +82,13 @@ table ArrayNodeData {
 
   // pointers to all the manifests where this array has chunk references
   manifests: [ManifestRef] (required);
+
+  // introduced in V2
+  // When writing V1 repos, `shape` is populated but `shape_v2` is None
+  // When writing V2+ repos, `shape` is `[]` but `shape_v2` is Some.
+  // Note that `shape` can be `[]` for scalars, so `shape_v2` being Some
+  // ultimately determines whether this is a V2 snapshot.
+  shape_v2: [DimensionShapeV2];
 }
 
 // the node contents, that can be either a group or an array
