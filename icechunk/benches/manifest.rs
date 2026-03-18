@@ -439,7 +439,7 @@ fn benchmark_get_chunks(c: &mut Criterion) {
     let nget = 500;
     let num_chunks: u32 = 1_000_000;
 
-    for storage_kind in [StorageKind::Rustfs] {
+    for storage_kind in [StorageKind::Memory, StorageKind::Rustfs] {
         for kind in
             [ChunkKind::Native, ChunkKind::Virtual, ChunkKind::VirtualWithPrefixes]
         {
@@ -454,9 +454,9 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                     |b, _| {
                         // Lazy setup: only runs if criterion's filter matches.
                         let session = session_cell.get_or_init(|| {
-                            let split_size = num_chunks.div_ceil(num_manifests);
-                            let split_config =
-                                ManifestSplittingConfig::with_size(split_size);
+                            let split_config = ManifestSplittingConfig::with_size(
+                                num_chunks.div_ceil(num_manifests),
+                            );
 
                             rt.block_on(async {
                                 // Create repo and write all chunks (no splitting).
@@ -587,8 +587,8 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
     let num_chunks = 500_000u32;
     for kind in [ChunkKind::Inline, ChunkKind::Virtual] {
         for num_manifests in [1, 10, 100, 1_000] {
-            let split_size = num_chunks.div_ceil(num_manifests);
-            let split_config = ManifestSplittingConfig::with_size(split_size);
+            let split_config =
+                ManifestSplittingConfig::with_size(num_chunks.div_ceil(num_manifests));
             group.throughput(Throughput::Elements(num_manifests as u64));
             group.bench_with_input(
                 BenchmarkId::new(kind.to_string(), num_manifests),
