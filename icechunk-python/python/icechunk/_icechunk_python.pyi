@@ -1398,6 +1398,11 @@ class RepositoryConfig:
             The manifest configuration for the repository.
         repo_update_retries: RepoUpdateRetryConfig | None
             Retry configuration for repo info update operations.
+        num_updates_per_repo_info_file: int | None
+            Maximum number of updates stored in a single repo info file. When this
+            limit is reached, a new repo info file is created. Lower values produce
+            slightly smaller repo info files but require more object fetches to
+            reconstruct the ops log. Default is 1000.
         """
         ...
     @staticmethod
@@ -1601,7 +1606,11 @@ class RepositoryConfig:
     def repo_update_retries(self, value: RepoUpdateRetryConfig | None) -> None: ...
     @property
     def num_updates_per_repo_info_file(self) -> int | None:
-        """The number of updates per repo info file."""
+        """Maximum number of updates stored in a single repo info file. When this
+        limit is reached, a new repo info file is created. Lower values produce
+        slightly smaller repo info files but require more object fetches to
+        reconstruct the ops log. Default is 1000.
+        """
         ...
     @num_updates_per_repo_info_file.setter
     def num_updates_per_repo_info_file(self, value: int | None) -> None: ...
