@@ -10,6 +10,7 @@
 //     The latency toxic is applied only during the timed get_chunk iterations.
 //     Requires `docker compose up -d`.
 
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::Write;
@@ -421,12 +422,13 @@ fn benchmark_set_chunks(c: &mut Criterion) {
 }
 
 /// Benchmarks getting of a random sequence of `nget` = 500 chunks
-/// from a million chunks split across 1 or 500 manifests, for both inline, native,
-/// and virtual-with-prefixes chunk kinds.
+/// from a million chunks split across 1 or 500 manifests, for both native,
+/// virtual, and virtual-with-prefixes chunk kinds.
 /// We always get the first and last chunk; the rest are randomly sampled.
 ///
-/// The repo and chunks are created once per kind, then `rewrite_manifests`
-/// is used to re-split for each `num_manifests` value.
+/// Each benchmark variant creates its own repo independently inside
+/// `bench_with_input`, so setup only runs for benchmarks that match
+/// the CLI filter.
 fn benchmark_get_chunks(c: &mut Criterion) {
     let mut group = c.benchmark_group("get_chunks");
     group.sample_size(10).sampling_mode(SamplingMode::Flat);
@@ -441,73 +443,90 @@ fn benchmark_get_chunks(c: &mut Criterion) {
         for kind in
             [ChunkKind::Native, ChunkKind::Virtual, ChunkKind::VirtualWithPrefixes]
         {
-            // One-time setup per kind: create repo and write all chunks (no splitting).
-            // We keep TempDir alive so virtual chunk files on disk remain accessible.
-            // We keep Repository so we can `reopen` it (preserving VCC auth).
-            let mut repo_cache: Option<(TempDir, Repository)> = None;
-
             for num_manifests in [1u32, 500] {
                 group.throughput(Throughput::Elements(num_manifests as u64));
 
-                let split_size = num_chunks.div_ceil(num_manifests);
-                let split_config = ManifestSplittingConfig::with_size(split_size);
-
-                let (_tmpdir, base_repo) = repo_cache.get_or_insert_with(|| {
-                    rt.block_on(async {
-                        let shape =
-                            ArrayShape::new(vec![(num_chunks.into(), num_chunks)])
-                                .unwrap();
-                        let (repo, tmpdir) =
-                            setup_repo(path.clone(), shape, None, None, storage_kind)
-                                .await
-                                .unwrap();
-                        let mut session = repo.writable_session("main").await.unwrap();
-                        set_chunks(path.clone(), &mut session, 0..num_chunks, kind)
-                            .await
-                            .unwrap();
-                        session.commit("data", None).await.unwrap();
-                        (tmpdir, repo)
-                    })
-                });
-
-                // Re-open with the new splitting config and rewrite manifests.
-                // Using reopen() preserves VCC auth from the original repo.
-                let session = rt.block_on(async {
-                    let man_config = ManifestConfig {
-                        preload: Some(ManifestPreloadConfig {
-                            max_total_refs: None,
-                            preload_if: None,
-                            max_arrays_to_scan: None,
-                        }),
-                        splitting: Some(split_config),
-                        virtual_chunk_location_compression: None,
-                    };
-                    let config = RepositoryConfig {
-                        manifest: Some(man_config),
-                        ..RepositoryConfig::default()
-                    };
-                    let repo = base_repo.reopen(Some(config), None).await.unwrap();
-                    if num_manifests > 1 {
-                        let mut session = repo.writable_session("main").await.unwrap();
-                        session
-                            .rewrite_manifests("rewrite", None, CommitMethod::Amend)
-                            .await
-                            .unwrap();
-                    }
-                    repo.readonly_session(&VersionInfo::BranchTipRef("main".into()))
-                        .await
-                        .unwrap()
-                });
-
-                // If specified, enable the latency toxic only for the timed iterations.
-                if let Some(ms) = toxiproxy_latency_ms() {
-                    rt.block_on(add_latency_toxic(ms)).unwrap();
-                }
+                let session_cell: OnceCell<Session> = OnceCell::new();
 
                 group.bench_with_input(
                     BenchmarkId::new(format!("{storage_kind}/{kind}"), num_manifests),
                     &num_manifests,
                     |b, _| {
+                        // Lazy setup: only runs if criterion's filter matches.
+                        let session = session_cell.get_or_init(|| {
+                            let split_size = num_chunks.div_ceil(num_manifests);
+                            let split_config =
+                                ManifestSplittingConfig::with_size(split_size);
+
+                            rt.block_on(async {
+                                // Create repo and write all chunks (no splitting).
+                                let shape = ArrayShape::new(vec![(
+                                    num_chunks.into(),
+                                    num_chunks,
+                                )])
+                                .unwrap();
+                                let (repo, _tmpdir) = setup_repo(
+                                    path.clone(),
+                                    shape,
+                                    None,
+                                    None,
+                                    storage_kind,
+                                )
+                                .await
+                                .unwrap();
+                                let mut session =
+                                    repo.writable_session("main").await.unwrap();
+                                set_chunks(
+                                    path.clone(),
+                                    &mut session,
+                                    0..num_chunks,
+                                    kind,
+                                )
+                                .await
+                                .unwrap();
+                                session.commit("data", None).await.unwrap();
+
+                                // Re-open with the splitting config and rewrite
+                                // manifests. Using reopen() preserves VCC auth.
+                                let man_config = ManifestConfig {
+                                    preload: Some(ManifestPreloadConfig {
+                                        max_total_refs: None,
+                                        preload_if: None,
+                                        max_arrays_to_scan: None,
+                                    }),
+                                    splitting: Some(split_config),
+                                    virtual_chunk_location_compression: None,
+                                };
+                                let config = RepositoryConfig {
+                                    manifest: Some(man_config),
+                                    ..RepositoryConfig::default()
+                                };
+                                let repo = repo.reopen(Some(config), None).await.unwrap();
+                                if num_manifests > 1 {
+                                    let mut session =
+                                        repo.writable_session("main").await.unwrap();
+                                    session
+                                        .rewrite_manifests(
+                                            "rewrite",
+                                            None,
+                                            CommitMethod::Amend,
+                                        )
+                                        .await
+                                        .unwrap();
+                                }
+                                repo.readonly_session(&VersionInfo::BranchTipRef(
+                                    "main".into(),
+                                ))
+                                .await
+                                .unwrap()
+                            })
+                        });
+
+                        // Enable the latency toxic only around the timed iterations.
+                        if let Some(ms) = toxiproxy_latency_ms() {
+                            rt.block_on(add_latency_toxic(ms)).unwrap();
+                        }
+
                         b.iter_batched(
                             || {
                                 // Generate a fresh random sample per iteration
@@ -547,13 +566,13 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                                 })
                             },
                             BatchSize::SmallInput,
-                        )
+                        );
+
+                        if toxiproxy_latency_ms().is_some() {
+                            rt.block_on(remove_latency_toxic()).unwrap();
+                        }
                     },
                 );
-
-                if toxiproxy_latency_ms().is_some() {
-                    rt.block_on(remove_latency_toxic()).unwrap();
-                }
             }
         }
     }
