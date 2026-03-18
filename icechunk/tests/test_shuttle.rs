@@ -10,6 +10,7 @@
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
+use futures::future::try_join_all;
 use icechunk::format::manifest::ChunkPayload;
 use icechunk::format::repo_info::UpdateType;
 use icechunk::format::snapshot::ArrayShape;
@@ -36,21 +37,18 @@ fn assert_ops_log_invariants(log: &[(DateTime<Utc>, UpdateType, Option<String>)]
     });
 
     // all non-None backup paths must be unique
-    let backup_paths: Vec<_> =
-        log.iter().filter_map(|(_, _, path)| path.as_ref()).collect();
-    let unique: HashSet<_> = backup_paths.iter().collect();
-    assert_eq!(
-        backup_paths.len(),
-        unique.len(),
-        "ops log backup paths must be unique, got duplicates in: {backup_paths:?}"
-    );
+    let backup_paths: HashSet<_> =
+        log[..log.len() - 1].iter().map(|(_, _, path)| path.as_ref()).collect();
+    assert_eq!(backup_paths.len(), log.len() - 1);
 
     // last entry (earliest) should always be RepoInitializedUpdate
-    if let Some((_, update_type, _)) = log.last() {
+    if let Some((_, update_type, _backup_path)) = log.last() {
         assert!(
             matches!(update_type, UpdateType::RepoInitializedUpdate),
             "last ops log entry (earliest) should be RepoInitializedUpdate, got: {update_type:?}"
         );
+        // initial commit has no backup
+        // assert!(backup_path.is_none())
     } else {
         unreachable!();
     }
@@ -58,10 +56,10 @@ fn assert_ops_log_invariants(log: &[(DateTime<Utc>, UpdateType, Option<String>)]
 
 /// Like `shuttle::check_random` but with 8MB stack to handle
 /// icechunk's commit path (zstd + flatbuffers serialization).
-fn check_random(f: impl Fn() + Send + Sync + 'static, iterations: usize) {
+fn check_pct(f: impl Fn() + Send + Sync + 'static, iterations: usize, depth: usize) {
     let mut config = Config::default();
     config.stack_size = 0x80_0000; // 8MB
-    let scheduler = scheduler::RandomScheduler::new(iterations);
+    let scheduler = scheduler::PctScheduler::new(depth, iterations);
     Runner::new(scheduler, config).run(f);
 }
 
@@ -115,8 +113,9 @@ async fn mk_concurrent_commits_same_branch() -> Result<(), Box<dyn Error + Send 
     let path2 = path.clone();
     let handle2 = spawn(async move { mk_commit(repo2, path2, "feature", 1).await });
 
-    handle1.await??;
-    handle2.await??;
+    for r in try_join_all([handle1, handle2]).await? {
+        r?;
+    }
 
     let (stream, _, _) = repo.ops_log().await?;
     let log: Vec<_> = stream.try_collect().await?;
@@ -128,17 +127,16 @@ async fn mk_concurrent_commits_same_branch() -> Result<(), Box<dyn Error + Send 
 // Regression test for https://github.com/earth-mover/icechunk/pull/1798
 #[test]
 fn concurrent_commits_same_branch() {
-    check_random(
+    check_pct(
         || {
             block_on(mk_concurrent_commits_same_branch()).unwrap();
         },
         100,
+        3,
     );
 }
 
-// ====
-
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum Action {
     Commit,
     AddBranch,
@@ -185,19 +183,19 @@ async fn setup_branches(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let path: Path = "/array".try_into()?;
     for (action, branch) in actions.iter().zip(branches.iter()) {
+        if *action != Action::AddBranch {
+            repo.create_branch(branch, &repo.lookup_branch("main").await?).await?;
+        }
         match action {
             Action::AddBranch => {}
             Action::Amend => {
-                repo.create_branch(branch, &repo.lookup_branch("main").await?).await?;
                 mk_commit(repo.clone(), path.clone(), branch, 3).await?;
             }
             Action::ResetBranch => {
-                repo.create_branch(branch, &repo.lookup_branch("main").await?).await?;
                 mk_commit(repo.clone(), path.clone(), branch, 2).await?;
                 mk_commit(repo.clone(), path.clone(), branch, 3).await?;
             }
             _ => {
-                repo.create_branch(branch, &repo.lookup_branch("main").await?).await?;
                 repo.create_tag(
                     &format!("tag-to-delete-{branch}"),
                     &repo.lookup_branch("main").await?,
@@ -382,10 +380,8 @@ async fn execute_concurrent_actions(
         })
         .collect::<Vec<_>>();
 
-    let mut results = vec![];
-    for handle in handles {
-        results.push(handle.await??);
-    }
+    let results: Vec<_> =
+        try_join_all(handles).await?.into_iter().collect::<Result<Vec<_>, _>>()?;
 
     let (stream, _, _) = repo.ops_log().await?;
     let log: Vec<_> = stream.try_collect().await?;
@@ -408,9 +404,9 @@ proptest! {
     #[test]
     fn concurrent_actions(acts in actions(3..=5)) {
         let acts = acts.clone();
-        check_random(move || {
+        check_pct(move || {
             let acts = acts.clone();
             block_on(execute_concurrent_actions(acts)).unwrap();
-        }, 100);
+        }, 100, 3);
     }
 }
