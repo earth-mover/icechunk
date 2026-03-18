@@ -3,6 +3,12 @@
 // not before it. Criterion's filter (the CLI argument) is only checked inside
 // bench_with_input. Any work done before that call runs unconditionally for every
 // benchmark in the group, even when filtered out.
+//
+// Environment variables:
+//   ICECHUNK_BENCH_LATENCY_MS=<ms>  — Use S3 (MinIO) behind toxiproxy instead
+//     of in-memory storage. The value sets the downstream latency in ms (e.g. 100).
+//     The latency toxic is applied only during the timed get_chunk iterations.
+//     Requires `docker compose up -d`.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -16,18 +22,24 @@ use criterion::{
 };
 use futures::{StreamExt, stream};
 use icechunk::ObjectStoreConfig;
-use icechunk::config::{ManifestConfig, ManifestPreloadConfig, ManifestSplittingConfig};
+use icechunk::config::{
+    ManifestConfig, ManifestPreloadConfig, ManifestSplittingConfig, S3Credentials,
+    S3Options, S3StaticCredentials,
+};
 use icechunk::conflicts::detector::ConflictDetector;
 use icechunk::format::manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef};
 use icechunk::format::snapshot::{ArrayShape, DimensionName};
 use icechunk::format::{ByteRange, ChunkIndices, Path};
 #[cfg(feature = "logs")]
 use icechunk::initialize_tracing;
+use icechunk::new_s3_storage;
 use icechunk::repository::{Repository, VersionInfo};
 use icechunk::session::{CommitMethod, Session, get_chunk};
 use icechunk::storage::new_in_memory_storage;
 use icechunk::virtual_chunks::VirtualChunkContainer;
 use icechunk::{RepositoryConfig, Storage};
+use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
+use object_store::ObjectStoreExt;
 use rand::RngExt;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -49,6 +61,92 @@ impl std::fmt::Display for ChunkKind {
     }
 }
 
+const MINIO_PORT: u16 = 9000;
+const TOXIPROXY_PORT: u16 = 9002;
+const TOXIPROXY_PROXY_NAME: &str = "bench-latency";
+
+/// Parse `ICECHUNK_BENCH_LATENCY_MS` env var; returns `Some(ms)` if set.
+fn toxiproxy_latency_ms() -> Option<u64> {
+    std::env::var("ICECHUNK_BENCH_LATENCY_MS")
+        .ok()
+        .map(|v| v.parse::<u64>().expect("ICECHUNK_BENCH_LATENCY_MS must be an integer"))
+}
+
+/// Set up toxiproxy: create a proxy on `TOXIPROXY_PORT` forwarding to MinIO at
+/// `rustfs:9000`. Does NOT add any toxics — those are managed separately so that
+/// latency is only injected during the timed portion of benchmarks.
+async fn setup_toxiproxy() -> Result<(), Box<dyn Error>> {
+    let client = Client::new("http://localhost:8474");
+
+    // Delete any proxy already bound to this port (leftover from a previous run).
+    let port_suffix = format!(":{TOXIPROXY_PORT}");
+    let proxies = client.proxies().await.unwrap_or_default();
+    for (name, proxy) in proxies {
+        if proxy.config.listen.ends_with(&port_suffix) {
+            proxy.delete().await.ok();
+            eprintln!("Deleted stale proxy on :{TOXIPROXY_PORT}: {name}");
+        }
+    }
+
+    let listen = format!("0.0.0.0:{TOXIPROXY_PORT}");
+    client.create_proxy(TOXIPROXY_PROXY_NAME, &listen, "rustfs:9000").await?;
+    eprintln!("Toxiproxy: {TOXIPROXY_PROXY_NAME} ({listen}) -> rustfs:9000");
+
+    Ok(())
+}
+
+/// Add a downstream latency toxic to the bench proxy.
+async fn add_latency_toxic(latency_ms: u64) -> Result<(), Box<dyn Error>> {
+    let client = Client::new("http://localhost:8474");
+    let toxic = Toxic {
+        kind: ToxicKind::Latency { latency: latency_ms, jitter: 0 },
+        name: "latency".into(),
+        toxicity: 1.0,
+        direction: StreamDirection::Downstream,
+    };
+    client.proxy(TOXIPROXY_PROXY_NAME).await?.add_toxic(&toxic).await?;
+    Ok(())
+}
+
+/// Remove the latency toxic from the bench proxy.
+async fn remove_latency_toxic() -> Result<(), Box<dyn Error>> {
+    let client = Client::new("http://localhost:8474");
+    client.proxy(TOXIPROXY_PROXY_NAME).await?.remove_toxic("latency").await?;
+    Ok(())
+}
+
+fn minio_s3_options(endpoint_port: u16) -> S3Options {
+    S3Options {
+        region: Some("us-east-1".to_string()),
+        endpoint_url: Some(format!("http://localhost:{endpoint_port}")),
+        allow_http: true,
+        anonymous: false,
+        force_path_style: true,
+        network_stream_timeout_seconds: None,
+        requester_pays: false,
+    }
+}
+
+fn minio_credentials() -> S3Credentials {
+    S3Credentials::Static(S3StaticCredentials {
+        access_key_id: "modify".into(),
+        secret_access_key: "modifydata".into(),
+        session_token: None,
+        expires_after: None,
+    })
+}
+
+/// Create S3 storage pointing at toxiproxy (which proxies to MinIO).
+fn make_s3_proxied_storage() -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn Error>> {
+    let storage = new_s3_storage(
+        minio_s3_options(TOXIPROXY_PORT),
+        "testbucket".to_string(),
+        Some(format!("bench-{}", uuid::Uuid::new_v4())),
+        Some(minio_credentials()),
+    )?;
+    Ok(storage)
+}
+
 /// Returns `(Repository, TempDir)` — the `TempDir` must be kept alive by the caller
 /// because it holds the on-disk files that virtual chunk containers reference.
 /// Dropping it would delete the files and break virtual chunk reads.
@@ -58,7 +156,12 @@ async fn setup_repo(
     dimension_names: Option<Vec<DimensionName>>,
     split_config: Option<ManifestSplittingConfig>,
 ) -> Result<(Repository, TempDir), Box<dyn Error>> {
-    let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+    let storage: Arc<dyn Storage + Send + Sync> = if toxiproxy_latency_ms().is_some() {
+        setup_toxiproxy().await?;
+        make_s3_proxied_storage()?
+    } else {
+        new_in_memory_storage().await?
+    };
 
     let man_config = ManifestConfig {
         preload: Some(ManifestPreloadConfig {
@@ -73,24 +176,61 @@ async fn setup_repo(
     let mut config =
         RepositoryConfig { manifest: Some(man_config), ..RepositoryConfig::default() };
 
-    // Create 100 subdirectories, each with a chunk.dat file, as separate VCC containers
+    // Create 100 VCC containers, each with a chunk.dat file.
+    // When using toxiproxy/S3, files live in MinIO and reads go through the proxy.
+    // Otherwise, files live in a local TempDir.
+    let use_s3 = toxiproxy_latency_ms().is_some();
     let mut auth: HashMap<String, Option<icechunk::config::Credentials>> = HashMap::new();
     let tmpdir = TempDir::new().unwrap();
-    for i in 0..100u32 {
-        let subdir = tmpdir.path().join(format!("prefix-{i}"));
-        std::fs::create_dir_all(&subdir)?;
-        let mut f = std::fs::File::create(subdir.join("chunk.dat"))?;
-        f.write_all(&[42u8; 64])?;
+    let chunk_data = Bytes::from_static(&[42u8; 64]);
 
-        let url_prefix = format!("file://{}/", subdir.display());
+    if use_s3 {
+        // Upload chunk.dat objects to MinIO (direct, not through toxiproxy).
+        let s3_store = object_store::aws::AmazonS3Builder::new()
+            .with_endpoint(format!("http://localhost:{MINIO_PORT}"))
+            .with_bucket_name("testbucket")
+            .with_region("us-east-1")
+            .with_access_key_id("modify")
+            .with_secret_access_key("modifydata")
+            .with_allow_http(true)
+            .build()?;
+        for i in 0..100u32 {
+            let obj_path: object_store::path::Path =
+                format!("bench-vcc/prefix-{i}/chunk.dat").into();
+            s3_store.put(&obj_path, chunk_data.clone().into()).await?;
+        }
+    } else {
+        for i in 0..100u32 {
+            let subdir = tmpdir.path().join(format!("prefix-{i}"));
+            std::fs::create_dir_all(&subdir)?;
+            let mut f = std::fs::File::create(subdir.join("chunk.dat"))?;
+            f.write_all(&chunk_data)?;
+        }
+    }
+
+    for i in 0..100u32 {
+        let (url_prefix, obj_store_config, cred) = if use_s3 {
+            // VCC reads go through toxiproxy for realistic latency.
+            let url_prefix = format!("s3://testbucket/bench-vcc/prefix-{i}/");
+            let obj_store_config =
+                ObjectStoreConfig::S3Compatible(minio_s3_options(TOXIPROXY_PORT));
+            let cred = Some(icechunk::config::Credentials::S3(minio_credentials()));
+            (url_prefix, obj_store_config, cred)
+        } else {
+            let subdir = tmpdir.path().join(format!("prefix-{i}"));
+            let url_prefix = format!("file://{}/", subdir.display());
+            let obj_store_config = ObjectStoreConfig::LocalFileSystem(subdir);
+            (url_prefix, obj_store_config, None)
+        };
+
         let cont = VirtualChunkContainer::new_named(
             format!("prefix-{i}"),
             url_prefix.clone(),
-            ObjectStoreConfig::LocalFileSystem(subdir.clone()),
+            obj_store_config,
         )
         .unwrap();
         config.set_virtual_chunk_container(cont).unwrap();
-        auth.insert(url_prefix, None);
+        auth.insert(url_prefix, cred);
     }
 
     let repository = Repository::create(Some(config), storage, auth, None, false).await?;
@@ -229,7 +369,8 @@ fn benchmark_get_chunks(c: &mut Criterion) {
     for kind in [ChunkKind::Inline, ChunkKind::VirtualWithPrefixes] {
         // One-time setup per kind: create repo and write all chunks (no splitting).
         // We keep TempDir alive so virtual chunk files on disk remain accessible.
-        let mut storage_cache: Option<(TempDir, Arc<dyn Storage + Send + Sync>)> = None;
+        // We keep Repository so we can `reopen` it (preserving VCC auth).
+        let mut repo_cache: Option<(TempDir, Repository)> = None;
 
         for num_manifests in [1u32, 10, 100, 1_000] {
             group.throughput(Throughput::Elements(num_manifests as u64));
@@ -237,7 +378,7 @@ fn benchmark_get_chunks(c: &mut Criterion) {
             let split_size = num_chunks.div_ceil(num_manifests);
             let split_config = ManifestSplittingConfig::with_size(split_size);
 
-            let (_tmpdir, storage) = storage_cache.get_or_insert_with(|| {
+            let (_tmpdir, base_repo) = repo_cache.get_or_insert_with(|| {
                 rt.block_on(async {
                     let shape =
                         ArrayShape::new(vec![(num_chunks.into(), num_chunks)]).unwrap();
@@ -248,11 +389,12 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                         .await
                         .unwrap();
                     session.commit("data", None).await.unwrap();
-                    (tmpdir, repo.storage().clone())
+                    (tmpdir, repo)
                 })
             });
 
             // Re-open with the new splitting config and rewrite manifests.
+            // Using reopen() preserves VCC auth from the original repo.
             let session = rt.block_on(async {
                 let man_config = ManifestConfig {
                     preload: Some(ManifestPreloadConfig {
@@ -267,10 +409,7 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                     manifest: Some(man_config),
                     ..RepositoryConfig::default()
                 };
-                let repo =
-                    Repository::open(Some(config), Arc::clone(storage), HashMap::new())
-                        .await
-                        .unwrap();
+                let repo = base_repo.reopen(Some(config), None).await.unwrap();
                 let mut session = repo.writable_session("main").await.unwrap();
                 session
                     .rewrite_manifests("rewrite", None, CommitMethod::Amend)
@@ -283,6 +422,11 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                         .unwrap(),
                 )
             });
+
+            // Enable the latency toxic only for the timed iterations.
+            if let Some(ms) = toxiproxy_latency_ms() {
+                rt.block_on(add_latency_toxic(ms)).unwrap();
+            }
 
             group.bench_with_input(
                 BenchmarkId::new(kind.to_string(), num_manifests),
@@ -312,19 +456,15 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                                         let session = session.clone();
                                         let path = path.clone();
                                         async move {
-                                            get_chunk(
-                                                session
-                                                    .get_chunk_reader(
-                                                        &path,
-                                                        &ChunkIndices(vec![idx as u32]),
-                                                        &ByteRange::ALL,
-                                                    )
-                                                    .await
-                                                    .unwrap(),
-                                            )
-                                            .await
-                                            .unwrap()
-                                            .unwrap();
+                                            let reader = session
+                                                .get_chunk_reader(
+                                                    &path,
+                                                    &ChunkIndices(vec![idx as u32]),
+                                                    &ByteRange::ALL,
+                                                )
+                                                .await
+                                                .unwrap();
+                                            get_chunk(reader).await.unwrap().unwrap();
                                         }
                                     })
                                     .await
@@ -334,6 +474,10 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                     )
                 },
             );
+
+            if toxiproxy_latency_ms().is_some() {
+                rt.block_on(remove_latency_toxic()).unwrap();
+            }
         }
     }
     group.finish();
