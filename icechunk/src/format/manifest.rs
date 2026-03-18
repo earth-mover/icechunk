@@ -339,9 +339,12 @@ impl VirtualChunkLocation {
         result.push_str(scheme);
         result.push_str("://");
         result.push_str(&host);
+        result.push('/');
+        let mut sep = "";
         for segment in segments.filter(|x| !x.is_empty()) {
-            result.push('/');
+            result.push_str(sep);
             result.push_str(segment);
+            sep = "/";
         }
 
         Ok(VirtualChunkLocation(result))
