@@ -100,6 +100,7 @@ fn default_storage_kind() -> StorageKind {
 
 /// Parse `ICECHUNK_BENCH_LATENCY_MS` env var; returns `Some(ms)` if set.
 fn toxiproxy_latency_ms() -> Option<u64> {
+    #[allow(clippy::expect_used)]
     std::env::var("ICECHUNK_BENCH_LATENCY_MS")
         .ok()
         .map(|v| v.parse::<u64>().expect("ICECHUNK_BENCH_LATENCY_MS must be an integer"))
