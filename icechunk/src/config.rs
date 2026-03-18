@@ -518,7 +518,7 @@ static DEFAULT_MANIFEST_CONFIG: OnceLock<ManifestConfig> = OnceLock::new();
 static DEFAULT_REPO_UPDATE_RETRY_CONFIG: OnceLock<RepoUpdateRetryConfig> =
     OnceLock::new();
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: u16 = 256;
-pub const DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE: u16 = 100;
+pub const DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE: u16 = 1_000;
 
 impl RepositoryConfig {
     pub fn inline_chunk_threshold_bytes(&self) -> u16 {
