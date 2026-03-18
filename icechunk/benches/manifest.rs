@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::io::Write;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -51,6 +52,8 @@ const TOXIPROXY_PORT: u16 = 9002;
 const TOXIPROXY_PROXY_NAME: &str = "bench-latency";
 const NUM_VCCS: usize = 20;
 const CHUNK_SIZE_BYTES: u64 = 1024 * 1024;
+const VCC_S3_BASE: &str = "s3://testbucket/bench-vcc/";
+const VCC_LOCAL_DIR: &str = "/tmp/icechunk-bench-vcc";
 
 #[derive(Clone, Copy)]
 enum ChunkKind {
@@ -228,7 +231,8 @@ async fn setup_repo(
 
     // Create 20 VCCs, each with a chunk file.
     // When using toxiproxy/S3, files live in MinIO and reads go through the proxy.
-    // Otherwise, files live in a local TempDir.
+    // Otherwise, files live at VCC_LOCAL_DIR (a fixed path so set_chunks can
+    // construct matching file:// URLs without needing the path at runtime).
     let use_s3 = matches!(storage_kind, StorageKind::Rustfs);
     let mut auth: HashMap<String, Option<Type>> = HashMap::new();
     let tmpdir = TempDir::new().unwrap();
@@ -251,7 +255,7 @@ async fn setup_repo(
         }
     } else {
         for i in 0..NUM_VCCS {
-            let subdir = tmpdir.path().join(format!("prefix-{i}"));
+            let subdir = PathBuf::from(format!("{VCC_LOCAL_DIR}/prefix-{i}"));
             std::fs::create_dir_all(&subdir)?;
             let mut f = std::fs::File::create(subdir.join("chunk"))?;
             f.write_all(&chunk_data)?;
@@ -263,13 +267,13 @@ async fn setup_repo(
             // VCC reads go through toxiproxy when latency is configured, else direct.
             let vcc_port =
                 if latency_ms.is_some() { TOXIPROXY_PORT } else { RUSTFS_PORT };
-            let url_prefix = format!("s3://testbucket/bench-vcc/prefix-{i}/");
+            let url_prefix = format!("{VCC_S3_BASE}prefix-{i}/");
             let obj_store_config =
                 ObjectStoreConfig::S3Compatible(rustfs_s3_options(vcc_port));
             let cred = Some(icechunk::config::Credentials::S3(rustfs_credentials()));
             (url_prefix, obj_store_config, cred)
         } else {
-            let subdir = tmpdir.path().join(format!("prefix-{i}"));
+            let subdir = PathBuf::from(format!("{VCC_LOCAL_DIR}/prefix-{i}"));
             let url_prefix = format!("file://{}/", subdir.display());
             let obj_store_config = ObjectStoreConfig::LocalFileSystem(subdir);
             (url_prefix, obj_store_config, None)
@@ -297,11 +301,21 @@ async fn setup_repo(
     Ok((repository, tmpdir))
 }
 
+fn vcc_chunk_url(storage_kind: StorageKind, prefix_idx: usize) -> String {
+    match storage_kind {
+        StorageKind::Rustfs => format!("{VCC_S3_BASE}prefix-{prefix_idx}/chunk"),
+        StorageKind::InMemory => {
+            format!("file://{VCC_LOCAL_DIR}/prefix-{prefix_idx}/chunk")
+        }
+    }
+}
+
 async fn set_chunks(
     path: Path,
     session: &mut Session,
     chunks: Range<u32>,
     kind: ChunkKind,
+    storage_kind: StorageKind,
 ) -> Result<(), Box<dyn Error>> {
     match kind {
         ChunkKind::Inline => {
@@ -331,8 +345,9 @@ async fn set_chunks(
             for idx in chunks {
                 let prefix_idx = rng.random_range(0..NUM_VCCS);
                 let payload = ChunkPayload::Virtual(VirtualChunkRef {
-                    location: VirtualChunkLocation::from_url(&format!(
-                        "s3://testbucket/bench-vcc/prefix-{prefix_idx}/chunk"
+                    location: VirtualChunkLocation::from_url(&vcc_chunk_url(
+                        storage_kind,
+                        prefix_idx,
                     ))?,
                     offset: 0,
                     length: CHUNK_SIZE_BYTES,
@@ -406,9 +421,15 @@ fn benchmark_set_chunks(c: &mut Criterion) {
                             rt.block_on({
                                 let path = path.clone();
                                 async {
-                                    set_chunks(path, &mut session, 0..num_chunks, kind)
-                                        .await
-                                        .unwrap();
+                                    set_chunks(
+                                        path,
+                                        &mut session,
+                                        0..num_chunks,
+                                        kind,
+                                        default_storage_kind(),
+                                    )
+                                    .await
+                                    .unwrap();
                                 }
                             })
                         },
@@ -439,7 +460,7 @@ fn benchmark_get_chunks(c: &mut Criterion) {
     let nget = 500;
     let num_chunks: u32 = 1_000_000;
 
-    for storage_kind in [StorageKind::Memory, StorageKind::Rustfs] {
+    for storage_kind in [StorageKind::InMemory, StorageKind::Rustfs] {
         for kind in
             [ChunkKind::Native, ChunkKind::Virtual, ChunkKind::VirtualWithPrefixes]
         {
@@ -481,6 +502,7 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                                     &mut session,
                                     0..num_chunks,
                                     kind,
+                                    storage_kind,
                                 )
                                 .await
                                 .unwrap();
@@ -613,9 +635,15 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
                                 .unwrap();
                                 let mut session =
                                     repo.writable_session("main").await.unwrap();
-                                set_chunks(path, &mut session, 0..num_chunks, kind)
-                                    .await
-                                    .unwrap();
+                                set_chunks(
+                                    path,
+                                    &mut session,
+                                    0..num_chunks,
+                                    kind,
+                                    default_storage_kind(),
+                                )
+                                .await
+                                .unwrap();
                                 session
                             })
                         },
@@ -684,6 +712,7 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
                                     &mut session,
                                     batch * split_size..(batch + 1) * split_size,
                                     kind,
+                                    default_storage_kind(),
                                 )
                                 .await
                                 .unwrap();
@@ -759,6 +788,7 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
                                     &mut session,
                                     batch * split_size..(batch + 1) * split_size,
                                     kind,
+                                    default_storage_kind(),
                                 )
                                 .await
                                 .unwrap();
