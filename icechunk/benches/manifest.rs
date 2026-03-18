@@ -25,8 +25,8 @@ use criterion::{
 use futures::{StreamExt, stream};
 use icechunk::ObjectStoreConfig;
 use icechunk::config::{
-    CachingConfig, ManifestConfig, ManifestPreloadConfig, ManifestSplittingConfig,
-    S3Credentials, S3Options, S3StaticCredentials,
+    CachingConfig, ManifestConfig, ManifestPreloadCondition, ManifestPreloadConfig,
+    ManifestSplittingConfig, S3Credentials, S3Options, S3StaticCredentials,
 };
 use icechunk::conflicts::detector::ConflictDetector;
 use icechunk::format::manifest::{ChunkPayload, VirtualChunkLocation, VirtualChunkRef};
@@ -207,7 +207,7 @@ async fn setup_repo(
         // turn off preloading so the profiles show us where things are loaded.
         preload: Some(ManifestPreloadConfig {
             max_total_refs: None,
-            preload_if: None,
+            preload_if: Some(ManifestPreloadCondition::False),
             max_arrays_to_scan: None,
         }),
         splitting: split_config,
@@ -489,13 +489,8 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                                 // Re-open with the splitting config and rewrite
                                 // manifests. Using reopen() preserves VCC auth.
                                 let man_config = ManifestConfig {
-                                    preload: Some(ManifestPreloadConfig {
-                                        max_total_refs: None,
-                                        preload_if: None,
-                                        max_arrays_to_scan: None,
-                                    }),
                                     splitting: Some(split_config),
-                                    virtual_chunk_location_compression: None,
+                                    ..Default::default()
                                 };
                                 let config = RepositoryConfig {
                                     manifest: Some(man_config),
