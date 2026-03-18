@@ -2965,6 +2965,7 @@ mod tests {
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
     use test_strategy::proptest;
+    #[cfg(not(feature = "shuttle"))]
     use tokio::sync::Barrier;
 
     use crate::test_utils::spec_version_cases;

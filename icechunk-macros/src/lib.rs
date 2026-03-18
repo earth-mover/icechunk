@@ -11,6 +11,7 @@ pub fn tokio_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let block = &input_fn.block;
 
     let expanded = quote! {
+        #[cfg(not(feature = "shuttle"))]
         #[test_log::test(tokio::test)]
         #[test_log(default_log_filter = "warn")]
         #(#attrs)*
