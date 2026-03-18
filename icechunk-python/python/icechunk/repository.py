@@ -13,10 +13,10 @@ from icechunk._icechunk_python import (
     GCSummary,
     ManifestFileInfo,
     PyRepository,
-    PySpecVersion,
     RepositoryConfig,
     RepoStatus,
     SnapshotInfo,
+    SpecVersion,
     Storage,
     StorageSettings,
     Update,
@@ -41,7 +41,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
-        spec_version: PySpecVersion | int | None = None,
+        spec_version: SpecVersion | None = None,
         check_clean_root: bool = True,
     ) -> Self:
         """
@@ -376,7 +376,7 @@ class Repository:
     def fetch_spec_version(
         storage: Storage,
         storage_settings: StorageSettings | None = None,
-    ) -> int | None:
+    ) -> SpecVersion | None:
         """
         Fetch the spec version of a repository without fully opening it.
 

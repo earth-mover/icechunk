@@ -888,7 +888,14 @@ fn mk_update(
 }
 
 #[repr(u8)]
-#[pyclass(eq, eq_int, ord, rename_all = "snake_case", skip_from_py_object)]
+#[pyclass(
+    eq,
+    eq_int,
+    ord,
+    rename_all = "snake_case",
+    skip_from_py_object,
+    name = "SpecVersion"
+)]
 #[derive(PartialEq, Default, Clone, PartialOrd)]
 pub enum PySpecVersion {
     V1dot0 = 1u8,
