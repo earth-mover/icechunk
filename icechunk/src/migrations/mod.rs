@@ -567,20 +567,43 @@ async fn delete_repo_info(repo: &Repository) -> MigrationResult<()> {
     Ok(())
 }
 
+const V1_DEFAULT_BRANCH_KEY: &str = "branch.main/ref.json";
+
+/// Delete V1 references during migration.
+///
+/// We delete the `main` branch first to ensure old IC1 clients fail fast
+/// with a "branch not found" error instead of potentially making writes
+/// that would be lost when the rest of the V1 refs are cleaned up.
+/// This minimizes the window where the repo appears as both valid V1 and V2.
 async fn delete_v1_refs(repo: &Repository) -> MigrationResult<()> {
     info!("Deleting V1 references");
-    let all =
-        repo.storage().list_objects(repo.storage_settings(), V1_REFS_FILE_PATH).await?;
-    let delete_keys = all.map_ok(|li| (li.id, 0)).boxed().try_collect::<Vec<_>>().await?;
 
+    // Delete the main branch first to break IC1 clients immediately
     repo.storage()
         .delete_objects(
             repo.storage_settings(),
             V1_REFS_FILE_PATH,
-            stream::iter(delete_keys).boxed(),
+            stream::iter([(V1_DEFAULT_BRANCH_KEY.to_string(), 0)]).boxed(),
         )
         .await?;
-    info!("V1 references deleted, verifying");
+    info!("V1 main branch reference deleted");
+
+    // Then delete remaining V1 refs, as long as main is gone the repo is broken for v1 usage
+    let all =
+        repo.storage().list_objects(repo.storage_settings(), V1_REFS_FILE_PATH).await?;
+    let delete_keys = all.map_ok(|li| (li.id, 0)).boxed().try_collect::<Vec<_>>().await?;
+
+    if !delete_keys.is_empty() {
+        repo.storage()
+            .delete_objects(
+                repo.storage_settings(),
+                V1_REFS_FILE_PATH,
+                stream::iter(delete_keys).boxed(),
+            )
+            .await?;
+    }
+
+    info!("All V1 references deleted, verifying");
     let remaining = repo
         .storage()
         .list_objects(repo.storage_settings(), V1_REFS_FILE_PATH)
