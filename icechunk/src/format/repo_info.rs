@@ -502,11 +502,11 @@ impl RepoInfo {
             // point: an entry whose backup_path we can use as the chain pointer.
             // Entries without a backup_path (e.g. synthetic migration entries)
             // can't serve as overflow — keep them in the file instead.
-            if updates.len() >= num_updates {
-                if let Some(bp) = file {
-                    repo_before_updates = Some(bp);
-                    break;
-                }
+            if updates.len() >= num_updates
+                && let Some(bp) = file
+            {
+                repo_before_updates = Some(bp);
+                break;
             }
 
             let (update_type_type, update_type) = update_type_to_fb(builder, &u_type)?;
