@@ -893,7 +893,7 @@ fn mk_update(
     eq_int,
     ord,
     rename_all = "snake_case",
-    from_py_object,
+    skip_from_py_object,
     name = "SpecVersion"
 )]
 #[derive(PartialEq, Default, Clone, PartialOrd, Debug)]
@@ -901,6 +901,26 @@ pub enum PySpecVersion {
     V1 = 1u8,
     #[default]
     V2 = 2u8,
+}
+
+impl<'py> FromPyObject<'_, 'py> for PySpecVersion {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        let value = if let Ok(v) = ob.extract::<u8>() {
+            match v {
+                1 => PySpecVersion::V1,
+                2 => PySpecVersion::V2,
+                _ => todo!(), //Err(PyValueError::new_err("")),
+            }
+        } else if let Ok(spec) = ob.extract::<PySpecVersion>() {
+            spec
+        } else {
+            todo!("throw error")
+        };
+
+        Ok(value)
+    }
 }
 
 impl From<PySpecVersion> for SpecVersionBin {
