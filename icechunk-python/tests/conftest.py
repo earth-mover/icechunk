@@ -1,4 +1,3 @@
-import os
 from enum import Enum
 from typing import Literal, cast
 
@@ -14,7 +13,7 @@ from icechunk import Repository, in_memory_storage, local_filesystem_storage
 #
 # Inherits from hypothesis's built-in "default" and "ci" profiles.
 # hypothesis auto-selects "ci" when the CI env var is set.
-# Override with: HYPOTHESIS_PROFILE=nightly
+# Select with: pytest --hypothesis-profile=nightly
 # ---------------------------------------------------------------------------
 settings.register_profile(
     "default",
@@ -37,8 +36,6 @@ settings.register_profile(
     derandomize=False,
     suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
 )
-if "HYPOTHESIS_PROFILE" in os.environ:
-    settings.load_profile(os.environ["HYPOTHESIS_PROFILE"])
 
 
 class Permission(Enum):

@@ -147,18 +147,18 @@ Three profiles control how many examples and steps Hypothesis explores:
 | Profile   | `max_examples` | `stateful_step_count` | Used in |
 |-----------|---------------:|----------------------:|---------|
 | `default` | 100            | 50                    | Local dev |
-| `ci`      | 300            | 200                   | PR checks |
-| `nightly` | 500            | 500                   | Nightly CI |
+| `ci`      | 500            | 200                   | PR checks |
+| `nightly` | 1000           | 500                   | Nightly CI |
 
 Hypothesis auto-selects the `ci` profile on GitHub Actions (via the `CI` env var).
-To manually select a profile, set `HYPOTHESIS_PROFILE`:
+Select a profile with the built-in pytest flag:
 
 ```bash
-# Run with nightly settings
-HYPOTHESIS_PROFILE=nightly uv run pytest
+# Run with nightly settings locally
+uv run pytest --hypothesis-profile=nightly
 
-# Run with CI settings
-HYPOTHESIS_PROFILE=ci uv run pytest
+# Run with CI settings locally
+uv run pytest --hypothesis-profile=ci
 ```
 
 Profiles are registered in `tests/conftest.py`. Individual tests should **not** override
