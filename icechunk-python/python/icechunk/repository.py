@@ -376,7 +376,7 @@ class Repository:
     def fetch_spec_version(
         storage: Storage,
         storage_settings: StorageSettings | None = None,
-    ) -> SpecVersion | int | None:
+    ) -> SpecVersion | None:
         """
         Fetch the spec version of a repository without fully opening it.
 
@@ -402,7 +402,7 @@ class Repository:
     async def fetch_spec_version_async(
         storage: Storage,
         storage_settings: StorageSettings | None = None,
-    ) -> SpecVersion | int | None:
+    ) -> SpecVersion | None:
         """
         Fetch the spec version of a repository without fully opening it (async version).
 

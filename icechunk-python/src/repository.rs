@@ -955,6 +955,10 @@ impl PySpecVersion {
             Self::V1 => "SpecVersion.v1".into(),
         }
     }
+
+    pub(crate) fn current(&self) -> Self {
+        Default::default()
+    }
 }
 
 #[pyclass]
