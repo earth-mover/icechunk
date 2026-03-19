@@ -90,41 +90,42 @@ affix = st.text(zrst.zarr_key_chars, min_size=1, max_size=3)
 separators = st.sampled_from(["_", "-", "."])
 
 
-@st.composite
-def derived_name(draw: st.DrawFn, name_pool: list[str]) -> str:
-    """Mutate an existing name from the pool by adding an affix or compounding."""
-    base = draw(st.sampled_from(name_pool))
-    branch = draw(st.integers(min_value=0, max_value=2))
-    if branch == 0:
-        result = base + draw(affix)
-    elif branch == 1:
-        result = draw(affix) + base
-    else:
-        other = draw(st.sampled_from(name_pool))
-        result = base + draw(separators) + other
-    if result.startswith("__") or result.lower() == "zarr.json":
-        result = "x" + result
-    return result
+def similar_name(
+    non_sibling_names: set[str], sibling_names: set[str]
+) -> st.SearchStrategy[str]:
+    """Strategy that picks a name similar or the same as existing one.
+
+    Either an affixed variant of any known name (e.g. "foo" → "foo-bar")
+    or an exact copy of a non-sibling name.
+    """
+    all_names = sorted(non_sibling_names | sibling_names)
+    non_siblings = sorted(non_sibling_names - sibling_names)
+
+    affixed = st.sampled_from(all_names).flatmap(
+        lambda base: st.one_of(
+            separators.flatmap(lambda sep: affix.map(lambda afx: base + sep + afx)),
+            separators.flatmap(lambda sep: affix.map(lambda afx: afx + sep + base)),
+        )
+    )
+    if non_siblings:
+        return st.one_of(affixed, st.sampled_from(non_siblings))
+    return affixed
 
 
 @st.composite
 def unique_sibling_names(draw: st.DrawFn, name_pool: set[str], n: int) -> list[str]:
     """Draw *n* names unique among themselves, feeding each into the shared pool."""
-    names: list[str] = []
-    seen: set[str] = set()
+    names: set[str] = set()
 
     for _ in range(n):
-        available_pool = sorted(name_pool - seen)
         strategy = (
-            st.one_of(node_names, derived_name(available_pool))
-            if available_pool
+            st.one_of(node_names, similar_name(name_pool, names))
+            if name_pool
             else node_names
-        )
-        name = draw(strategy.filter(lambda name_: name_ not in seen))
-        names.append(name)
-        seen.add(name)
-        name_pool.add(name)
-    return names
+        ).filter(lambda name_: name_ not in names)
+        name = draw(strategy)
+        names.add(name)
+    return list(names)
 
 
 # ---------------------------------------------------------------------------
@@ -132,11 +133,13 @@ def unique_sibling_names(draw: st.DrawFn, name_pool: set[str], n: int) -> list[s
 # ---------------------------------------------------------------------------
 
 
-def skeletons(*, max_leaves: int = 50, max_children: int = 4) -> st.SearchStrategy[Node]:
+def skeletons(
+    *, max_leaves: int = 50, max_children: int = 4
+) -> st.SearchStrategy[GroupNode]:
     """Unnamed tree skeletons via st.recursive.
 
-    Produces trees with placeholder index keys ("0", "1", ...) as child names.
-    Real names are assigned later by ``trees``.
+    Always returns a GroupNode (the root group). Child names are placeholder
+    indices ("0", "1", ...); real names are assigned later by ``trees``.
     """
     leaves = st.just(ArrayNode(shape=SHAPE, dtype=DTYPE))
 
@@ -147,7 +150,8 @@ def skeletons(*, max_leaves: int = 50, max_children: int = 4) -> st.SearchStrate
             )
         )
 
-    return st.recursive(leaves, extend, max_leaves=max_leaves)
+    # Wrap in extend so the top level is always a GroupNode (the root group).
+    return extend(st.recursive(leaves, extend, max_leaves=max_leaves))
 
 
 @st.composite
@@ -170,26 +174,21 @@ def trees(
     ...     under_test = tree.materialize(my_icechunk_store())
     ...     # compare...
     """
-    name_pool: set[str] = set()
 
-    def assign_names(node: Node) -> Node:
-        if isinstance(node, ArrayNode):
-            return node
-        child_nodes = list(node.children.values())
-        names = draw(unique_sibling_names(name_pool, len(child_nodes)))
-        return GroupNode(
-            children={
-                name: assign_names(child)
-                for name, child in zip(names, child_nodes, strict=True)
-            }
-        )
+    def rebuild_with_names(
+        group: GroupNode, name_pool: set[str]
+    ) -> tuple[GroupNode, set[str]]:
+        new_names = draw(unique_sibling_names(name_pool, len(group.children)))
+        name_pool = name_pool | set(new_names)
+        children: dict[str, Node] = {}
+        for name, child in zip(new_names, group.children.values(), strict=True):
+            if isinstance(child, GroupNode):
+                child, name_pool = rebuild_with_names(child, name_pool)
+            children[name] = child
+        return GroupNode(children=children), name_pool
 
     skeleton = draw(
         skeletons(max_leaves=draw(max_leaves), max_children=draw(max_children))
     )
-    node = assign_names(skeleton)
-
-    if isinstance(node, ArrayNode):
-        node = GroupNode(children={"data": node})
-
-    return node
+    result, _ = rebuild_with_names(skeleton, set())
+    return result
