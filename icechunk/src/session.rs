@@ -587,6 +587,16 @@ impl Session {
         Ok(())
     }
 
+    enum ReindexMapping {
+        ForwardOnly(Fn(&ChunkIndices) -> ReindexOperationResult),
+        ForwardBackwards{
+            forward: Fn(&ChunkIndices) -> ReindexOperationResult,
+            bacwards: Fn(&ChunkIndices) -> ReindexOperationResult
+        },
+        //ForwardBackwardsOnce( Fn(&ChunkIndices) -> (ReindexOperationResult, ReindexOperationResult))
+    }
+
+
     #[instrument(skip(self, calculate_new_index))]
     /// Reindex chunks in an array by applying a transformation function to each chunk's coordinates.
     ///
@@ -599,7 +609,7 @@ impl Session {
     pub async fn reindex_array<F>(
         &mut self,
         array_path: &Path,
-        calculate_new_index: F,
+        calculate_new_index: ReindexMapping,
     ) -> SessionResult<()>
     where
         F: Fn(&ChunkIndices) -> ReindexOperationResult,
@@ -618,6 +628,16 @@ impl Session {
 
         // TODO: concurrency
         while let Some(old_chunk_index) = original_chunks.try_next().await? {
+            // say there is a chunk at indexn i
+            // say we are shifting by 1
+            // say there is no chunk at index i - 1
+            // then inde i still has a chunk after the shift
+            //
+            // first do what do now
+            // then ... for all indexes j that were not written to:
+            //    - check if there was a chunk at f-1(j)
+            //    - and if there wasn't a chunk there, delete chunk at index j
+            //    - if there was a chunk at f-1(j) it's already handled
             if let Some(new_chunk_index) = calculate_new_index(&old_chunk_index)? {
                 let new_payload =
                     self.get_chunk_ref(array_path, &old_chunk_index).await?;
