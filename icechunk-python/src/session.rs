@@ -104,6 +104,11 @@ impl PySession {
     }
 
     #[getter]
+    pub fn is_fork(&self, py: Python<'_>) -> bool {
+        py.detach(move || self.0.blocking_read().is_fork())
+    }
+
+    #[getter]
     pub fn mode(&self, py: Python<'_>) -> PySessionMode {
         // This is blocking function, we need to release the Gil
         py.detach(move || self.0.blocking_read().mode().into())

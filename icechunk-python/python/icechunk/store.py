@@ -36,12 +36,10 @@ def _byte_request_to_tuple(
 
 class IcechunkStore(Store, SyncMixin):
     _store: PyStore
-    _for_fork: bool
 
     def __init__(
         self,
         store: PyStore,
-        for_fork: bool,
         read_only: bool | None = None,
         *args: Any,
         **kwargs: Any,
@@ -58,7 +56,6 @@ class IcechunkStore(Store, SyncMixin):
             )
         self._store = store
         self._is_open = True
-        self._for_fork = for_fork
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, IcechunkStore):
@@ -67,19 +64,17 @@ class IcechunkStore(Store, SyncMixin):
 
     def __getstate__(self) -> object:
         # for read_only sessions we allow pickling, this allows distributed reads without forking
-        writable = not self.session.read_only
-        if writable and not self._for_fork:
+        session = self._store.session
+        if not session.read_only and not session.is_fork:
             raise ValueError(
                 "You must opt-in to pickle writable sessions in a distributed context "
                 "using Session.fork(). "
-                # link to docs
                 "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
                 "please use `icechunk.xarray.to_icechunk` instead. "
             )
         d = self.__dict__.copy()
         # we serialize the Rust store as bytes
         d["_store"] = self._store.as_bytes()
-        d["_for_fork"] = self._for_fork
         return d
 
     def __setstate__(self, state: Any) -> None:
@@ -89,7 +84,7 @@ class IcechunkStore(Store, SyncMixin):
         self.__dict__ = state
 
     def with_read_only(self, read_only: bool = False) -> Store:
-        new_store = IcechunkStore(store=self._store, for_fork=False, read_only=read_only)
+        new_store = IcechunkStore(store=self._store, read_only=read_only)
         new_store._is_open = False
         return new_store
 
@@ -97,7 +92,7 @@ class IcechunkStore(Store, SyncMixin):
     def session(self) -> "Session":
         from icechunk.session import ForkSession, Session
 
-        if self._for_fork:
+        if self._store.session.is_fork:
             return ForkSession(self._store.session)
         else:
             return Session(self._store.session)

@@ -147,7 +147,7 @@ class Session:
         IcechunkStore
             A zarr Store object for reading and writing data from the repository.
         """
-        return IcechunkStore(self._session.store, for_fork=False)
+        return IcechunkStore(self._session.store)
 
     @property
     def config(self) -> RepositoryConfig:
@@ -630,15 +630,3 @@ class ForkSession(Session):
         if not isinstance(state, dict):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
-
-    @property
-    def store(self) -> IcechunkStore:
-        """
-        Get a zarr Store object for reading and writing data from the repository using zarr python.
-
-        Returns
-        -------
-        IcechunkStore
-            A zarr Store object for reading and writing data from the repository.
-        """
-        return IcechunkStore(self._session.store, for_fork=True)
