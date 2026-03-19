@@ -51,9 +51,9 @@ class ModelStore(MemoryStore):
         # Read all chunks keyed by their new indices, discarding out-of-bounds
         chunk_data: dict[tuple[int, ...], Any] = {}
         async for key in self.list_prefix(prefix):
-            parts = key.split("/")
-            idx_start = parts.index("c") + 1
-            old_idx = tuple(int(p) for p in parts[idx_start:])
+            # Strip the prefix to get just the index parts (e.g. "0/1/2")
+            idx_str = key[len(prefix) :]
+            old_idx = tuple(int(p) for p in idx_str.split("/"))
             new_idx = tuple(idx + off for idx, off in zip(old_idx, offset, strict=True))
             if any(
                 idx < 0 or idx >= nchunks
