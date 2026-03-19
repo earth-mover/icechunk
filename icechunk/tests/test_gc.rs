@@ -564,7 +564,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         let snap = session
-            .commit(&format!("commit {i}"))
+            .commit(format!("commit {i}"))
             .max_concurrent_nodes(8)
             .execute()
             .await?;
