@@ -436,9 +436,9 @@ pub mod format_constants {
         Ord,
     )]
     pub enum SpecVersionBin {
-        V1dot0 = 1u8,
+        V1 = 1u8,
         #[default]
-        V2dot0 = 2u8,
+        V2 = 2u8,
     }
 
     impl TryFrom<u8> for SpecVersionBin {
@@ -446,8 +446,8 @@ pub mod format_constants {
 
         fn try_from(value: u8) -> Result<Self, Self::Error> {
             match value {
-                n if n == SpecVersionBin::V1dot0 as u8 => Ok(SpecVersionBin::V1dot0),
-                n if n == SpecVersionBin::V2dot0 as u8 => Ok(SpecVersionBin::V2dot0),
+                n if n == SpecVersionBin::V1 as u8 => Ok(SpecVersionBin::V1),
+                n if n == SpecVersionBin::V2 as u8 => Ok(SpecVersionBin::V2),
                 n => Err(format!("Bad spec version code: {n}")),
             }
         }
@@ -462,8 +462,8 @@ pub mod format_constants {
     impl std::fmt::Display for SpecVersionBin {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             let s = match self {
-                SpecVersionBin::V1dot0 => "1.0",
-                SpecVersionBin::V2dot0 => "2.0",
+                SpecVersionBin::V1 => "1.0",
+                SpecVersionBin::V2 => "2.0",
             };
             write!(f, "{s}")
         }

@@ -460,7 +460,7 @@ impl Snapshot {
             .iter()
             .map(|(k, v)| {
                 let name = builder.create_shared_string(k.as_str());
-                let serialized = if spec_version == SpecVersionBin::V1dot0 {
+                let serialized = if spec_version == SpecVersionBin::V1 {
                     rmp_serde::to_vec(v).map_err(Box::new)?
                 } else {
                     flexbuffers::to_vec(v).map_err(Box::new)?
@@ -560,7 +560,7 @@ impl Snapshot {
             .iter()
             .map(|item| {
                 let key = item.name().to_string();
-                let value = if self.spec_version == SpecVersionBin::V1dot0 {
+                let value = if self.spec_version == SpecVersionBin::V1 {
                     rmp_serde::from_slice(item.value().bytes()).map_err(Box::new)?
                 } else {
                     flexbuffers::from_slice(item.value().bytes()).map_err(Box::new)?
@@ -609,7 +609,7 @@ impl Snapshot {
         Snapshot::from_iter(
             Some(new_child.id()),
             Some(self.id()),
-            SpecVersionBin::V1dot0, // 2.0 doesn't use adopt
+            SpecVersionBin::V1, // 2.0 doesn't use adopt
             new_child.message().clone(),
             Some(new_child.metadata()?.clone()),
             new_child.manifest_files().collect(),
@@ -773,7 +773,7 @@ fn mk_array_shapes<'a>(
 ) -> (Option<ShapeV1<'a>>, Option<ShapeV2<'a>>) {
     use SpecVersionBin::*;
     match spec_version {
-        V1dot0 => {
+        V1 => {
             let shape = shape
                 .0
                 .iter()
@@ -794,7 +794,7 @@ fn mk_array_shapes<'a>(
                 .collect::<Vec<_>>();
             (Some(builder.create_vector(shape.as_slice())), None)
         }
-        V2dot0 => {
+        V2 => {
             let shape = shape
                 .0
                 .iter()

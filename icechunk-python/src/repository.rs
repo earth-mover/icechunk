@@ -932,8 +932,8 @@ impl<'py> FromPyObject<'_, 'py> for PySpecVersion {
 impl From<PySpecVersion> for SpecVersionBin {
     fn from(value: PySpecVersion) -> Self {
         match value {
-            PySpecVersion::V1 => Self::V1dot0,
-            PySpecVersion::V2 => Self::V2dot0,
+            PySpecVersion::V1 => Self::V1,
+            PySpecVersion::V2 => Self::V2,
         }
     }
 }
@@ -941,8 +941,8 @@ impl From<PySpecVersion> for SpecVersionBin {
 impl From<SpecVersionBin> for PySpecVersion {
     fn from(value: SpecVersionBin) -> Self {
         match value {
-            SpecVersionBin::V1dot0 => Self::V1,
-            SpecVersionBin::V2dot0 => Self::V2,
+            SpecVersionBin::V1 => Self::V1,
+            SpecVersionBin::V2 => Self::V2,
         }
     }
 }

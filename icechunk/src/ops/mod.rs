@@ -141,10 +141,10 @@ pub async fn pointed_snapshots<'a>(
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> RepositoryResult<impl Stream<Item = RepositoryResult<Arc<Snapshot>>> + 'a> {
     match asset_manager.spec_version() {
-        SpecVersionBin::V1dot0 => {
+        SpecVersionBin::V1 => {
             Ok(pointed_snapshots_v1(asset_manager, extra_roots).await?.left_stream())
         }
-        SpecVersionBin::V2dot0 => {
+        SpecVersionBin::V2 => {
             Ok(pointed_snapshots_v2(asset_manager, extra_roots).await?.right_stream())
         }
     }
