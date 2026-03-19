@@ -2414,7 +2414,7 @@ impl PyRepository {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let lock = self.0.read().await;
-                    rewrite_manifests(&lock, branch, message, metadata, commit_method)
+                    rewrite_manifests(&lock, branch, message, 1, metadata, commit_method)
                         .await
                         .map_err(PyIcechunkStoreError::ManifestOpsError)
                 })?;
@@ -2443,6 +2443,7 @@ impl PyRepository {
                 &repository,
                 &branch,
                 &message,
+                1,
                 metadata,
                 commit_method,
             )
