@@ -15,21 +15,17 @@ use criterion::{
     BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group,
 };
 use futures::{StreamExt, stream};
-use icechunk::config::{
-    ManifestConfig, ManifestSplittingConfig, RepositoryConfig,
-};
+use icechunk::config::{ManifestConfig, ManifestSplittingConfig, RepositoryConfig};
 use icechunk::conflicts::detector::ConflictDetector;
 use icechunk::format::snapshot::ArrayShape;
 use icechunk::format::{ByteRange, ChunkIndices, Path};
-#[cfg(feature = "logs")]
-use icechunk::initialize_tracing;
 use icechunk::repository::VersionInfo;
 use icechunk::session::{CommitMethod, get_chunk};
 use tokio::runtime::Runtime;
 
 use crate::helpers::{
-    ChunkKind, StorageKind, add_latency_toxic, default_storage_kind, remove_latency_toxic,
-    set_chunks, setup_repo, toxiproxy_latency_ms,
+    ChunkKind, StorageKind, add_latency_toxic, default_storage_kind,
+    remove_latency_toxic, set_chunks, setup_repo, toxiproxy_latency_ms,
 };
 
 /// Benchmarks setting of inline and virtual chunks
@@ -388,8 +384,6 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
 /// All sessions are opened from the same branch tip, then committed
 /// sequentially — the first is a fast-forward, the rest must rebase.
 fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
-    #[cfg(feature = "logs")]
-    initialize_tracing(None);
     let mut group = c.benchmark_group("commit_rebase_split_manifests");
     group.sample_size(10).sampling_mode(SamplingMode::Flat);
 

@@ -1,7 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-use criterion::criterion_main;
-
 mod helpers;
 
 #[allow(dead_code)]
@@ -9,4 +7,11 @@ mod asset_manager;
 #[allow(dead_code)]
 mod manifest;
 
-criterion_main!(manifest::manifest_benches, asset_manager::asset_manager_benches);
+fn main() {
+    helpers::init_samply();
+
+    manifest::manifest_benches();
+    asset_manager::asset_manager_benches();
+
+    criterion::Criterion::default().configure_from_args().final_summary();
+}

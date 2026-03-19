@@ -5,7 +5,7 @@ The benchmarks are written using `criterion.rs` as harness.
 2. Run the specific `commit_split_manifests` group of benchmarks with `cargo bench -- "commit_split_manifests"`. The name is set by statements like `c.benchmark_group("commit_split_manifests");`
 3. Run those benchmarks only for inline chunks: `cargo bench -- "commit_split_manifests/inline"`
 4. Run those benchmarks only for inline chunks and specifically 1000 manifests: `cargo bench -- "commit_split_manifests/virtual/1000$"`
-5. Examine logs for a particular benchmark: `ICECHUNK_LOG=icechunk=trace cargo bench --features logs -- "commit_rebase_split_manifests/inline" --test --nocapture`. You will need to add the `initialize_tracing(None)` line at the beginning of the benchmark function.
+5. Examine logs for a particular benchmark: `ICECHUNK_LOG=icechunk=trace cargo bench --features logs -- "commit_rebase_split_manifests/inline" --test --nocapture`.
 6. To compare `main` vs `HEAD` do it manually using "baselines":
     ``` sh
     git switch support/v1.x \
@@ -52,10 +52,14 @@ An alternative is to find useful cargo subcommands that make our life easy.
 samply is an extremely good cross-platform profiler. I have found it quite useful, though reading the traces takes some effort given our heavy use of iterators.
 
 ``` sh
-cargo samply -- "commit_rebase_split_manifests/type/inline" --test
+just samply "commit_rebase_split_manifests/type/inline"
 ```
 
 will run that benchmark once and open up a profile in the Firefox Profiler.
+
+The `just samply` command automatically wires up `tracing-samply` so all
+`#[instrument]` annotations in the codebase appear as profiler markers in the
+samply UI.
 
 ## [`cargo-instruments`](https://github.com/cmyr/cargo-instruments)
 

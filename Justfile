@@ -92,6 +92,10 @@ pre-commit-python:
   just format "-p icechunk-python"
   just lint "-p icechunk-python"
 
+[doc("Profile benchmarks with cargo-samply (tracing spans become profiler markers)")]
+samply *args:
+  cargo samply --features logs --bench main -- {{args}} --test
+
 [doc("Compare pytest-benchmark results")]
 bench-compare *args:
   pytest-benchmark compare --group=group,func,param --sort=fullname --columns=median --name=short "$@"

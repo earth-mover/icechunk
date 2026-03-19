@@ -1,5 +1,31 @@
 // Shared helpers for benchmarks: storage setup, repo creation, chunk writing, toxiproxy.
 
+/// Wire up `tracing-samply` so that all `#[instrument]` spans appear as profiler
+/// markers in the samply UI. Silently no-ops when not running under samply or
+/// without `--features logs`.
+#[allow(dead_code)]
+pub(crate) fn init_samply() {
+    #[cfg(feature = "logs")]
+    {
+        match tracing_samply::SamplyLayer::new() {
+            Ok(layer) => {
+                use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+                match tracing_subscriber::Registry::default()
+                    .with(tracing_error::ErrorLayer::default())
+                    .with(layer)
+                    .try_init()
+                {
+                    Ok(()) => eprintln!("tracing-samply: layer installed"),
+                    Err(e) => eprintln!("tracing-samply: try_init failed: {e}"),
+                }
+            }
+            Err(e) => eprintln!("tracing-samply: SamplyLayer::new() failed: {e}"),
+        }
+    }
+    #[cfg(not(feature = "logs"))]
+    eprintln!("tracing-samply: logs feature not enabled");
+}
+
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::Write;
@@ -27,16 +53,16 @@ use object_store::ObjectStoreExt;
 use rand::RngExt;
 use tempfile::TempDir;
 
-pub const RUSTFS_PORT: u16 = 9000;
-pub const TOXIPROXY_PORT: u16 = 9002;
-pub const TOXIPROXY_PROXY_NAME: &str = "bench-latency";
-pub const NUM_VCCS: usize = 20;
-pub const CHUNK_SIZE_BYTES: u64 = 1024 * 1024;
-pub const VCC_S3_BASE: &str = "s3://testbucket/bench-vcc/";
-pub const VCC_LOCAL_DIR: &str = "/tmp/icechunk-bench-vcc";
+pub(crate) const RUSTFS_PORT: u16 = 9000;
+pub(crate) const TOXIPROXY_PORT: u16 = 9002;
+pub(crate) const TOXIPROXY_PROXY_NAME: &str = "bench-latency";
+pub(crate) const NUM_VCCS: usize = 20;
+pub(crate) const CHUNK_SIZE_BYTES: u64 = 1024 * 1024;
+pub(crate) const VCC_S3_BASE: &str = "s3://testbucket/bench-vcc/";
+pub(crate) const VCC_LOCAL_DIR: &str = "/tmp/icechunk-bench-vcc";
 
 #[derive(Clone, Copy)]
-pub enum ChunkKind {
+pub(crate) enum ChunkKind {
     Inline,
     Native,
     Virtual,
@@ -57,7 +83,7 @@ impl std::fmt::Display for ChunkKind {
 }
 
 #[derive(Clone, Copy)]
-pub enum StorageKind {
+pub(crate) enum StorageKind {
     InMemory,
     Rustfs,
 }
@@ -71,7 +97,7 @@ impl std::fmt::Display for StorageKind {
     }
 }
 
-pub fn default_storage_kind() -> StorageKind {
+pub(crate) fn default_storage_kind() -> StorageKind {
     match toxiproxy_latency_ms() {
         Some(_) => StorageKind::Rustfs,
         None => StorageKind::InMemory,
@@ -79,7 +105,7 @@ pub fn default_storage_kind() -> StorageKind {
 }
 
 /// Parse `ICECHUNK_BENCH_LATENCY_MS` env var; returns `Some(ms)` if set.
-pub fn toxiproxy_latency_ms() -> Option<u64> {
+pub(crate) fn toxiproxy_latency_ms() -> Option<u64> {
     #[allow(clippy::expect_used)]
     std::env::var("ICECHUNK_BENCH_LATENCY_MS")
         .ok()
@@ -89,7 +115,7 @@ pub fn toxiproxy_latency_ms() -> Option<u64> {
 /// Set up toxiproxy: create a proxy on `TOXIPROXY_PORT` forwarding to RustFS at
 /// `rustfs:9000`. Does NOT add any toxics — those are managed separately so that
 /// latency is only injected during the timed portion of benchmarks.
-pub async fn setup_toxiproxy() -> Result<(), Box<dyn Error>> {
+pub(crate) async fn setup_toxiproxy() -> Result<(), Box<dyn Error>> {
     let client = Client::new("http://localhost:8474");
 
     // Delete any proxy already bound to this port (leftover from a previous run).
@@ -110,7 +136,7 @@ pub async fn setup_toxiproxy() -> Result<(), Box<dyn Error>> {
 }
 
 /// Add a downstream latency toxic to the bench proxy.
-pub async fn add_latency_toxic(latency_ms: u64) -> Result<(), Box<dyn Error>> {
+pub(crate) async fn add_latency_toxic(latency_ms: u64) -> Result<(), Box<dyn Error>> {
     let client = Client::new("http://localhost:8474");
     let toxic = Toxic {
         kind: ToxicKind::Latency { latency: latency_ms, jitter: 0 },
@@ -123,13 +149,13 @@ pub async fn add_latency_toxic(latency_ms: u64) -> Result<(), Box<dyn Error>> {
 }
 
 /// Remove the latency toxic from the bench proxy.
-pub async fn remove_latency_toxic() -> Result<(), Box<dyn Error>> {
+pub(crate) async fn remove_latency_toxic() -> Result<(), Box<dyn Error>> {
     let client = Client::new("http://localhost:8474");
     client.proxy(TOXIPROXY_PROXY_NAME).await?.remove_toxic("latency").await?;
     Ok(())
 }
 
-pub fn rustfs_s3_options(endpoint_port: u16) -> S3Options {
+pub(crate) fn rustfs_s3_options(endpoint_port: u16) -> S3Options {
     S3Options {
         region: Some("us-east-1".to_string()),
         endpoint_url: Some(format!("http://localhost:{endpoint_port}")),
@@ -141,7 +167,7 @@ pub fn rustfs_s3_options(endpoint_port: u16) -> S3Options {
     }
 }
 
-pub fn rustfs_credentials() -> S3Credentials {
+pub(crate) fn rustfs_credentials() -> S3Credentials {
     S3Credentials::Static(S3StaticCredentials {
         access_key_id: "modify".into(),
         secret_access_key: "modifydata".into(),
@@ -151,7 +177,7 @@ pub fn rustfs_credentials() -> S3Credentials {
 }
 
 /// Create S3 storage pointing at RustFS, optionally through toxiproxy.
-pub fn make_s3_storage(
+pub(crate) fn make_s3_storage(
     latency_ms: Option<u64>,
 ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn Error>> {
     let port = if latency_ms.is_some() { TOXIPROXY_PORT } else { RUSTFS_PORT };
@@ -169,7 +195,7 @@ type Credentials = icechunk::config::Credentials;
 /// Returns `(Repository, TempDir)` — the `TempDir` must be kept alive by the caller
 /// because it holds the on-disk files that virtual chunk containers reference.
 /// Dropping it would delete the files and break virtual chunk reads.
-pub async fn setup_repo(
+pub(crate) async fn setup_repo(
     path: Path,
     shape: ArrayShape,
     dimension_names: Option<Vec<DimensionName>>,
@@ -282,7 +308,7 @@ pub async fn setup_repo(
     Ok((repository, tmpdir))
 }
 
-pub fn vcc_chunk_url(storage_kind: StorageKind, prefix_idx: usize) -> String {
+pub(crate) fn vcc_chunk_url(storage_kind: StorageKind, prefix_idx: usize) -> String {
     match storage_kind {
         StorageKind::Rustfs => format!("{VCC_S3_BASE}prefix-{prefix_idx}/chunk"),
         StorageKind::InMemory => {
@@ -291,7 +317,7 @@ pub fn vcc_chunk_url(storage_kind: StorageKind, prefix_idx: usize) -> String {
     }
 }
 
-pub async fn set_chunks(
+pub(crate) async fn set_chunks(
     path: Path,
     session: &mut Session,
     chunks: Range<u32>,
