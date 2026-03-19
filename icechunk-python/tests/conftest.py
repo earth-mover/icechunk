@@ -34,6 +34,7 @@ settings.register_profile(
     parent=settings.get_profile("ci"),
     max_examples=1000,
     stateful_step_count=500,
+    derandomize=False,
     suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
 )
 if "HYPOTHESIS_PROFILE" in os.environ:
