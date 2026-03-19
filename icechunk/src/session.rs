@@ -91,6 +91,18 @@ pub enum SessionErrorKind {
     #[error("Read only sessions cannot modify the repository")]
     ReadOnlySession,
     #[error(
+        "commits are not allowed on read-only or forked sessions, merge forked sessions back into the base session before committing. See https://icechunk.io/en/latest/parallel/ for more"
+    )]
+    CommitNotAllowed,
+    #[error(
+        "cannot merge a branch session into a fork session, only fork sessions can be merged into a fork. See https://icechunk.io/en/latest/parallel/ for more"
+    )]
+    MergeNotAllowed,
+    #[error(
+        "cannot fork a read-only session, read-only sessions can be serialized and transmitted directly. See https://icechunk.io/en/latest/parallel/ for more"
+    )]
+    CannotForkReadOnlySession,
+    #[error(
         "This session was created to rearrange the hierarchy, other write operations cannot be executed. Commit or abandon the sessions and create a regular writable session"
     )]
     RearrangeSessionOnly,
@@ -579,8 +591,21 @@ impl Session {
         self.virtual_resolver.matching_container(chunk_location)
     }
 
+    /// Create a "forked" [`Session`] from a "base" [`Session`]
+    /// Fork sessions:
+    /// 1. contain an empty [`ChangeSet`]
+    /// 2. Are built off an anonymous [`Snapshot`] that records the state of the base [`Session`].
+    /// 3. Cannot be committed.
+    ///
+    /// Such Sessions are useful for distributed writes. You are expected to communicate the forked
+    /// [`Session`] using [`Session.as_bytes()`] and [`Session.from_bytes`] methods to distributed workers,
+    /// do the necessary writes, communicate back the Sessions from each work, and merge them in to the
+    /// base Session, which can then be committed.
     #[instrument(skip(self))]
     pub async fn fork(&self) -> SessionResult<Self> {
+        if self.read_only() {
+            return Err(SessionErrorKind::CannotForkReadOnlySession.into());
+        }
         // TODO: why do we allow Clone?
         let snap = self.clone().flush("foo", None).await?;
 
@@ -594,6 +619,11 @@ impl Session {
             snap.clone(),
             self.default_commit_metadata.clone(),
         ))
+    }
+
+    /// Returns true if this is a fork session (writable, not attached to a branch).
+    pub fn is_fork(&self) -> bool {
+        self.branch_name.is_none() && !self.read_only()
     }
 
     /// Compute an overview of the current session changes
@@ -1325,6 +1355,10 @@ impl Session {
         if self.read_only() {
             return Err(SessionErrorKind::ReadOnlySession.into());
         }
+        // A fork session cannot absorb a base session
+        if self.branch_name.is_none() && other.branch_name.is_some() {
+            return Err(SessionErrorKind::MergeNotAllowed.into());
+        }
         let Session { change_set, .. } = other;
 
         self.change_set.merge(change_set)?;
@@ -1497,7 +1531,7 @@ impl Session {
         allow_empty: bool,
     ) -> SessionResult<SnapshotId> {
         let Some(branch_name) = &self.branch_name else {
-            return Err(SessionErrorKind::ReadOnlySession.into());
+            return Err(SessionErrorKind::CommitNotAllowed.into());
         };
 
         // amend is only allowed in spec v2, this should be checked at this point so we only assert
@@ -1683,7 +1717,7 @@ impl Session {
         solver: &(dyn ConflictSolver + Send + Sync),
     ) -> SessionResult<()> {
         let Some(branch_name) = &self.branch_name else {
-            return Err(SessionErrorKind::ReadOnlySession.into());
+            return Err(SessionErrorKind::CommitNotAllowed.into());
         };
 
         debug!("Rebase started");

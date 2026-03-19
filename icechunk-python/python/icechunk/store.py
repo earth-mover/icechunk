@@ -67,15 +67,15 @@ class IcechunkStore(Store, SyncMixin):
 
     def __getstate__(self) -> object:
         # for read_only sessions we allow pickling, this allows distributed reads without forking
-        # writable = not self.session.read_only
-        # if writable and not self._for_fork:
-        #     raise ValueError(
-        #         "You must opt-in to pickle writable sessions in a distributed context "
-        #         "using Session.fork(). "
-        #         # link to docs
-        #         "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
-        #         "please use `icechunk.xarray.to_icechunk` instead. "
-        #     )
+        writable = not self.session.read_only
+        if writable and not self._for_fork:
+            raise ValueError(
+                "You must opt-in to pickle writable sessions in a distributed context "
+                "using Session.fork(). "
+                # link to docs
+                "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
+                "please use `icechunk.xarray.to_icechunk` instead. "
+            )
         d = self.__dict__.copy()
         # we serialize the Rust store as bytes
         d["_store"] = self._store.as_bytes()

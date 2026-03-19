@@ -4182,57 +4182,99 @@ mod tests {
             .await?;
         session.commit("init", None).await?;
 
-        let mut session = repo.writable_session("main").await?;
+        async fn do_distributed_writes(
+            session: &mut Session,
+            array_path: &Path,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            // create a _clean_ writable session from that snapshot
+            let clean = session.fork().await?;
 
-        // zarr-python's mode="w" will delete, then re-create
+            // distribute these clean sessions to two writers
+            // NOTE: this is explicitly modeling a python pickle/unpickle workflow;
+            // we could just send out a SnapshotId and call `create_writable_session`
+            // on the distributed worker instead
+            let clean_bytes = clean.as_bytes()?;
+            let mut s1 = Session::from_bytes(clean_bytes.clone())?;
+            let mut s2 = Session::from_bytes(clean_bytes)?;
+
+            // now both writers make independent changes
+            s1.set_chunk_ref(
+                array_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline(format!("0").into())),
+            )
+            .await?;
+            s2.set_chunk_ref(
+                array_path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline(format!("1").into())),
+            )
+            .await?;
+
+            // forked sessions cannot be committed.
+            assert!(s1.commit("foo", None).await.is_err());
+            assert!(s2.commit("foo", None).await.is_err());
+
+            // merge the distributed writers' sessions
+            s1.merge(s2).await?;
+
+            assert!(s1.commit("foo", None).await.is_err());
+
+            // merging a base session into a fork session is not allowed
+            let base_clone = session.clone();
+            assert!(matches!(
+                s1.merge(base_clone).await.unwrap_err().kind,
+                SessionErrorKind::MergeNotAllowed
+            ));
+
+            // flushing a fork session succeeds (anonymous snapshot)
+            let flush_result = s1.clone().flush("fork-flush", None).await;
+            assert!(flush_result.is_ok());
+
+            // merge that in to the base
+            session.merge(s1).await?;
+
+            for i in 0..2 {
+                let reader = session
+                    .get_chunk_reader(array_path, &ChunkIndices(vec![i]), &ByteRange::ALL)
+                    .await?;
+                assert_eq!(get_chunk(reader).await?, Some(format!("{i}").into()));
+            }
+
+            // base session can be committed
+            session.commit("foo", None).await?;
+
+            for i in 0..2 {
+                let reader = session
+                    .get_chunk_reader(array_path, &ChunkIndices(vec![i]), &ByteRange::ALL)
+                    .await?;
+                assert_eq!(get_chunk(reader).await?, Some(format!("{i}").into()));
+            }
+
+            Ok(())
+        }
+
+        // zarr-python's mode="w" will delete and array, then re-create it
+        let mut session = repo.writable_session("main").await?;
         session.delete_array(array_path.clone()).await?;
         session
             .add_array(
                 array_path.clone(),
-                shape,
+                shape.clone(),
                 Some(vec!["x".into()]),
                 Bytes::from_static(b"{}"),
             )
             .await?;
+        do_distributed_writes(&mut session, &array_path).await?;
 
-        // create a _clean_ writable session from that snapshot
-        let clean = session.fork().await?;
-
-        // distribute these clean sessions to two writers
-        // NOTE: this is explicitly modeling a python pickle/unpickle workflow;
-        // we could just send out a SnapshotId and call `create_writable_session`
-        // on the distributed worker instead
-        let clean_bytes = clean.as_bytes()?;
-        let mut s1 = Session::from_bytes(clean_bytes.clone())?;
-        let mut s2 = Session::from_bytes(clean_bytes)?;
-
-        // now both writers make independent changes
-        s1.set_chunk_ref(
-            array_path.clone(),
-            ChunkIndices(vec![0]),
-            Some(ChunkPayload::Inline(format!("0").into())),
-        )
-        .await?;
-        s2.set_chunk_ref(
-            array_path.clone(),
-            ChunkIndices(vec![1]),
-            Some(ChunkPayload::Inline(format!("1").into())),
-        )
-        .await?;
-        // merge the distributed writers' sessions
-        s1.merge(s2).await?;
-
-        // merge that in to the base
-        // TODO: we might reconstruct this from the transaction log
-        // Session::from_transaction_log?
-        session.merge(s1).await?;
-
-        for i in 0..2 {
-            let reader = session
-                .get_chunk_reader(&array_path, &ChunkIndices(vec![i]), &ByteRange::ALL)
+        // delete all chunks then do distributed writes
+        let mut session = repo.writable_session("main").await?;
+        for i in 0..10 {
+            session
+                .set_chunk_ref(array_path.clone(), ChunkIndices(vec![i]), None)
                 .await?;
-            assert_eq!(get_chunk(reader).await?, Some(format!("{i}").into()));
         }
+        do_distributed_writes(&mut session, &array_path).await?;
 
         Ok(())
     }

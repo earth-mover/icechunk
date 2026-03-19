@@ -1,6 +1,6 @@
 import contextlib
 from collections.abc import AsyncIterator, Callable, Generator, Iterable, Sequence
-from typing import Any, NoReturn, Self
+from typing import Any
 
 from icechunk import (
     ChunkType,
@@ -27,17 +27,17 @@ class Session:
         return self._session == value._session
 
     def __getstate__(self) -> object:
-        # if not self.read_only:
-        #     raise ValueError(
-        #         "You must opt-in to pickle writable sessions in a distributed context "
-        #         "using Session.fork(). "
-        #         "See https://icechunk.io/en/stable/parallel/#distributed-writes for more. "
-        #         "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
-        #         "please use `icechunk.xarray.to_icechunk` instead. "
-        #         "If you are using dask & distributed or multi-processing to read/write from the same repository, "
-        #         "then pass a readonly session created using Repository.readonly_session for the read step. "
-        #         "Alternatively, make sure to pass the ForkSession created by Session.fork() for the read step. "
-        #     )
+        if not self.read_only:
+            raise ValueError(
+                "You must opt-in to pickle writable sessions in a distributed context "
+                "using Session.fork(). "
+                "See https://icechunk.io/en/stable/parallel/#distributed-writes for more. "
+                "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
+                "please use `icechunk.xarray.to_icechunk` instead. "
+                "If you are using dask & distributed or multi-processing to read/write from the same repository, "
+                "then pass a readonly session created using Repository.readonly_session for the read step. "
+                "Alternatively, make sure to pass the ForkSession created by Session.fork() for the read step. "
+            )
         state = {
             "_session": self._session.as_bytes(),
         }
@@ -319,11 +319,6 @@ class Session:
             The forked sessions to merge changes from.
         """
         for other in others:
-            if not isinstance(other, ForkSession):
-                raise TypeError(
-                    "Sessions can only be merged with a ForkSession created with Session.fork(). "
-                    f"Received {type(other).__name__} instead."
-                )
             self._session.merge(other._session)
 
     async def merge_async(self, *others: "ForkSession") -> None:
@@ -336,11 +331,6 @@ class Session:
             The forked sessions to merge changes from.
         """
         for other in others:
-            if not isinstance(other, ForkSession):
-                raise TypeError(
-                    "Sessions can only be merged with a ForkSession created with Session.fork(). "
-                    f"Received {type(other).__name__} instead."
-                )
             await self._session.merge_async(other._session)
 
     def commit(
@@ -627,10 +617,6 @@ class Session:
         ValueError
             When `self` is read-only.
         """
-        if self.read_only:
-            raise ValueError(
-                "You should not need to fork a read-only session. Read-only sessions can be pickled and transmitted directly."
-            )
         # TODO: Do we still need ForkSession?
         return ForkSession(self._session.fork())
 
@@ -644,80 +630,6 @@ class ForkSession(Session):
         if not isinstance(state, dict):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
-
-    def merge(self, *others: Self) -> None:
-        for other in others:
-            if not isinstance(other, ForkSession):
-                raise TypeError(
-                    f"A ForkSession can only be merged with another ForkSession. Received {type(other)} instead."
-                )
-            self._session.merge(other._session)
-
-    async def merge_async(self, *others: Self) -> None:
-        """
-        Merge the changes for this fork session with the changes from other fork sessions (async version).
-
-        Parameters
-        ----------
-        others : ForkSession
-            The other fork sessions to merge changes from.
-        """
-        for other in others:
-            if not isinstance(other, ForkSession):
-                raise TypeError(
-                    f"A ForkSession can only be merged with another ForkSession. Received {type(other)} instead."
-                )
-            await self._session.merge_async(other._session)
-
-    def commit(
-        self,
-        message: str,
-        metadata: dict[str, Any] | None = None,
-        rebase_with: ConflictSolver | None = None,
-        rebase_tries: int = 1_000,
-        allow_empty: bool = False,
-    ) -> NoReturn:
-        raise TypeError(
-            "Cannot commit a fork of a Session. If you are using uncooperative writes, "
-            "please send the Repository object to your workers, not a Session. "
-            "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
-        )
-
-    async def commit_async(
-        self,
-        message: str,
-        metadata: dict[str, Any] | None = None,
-        rebase_with: ConflictSolver | None = None,
-        rebase_tries: int = 1_000,
-        allow_empty: bool = False,
-    ) -> NoReturn:
-        raise TypeError(
-            "Cannot commit a fork of a Session. If you are using uncooperative writes, "
-            "please send the Repository object to your workers, not a Session. "
-            "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
-        )
-
-    def flush(
-        self,
-        message: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> NoReturn:
-        raise TypeError(
-            "Cannot flush a fork of a Session. If you are using uncooperative writes, "
-            "please send the Repository object to your workers, not a Session. "
-            "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
-        )
-
-    async def flush_async(
-        self,
-        message: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> NoReturn:
-        raise TypeError(
-            "Cannot flush a fork of a Session. If you are using uncooperative writes, "
-            "please send the Repository object to your workers, not a Session. "
-            "See https://icechunk.io/en/stable/icechunk-python/parallel/#distributed-writes for more."
-        )
 
     @property
     def store(self) -> IcechunkStore:
