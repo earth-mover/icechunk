@@ -69,7 +69,7 @@ class ModelStore(MemoryStore):
             new_key = f"{prefix}{'/'.join(str(idx) for idx in new_idx)}"
             await self.set(new_key, data)
 
-    spec_version: SpecVersion
+    spec_version: SpecVersion | int
 
     async def move(self, source: str, dest: str) -> None:
         """Move all keys from source to dest.
@@ -124,17 +124,15 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         # This will be replaced in init_store with the Hypothesis-sampled version
         # we need this in order to properly initialize the superclass MemoryStore
         # model
-        temp_repo = Repository.create(
-            in_memory_storage(), spec_version=SpecVersion.v1dot0
-        )
+        temp_repo = Repository.create(in_memory_storage(), spec_version=1)
         temp_store = temp_repo.writable_session("main").store
         super().__init__(temp_store)
         # Replace parent's MemoryStore with our ModelStore that has move()
         self.model = ModelStore()
-        self.model.spec_version = SpecVersion.v1dot0
+        self.model.spec_version = 1
         zarr.group(store=self.model)
 
-    @initialize(spec_version=st.sampled_from([SpecVersion.v1dot0, SpecVersion.v2dot0]))
+    @initialize(spec_version=st.sampled_from([1, 2]))
     def init_store(self, spec_version: SpecVersion) -> None:
         """Override parent's init_store to sample spec_version and create repository."""
         # necessary to control the order of calling. if multiple intiliazes they will be
@@ -179,15 +177,13 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def rewrite_manifests(self, data: st.DataObject) -> None:
-        sconfig = self.ic.ManifestSplittingConfig.from_dict(
-            {
-                self.ic.ManifestSplitCondition.AnyArray(): {
-                    self.ic.ManifestSplitDimCondition.Any(): data.draw(
-                        st.integers(min_value=1, max_value=10)
-                    )
-                }
+        sconfig = self.ic.ManifestSplittingConfig.from_dict({
+            self.ic.ManifestSplitCondition.AnyArray(): {
+                self.ic.ManifestSplitDimCondition.Any(): data.draw(
+                    st.integers(min_value=1, max_value=10)
+                )
             }
-        )
+        })
 
         config = self.ic.RepositoryConfig(
             inline_chunk_threshold_bytes=0,
@@ -260,8 +256,8 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         )
         self.store = self.repo.writable_session("main").store
         if not dry_run:
-            assert self.repo.spec_version == SpecVersion.v2dot0
-            self.model.spec_version = SpecVersion.v2dot0
+            assert self.repo.spec_version == 2
+            self.model.spec_version = 2
 
     @rule(data=st.data(), num_moves=st.integers(min_value=1, max_value=5))
     @precondition(lambda self: self.model.spec_version >= 2)

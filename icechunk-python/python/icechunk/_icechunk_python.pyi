@@ -8,7 +8,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from enum import Enum
+from enum import Enum, IntEnum
 from functools import total_ordering
 from typing import Any, TypeAlias, final
 
@@ -1899,9 +1899,9 @@ class ManifestFileInfo:
 
 @final
 @total_ordering
-class SpecVersion(Enum):
-    v1dot0 = 1
-    v2dot0 = 2
+class SpecVersion(IntEnum):
+    v1 = 1
+    v2 = 2
 
     def __eq__(self, other: object) -> bool: ...
     def __lt__(self, other: object) -> bool: ...

@@ -7,19 +7,19 @@ from icechunk import SpecVersion
 
 def test_create_repo_with_spec_version_2() -> None:
     storage = ic.in_memory_storage()
-    ic.Repository.create(storage, spec_version=SpecVersion.v2dot0)
-    assert ic.Repository.open(storage).spec_version == SpecVersion.v2dot0
+    ic.Repository.create(storage, spec_version=2)
+    assert ic.Repository.open(storage).spec_version == 2
 
 
 def test_create_repo_with_spec_version_1() -> None:
     storage = ic.in_memory_storage()
-    ic.Repository.create(storage, spec_version=SpecVersion.v1dot0)
-    assert ic.Repository.open(storage).spec_version == SpecVersion.v1dot0
+    ic.Repository.create(storage, spec_version=1)
+    assert ic.Repository.open(storage).spec_version == 1
 
 
 def test_cannot_amend_with_spec_version_1() -> None:
     storage = ic.in_memory_storage()
-    repo = ic.Repository.create(storage, spec_version=SpecVersion.v1dot0)
+    repo = ic.Repository.create(storage, spec_version=1)
     session = repo.writable_session("main")
     group = zarr.group(store=session.store, overwrite=True)
     group.create_group("foo")
@@ -34,35 +34,35 @@ def test_cannot_amend_with_spec_version_1() -> None:
 
 def test_cannot_get_metadata_with_version_1() -> None:
     storage = ic.in_memory_storage()
-    repo = ic.Repository.create(storage, spec_version=SpecVersion.v1dot0)
+    repo = ic.Repository.create(storage, spec_version=1)
     with pytest.raises(ic.IcechunkError, match="upgrade"):
         repo.get_metadata()
 
 
 def test_cannot_set_metadata_with_version_1() -> None:
     storage = ic.in_memory_storage()
-    repo = ic.Repository.create(storage, spec_version=SpecVersion.v1dot0)
+    repo = ic.Repository.create(storage, spec_version=1)
     with pytest.raises(ic.IcechunkError, match="upgrade"):
         repo.set_metadata({"foo": "bar"})
 
 
 def test_cannot_update_metadata_with_version_1() -> None:
     storage = ic.in_memory_storage()
-    repo = ic.Repository.create(storage, spec_version=SpecVersion.v1dot0)
+    repo = ic.Repository.create(storage, spec_version=1)
     with pytest.raises(ic.IcechunkError, match="upgrade"):
         repo.update_metadata({"foo": "bar"})
 
 
 def test_fetch_spec_version_v1() -> None:
     storage = ic.in_memory_storage()
-    ic.Repository.create(storage, spec_version=SpecVersion.v1dot0)
-    assert ic.Repository.fetch_spec_version(storage) == SpecVersion.v1dot0
+    ic.Repository.create(storage, spec_version=1)
+    assert ic.Repository.fetch_spec_version(storage) == 1
 
 
 def test_fetch_spec_version_v2() -> None:
     storage = ic.in_memory_storage()
-    ic.Repository.create(storage, spec_version=SpecVersion.v2dot0)
-    assert ic.Repository.fetch_spec_version(storage) == SpecVersion.v2dot0
+    ic.Repository.create(storage, spec_version=2)
+    assert ic.Repository.fetch_spec_version(storage) == 2
 
 
 def test_fetch_spec_version_no_repo() -> None:
@@ -73,15 +73,15 @@ def test_fetch_spec_version_no_repo() -> None:
 @pytest.mark.asyncio
 async def test_fetch_spec_version_async_v1() -> None:
     storage = ic.in_memory_storage()
-    await ic.Repository.create_async(storage, spec_version=SpecVersion.v1dot0)
-    assert await ic.Repository.fetch_spec_version_async(storage) == SpecVersion.v1dot0
+    await ic.Repository.create_async(storage, spec_version=1)
+    assert await ic.Repository.fetch_spec_version_async(storage) == 1
 
 
 @pytest.mark.asyncio
 async def test_fetch_spec_version_async_v2() -> None:
     storage = ic.in_memory_storage()
-    await ic.Repository.create_async(storage, spec_version=SpecVersion.v2dot0)
-    assert await ic.Repository.fetch_spec_version_async(storage) == SpecVersion.v2dot0
+    await ic.Repository.create_async(storage, spec_version=2)
+    assert await ic.Repository.fetch_spec_version_async(storage) == 2
 
 
 @pytest.mark.asyncio
@@ -94,17 +94,17 @@ def test_exists_and_fetch_spec_version_with_storage_settings() -> None:
     settings = ic.StorageSettings()
 
     storage1 = ic.in_memory_storage()
-    ic.Repository.create(storage1, spec_version=SpecVersion.v1dot0)
+    ic.Repository.create(storage1, spec_version=1)
     assert ic.Repository.exists(storage1, storage_settings=settings)
     assert (
         ic.Repository.fetch_spec_version(storage1, storage_settings=settings)
-        == SpecVersion.v1dot0
+        == 1
     )
 
     storage2 = ic.in_memory_storage()
-    ic.Repository.create(storage2, spec_version=SpecVersion.v2dot0)
+    ic.Repository.create(storage2, spec_version=2)
     assert ic.Repository.exists(storage2, storage_settings=settings)
     assert (
         ic.Repository.fetch_spec_version(storage2, storage_settings=settings)
-        == SpecVersion.v2dot0
+        == 2
     )

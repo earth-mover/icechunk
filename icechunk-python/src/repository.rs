@@ -898,16 +898,16 @@ fn mk_update(
 )]
 #[derive(PartialEq, Default, Clone, PartialOrd, Debug)]
 pub enum PySpecVersion {
-    V1dot0 = 1u8,
+    V1 = 1u8,
     #[default]
-    V2dot0 = 2u8,
+    V2 = 2u8,
 }
 
 impl From<PySpecVersion> for SpecVersionBin {
     fn from(value: PySpecVersion) -> Self {
         match value {
-            PySpecVersion::V1dot0 => Self::V1dot0,
-            PySpecVersion::V2dot0 => Self::V2dot0,
+            PySpecVersion::V1 => Self::V1dot0,
+            PySpecVersion::V2 => Self::V2dot0,
         }
     }
 }
@@ -915,8 +915,8 @@ impl From<PySpecVersion> for SpecVersionBin {
 impl From<SpecVersionBin> for PySpecVersion {
     fn from(value: SpecVersionBin) -> Self {
         match value {
-            SpecVersionBin::V1dot0 => Self::V1dot0,
-            SpecVersionBin::V2dot0 => Self::V2dot0,
+            SpecVersionBin::V1dot0 => Self::V1,
+            SpecVersionBin::V2dot0 => Self::V2,
         }
     }
 }

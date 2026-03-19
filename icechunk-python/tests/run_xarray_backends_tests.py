@@ -40,7 +40,7 @@ from xarray.tests.test_backends import (
 class SpecVersionMixin:
     @pytest.fixture(
         autouse=True,
-        params=[SpecVersion.v1dot0, SpecVersion.v2dot0, None],
+        params=[1, 2, None],
         ids=["spec-v1", "spec-v2", "no-spec-version"],
     )
     def _spec_version(self, request: pytest.FixtureRequest) -> None:

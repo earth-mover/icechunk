@@ -536,7 +536,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @initialize(
         data=st.data(),
         target=branches,
-        spec_version=st.sampled_from([SpecVersion.v1dot0, SpecVersion.v2dot0]),
+        spec_version=st.sampled_from([1, 2]),
         # Both latencies are zero (~75%) or both non-zero (~25%)
         # to exercise the flushed_at vs created_at timing gap in GC.
         latency=st.one_of(
@@ -657,7 +657,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         self.model.upgrade(dry_run)
         if not dry_run:
-            assert self.repo.spec_version == SpecVersion.v2dot0
+            assert self.repo.spec_version == 2
 
     @rule(data=st.data())
     def reopen_repository(self, data: st.DataObject) -> None:

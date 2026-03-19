@@ -628,7 +628,7 @@ Arrays deleted:
     actual = next(iter([parent async for parent in repo.async_ancestry(tag="v1.0")]))
     assert actual == await repo.lookup_snapshot_async(actual.id)
 
-    if any_spec_version is None or any_spec_version != SpecVersion.v1dot0:
+    if any_spec_version is None or any_spec_version != 1:
         ops = [op.kind for op in repo.ops_log()]
         flush_or_commit = (
             [ic.UpdateType.NewCommit]
@@ -803,7 +803,7 @@ async def test_branch_expiration_async(any_spec_version: SpecVersion | int | Non
 
     for snap in (a, b):
         # In IC > 1 expired snapshot can no longer be reached
-        if any_spec_version is None or any_spec_version != SpecVersion.v1dot0:
+        if any_spec_version is None or any_spec_version != 1:
             with pytest.raises(ic.IcechunkError):
                 await repo.lookup_snapshot_async(snap)
         else:
@@ -871,7 +871,7 @@ def test_branch_expiration(any_spec_version: SpecVersion | int | None) -> None:
 
     for snap in (a, b):
         # In IC > 1 expired snapshot can no longer be reached
-        if any_spec_version is None or any_spec_version != SpecVersion.v1dot0:
+        if any_spec_version is None or any_spec_version != 1:
             with pytest.raises(ic.IcechunkError):
                 repo.lookup_snapshot(snap)
         else:
@@ -1001,7 +1001,7 @@ async def test_rewrite_manifests_async(any_spec_version: SpecVersion | int | Non
 
 @pytest.mark.parametrize(
     "spec_version",
-    [SpecVersion.v2dot0, None],
+    [2, None],
 )
 def test_amend(spec_version: SpecVersion | int | None) -> None:
     config = ic.RepositoryConfig.default()
@@ -1084,7 +1084,7 @@ Chunks updated:
 
 @pytest.mark.parametrize(
     "spec_version",
-    [SpecVersion.v2dot0, None],
+    [2, None],
 )
 async def test_long_ops_log(spec_version: SpecVersion | int | None) -> None:
     NUM_BRANCHES = 120

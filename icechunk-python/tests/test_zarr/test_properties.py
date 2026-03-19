@@ -32,7 +32,7 @@ def create(spec_version: SpecVersion | int | None) -> IcechunkStore:
 def icechunk_stores(
     draw: st.DrawFn,
     spec_version: st.SearchStrategy[SpecVersion | int | None] = st.sampled_from(
-        [None, SpecVersion.v1dot0, SpecVersion.v2dot0]
+        [None, 1, 2]
     ),
 ) -> IcechunkStore:
     return create(spec_version=draw(spec_version))
@@ -42,7 +42,7 @@ def icechunk_stores(
 @given(
     data=st.data(),
     nparray=numpy_arrays(),
-    spec_version=st.sampled_from([None, SpecVersion.v1dot0, SpecVersion.v2dot0]),
+    spec_version=st.sampled_from([None, 1, 2]),
 )
 def test_roundtrip(
     data: st.DataObject, nparray: Any, spec_version: SpecVersion | int | None
@@ -66,7 +66,7 @@ def test_roundtrip(
 @settings(report_multiple_bugs=True, deadline=None, max_examples=300)
 @given(
     data=st.data(),
-    spec_version=st.sampled_from([None, SpecVersion.v1dot0, SpecVersion.v2dot0]),
+    spec_version=st.sampled_from([None, 1, 2]),
 )
 def test_roundtrip_complex_chunk_grids(
     data: st.DataObject, spec_version: SpecVersion | int | None

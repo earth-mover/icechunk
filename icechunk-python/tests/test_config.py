@@ -275,7 +275,7 @@ def test_manifest_preload_magic_methods() -> None:
 
 
 def test_spec_version() -> None:
-    assert icechunk.spec_version() in (SpecVersion.v1dot0, SpecVersion.v2dot0)
+    assert icechunk.spec_version() in (1, 2)
 
 
 def test_config_from_store(any_spec_version: SpecVersion | int | None) -> None:

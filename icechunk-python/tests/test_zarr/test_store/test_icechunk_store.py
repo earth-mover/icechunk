@@ -52,7 +52,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         }
         return kwargs
 
-    @pytest.fixture(params=[SpecVersion.v1dot0, SpecVersion.v2dot0])
+    @pytest.fixture(params=[1, 2])
     async def store(
         self, request: pytest.FixtureRequest, store_kwargs: dict[str, Any]
     ) -> IcechunkStore:  # type: ignore[override, unused-ignore]
@@ -64,7 +64,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             session = repo.writable_session("main")
         return session.store
 
-    @pytest.fixture(params=[SpecVersion.v1dot0, SpecVersion.v2dot0])
+    @pytest.fixture(params=[1, 2])
     async def store_not_open(  # type: ignore[override, unused-ignore]
         self, request: pytest.FixtureRequest, store_kwargs: dict[str, Any]
     ) -> IcechunkStore:

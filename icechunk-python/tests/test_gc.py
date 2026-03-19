@@ -97,7 +97,7 @@ async def test_expire_and_gc(
         == 21
     )
     # V2 repos have a transaction log for the initial snapshot
-    expected_tx_logs = 23 if any_spec_version != SpecVersion.v1dot0 else 22
+    expected_tx_logs = 23 if any_spec_version != 1 else 22
     assert (
         len(
             client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/transactions")[
@@ -200,7 +200,7 @@ async def test_expire_and_gc(
         == 1
     )
     # V2 repos keep the initial snapshot's transaction log
-    expected_remaining_tx_logs = 2 if any_spec_version != SpecVersion.v1dot0 else 1
+    expected_remaining_tx_logs = 2 if any_spec_version != 1 else 1
     assert (
         len(
             client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/transactions")[
