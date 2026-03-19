@@ -4,9 +4,10 @@ import pytest
 
 import icechunk as ic
 import zarr
+from icechunk import SpecVersion
 
 
-def test_property_types(any_spec_version: int | None) -> None:
+def test_property_types(any_spec_version: SpecVersion | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
@@ -40,7 +41,7 @@ class NoJson:
     pass
 
 
-def test_invalid_property_types(any_spec_version: int | None) -> None:
+def test_invalid_property_types(any_spec_version: SpecVersion | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,

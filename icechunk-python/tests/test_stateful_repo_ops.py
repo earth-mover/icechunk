@@ -9,7 +9,7 @@ import textwrap
 from collections.abc import Iterator
 from dataclasses import dataclass, fields
 from functools import partial
-from typing import Any, Literal, Self, cast
+from typing import Any, Self, cast
 
 import numpy as np
 import pytest
@@ -45,6 +45,7 @@ from icechunk import (
     Repository,
     RepositoryConfig,
     SnapshotInfo,
+    SpecVersion,
     Storage,
 )
 from icechunk.testing import LatencyStorage
@@ -535,7 +536,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     @initialize(
         data=st.data(),
         target=branches,
-        spec_version=st.sampled_from([1, 2]),
+        spec_version=st.sampled_from([SpecVersion.v1dot0, SpecVersion.v2dot0]),
         # Both latencies are zero (~75%) or both non-zero (~25%)
         # to exercise the flushed_at vs created_at timing gap in GC.
         latency=st.one_of(
@@ -548,7 +549,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def initialize(
         self,
         data: st.DataObject,
-        spec_version: Literal[1, 2],
+        spec_version: SpecVersion,
         latency: tuple[int, int] = (0, 0),
     ) -> str:
         write_latency_ms, read_latency_ms = latency
@@ -562,8 +563,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         else:
             self.storage = inner
         config = data.draw(repository_configs(ic_module=self.ic))
-        self.model.initial_spec_version = spec_version
-        self.model.spec_version = spec_version
+        self.model.initial_spec_version = spec_version.value
+        self.model.spec_version = spec_version.value
 
         if Version(self.ic.__version__).major >= 2:
             self.repo = self.actor.create(
@@ -656,7 +657,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
 
         self.model.upgrade(dry_run)
         if not dry_run:
-            assert self.repo.spec_version == 2
+            assert self.repo.spec_version == SpecVersion.v2dot0
 
     @rule(data=st.data())
     def reopen_repository(self, data: st.DataObject) -> None:

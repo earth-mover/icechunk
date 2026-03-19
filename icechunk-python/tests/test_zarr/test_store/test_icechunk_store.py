@@ -8,7 +8,7 @@ from typing import Any, TypeVar
 import pytest
 
 import zarr
-from icechunk import IcechunkError, IcechunkStore, local_filesystem_storage
+from icechunk import IcechunkError, IcechunkStore, SpecVersion, local_filesystem_storage
 from icechunk.repository import Repository
 from zarr.abc.store import OffsetByteRequest, RangeByteRequest, Store, SuffixByteRequest
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
@@ -52,7 +52,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         }
         return kwargs
 
-    @pytest.fixture(params=[1, 2])
+    @pytest.fixture(params=[SpecVersion.v1dot0, SpecVersion.v2dot0])
     async def store(
         self, request: pytest.FixtureRequest, store_kwargs: dict[str, Any]
     ) -> IcechunkStore:  # type: ignore[override, unused-ignore]
@@ -64,7 +64,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             session = repo.writable_session("main")
         return session.store
 
-    @pytest.fixture(params=[1, 2])
+    @pytest.fixture(params=[SpecVersion.v1dot0, SpecVersion.v2dot0])
     async def store_not_open(  # type: ignore[override, unused-ignore]
         self, request: pytest.FixtureRequest, store_kwargs: dict[str, Any]
     ) -> IcechunkStore:

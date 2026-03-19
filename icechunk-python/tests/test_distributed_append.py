@@ -9,6 +9,7 @@ import dask
 import icechunk as ic
 import xarray as xr
 import zarr
+from icechunk import SpecVersion
 from icechunk.xarray import to_icechunk
 
 p = zarr.core.buffer.default_buffer_prototype()
@@ -21,7 +22,7 @@ IC_STORAGE = ic.local_filesystem_storage(
 )
 
 
-def do_test(scheduler: str, spec_version: int | None = None) -> None:
+def do_test(scheduler: str, spec_version: SpecVersion | None = None) -> None:
     # Writing the initial dataset
     if scheduler in ["processes", "sync"]:
         CHUNKX = 3
@@ -124,7 +125,9 @@ def do_test(scheduler: str, spec_version: int | None = None) -> None:
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_dask_distributed_appends(scheduler: str, any_spec_version: int | None) -> None:
+def test_dask_distributed_appends(
+    scheduler: str, any_spec_version: SpecVersion | None
+) -> None:
     do_test(scheduler, spec_version=any_spec_version)
 
 

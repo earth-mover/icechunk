@@ -17,6 +17,7 @@ from icechunk import (
     RepositoryConfig,
     RepoStatus,
     SessionMode,
+    SpecVersion,
     UpdateType,
     VirtualChunkContainer,
     VirtualChunkSpec,
@@ -31,7 +32,9 @@ from tests.conftest import Permission
 
 
 @pytest.mark.parametrize("use_async", [True, False])
-async def test_session_fork(use_async: bool, any_spec_version: int | None) -> None:
+async def test_session_fork(
+    use_async: bool, any_spec_version: SpecVersion | None
+) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Repository.create(
             local_filesystem_storage(tmpdir),
@@ -125,7 +128,7 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
     ids=["inline", "native"],
 )
 async def test_chunk_type(
-    inline_threshold: int, chunk_type: ChunkType, any_spec_version: int | None
+    inline_threshold: int, chunk_type: ChunkType, any_spec_version: SpecVersion | None
 ) -> None:
     config = RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = inline_threshold
@@ -191,7 +194,9 @@ def test_session_mode() -> None:
     assert readonly_snap.read_only
 
     # rearrange session (requires spec_version >= 2)
-    repo_v2 = Repository.create(storage=in_memory_storage(), spec_version=2)
+    repo_v2 = Repository.create(
+        storage=in_memory_storage(), spec_version=SpecVersion.v2dot0
+    )
     rearrange = repo_v2.rearrange_session("main")
     assert rearrange.mode == SessionMode.rearrange
     assert not rearrange.read_only
@@ -203,7 +208,7 @@ def test_session_mode() -> None:
     assert writable.mode == SessionMode.readonly  # type: ignore[comparison-overlap]
 
 
-def test_repository_open_no_list_bucket(any_spec_version: int | None) -> None:
+def test_repository_open_no_list_bucket(any_spec_version: SpecVersion | None) -> None:
     prefix = "test-repo__" + str(time.time())
     (access_key_id, secret_access_key) = Permission.MODIFY.keys()
     write_storage = s3_storage(
@@ -264,7 +269,7 @@ def test_repository_open_no_list_bucket(any_spec_version: int | None) -> None:
 
     assert len(list(repo.ancestry(branch="main"))) == 3
     assert len(list(repo.ancestry(branch="new_branch"))) == 2
-    if repo.spec_version == 1:
+    if repo.spec_version == SpecVersion.v1dot0:
         # This should fail for v1 spec, since listing branches and tags
         # try to list from the object store instead of reading from
         # repo_info like in a v2 repo
@@ -284,7 +289,7 @@ def test_repository_open_no_list_bucket(any_spec_version: int | None) -> None:
 def test_repo_status_readonly_blocks_writable_session() -> None:
     repo = Repository.create(
         storage=in_memory_storage(),
-        spec_version=2,
+        spec_version=SpecVersion.v2dot0,
     )
 
     session = repo.writable_session("main")
@@ -313,7 +318,7 @@ def test_repo_status_readonly_blocks_writable_session() -> None:
 def test_repo_status_readonly_change_during_writable_session() -> None:
     repo = Repository.create(
         storage=in_memory_storage(),
-        spec_version=2,
+        spec_version=SpecVersion.v2dot0,
     )
 
     session = repo.writable_session("main")
@@ -352,7 +357,7 @@ def test_repo_status_readonly_change_during_writable_session() -> None:
 def test_repo_status_readonly_blocks_rearrange_session() -> None:
     repo = Repository.create(
         storage=in_memory_storage(),
-        spec_version=2,
+        spec_version=SpecVersion.v2dot0,
     )
 
     session = repo.writable_session("main")
@@ -387,7 +392,7 @@ def test_repo_status_readonly_blocks_rearrange_session() -> None:
 def test_repo_status_change_migration() -> None:
     repo = Repository.create(
         storage=in_memory_storage(),
-        spec_version=1,
+        spec_version=SpecVersion.v1dot0,
     )
 
     session = repo.writable_session("main")
@@ -406,7 +411,7 @@ def test_repo_status_change_migration() -> None:
 def test_repo_status_readonly_change_during_rearrange_session() -> None:
     repo = Repository.create(
         storage=in_memory_storage(),
-        spec_version=2,
+        spec_version=SpecVersion.v2dot0,
     )
 
     session = repo.writable_session("main")
@@ -452,7 +457,7 @@ def test_repo_status_readonly_change_during_rearrange_session() -> None:
 async def test_repo_status_readonly_blocks_rearrange_session_async() -> None:
     repo = await Repository.create_async(
         storage=in_memory_storage(),
-        spec_version=2,
+        spec_version=SpecVersion.v2dot0,
     )
 
     session = await repo.writable_session_async("main")
@@ -510,7 +515,7 @@ async def test_repo_status_readonly_blocks_rearrange_session_async() -> None:
 async def test_repo_status_readonly_blocks_writable_session_async() -> None:
     repo = await Repository.create_async(
         storage=in_memory_storage(),
-        spec_version=2,
+        spec_version=SpecVersion.v2dot0,
     )
 
     session = await repo.writable_session_async("main")

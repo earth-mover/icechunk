@@ -6,10 +6,11 @@ import pytest
 
 import icechunk as ic
 import zarr
+from icechunk import SpecVersion
 from tests.conftest import Permission, get_minio_client
 
 
-def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
+def mk_repo(spec_version: SpecVersion | None) -> tuple[str, ic.Repository]:
     prefix = "test-repo__" + str(time.time())
     access_key_id, secret_access_key = Permission.MODIFY.keys()
     repo = ic.Repository.create(
@@ -31,7 +32,9 @@ def mk_repo(spec_version: int | None) -> tuple[str, ic.Repository]:
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 @pytest.mark.parametrize("use_async", [True, False])
-async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> None:
+async def test_expire_and_gc(
+    use_async: bool, any_spec_version: SpecVersion | None
+) -> None:
     prefix, repo = mk_repo(any_spec_version)
 
     session = repo.writable_session("main")
@@ -94,7 +97,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
         == 21
     )
     # V2 repos have a transaction log for the initial snapshot
-    expected_tx_logs = 23 if any_spec_version != 1 else 22
+    expected_tx_logs = 23 if any_spec_version != SpecVersion.v1dot0 else 22
     assert (
         len(
             client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/transactions")[
@@ -197,7 +200,7 @@ async def test_expire_and_gc(use_async: bool, any_spec_version: int | None) -> N
         == 1
     )
     # V2 repos keep the initial snapshot's transaction log
-    expected_remaining_tx_logs = 2 if any_spec_version != 1 else 1
+    expected_remaining_tx_logs = 2 if any_spec_version != SpecVersion.v1dot0 else 1
     assert (
         len(
             client.list_objects(Bucket="testbucket", Prefix=f"{prefix}/transactions")[

@@ -16,6 +16,7 @@ import zarr
 from icechunk import (
     IcechunkStore,
     Repository,
+    SpecVersion,
     local_filesystem_storage,
     s3_storage,
 )
@@ -39,7 +40,7 @@ from xarray.tests.test_backends import (
 class SpecVersionMixin:
     @pytest.fixture(
         autouse=True,
-        params=[1, 2, None],
+        params=[SpecVersion.v1dot0, SpecVersion.v2dot0, None],
         ids=["spec-v1", "spec-v2", "no-spec-version"],
     )
     def _spec_version(self, request: pytest.FixtureRequest) -> None:

@@ -1904,7 +1904,6 @@ class SpecVersion(Enum):
     v2dot0 = 2
 
     def __eq__(self, other: object): ...
-
     def __lt__(self, other: object): ...
 
 class PyRepository:

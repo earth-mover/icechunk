@@ -8,7 +8,7 @@ from typing import Any, Literal
 import numpy as np
 import pytest
 
-from icechunk import IcechunkStore
+from icechunk import IcechunkStore, SpecVersion
 from tests.conftest import parse_repo
 from zarr import Group, create_array
 from zarr.core.buffer import default_buffer_prototype
@@ -29,7 +29,7 @@ except ImportError:
 # @pytest.fixture(params=["local"])
 @pytest.fixture
 def store(
-    request: pytest.FixtureRequest, tmpdir: Path, any_spec_version: int | None
+    request: pytest.FixtureRequest, tmpdir: Path, any_spec_version: SpecVersion | None
 ) -> IcechunkStore:
     repo = parse_repo(
         "local",

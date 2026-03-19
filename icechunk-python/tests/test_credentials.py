@@ -10,6 +10,7 @@ from icechunk import (
     Repository,
     S3Options,
     S3StaticCredentials,
+    SpecVersion,
     Storage,
     s3_refreshable_credentials,
     s3_storage,
@@ -190,7 +191,7 @@ def test_s3_refreshable_credentials_refresh(
 def test_s3_refreshable_credentials_pickle_with_optimization(
     tmp_path: Path,
     scatter_initial_credentials: bool,
-    any_spec_version: int | None,
+    any_spec_version: SpecVersion | None,
 ) -> None:
     """Verifies pickled repos don't need to call get_credentials again if scatter_initial_credentials=True"""
     path = tmp_path / "calls.txt"

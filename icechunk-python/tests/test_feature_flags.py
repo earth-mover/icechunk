@@ -1,12 +1,13 @@
 import pytest
 
 import icechunk as ic
+from icechunk import SpecVersion
 
 
 def test_set_and_unset_flags_on_repo() -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
-        spec_version=2,
+        spec_version=SpecVersion.v2dot0,
     )
 
     # All flags should be present and enabled by default
@@ -75,7 +76,7 @@ def test_set_and_unset_flags_on_repo() -> None:
 async def test_set_and_unset_flags_on_repo_async() -> None:
     repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
-        spec_version=2,
+        spec_version=SpecVersion.v2dot0,
     )
 
     all_flags = await repo.feature_flags_async()
@@ -102,7 +103,7 @@ async def test_set_and_unset_flags_on_repo_async() -> None:
 def test_tag_ops_blocked_by_feature_flags() -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
-        spec_version=2,
+        spec_version=SpecVersion.v2dot0,
     )
 
     snap_id = repo.lookup_branch("main")
@@ -124,7 +125,7 @@ def test_tag_ops_blocked_by_feature_flags() -> None:
 async def test_tag_ops_blocked_by_feature_flags_async() -> None:
     repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
-        spec_version=2,
+        spec_version=SpecVersion.v2dot0,
     )
 
     snap_id = await repo.lookup_branch_async("main")

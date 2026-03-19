@@ -79,7 +79,9 @@ def write_chunks_to_minio(
 
 
 @pytest.fixture(
-    scope="function", params=[SpecVersion.v1dot0, SpecVersion.v2dot0, None], ids=["spec-v1", "spec-v2", "no-spec-version"]
+    scope="function",
+    params=[SpecVersion.v1dot0, SpecVersion.v2dot0, None],
+    ids=["spec-v1", "spec-v2", "no-spec-version"],
 )
 def any_spec_version(request: pytest.FixtureRequest) -> SpecVersion | None:
     return cast(SpecVersion | None, request.param)
