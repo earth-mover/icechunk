@@ -8,7 +8,7 @@ mod asset_manager;
 mod manifest;
 
 fn main() {
-    helpers::init_samply();
+    let _guard = helpers::init_tracing();
 
     manifest::manifest_benches();
     asset_manager::asset_manager_benches();

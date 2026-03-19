@@ -1,29 +1,80 @@
 // Shared helpers for benchmarks: storage setup, repo creation, chunk writing, toxiproxy.
 
-/// Wire up `tracing-samply` so that all `#[instrument]` spans appear as profiler
-/// markers in the samply UI. Silently no-ops when not running under samply or
-/// without `--features logs`.
+/// Initialize a tracing backend selected by the `ICECHUNK_TRACE` env var.
+///
+/// Supported values (case-insensitive):
+/// - `samply`  — wire up `tracing-samply` so `#[instrument]` spans appear as
+///               profiler markers in the samply UI.
+/// - `chrome`  — emit a Chrome trace JSON file (viewable in Perfetto UI or
+///               `chrome://tracing`). The file is written when the returned
+///               `FlushGuard` is dropped.
+///
+/// If unset or unrecognized, no tracing layer is installed.
 #[allow(dead_code)]
-pub(crate) fn init_samply() {
+pub(crate) fn init_tracing() -> Option<tracing_chrome::FlushGuard> {
+    #[cfg(not(feature = "logs"))]
+    {
+        if std::env::var("ICECHUNK_TRACE").is_ok() {
+            eprintln!("ICECHUNK_TRACE is set but the `logs` feature is not enabled");
+        }
+        return None;
+    }
+
     #[cfg(feature = "logs")]
     {
-        match tracing_samply::SamplyLayer::new() {
-            Ok(layer) => {
-                use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+        use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+        let trace_var = std::env::var("ICECHUNK_TRACE").unwrap_or_default();
+        match trace_var.to_lowercase().as_str() {
+            "samply" => {
+                match tracing_samply::SamplyLayer::new() {
+                    Ok(layer) => {
+                        match tracing_subscriber::Registry::default()
+                            .with(tracing_error::ErrorLayer::default())
+                            .with(layer)
+                            .try_init()
+                        {
+                            Ok(()) => eprintln!("tracing: samply layer installed"),
+                            Err(e) => eprintln!("tracing: samply try_init failed: {e}"),
+                        }
+                    }
+                    Err(e) => eprintln!("tracing: SamplyLayer::new() failed: {e}"),
+                }
+                None
+            }
+            "chrome" => {
+                let trace_file =
+                    std::env::current_dir().unwrap_or_default().join(format!(
+                        "trace-{}.json",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                    ));
+                let (chrome_layer, guard) =
+                    tracing_chrome::ChromeLayerBuilder::new().file(&trace_file).build();
                 match tracing_subscriber::Registry::default()
                     .with(tracing_error::ErrorLayer::default())
-                    .with(layer)
+                    .with(chrome_layer)
                     .try_init()
                 {
-                    Ok(()) => eprintln!("tracing-samply: layer installed"),
-                    Err(e) => eprintln!("tracing-samply: try_init failed: {e}"),
+                    Ok(()) => eprintln!(
+                        "tracing: chrome layer installed, will write to {}",
+                        trace_file.display()
+                    ),
+                    Err(e) => eprintln!("tracing: chrome try_init failed: {e}"),
                 }
+                Some(guard)
             }
-            Err(e) => eprintln!("tracing-samply: SamplyLayer::new() failed: {e}"),
+            "" => None,
+            other => {
+                eprintln!(
+                    "ICECHUNK_TRACE={other}: unrecognized value (expected `samply` or `chrome`)"
+                );
+                None
+            }
         }
     }
-    #[cfg(not(feature = "logs"))]
-    eprintln!("tracing-samply: logs feature not enabled");
 }
 
 use std::collections::HashMap;

@@ -57,9 +57,23 @@ just samply "commit_rebase_split_manifests/type/inline"
 
 will run that benchmark once and open up a profile in the Firefox Profiler.
 
-The `just samply` command automatically wires up `tracing-samply` so all
-`#[instrument]` annotations in the codebase appear as profiler markers in the
-samply UI.
+The `just samply` command sets `ICECHUNK_TRACE=samply` so all `#[instrument]`
+annotations in the codebase appear as profiler markers in the samply UI.
+
+## tracing-chrome / Perfetto
+
+Run a benchmark and emit a Chrome trace JSON file:
+
+``` sh
+just chrome-trace "commit_split_manifests/inline"
+```
+
+This sets `ICECHUNK_TRACE=chrome` and runs the benchmark once (`--test`). On exit, a `trace-{timestamp}.json` file is written to the current directory. Open it in:
+
+- https://ui.perfetto.dev/
+- `chrome://tracing`
+
+All `#[instrument]` spans in the codebase appear as trace events.
 
 ## [`cargo-instruments`](https://github.com/cmyr/cargo-instruments)
 

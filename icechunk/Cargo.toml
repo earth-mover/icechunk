@@ -107,6 +107,7 @@ uuid = { version = "1.22", features = ["v4"] }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 shuttle = { git = "https://github.com/awslabs/shuttle", branch = "main" }
 tracing-samply = "0.1.5"
+tracing-chrome = "0.7"
 
 [lints]
 workspace = true
