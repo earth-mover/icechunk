@@ -2,7 +2,6 @@ import pytest
 
 import icechunk as ic
 import zarr
-from icechunk import SpecVersion
 
 
 def test_create_repo_with_spec_version_2() -> None:
@@ -96,15 +95,9 @@ def test_exists_and_fetch_spec_version_with_storage_settings() -> None:
     storage1 = ic.in_memory_storage()
     ic.Repository.create(storage1, spec_version=1)
     assert ic.Repository.exists(storage1, storage_settings=settings)
-    assert (
-        ic.Repository.fetch_spec_version(storage1, storage_settings=settings)
-        == 1
-    )
+    assert ic.Repository.fetch_spec_version(storage1, storage_settings=settings) == 1
 
     storage2 = ic.in_memory_storage()
     ic.Repository.create(storage2, spec_version=2)
     assert ic.Repository.exists(storage2, storage_settings=settings)
-    assert (
-        ic.Repository.fetch_spec_version(storage2, storage_settings=settings)
-        == 2
-    )
+    assert ic.Repository.fetch_spec_version(storage2, storage_settings=settings) == 2

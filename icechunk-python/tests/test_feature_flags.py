@@ -1,7 +1,6 @@
 import pytest
 
 import icechunk as ic
-from icechunk import SpecVersion
 
 
 def test_set_and_unset_flags_on_repo() -> None:

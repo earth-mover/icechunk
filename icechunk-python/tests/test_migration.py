@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 import icechunk as ic
-from icechunk import SpecVersion
 
 
 def test_migration_1_to_2_dry_run(tmpdir: Path) -> None:

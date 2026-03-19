@@ -197,7 +197,9 @@ def test_manifest_overwrite_splitting_config_on_read(
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
 
-def test_manifest_splitting_sparse_regions(any_spec_version: SpecVersion | int | None) -> None:
+def test_manifest_splitting_sparse_regions(
+    any_spec_version: SpecVersion | int | None,
+) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {
             ManifestSplitCondition.name_matches("temperature"): {

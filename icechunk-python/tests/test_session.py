@@ -128,7 +128,9 @@ async def test_session_fork(
     ids=["inline", "native"],
 )
 async def test_chunk_type(
-    inline_threshold: int, chunk_type: ChunkType, any_spec_version: SpecVersion | int | None
+    inline_threshold: int,
+    chunk_type: ChunkType,
+    any_spec_version: SpecVersion | int | None,
 ) -> None:
     config = RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = inline_threshold
@@ -194,9 +196,7 @@ def test_session_mode() -> None:
     assert readonly_snap.read_only
 
     # rearrange session (requires spec_version >= 2)
-    repo_v2 = Repository.create(
-        storage=in_memory_storage(), spec_version=2
-    )
+    repo_v2 = Repository.create(storage=in_memory_storage(), spec_version=2)
     rearrange = repo_v2.rearrange_session("main")
     assert rearrange.mode == SessionMode.rearrange
     assert not rearrange.read_only
@@ -208,7 +208,9 @@ def test_session_mode() -> None:
     assert writable.mode == SessionMode.readonly  # type: ignore[comparison-overlap]
 
 
-def test_repository_open_no_list_bucket(any_spec_version: SpecVersion | int | None) -> None:
+def test_repository_open_no_list_bucket(
+    any_spec_version: SpecVersion | int | None,
+) -> None:
     prefix = "test-repo__" + str(time.time())
     (access_key_id, secret_access_key) = Permission.MODIFY.keys()
     write_storage = s3_storage(

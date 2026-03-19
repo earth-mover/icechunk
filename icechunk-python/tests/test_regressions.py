@@ -116,7 +116,9 @@ async def test_issue_418(any_spec_version: SpecVersion | int | None) -> None:
     assert (await store._store.get("time/c/2")) == b"thir"
 
 
-async def test_read_chunks_from_old_array(any_spec_version: SpecVersion | int | None) -> None:
+async def test_read_chunks_from_old_array(
+    any_spec_version: SpecVersion | int | None,
+) -> None:
     # This regression appeared during the change to manifest per array
     repo = Repository.create(
         storage=in_memory_storage(),

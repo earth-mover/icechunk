@@ -16,7 +16,6 @@ import zarr
 from icechunk import (
     IcechunkStore,
     Repository,
-    SpecVersion,
     local_filesystem_storage,
     s3_storage,
 )

@@ -63,7 +63,9 @@ def test_distributed(any_spec_version: SpecVersion | int | None) -> None:
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_dask_schedulers(scheduler: str, any_spec_version: SpecVersion | int | None) -> None:
+def test_dask_schedulers(
+    scheduler: str, any_spec_version: SpecVersion | int | None
+) -> None:
     with dask.config.set(scheduler=scheduler):
         ds = create_test_data().chunk(dim1=3, dim2=4)
         with roundtrip(

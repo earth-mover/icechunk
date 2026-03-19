@@ -11,7 +11,9 @@ from zarr.core.buffer import cpu, default_buffer_prototype
 rng = np.random.default_rng(seed=12345)
 
 
-async def test_store_clear_metadata_list(any_spec_version: SpecVersion | int | None) -> None:
+async def test_store_clear_metadata_list(
+    any_spec_version: SpecVersion | int | None,
+) -> None:
     repo = parse_repo("memory", "test", any_spec_version)
     session = repo.writable_session("main")
     store = session.store
@@ -55,7 +57,9 @@ async def test_store_clear_chunk_list(any_spec_version: SpecVersion | int | None
     assert len(keys) == 2 + 3, keys
 
 
-async def test_support_dimension_names_null(any_spec_version: SpecVersion | int | None) -> None:
+async def test_support_dimension_names_null(
+    any_spec_version: SpecVersion | int | None,
+) -> None:
     repo = parse_repo("memory", "test", any_spec_version)
     session = repo.writable_session("main")
     store = session.store
@@ -113,7 +117,9 @@ async def test_transaction(any_spec_version: SpecVersion | int | None) -> None:
     assert cid1 != cid2, "Transaction did not commit changes"
 
 
-async def test_transaction_failed_no_commit(any_spec_version: SpecVersion | int | None) -> None:
+async def test_transaction_failed_no_commit(
+    any_spec_version: SpecVersion | int | None,
+) -> None:
     repo = parse_repo("memory", "test", any_spec_version)
     cid1 = repo.lookup_branch("main")
     try:

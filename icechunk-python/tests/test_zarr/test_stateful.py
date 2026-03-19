@@ -177,13 +177,15 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
     @precondition(lambda self: not self.store.session.has_uncommitted_changes)
     @rule(data=st.data())
     def rewrite_manifests(self, data: st.DataObject) -> None:
-        sconfig = self.ic.ManifestSplittingConfig.from_dict({
-            self.ic.ManifestSplitCondition.AnyArray(): {
-                self.ic.ManifestSplitDimCondition.Any(): data.draw(
-                    st.integers(min_value=1, max_value=10)
-                )
+        sconfig = self.ic.ManifestSplittingConfig.from_dict(
+            {
+                self.ic.ManifestSplitCondition.AnyArray(): {
+                    self.ic.ManifestSplitDimCondition.Any(): data.draw(
+                        st.integers(min_value=1, max_value=10)
+                    )
+                }
             }
-        })
+        )
 
         config = self.ic.RepositoryConfig(
             inline_chunk_threshold_bytes=0,

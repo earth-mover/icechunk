@@ -151,7 +151,9 @@ def test_virtual_chunk_containers() -> None:
     assert config.virtual_chunk_containers["s3://testbucket/"] == container
 
 
-def test_can_change_deep_config_values(any_spec_version: SpecVersion | int | None) -> None:
+def test_can_change_deep_config_values(
+    any_spec_version: SpecVersion | int | None,
+) -> None:
     storage = icechunk.in_memory_storage()
     repo = icechunk.Repository.create(
         storage=storage,

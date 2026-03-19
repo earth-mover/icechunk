@@ -41,7 +41,9 @@ def parse_repo(
 
 @pytest.fixture(scope="function")
 def repo(
-    request: pytest.FixtureRequest, tmpdir: str, any_spec_version: SpecVersion | int | None
+    request: pytest.FixtureRequest,
+    tmpdir: str,
+    any_spec_version: SpecVersion | int | None,
 ) -> tuple[Repository, str]:
     param = request.param
     repo = parse_repo(param, tmpdir, spec_version=any_spec_version)

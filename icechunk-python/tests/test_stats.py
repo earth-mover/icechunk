@@ -36,7 +36,9 @@ def test_total_chunks_storage(any_spec_version: SpecVersion | int | None) -> Non
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_total_chunks_storage_async(any_spec_version: SpecVersion | int | None) -> None:
+async def test_total_chunks_storage_async(
+    any_spec_version: SpecVersion | int | None,
+) -> None:
     """Test the async version of total_chunks_storage"""
 
     repo = await ic.Repository.create_async(

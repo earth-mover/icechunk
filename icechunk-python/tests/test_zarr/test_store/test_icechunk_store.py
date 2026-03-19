@@ -8,7 +8,7 @@ from typing import Any, TypeVar
 import pytest
 
 import zarr
-from icechunk import IcechunkError, IcechunkStore, SpecVersion, local_filesystem_storage
+from icechunk import IcechunkError, IcechunkStore, local_filesystem_storage
 from icechunk.repository import Repository
 from zarr.abc.store import OffsetByteRequest, RangeByteRequest, Store, SuffixByteRequest
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
