@@ -882,7 +882,6 @@ impl Session {
     /// The helper function [`get_chunk`] manages the pattern matching of the result and returns
     /// the bytes.
     #[instrument(skip(self))]
-    #[allow(clippy::type_complexity)]
     pub async fn get_chunk_reader(
         &self,
         path: &Path,
