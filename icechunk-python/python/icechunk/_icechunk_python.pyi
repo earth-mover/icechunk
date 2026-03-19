@@ -9,6 +9,7 @@ from collections.abc import (
     Sequence,
 )
 from enum import Enum
+from functools import total_ordering
 from typing import Any, TypeAlias, final
 
 from icechunk.types import CommitMethod
@@ -1897,9 +1898,14 @@ class ManifestFileInfo:
         ...
 
 @final
+@total_ordering
 class SpecVersion(Enum):
     v1dot0 = 1
     v2dot0 = 2
+
+    def __eq__(self, other: object): ...
+
+    def __lt__(self, other: object): ...
 
 class PyRepository:
     @classmethod
