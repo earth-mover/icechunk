@@ -894,7 +894,8 @@ fn mk_update(
     ord,
     rename_all = "snake_case",
     skip_from_py_object,
-    name = "SpecVersion"
+    name = "SpecVersion",
+    frozen
 )]
 #[derive(PartialEq, Default, Clone, PartialOrd, Debug)]
 pub enum PySpecVersion {
@@ -906,17 +907,22 @@ pub enum PySpecVersion {
 impl<'py> FromPyObject<'_, 'py> for PySpecVersion {
     type Error = PyErr;
 
+    /// Custom implementation that allows passing an integer or PySpecVersion
     fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
         let value = if let Ok(v) = ob.extract::<u8>() {
             match v {
                 1 => PySpecVersion::V1,
                 2 => PySpecVersion::V2,
-                _ => todo!(), //Err(PyValueError::new_err("")),
+                v => {
+                    return Err(PyValueError::new_err(format!(
+                        "Unsupported version {v}"
+                    )));
+                }
             }
-        } else if let Ok(spec) = ob.extract::<PySpecVersion>() {
-            spec
+        } else if let Ok(spec) = ob.cast::<PySpecVersion>() {
+            spec.get().clone()
         } else {
-            todo!("throw error")
+            return Err(PyValueError::new_err("Couldn't parse a valid version"));
         };
 
         Ok(value)
@@ -937,6 +943,16 @@ impl From<SpecVersionBin> for PySpecVersion {
         match value {
             SpecVersionBin::V1dot0 => Self::V1,
             SpecVersionBin::V2dot0 => Self::V2,
+        }
+    }
+}
+
+#[pymethods]
+impl PySpecVersion {
+    pub(crate) fn __repr__(&self) -> String {
+        match self {
+            Self::V2 => "SpecVersion.v2 (current)".into(),
+            Self::V1 => "SpecVersion.v1".into(),
         }
     }
 }

@@ -305,6 +305,10 @@ def upgrade_icechunk_repository(
     return Repository(new_repo)
 
 
+def supported_spec_versions() -> list[SpecVersion]:
+    return [SpecVersion.v2, SpecVersion.v1]
+
+
 ManifestSplittingConfig.from_dict = staticmethod(from_dict)  # type: ignore[method-assign]
 ManifestSplittingConfig.to_dict = to_dict  # type: ignore[method-assign,assignment]
 
