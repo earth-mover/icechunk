@@ -1,3 +1,5 @@
+#![cfg(not(feature = "shuttle"))]
+#![allow(clippy::unwrap_used)]
 use chrono::Utc;
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;

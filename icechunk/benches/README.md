@@ -18,6 +18,13 @@ Settings for the default `bench` profile have been edited to include some, but n
 
 Upon completion, you can find HTML output in `target/criterion/`.
 
+## Environment variables
+
+- `ICECHUNK_BENCH_LATENCY_MS=<ms>` — Run benchmarks against S3 (MinIO) behind toxiproxy instead of in-memory storage. The value sets downstream latency in ms (e.g. `100`). The latency toxic is applied only during the timed `get_chunk` iterations, not during setup. Requires `docker compose up -d` to start MinIO and toxiproxy. Example:
+  ```sh
+  ICECHUNK_BENCH_LATENCY_MS=100 cargo bench --bench manifest -- get_chunks
+  ```
+
 # Profiling
 
 ## Concepts
