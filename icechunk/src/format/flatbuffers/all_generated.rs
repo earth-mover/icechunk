@@ -217,13 +217,13 @@ pub mod generated {
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
-    pub const ENUM_MAX_UPDATE_TYPE: u8 = 15;
+    pub const ENUM_MAX_UPDATE_TYPE: u8 = 16;
     #[deprecated(
         since = "2.0.0",
         note = "Use associated constants instead. This will no longer be generated in 2021."
     )]
     #[allow(non_camel_case_types)]
-    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 16] = [
+    pub const ENUM_VALUES_UPDATE_TYPE: [UpdateType; 17] = [
         UpdateType::NONE,
         UpdateType::RepoInitializedUpdate,
         UpdateType::RepoMigratedUpdate,
@@ -240,6 +240,7 @@ pub mod generated {
         UpdateType::GCRanUpdate,
         UpdateType::ExpirationRanUpdate,
         UpdateType::FeatureFlagChangedUpdate,
+        UpdateType::RepoStatusChangedUpdate,
     ];
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -263,9 +264,10 @@ pub mod generated {
         pub const GCRanUpdate: Self = Self(13);
         pub const ExpirationRanUpdate: Self = Self(14);
         pub const FeatureFlagChangedUpdate: Self = Self(15);
+        pub const RepoStatusChangedUpdate: Self = Self(16);
 
         pub const ENUM_MIN: u8 = 0;
-        pub const ENUM_MAX: u8 = 15;
+        pub const ENUM_MAX: u8 = 16;
         pub const ENUM_VALUES: &'static [Self] = &[
             Self::NONE,
             Self::RepoInitializedUpdate,
@@ -283,6 +285,7 @@ pub mod generated {
             Self::GCRanUpdate,
             Self::ExpirationRanUpdate,
             Self::FeatureFlagChangedUpdate,
+            Self::RepoStatusChangedUpdate,
         ];
         /// Returns the variant's name or "" if unknown.
         pub fn variant_name(self) -> Option<&'static str> {
@@ -303,6 +306,7 @@ pub mod generated {
                 Self::GCRanUpdate => Some("GCRanUpdate"),
                 Self::ExpirationRanUpdate => Some("ExpirationRanUpdate"),
                 Self::FeatureFlagChangedUpdate => Some("FeatureFlagChangedUpdate"),
+                Self::RepoStatusChangedUpdate => Some("RepoStatusChangedUpdate"),
                 _ => None,
             }
         }
@@ -2181,6 +2185,129 @@ pub mod generated {
             ds.finish()
         }
     }
+    pub enum DimensionShapeV2Offset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct DimensionShapeV2<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for DimensionShapeV2<'a> {
+        type Inner = DimensionShapeV2<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+        }
+    }
+
+    impl<'a> DimensionShapeV2<'a> {
+        pub const VT_ARRAY_LENGTH: flatbuffers::VOffsetT = 4;
+        pub const VT_NUM_CHUNKS: flatbuffers::VOffsetT = 6;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            DimensionShapeV2 { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args DimensionShapeV2Args,
+        ) -> flatbuffers::WIPOffset<DimensionShapeV2<'bldr>> {
+            let mut builder = DimensionShapeV2Builder::new(_fbb);
+            builder.add_array_length(args.array_length);
+            builder.add_num_chunks(args.num_chunks);
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn array_length(&self) -> u64 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<u64>(DimensionShapeV2::VT_ARRAY_LENGTH, Some(0)).unwrap()
+            }
+        }
+        #[inline]
+        pub fn num_chunks(&self) -> u32 {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<u32>(DimensionShapeV2::VT_NUM_CHUNKS, Some(0)).unwrap()
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for DimensionShapeV2<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<u64>("array_length", Self::VT_ARRAY_LENGTH, false)?
+                .visit_field::<u32>("num_chunks", Self::VT_NUM_CHUNKS, false)?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct DimensionShapeV2Args {
+        pub array_length: u64,
+        pub num_chunks: u32,
+    }
+    impl<'a> Default for DimensionShapeV2Args {
+        #[inline]
+        fn default() -> Self {
+            DimensionShapeV2Args { array_length: 0, num_chunks: 0 }
+        }
+    }
+
+    pub struct DimensionShapeV2Builder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> DimensionShapeV2Builder<'a, 'b, A> {
+        #[inline]
+        pub fn add_array_length(&mut self, array_length: u64) {
+            self.fbb_.push_slot::<u64>(
+                DimensionShapeV2::VT_ARRAY_LENGTH,
+                array_length,
+                0,
+            );
+        }
+        #[inline]
+        pub fn add_num_chunks(&mut self, num_chunks: u32) {
+            self.fbb_.push_slot::<u32>(DimensionShapeV2::VT_NUM_CHUNKS, num_chunks, 0);
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> DimensionShapeV2Builder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            DimensionShapeV2Builder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<DimensionShapeV2<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for DimensionShapeV2<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("DimensionShapeV2");
+            ds.field("array_length", &self.array_length());
+            ds.field("num_chunks", &self.num_chunks());
+            ds.finish()
+        }
+    }
     pub enum DimensionNameOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -2392,6 +2519,7 @@ pub mod generated {
         pub const VT_SHAPE: flatbuffers::VOffsetT = 4;
         pub const VT_DIMENSION_NAMES: flatbuffers::VOffsetT = 6;
         pub const VT_MANIFESTS: flatbuffers::VOffsetT = 8;
+        pub const VT_SHAPE_V2: flatbuffers::VOffsetT = 10;
 
         #[inline]
         pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -2408,6 +2536,9 @@ pub mod generated {
             args: &'args ArrayNodeDataArgs<'args>,
         ) -> flatbuffers::WIPOffset<ArrayNodeData<'bldr>> {
             let mut builder = ArrayNodeDataBuilder::new(_fbb);
+            if let Some(x) = args.shape_v2 {
+                builder.add_shape_v2(x);
+            }
             if let Some(x) = args.manifests {
                 builder.add_manifests(x);
             }
@@ -2463,6 +2594,24 @@ pub mod generated {
                     .unwrap()
             }
         }
+        #[inline]
+        pub fn shape_v2(
+            &self,
+        ) -> Option<
+            flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<DimensionShapeV2<'a>>>,
+        > {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<
+                    flatbuffers::Vector<
+                        'a,
+                        flatbuffers::ForwardsUOffset<DimensionShapeV2>,
+                    >,
+                >>(ArrayNodeData::VT_SHAPE_V2, None)
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for ArrayNodeData<'_> {
@@ -2476,6 +2625,7 @@ pub mod generated {
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, DimensionShape>>>("shape", Self::VT_SHAPE, true)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<DimensionName>>>>("dimension_names", Self::VT_DIMENSION_NAMES, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ManifestRef>>>>("manifests", Self::VT_MANIFESTS, true)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<DimensionShapeV2>>>>("shape_v2", Self::VT_SHAPE_V2, false)?
      .finish();
             Ok(())
         }
@@ -2493,6 +2643,14 @@ pub mod generated {
                 flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ManifestRef<'a>>>,
             >,
         >,
+        pub shape_v2: Option<
+            flatbuffers::WIPOffset<
+                flatbuffers::Vector<
+                    'a,
+                    flatbuffers::ForwardsUOffset<DimensionShapeV2<'a>>,
+                >,
+            >,
+        >,
     }
     impl<'a> Default for ArrayNodeDataArgs<'a> {
         #[inline]
@@ -2501,6 +2659,7 @@ pub mod generated {
                 shape: None, // required field
                 dimension_names: None,
                 manifests: None, // required field
+                shape_v2: None,
             }
         }
     }
@@ -2545,6 +2704,21 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_shape_v2(
+            &mut self,
+            shape_v2: flatbuffers::WIPOffset<
+                flatbuffers::Vector<
+                    'b,
+                    flatbuffers::ForwardsUOffset<DimensionShapeV2<'b>>,
+                >,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(
+                ArrayNodeData::VT_SHAPE_V2,
+                shape_v2,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> ArrayNodeDataBuilder<'a, 'b, A> {
@@ -2566,6 +2740,7 @@ pub mod generated {
             ds.field("shape", &self.shape());
             ds.field("dimension_names", &self.dimension_names());
             ds.field("manifests", &self.manifests());
+            ds.field("shape_v2", &self.shape_v2());
             ds.finish()
         }
     }
@@ -4771,6 +4946,121 @@ pub mod generated {
             ds.finish()
         }
     }
+    pub enum RepoStatusChangedUpdateOffset {}
+    #[derive(Copy, Clone, PartialEq)]
+
+    pub struct RepoStatusChangedUpdate<'a> {
+        pub _tab: flatbuffers::Table<'a>,
+    }
+
+    impl<'a> flatbuffers::Follow<'a> for RepoStatusChangedUpdate<'a> {
+        type Inner = RepoStatusChangedUpdate<'a>;
+        #[inline]
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+        }
+    }
+
+    impl<'a> RepoStatusChangedUpdate<'a> {
+        pub const VT_STATUS: flatbuffers::VOffsetT = 4;
+
+        #[inline]
+        pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+            RepoStatusChangedUpdate { _tab: table }
+        }
+        #[allow(unused_mut)]
+        pub fn create<
+            'bldr: 'args,
+            'args: 'mut_bldr,
+            'mut_bldr,
+            A: flatbuffers::Allocator + 'bldr,
+        >(
+            _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+            args: &'args RepoStatusChangedUpdateArgs<'args>,
+        ) -> flatbuffers::WIPOffset<RepoStatusChangedUpdate<'bldr>> {
+            let mut builder = RepoStatusChangedUpdateBuilder::new(_fbb);
+            if let Some(x) = args.status {
+                builder.add_status(x);
+            }
+            builder.finish()
+        }
+
+        #[inline]
+        pub fn status(&self) -> Option<RepoStatus<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<flatbuffers::ForwardsUOffset<RepoStatus>>(
+                    RepoStatusChangedUpdate::VT_STATUS,
+                    None,
+                )
+            }
+        }
+    }
+
+    impl flatbuffers::Verifiable for RepoStatusChangedUpdate<'_> {
+        #[inline]
+        fn run_verifier(
+            v: &mut flatbuffers::Verifier,
+            pos: usize,
+        ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+            use self::flatbuffers::Verifiable;
+            v.visit_table(pos)?
+                .visit_field::<flatbuffers::ForwardsUOffset<RepoStatus>>(
+                    "status",
+                    Self::VT_STATUS,
+                    false,
+                )?
+                .finish();
+            Ok(())
+        }
+    }
+    pub struct RepoStatusChangedUpdateArgs<'a> {
+        pub status: Option<flatbuffers::WIPOffset<RepoStatus<'a>>>,
+    }
+    impl<'a> Default for RepoStatusChangedUpdateArgs<'a> {
+        #[inline]
+        fn default() -> Self {
+            RepoStatusChangedUpdateArgs { status: None }
+        }
+    }
+
+    pub struct RepoStatusChangedUpdateBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+        fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+    }
+    impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a>
+        RepoStatusChangedUpdateBuilder<'a, 'b, A>
+    {
+        #[inline]
+        pub fn add_status(&mut self, status: flatbuffers::WIPOffset<RepoStatus<'b>>) {
+            self.fbb_.push_slot_always::<flatbuffers::WIPOffset<RepoStatus>>(
+                RepoStatusChangedUpdate::VT_STATUS,
+                status,
+            );
+        }
+        #[inline]
+        pub fn new(
+            _fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+        ) -> RepoStatusChangedUpdateBuilder<'a, 'b, A> {
+            let start = _fbb.start_table();
+            RepoStatusChangedUpdateBuilder { fbb_: _fbb, start_: start }
+        }
+        #[inline]
+        pub fn finish(self) -> flatbuffers::WIPOffset<RepoStatusChangedUpdate<'a>> {
+            let o = self.fbb_.end_table(self.start_);
+            flatbuffers::WIPOffset::new(o.value())
+        }
+    }
+
+    impl core::fmt::Debug for RepoStatusChangedUpdate<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let mut ds = f.debug_struct("RepoStatusChangedUpdate");
+            ds.field("status", &self.status());
+            ds.finish()
+        }
+    }
     pub enum ConfigChangedUpdateOffset {}
     #[derive(Copy, Clone, PartialEq)]
 
@@ -6704,6 +6994,22 @@ pub mod generated {
                 None
             }
         }
+
+        #[inline]
+        #[allow(non_snake_case)]
+        pub fn update_type_as_repo_status_changed_update(
+            &self,
+        ) -> Option<RepoStatusChangedUpdate<'a>> {
+            if self.update_type_type() == UpdateType::RepoStatusChangedUpdate {
+                let u = self.update_type();
+                // Safety:
+                // Created from a valid Table for this object
+                // Which contains a valid union in this slot
+                Some(unsafe { RepoStatusChangedUpdate::init_from_table(u) })
+            } else {
+                None
+            }
+        }
     }
 
     impl flatbuffers::Verifiable for Update<'_> {
@@ -6731,6 +7037,7 @@ pub mod generated {
           UpdateType::GCRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<GCRanUpdate>>("UpdateType::GCRanUpdate", pos),
           UpdateType::ExpirationRanUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ExpirationRanUpdate>>("UpdateType::ExpirationRanUpdate", pos),
           UpdateType::FeatureFlagChangedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<FeatureFlagChangedUpdate>>("UpdateType::FeatureFlagChangedUpdate", pos),
+          UpdateType::RepoStatusChangedUpdate => v.verify_union_variant::<flatbuffers::ForwardsUOffset<RepoStatusChangedUpdate>>("UpdateType::RepoStatusChangedUpdate", pos),
           _ => Ok(()),
         }
      })?
@@ -6912,6 +7219,13 @@ pub mod generated {
                 }
                 UpdateType::FeatureFlagChangedUpdate => {
                     if let Some(x) = self.update_type_as_feature_flag_changed_update() {
+                        ds.field("update_type", &x)
+                    } else {
+                        ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")
+                    }
+                }
+                UpdateType::RepoStatusChangedUpdate => {
+                    if let Some(x) = self.update_type_as_repo_status_changed_update() {
                         ds.field("update_type", &x)
                     } else {
                         ds.field("update_type", &"InvalidFlatbuffer: Union discriminant does not match value.")

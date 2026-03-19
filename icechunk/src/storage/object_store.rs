@@ -389,15 +389,48 @@ impl Storage for ObjectStorage {
         _content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
-        // FIXME: add support for content type, version check and metadata
         let from = self.prefixed_path(from);
         let to = self.prefixed_path(to);
-        match self.get_client(settings).await.copy(&from, &to).await {
-            Ok(_) => Ok(VersionedUpdateResult::Updated { new_version: version.clone() }),
-            Err(object_store::Error::NotFound { .. }) => {
-                Err(StorageErrorKind::ObjectNotFound.into())
+
+        if settings.unsafe_use_conditional_update() && version.etag().is_some() {
+            // object_store has no conditional copy, so we do a conditional GET
+            // (verifying the source etag) followed by a PUT.
+            let opts = GetOptions {
+                if_match: version.etag().map(|e| strip_quotes(e).into()),
+                ..Default::default()
+            };
+            let result = self.get_client(settings).await.get_opts(&from, opts).await;
+            match result {
+                Ok(result) => {
+                    let bytes = result
+                        .bytes()
+                        .await
+                        .map_err(|e| -> StorageError { Box::new(e).into() })?;
+                    self.get_client(settings)
+                        .await
+                        .put(&to, bytes.into())
+                        .await
+                        .map_err(|e| -> StorageError { Box::new(e).into() })?;
+                    Ok(VersionedUpdateResult::Updated { new_version: version.clone() })
+                }
+                Err(object_store::Error::Precondition { .. }) => {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
+                }
+                Err(object_store::Error::NotFound { .. }) => {
+                    Err(StorageErrorKind::ObjectNotFound.into())
+                }
+                Err(err) => Err(Box::new(err).into()),
             }
-            Err(err) => Err(Box::new(err).into()),
+        } else {
+            match self.get_client(settings).await.copy(&from, &to).await {
+                Ok(_) => {
+                    Ok(VersionedUpdateResult::Updated { new_version: version.clone() })
+                }
+                Err(object_store::Error::NotFound { .. }) => {
+                    Err(StorageErrorKind::ObjectNotFound.into())
+                }
+                Err(err) => Err(Box::new(err).into()),
+            }
         }
     }
 

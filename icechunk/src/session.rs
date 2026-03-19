@@ -56,7 +56,7 @@ use crate::{
         },
         transaction_log::{Diff, DiffBuilder, TransactionLog},
     },
-    refs::{RefError, RefErrorKind, fetch_branch_tip, update_branch},
+    refs::{RefError, RefErrorKind, fetch_branch_tip_v1, update_branch},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     storage::{self, StorageErrorKind},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
@@ -882,7 +882,6 @@ impl Session {
     /// The helper function [`get_chunk`] manages the pattern matching of the result and returns
     /// the bytes.
     #[instrument(skip(self))]
-    #[allow(clippy::type_complexity)]
     pub async fn get_chunk_reader(
         &self,
         path: &Path,
@@ -1538,7 +1537,7 @@ impl Session {
         &self,
         branch_name: &str,
     ) -> SessionResult<Vec<SnapshotId>> {
-        let ref_data = match fetch_branch_tip(
+        let ref_data = match fetch_branch_tip_v1(
             self.storage.as_ref(),
             self.storage_settings.as_ref(),
             branch_name,
@@ -2965,6 +2964,7 @@ mod tests {
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
     use test_strategy::proptest;
+    #[cfg(not(feature = "shuttle"))]
     use tokio::sync::Barrier;
 
     use crate::test_utils::spec_version_cases;
@@ -3034,7 +3034,7 @@ mod tests {
     #[proptest(async = "tokio")]
     async fn test_add_delete_array(
         #[strategy(node_paths())] path: Path,
-        #[strategy(shapes_and_dims(None))] metadata: ShapeDim,
+        #[strategy(shapes_and_dims(None, None))] metadata: ShapeDim,
         #[strategy(empty_writable_session())] mut session: Session,
     ) {
         // new array must always succeed
@@ -3089,7 +3089,7 @@ mod tests {
     #[proptest(async = "tokio")]
     async fn test_add_array_group_clash(
         #[strategy(node_paths())] path: Path,
-        #[strategy(shapes_and_dims(None))] metadata: ShapeDim,
+        #[strategy(shapes_and_dims(None, None))] metadata: ShapeDim,
         #[strategy(empty_writable_session())] mut session: Session,
     ) {
         // adding a group at an existing array node must fail
@@ -3290,7 +3290,7 @@ mod tests {
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
 
         let array_path: Path = "/array".to_string().try_into().unwrap();
-        let shape = ArrayShape::new(vec![(4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let array_def = Bytes::from_static(br#"{"this":"other array"}"#);
 
@@ -3322,7 +3322,7 @@ mod tests {
         // first, delete any out of bounds chunks
         session.set_chunk_ref(array_path.clone(), ChunkIndices(vec![2]), None).await?;
         // second, update metadata
-        let shape2 = ArrayShape::new(vec![(2, 1)]).unwrap();
+        let shape2 = ArrayShape::new(vec![(2, 2)]).unwrap();
         session
             .update_array(
                 &array_path,
@@ -3429,7 +3429,7 @@ mod tests {
         let manifest_id = manifest.id();
         let manifest_size = asset_manager.write_manifest(Arc::clone(&manifest)).await?;
 
-        let shape = ArrayShape::new(vec![(2, 1), (2, 1), (2, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(2, 2), (2, 2), (2, 2)]).unwrap();
         let dimension_names = Some(vec!["x".into(), "y".into(), "t".into()]);
 
         let manifest_ref = ManifestRef {
@@ -3532,7 +3532,7 @@ mod tests {
         ds.add_group("/group".try_into().unwrap(), Bytes::copy_from_slice(b"somedef2"))
             .await?;
 
-        let shape2 = ArrayShape::new(vec![(2, 2)]).unwrap();
+        let shape2 = ArrayShape::new(vec![(2, 1)]).unwrap();
         let dimension_names2 = Some(vec!["t".into()]);
 
         let array_def2 = Bytes::from_static(br#"{"this":"other array"}"#);
@@ -3569,7 +3569,7 @@ mod tests {
         ));
 
         // update the array definition
-        let shape3 = ArrayShape::new(vec![(4, 3)]).unwrap();
+        let shape3 = ArrayShape::new(vec![(4, 2)]).unwrap();
         let dimension_names3 = Some(vec!["tt".into()]);
 
         let array_def3 = Bytes::from_static(br#"{"this":"yet other array"}"#);
@@ -3635,7 +3635,7 @@ mod tests {
 
         // reduce size of dimension
         // // update old array zarr metadata and check it
-        let shape4 = ArrayShape::new(vec![(6, 3)]).unwrap();
+        let shape4 = ArrayShape::new(vec![(6, 2)]).unwrap();
         let array_def3 = Bytes::from_static(br#"{"this":"more arrays"}"#);
         ds.update_array(
             &new_array_path.clone(),
@@ -3751,7 +3751,7 @@ mod tests {
               if path == "/group".try_into().unwrap() && user_data2 == actual_user_data && node_data == NodeData::Group
         ));
 
-        let shape = ArrayShape::new([(1, 1), (1, 1), (2, 1)]).unwrap();
+        let shape = ArrayShape::new([(1, 1), (1, 1), (2, 2)]).unwrap();
         let dimension_names = Some(vec!["x".into(), "y".into(), "z".into()]);
         let array_user_data = Bytes::copy_from_slice(b"array");
 
@@ -4159,7 +4159,7 @@ mod tests {
         // add a new array and retrieve its node
         ds.add_group(Path::root(), def.clone()).await?;
 
-        let shape = ArrayShape::new(vec![(4, 2), (2, 1), (4, 2)]).unwrap();
+        let shape = ArrayShape::new(vec![(4, 2), (2, 2), (4, 2)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
 
         let new_array_path: Path = "/array".try_into().unwrap();
@@ -4253,7 +4253,7 @@ mod tests {
         let mut ds = repo.writable_session("main").await?;
         let def = Bytes::copy_from_slice(b"");
 
-        let shape = ArrayShape::new(vec![(5, 2), (5, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(5, 3), (5, 5)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
 
         ds.add_group(Path::root(), def.clone()).await?;
@@ -4471,7 +4471,7 @@ mod tests {
                         if path == Path::root()  && node_data == NodeData::Group
         ));
 
-        let shape = ArrayShape::new(vec![(1, 1), (2, 1), (4, 2)]).unwrap();
+        let shape = ArrayShape::new(vec![(1, 1), (2, 2), (4, 2)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
 
         let new_array_path: Path = "/array1".try_into().unwrap();
@@ -4929,7 +4929,7 @@ mod tests {
         .await?;
         let mut session = repo.writable_session("main").await?;
 
-        let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
+        let shape = ArrayShape::new(vec![(5, 3), (5, 3)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;
         session.add_group(Path::new("/foo/old").unwrap(), Bytes::new()).await?;
         let apath: Path = "/foo/old/array".try_into()?;
@@ -4995,7 +4995,7 @@ mod tests {
         .await?;
         let mut session = repo.writable_session("main").await?;
 
-        let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
+        let shape = ArrayShape::new(vec![(5, 3), (5, 3)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;
         let apath: Path = "/foo/old/array".try_into()?;
         session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
@@ -5035,7 +5035,7 @@ mod tests {
         .await?;
         let mut ds = repo.writable_session("main").await?;
 
-        let shape = ArrayShape::new(vec![(5, 2), (5, 2)]).unwrap();
+        let shape = ArrayShape::new(vec![(5, 3), (5, 3)]).unwrap();
         ds.add_group(Path::root(), Bytes::new()).await?;
 
         let apath: Path = "/array1".try_into()?;
@@ -5105,7 +5105,7 @@ mod tests {
         )
         .await?;
         let mut session = repo.writable_session("main").await?;
-        let shape = ArrayShape::new(vec![(20, 2)]).unwrap();
+        let shape = ArrayShape::new(vec![(20, 10)]).unwrap();
         session.add_group(Path::root(), Bytes::new()).await?;
         let apath: Path = "/array".try_into()?;
         session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
@@ -5232,7 +5232,7 @@ mod tests {
     }
 
     fn basic_shape() -> ArrayShape {
-        ArrayShape::new(vec![(5, 1)]).unwrap()
+        ArrayShape::new(vec![(5, 5)]).unwrap()
     }
 
     fn user_data() -> Bytes {
@@ -5934,7 +5934,7 @@ mod tests {
         let mut ds1 = repo.writable_session("main").await?;
         ds1.update_array(
             &path,
-            ArrayShape::new(vec![(20, 1)]).unwrap(),
+            ArrayShape::new(vec![(20, 20)]).unwrap(),
             None,
             Bytes::new(),
         )
@@ -6286,7 +6286,7 @@ mod tests {
                 prop_oneof![
                     (
                         node_paths(),
-                        shapes_and_dims(None),
+                        shapes_and_dims(None, None),
                         proptest::collection::vec(any::<u8>(), 0..=100)
                     )
                         .prop_map(|(a, shape, user_data)| {
@@ -6299,7 +6299,7 @@ mod tests {
                         }),
                     (
                         node_paths(),
-                        shapes_and_dims(None),
+                        shapes_and_dims(None, None),
                         proptest::collection::vec(any::<u8>(), 0..=100)
                     )
                         .prop_map(|(a, shape, user_data)| {

@@ -1,5 +1,13 @@
 [graph]
 all-features = true
+# shuttle crates are only used for concurrency testing and lack license metadata.
+exclude = [
+  "shuttle",
+  "shuttle-tokio",
+  "shuttle-tokio-impl",
+  "shuttle-tokio-impl-inner",
+  "shuttle-tokio-macros-impl",
+]
 
 [advisories]
 version = 2

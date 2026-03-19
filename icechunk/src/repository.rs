@@ -46,7 +46,7 @@ use crate::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
         format_constants::SpecVersionBin,
-        repo_info::{RepoInfo, UpdateType},
+        repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateType},
         snapshot::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
@@ -137,6 +137,8 @@ pub enum RepositoryErrorKind {
     CannotDeleteMain,
     #[error("the storage used by this Icechunk repository is read-only: {0}")]
     ReadonlyStorage(String),
+    #[error("the repository status is read-only: {0}")]
+    ReadonlyRepository(String),
     #[error(
         "the first commit in the repository cannot be an amend, create a new commit instead"
     )]
@@ -332,6 +334,8 @@ impl Repository {
             }
             .in_current_span();
 
+            // Note that for V1 repos we don't actually create a repo info file despite the name here.
+            // We are (writing the snap; then updating the branch pointer) & writing config.yaml concurrently.
             let (_, config_version) = try_join!(create_repo_info, update_config)?;
             config_version
         };
@@ -515,7 +519,7 @@ impl Repository {
         let storage_c = Arc::clone(&storage);
         let settings_c = settings.clone();
         let is_v1 = async move {
-            match refs::fetch_branch_tip(
+            match refs::fetch_branch_tip_v1(
                 storage_c.as_ref(),
                 &settings_c,
                 Ref::DEFAULT_BRANCH,
@@ -743,6 +747,48 @@ impl Repository {
             .asset_manager
             .update_repo_info(self.config.repo_update_retries().retries(), do_update)
             .await?;
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn get_status(&self) -> RepositoryResult<RepoStatus> {
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        let (repo, _) = self.asset_manager().fetch_repo_info().await?;
+        Ok(repo.status()?)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn set_status(&self, status: &RepoStatus) -> RepositoryResult<()> {
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        if !self.storage.can_write().await? {
+            return Err(RepositoryErrorKind::ReadonlyStorage(
+                "Cannot set status".to_string(),
+            )
+            .into());
+        }
+
+        let num_updates = self.config().num_updates_per_repo_info_file();
+        let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            Ok(Arc::new(repo_info.set_status(
+                self.spec_version(),
+                status,
+                backup_path,
+                num_updates,
+            )?))
+        };
+
+        // This is the only place where this method should be called,
+        // because otherwise we wouldn't be able to change the repo
+        // status.
+        unsafe {
+            let _ = self
+                .asset_manager
+                .update_repo_info_unchecked(
+                    self.config.repo_update_retries().retries(),
+                    do_update,
+                )
+                .await?;
+        }
         Ok(())
     }
 
@@ -1112,9 +1158,12 @@ impl Repository {
     /// Get the snapshot id of the tip of a branch
     #[instrument(skip(self))]
     async fn lookup_branch_v1(&self, branch: &str) -> RepositoryResult<SnapshotId> {
-        let branch_version =
-            refs::fetch_branch_tip(self.storage.as_ref(), &self.storage_settings, branch)
-                .await?;
+        let branch_version = refs::fetch_branch_tip_v1(
+            self.storage.as_ref(),
+            &self.storage_settings,
+            branch,
+        )
+        .await?;
         Ok(branch_version.snapshot)
     }
 
@@ -1546,7 +1595,7 @@ impl Repository {
                 Ok(ref_data.snapshot)
             }
             RefVersionInfo::BranchTipRef(branch) => {
-                let ref_data = refs::fetch_branch_tip(
+                let ref_data = refs::fetch_branch_tip_v1(
                     self.storage.as_ref(),
                     &self.storage_settings,
                     branch,
@@ -1774,6 +1823,20 @@ impl Repository {
         Ok(session)
     }
 
+    async fn fail_unless_online_status(&self, error_msg: &str) -> RepositoryResult<()> {
+        if self.spec_version() >= SpecVersionBin::V2dot0 {
+            let status = self.get_status().await?;
+            if status.availability != RepoAvailability::Online {
+                return Err(RepositoryErrorKind::ReadonlyRepository(format!(
+                    "{error_msg}; {0}",
+                    status.error_msg()
+                ))
+                .into());
+            }
+        }
+        Ok(())
+    }
+
     #[instrument(skip(self))]
     pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
         if !self.storage.can_write().await? {
@@ -1782,6 +1845,9 @@ impl Repository {
             )
             .into());
         }
+
+        self.fail_unless_online_status("Cannot create writable session").await?;
+
         let snapshot_id = self.lookup_branch(branch).await?;
 
         let session = Session::create_writable_session(
@@ -1808,8 +1874,11 @@ impl Repository {
             )
             .into());
         }
+
         // this feature is only available in IC2
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+
+        self.fail_unless_online_status("Cannot create rearrange session").await?;
 
         let (ri, _) = self.asset_manager().fetch_repo_info().await?;
         let snapshot_id = self.lookup_branch_v2(branch, Some(&ri)).await?;
@@ -2357,7 +2426,7 @@ mod tests {
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
 
         let array_path: Path = "/array".to_string().try_into().unwrap();
-        let shape = ArrayShape::new(vec![(4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let array_def = Bytes::from_static(br#"{"this":"other array"}"#);
 
@@ -2384,7 +2453,7 @@ mod tests {
         // Note we are still rewriting the manifest even without chunk changes
         // GH604
         let mut session = repo.writable_session("main").await?;
-        let shape2 = ArrayShape::new(vec![(2, 1)]).unwrap();
+        let shape2 = ArrayShape::new(vec![(2, 2)]).unwrap();
         session
             .update_array(
                 &array_path,
@@ -2399,7 +2468,7 @@ mod tests {
         // Now we expand the size, but don't write chunks.
         // No new manifests need to be written
         let mut session = repo.writable_session("main").await?;
-        let shape3 = ArrayShape::new(vec![(6, 1)]).unwrap();
+        let shape3 = ArrayShape::new(vec![(6, 6)]).unwrap();
         session
             .update_array(
                 &array_path,
@@ -2419,7 +2488,7 @@ mod tests {
     async fn test_splits_change_in_session(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
-        let shape = ArrayShape::new(vec![(13, 1), (2, 1), (1, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(13, 13), (2, 2), (1, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "y".into(), "x".into()]);
         let new_dimension_names = Some(vec!["time".into(), "y".into(), "x".into()]);
         let array_path: Path = "/temperature".try_into().unwrap();
@@ -2529,7 +2598,7 @@ mod tests {
         let split_size = 3u32;
         let dim_size = 10u32;
 
-        let shape = ArrayShape::new(vec![(dim_size as u64, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(dim_size as u64, dim_size)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
         let split_config = ManifestSplittingConfig::with_size(split_size);
@@ -2669,12 +2738,10 @@ mod tests {
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let dim_size = 25u32;
-        let chunk_size = 1u32;
         let split_size = 3u32;
 
         let shape =
-            ArrayShape::new(vec![(dim_size.into(), chunk_size.into()), (2, 1), (1, 1)])
-                .unwrap();
+            ArrayShape::new(vec![(dim_size.into(), dim_size), (2, 2), (1, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
         let split_config = ManifestSplittingConfig::with_size(split_size);
@@ -2876,7 +2943,7 @@ mod tests {
 
     #[tokio_test]
     async fn test_manifest_splitting_complex_config() -> Result<(), Box<dyn Error>> {
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(25, 25), (10, 10), (3, 3), (4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
@@ -2948,7 +3015,7 @@ mod tests {
         let other_split_size = 9u32;
         let y_split_size = 2u32;
 
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(25, 25), (10, 10), (3, 3), (4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
@@ -3196,7 +3263,7 @@ mod tests {
     async fn test_manifest_splits_merge_sessions(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(25, 25), (10, 10), (3, 3), (4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
@@ -3364,7 +3431,7 @@ mod tests {
     async fn test_commits_with_conflicting_manifest_splits(
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
-        let shape = ArrayShape::new(vec![(25, 1), (10, 1), (3, 1), (4, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(25, 25), (10, 10), (3, 3), (4, 4)]).unwrap();
         let dimension_names = Some(vec!["t".into(), "z".into(), "y".into(), "x".into()]);
         let temp_path: Path = "/temperature".try_into().unwrap();
 
@@ -3501,7 +3568,7 @@ mod tests {
         let def = Bytes::from_static(br#"{"this":"array"}"#);
         session.add_group(Path::root(), def.clone()).await?;
 
-        let shape = ArrayShape::new(vec![(1_000, 1), (1, 1), (1, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(1_000, 1_000), (1, 1), (1, 1)]).unwrap();
         let dimension_names = Some(vec!["t".into()]);
 
         let time_path: Path = "/time".try_into().unwrap();
@@ -3894,7 +3961,7 @@ mod tests {
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
 
         let array_path: Path = "/array".to_string().try_into().unwrap();
-        let shape = ArrayShape::new(vec![(10, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(10, 10)]).unwrap();
         session
             .add_array(
                 array_path.clone(),

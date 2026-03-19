@@ -265,6 +265,11 @@ impl VirtualChunkLocation {
         self.0.as_str()
     }
 
+    /// Wrap a pre-validated location string without re-parsing.
+    fn from_trusted(s: String) -> Self {
+        VirtualChunkLocation(s)
+    }
+
     /// Returns true if this is a relative `vcc://` location.
     pub fn is_relative(&self) -> bool {
         self.0.starts_with(VCC_RELATIVE_URL_SCHEME)
@@ -288,14 +293,19 @@ impl VirtualChunkLocation {
             )
             .into());
         }
-        let path: String = relative_path
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join("/");
-        Ok(VirtualChunkLocation(format!(
-            "{VCC_RELATIVE_URL_SCHEME}{container_name}/{path}"
-        )))
+        let mut result = String::with_capacity(
+            VCC_RELATIVE_URL_SCHEME.len()
+                + container_name.len()
+                + 1
+                + relative_path.len(),
+        );
+        result.push_str(VCC_RELATIVE_URL_SCHEME);
+        result.push_str(container_name);
+        for segment in relative_path.split('/').filter(|s| !s.is_empty()) {
+            result.push('/');
+            result.push_str(segment);
+        }
+        Ok(VirtualChunkLocation(result))
     }
 
     /// Parse a location that may be either `vcc://` relative or an absolute URL.
@@ -314,17 +324,14 @@ impl VirtualChunkLocation {
             VirtualReferenceErrorKind::CannotParseUrl { cause: e, url: path.to_string() }
         })?;
         let scheme = url.scheme();
-        let new_path: String = url
+        let segments = url
             .path_segments()
-            .ok_or(VirtualReferenceErrorKind::NoPathSegments(path.into()))?
-            // strip empty segments here, object_store cannot handle them.
-            .filter(|x| !x.is_empty())
-            .join("/");
+            .ok_or(VirtualReferenceErrorKind::NoPathSegments(path.into()))?;
 
-        let host = if let Some(host) = url.host() {
-            host.to_string()
+        let host = if let Some(host) = url.host_str() {
+            host
         } else if scheme == "file" {
-            "".to_string()
+            ""
         } else if scheme == "vcc" {
             return Err(VirtualReferenceErrorKind::NoContainerForName(path.into()).into());
         } else {
@@ -333,9 +340,19 @@ impl VirtualChunkLocation {
             );
         };
 
-        let location = format!("{scheme}://{host}/{new_path}",);
+        let mut result = String::with_capacity(path.len());
+        result.push_str(scheme);
+        result.push_str("://");
+        result.push_str(host);
+        result.push('/');
+        let mut sep = "";
+        for segment in segments.filter(|x| !x.is_empty()) {
+            result.push_str(sep);
+            result.push_str(segment);
+            sep = "/";
+        }
 
-        Ok(VirtualChunkLocation(location))
+        Ok(VirtualChunkLocation(result))
     }
 }
 
@@ -692,13 +709,13 @@ fn ref_to_payload(
         let decompressed = decompressor
             .decompress(compressed.bytes(), MAX_DECOMPRESSED_LOCATION_SIZE)
             .map_err(IcechunkFormatErrorKind::IO)?;
-        let location_str = std::str::from_utf8(&decompressed).map_err(|e| {
+        let location_string = String::from_utf8(decompressed).map_err(|e| {
             IcechunkFormatErrorKind::IO(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 e,
             ))
         })?;
-        let location = VirtualChunkLocation::from_url(location_str)?;
+        let location = VirtualChunkLocation::from_trusted(location_string);
         Ok(ChunkPayload::Virtual(VirtualChunkRef {
             location,
             checksum: checksum(&chunk_ref),
@@ -706,7 +723,7 @@ fn ref_to_payload(
             length: chunk_ref.length(),
         }))
     } else if let Some(location) = chunk_ref.location() {
-        let location = VirtualChunkLocation::from_url(location)?;
+        let location = VirtualChunkLocation::from_trusted(location.to_string());
         Ok(ChunkPayload::Virtual(VirtualChunkRef {
             location,
             checksum: checksum(&chunk_ref),
@@ -1141,19 +1158,22 @@ mod tests {
 
     #[alt_proptest]
     fn test_manifest_split_from_edges(
-        #[strategy(shapes_and_dims(Some(5)))] shape_dim: ShapeDim,
+        #[strategy(shapes_and_dims(Some(5), Some(1)))] shape_dim: ShapeDim,
     ) {
         // Note: using the shape, chunks strategy to generate chunk_shape, split_shape
         let ShapeDim { shape, .. } = shape_dim;
 
-        let num_chunks = shape.iter().map(|x| x.array_length()).collect::<Vec<_>>();
-        let split_shape = shape.iter().map(|x| x.chunk_length()).collect::<Vec<_>>();
+        let num_chunks: Vec<u32> = shape.iter().map(|x| x.num_chunks()).collect();
+        let split_shape: Vec<u64> = shape
+            .iter()
+            .map(|x| x.array_length().div_ceil(x.num_chunks() as u64))
+            .collect();
 
         let ndim = shape.len();
         let edges: Vec<Vec<u32>> = (0usize..ndim)
             .map(|axis| {
                 uniform_manifest_split_edges(
-                    num_chunks[axis] as u32,
+                    num_chunks[axis],
                     &(split_shape[axis] as u32),
                 )
             })
