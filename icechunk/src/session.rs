@@ -450,6 +450,7 @@ pub struct Session {
     storage: Arc<dyn Storage + Send + Sync>,
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
+    read_only: bool,
     branch_name: Option<String>,
     snapshot_id: SnapshotId,
     change_set: ChangeSet,
@@ -471,6 +472,7 @@ impl Session {
             storage,
             asset_manager,
             virtual_resolver,
+            read_only: true,
             branch_name: None,
             snapshot_id,
             change_set: ChangeSet::for_edits(),
@@ -495,6 +497,7 @@ impl Session {
             storage,
             asset_manager,
             virtual_resolver,
+            read_only: false,
             branch_name,
             snapshot_id,
             change_set: ChangeSet::for_edits(),
@@ -519,6 +522,7 @@ impl Session {
             storage,
             asset_manager,
             virtual_resolver,
+            read_only: false,
             branch_name: Some(branch_name),
             snapshot_id,
             change_set: ChangeSet::for_rearranging(),
@@ -541,8 +545,7 @@ impl Session {
     }
 
     pub fn read_only(&self) -> bool {
-        // self.branch_name.is_none()
-        false
+        self.read_only
     }
 
     /// Returns the mode of this session.
@@ -1435,6 +1438,7 @@ impl Session {
         self.snapshot_id = new_snap.id().clone();
         // Once committed, the session is now read only, which we control
         // by setting the branch_name to None (you can only write to a branch session)
+        self.read_only = true;
         self.branch_name = None;
 
         Ok(new_snap.id().clone())
@@ -1542,6 +1546,7 @@ impl Session {
         self.snapshot_id = id.clone();
         // Once committed, the session is now read only, which we control
         // by setting the branch_name to None (you can only write to a branch session)
+        self.read_only = true;
         self.branch_name = None;
 
         Ok(id)
