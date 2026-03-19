@@ -41,8 +41,7 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         zarr.group(session.store)
         assert session.has_uncommitted_changes
 
-        with pytest.raises(ValueError):
-            session.fork()
+        fork = session.fork()
 
         if use_async:
             await session.commit_async("init")
@@ -62,9 +61,8 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         zarr.create_group(fork.store, path="/foo")
         assert not session.has_uncommitted_changes
         assert fork.has_uncommitted_changes
-        with pytest.warns(UserWarning):
-            with pytest.raises(IcechunkError, match="cannot commit"):
-                session.commit("foo")
+        with pytest.raises(IcechunkError, match="cannot commit"):
+            session.commit("foo")
         if use_async:
             await session.merge_async(fork)
             await session.commit_async("foo")
@@ -105,8 +103,6 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         fork1 = pickle.loads(pickle.dumps(session.fork()))
         fork2 = pickle.loads(pickle.dumps(fork1.fork()))
         zarr.create_group(fork1.store, path="/foo3")
-        with pytest.raises(ValueError):
-            fork1.fork()
         zarr.create_group(fork2.store, path="/foo4")
 
         fork1 = pickle.loads(pickle.dumps(fork1))

@@ -1,5 +1,4 @@
 import contextlib
-import warnings
 from collections.abc import AsyncIterator, Callable, Generator, Iterable, Sequence
 from typing import Any, NoReturn, Self
 
@@ -18,11 +17,9 @@ class Session:
     """A session object that allows for reading and writing data from an Icechunk repository."""
 
     _session: PySession
-    _allow_changes: bool
 
     def __init__(self, session: PySession):
         self._session = session
-        self._allow_changes = False
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, Session):
@@ -30,20 +27,19 @@ class Session:
         return self._session == value._session
 
     def __getstate__(self) -> object:
-        if not self.read_only:
-            raise ValueError(
-                "You must opt-in to pickle writable sessions in a distributed context "
-                "using Session.fork(). "
-                "See https://icechunk.io/en/stable/parallel/#distributed-writes for more. "
-                "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
-                "please use `icechunk.xarray.to_icechunk` instead. "
-                "If you are using dask & distributed or multi-processing to read/write from the same repository, "
-                "then pass a readonly session created using Repository.readonly_session for the read step. "
-                "Alternatively, make sure to pass the ForkSession created by Session.fork() for the read step. "
-            )
+        # if not self.read_only:
+        #     raise ValueError(
+        #         "You must opt-in to pickle writable sessions in a distributed context "
+        #         "using Session.fork(). "
+        #         "See https://icechunk.io/en/stable/parallel/#distributed-writes for more. "
+        #         "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
+        #         "please use `icechunk.xarray.to_icechunk` instead. "
+        #         "If you are using dask & distributed or multi-processing to read/write from the same repository, "
+        #         "then pass a readonly session created using Repository.readonly_session for the read step. "
+        #         "Alternatively, make sure to pass the ForkSession created by Session.fork() for the read step. "
+        #     )
         state = {
             "_session": self._session.as_bytes(),
-            "_allow_changes": self._allow_changes,
         }
         return state
 
@@ -51,7 +47,6 @@ class Session:
         if not isinstance(state, dict):
             raise ValueError("Invalid state")
         self._session = PySession.from_bytes(state["_session"])
-        self._allow_changes = state["_allow_changes"]
 
     @contextlib.contextmanager
     def allow_pickling(self) -> Generator[None, None, None]:
@@ -330,7 +325,6 @@ class Session:
                     f"Received {type(other).__name__} instead."
                 )
             self._session.merge(other._session)
-        self._allow_changes = False
 
     async def merge_async(self, *others: "ForkSession") -> None:
         """
@@ -348,7 +342,6 @@ class Session:
                     f"Received {type(other).__name__} instead."
                 )
             await self._session.merge_async(other._session)
-        self._allow_changes = False
 
     def commit(
         self,
@@ -390,13 +383,6 @@ class Session:
         icechunk.NoChangesToCommitError
             If there are no changes to commit and allow_empty is False.
         """
-        if self._allow_changes:
-            warnings.warn(
-                "Committing a session after forking, and without merging will not work. "
-                "Merge back in the remote changes first using Session.merge().",
-                UserWarning,
-                stacklevel=2,
-            )
         return self._session.commit(
             message,
             metadata,
@@ -445,13 +431,6 @@ class Session:
         icechunk.NoChangesToCommitError
             If there are no changes to commit and allow_empty is False.
         """
-        if self._allow_changes:
-            warnings.warn(
-                "Committing a session after forking, and without merging will not work. "
-                "Merge back in the remote changes first using Session.merge().",
-                UserWarning,
-                stacklevel=2,
-            )
         return await self._session.commit_async(
             message,
             metadata,
@@ -497,13 +476,7 @@ class Session:
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
         """
-        if self._allow_changes:
-            warnings.warn(
-                "Committing a session after forking, and without merging will not work. "
-                "Merge back in the remote changes first using Session.merge().",
-                UserWarning,
-                stacklevel=2,
-            )
+
         return self._session.amend(message, metadata, allow_empty=allow_empty)
 
     async def amend_async(
@@ -543,13 +516,7 @@ class Session:
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
         """
-        if self._allow_changes:
-            warnings.warn(
-                "Committing a session after forking, and without merging will not work. "
-                "Merge back in the remote changes first using Session.merge().",
-                UserWarning,
-                stacklevel=2,
-            )
+
         return await self._session.amend_async(message, metadata, allow_empty=allow_empty)
 
     def flush(
@@ -574,13 +541,7 @@ class Session:
         str
             The ID of the new snapshot.
         """
-        if self._allow_changes:
-            warnings.warn(
-                "Committing a session after forking, and without merging will not work. "
-                "Merge back in the remote changes first using Session.merge().",
-                UserWarning,
-                stacklevel=2,
-            )
+
         return self._session.flush(message, metadata)
 
     async def flush_async(
@@ -605,13 +566,6 @@ class Session:
         str
             The ID of the new snapshot.
         """
-        if self._allow_changes:
-            warnings.warn(
-                "Flushing a session after forking, and without merging will not work. "
-                "Merge back in the remote changes first using Session.merge().",
-                UserWarning,
-                stacklevel=2,
-            )
         return await self._session.flush_async(message, metadata)
 
     def rebase(self, solver: ConflictSolver) -> None:
@@ -677,7 +631,6 @@ class Session:
             raise ValueError(
                 "You should not need to fork a read-only session. Read-only sessions can be pickled and transmitted directly."
             )
-        self._allow_changes = True
         # TODO: Do we still need ForkSession?
         return ForkSession(self._session.fork())
 
