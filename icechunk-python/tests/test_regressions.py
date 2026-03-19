@@ -34,7 +34,7 @@ async def write_minio_virtual_refs() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_issue_418(any_spec_version: SpecVersion | None) -> None:
+async def test_issue_418(any_spec_version: SpecVersion | int | None) -> None:
     # See https://github.com/earth-mover/icechunk/issues/418
     await write_minio_virtual_refs()
     config = RepositoryConfig.default()
@@ -116,7 +116,7 @@ async def test_issue_418(any_spec_version: SpecVersion | None) -> None:
     assert (await store._store.get("time/c/2")) == b"thir"
 
 
-async def test_read_chunks_from_old_array(any_spec_version: SpecVersion | None) -> None:
+async def test_read_chunks_from_old_array(any_spec_version: SpecVersion | int | None) -> None:
     # This regression appeared during the change to manifest per array
     repo = Repository.create(
         storage=in_memory_storage(),
@@ -150,7 +150,7 @@ async def test_read_chunks_from_old_array(any_spec_version: SpecVersion | None) 
     assert array1[0] == 42
 
 
-async def test_tag_with_open_session(any_spec_version: SpecVersion | None) -> None:
+async def test_tag_with_open_session(any_spec_version: SpecVersion | int | None) -> None:
     """This is an issue found by hypothesis"""
 
     repo = Repository.create(
@@ -206,7 +206,7 @@ async def test_tag_with_open_session(any_spec_version: SpecVersion | None) -> No
         assert value is not None, k
 
 
-async def test_list_missing_array(any_spec_version: SpecVersion | None) -> None:
+async def test_list_missing_array(any_spec_version: SpecVersion | int | None) -> None:
     """This is an issue found by hypothesis"""
 
     repo = Repository.create(

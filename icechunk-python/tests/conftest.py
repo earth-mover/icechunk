@@ -24,7 +24,7 @@ class Permission(Enum):
 
 
 def parse_repo(
-    store: Literal["local", "memory"], path: str, spec_version: SpecVersion | None
+    store: Literal["local", "memory"], path: str, spec_version: SpecVersion | int | None
 ) -> Repository:
     if store == "local":
         return Repository.create(
@@ -41,7 +41,7 @@ def parse_repo(
 
 @pytest.fixture(scope="function")
 def repo(
-    request: pytest.FixtureRequest, tmpdir: str, any_spec_version: SpecVersion | None
+    request: pytest.FixtureRequest, tmpdir: str, any_spec_version: SpecVersion | int | None
 ) -> tuple[Repository, str]:
     param = request.param
     repo = parse_repo(param, tmpdir, spec_version=any_spec_version)
@@ -83,5 +83,5 @@ def write_chunks_to_minio(
     params=[SpecVersion.v1dot0, SpecVersion.v2dot0, None],
     ids=["spec-v1", "spec-v2", "no-spec-version"],
 )
-def any_spec_version(request: pytest.FixtureRequest) -> SpecVersion | None:
-    return cast(SpecVersion | None, request.param)
+def any_spec_version(request: pytest.FixtureRequest) -> SpecVersion | int | None:
+    return cast(SpecVersion | int | None, request.param)

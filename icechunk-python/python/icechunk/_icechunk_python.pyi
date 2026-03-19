@@ -1914,7 +1914,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        spec_version: SpecVersion | None = None,
+        spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1924,7 +1924,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        spec_version: SpecVersion | None = None,
+        spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1950,7 +1950,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        create_version: SpecVersion | None = None,
+        create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1960,7 +1960,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        create_version: SpecVersion | None = None,
+        create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @staticmethod
@@ -1974,11 +1974,11 @@ class PyRepository:
     @staticmethod
     def fetch_spec_version(
         storage: Storage, storage_settings: StorageSettings | None = None
-    ) -> SpecVersion | None: ...
+    ) -> SpecVersion | int | None: ...
     @staticmethod
     async def fetch_spec_version_async(
         storage: Storage, storage_settings: StorageSettings | None = None
-    ) -> SpecVersion | None: ...
+    ) -> SpecVersion | int | None: ...
     @classmethod
     def from_bytes(cls, bytes: bytes) -> PyRepository: ...
     def as_bytes(self) -> bytes: ...

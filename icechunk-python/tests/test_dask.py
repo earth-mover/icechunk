@@ -16,7 +16,7 @@ from tests.test_xarray import create_test_data, roundtrip
 from xarray.testing import assert_identical
 
 
-def test_store_dask(any_spec_version: SpecVersion | None) -> None:
+def test_store_dask(any_spec_version: SpecVersion | int | None) -> None:
     shape = (100, 100)
     dask_chunks = (20, 20)
     dask_array = dask.array.random.random(shape, chunks=dask_chunks)
@@ -55,7 +55,7 @@ def test_store_dask(any_spec_version: SpecVersion | None) -> None:
             store_dask(sources=[dask_array], targets=[zarray])
 
 
-def test_distributed(any_spec_version: SpecVersion | None) -> None:
+def test_distributed(any_spec_version: SpecVersion | int | None) -> None:
     with distributed.Client():  # type: ignore [no-untyped-call]
         ds = create_test_data().chunk(dim1=3, dim2=4)
         with roundtrip(ds, commit=True, spec_version=any_spec_version) as actual:
@@ -63,7 +63,7 @@ def test_distributed(any_spec_version: SpecVersion | None) -> None:
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_dask_schedulers(scheduler: str, any_spec_version: SpecVersion | None) -> None:
+def test_dask_schedulers(scheduler: str, any_spec_version: SpecVersion | int | None) -> None:
     with dask.config.set(scheduler=scheduler):
         ds = create_test_data().chunk(dim1=3, dim2=4)
         with roundtrip(
@@ -76,7 +76,7 @@ def test_dask_schedulers(scheduler: str, any_spec_version: SpecVersion | None) -
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
 def test_xarray_to_icechunk_nested_pickling(
-    scheduler: str, any_spec_version: SpecVersion | None
+    scheduler: str, any_spec_version: SpecVersion | int | None
 ) -> None:
     with dask.config.set(scheduler=scheduler):
         ds = create_test_data(dim_sizes=(2, 3, 4)).chunk(-1)
@@ -105,7 +105,7 @@ def test_xarray_to_icechunk_nested_pickling(
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
 def test_fork_session_deep_copies(
-    scheduler: str, any_spec_version: SpecVersion | None
+    scheduler: str, any_spec_version: SpecVersion | int | None
 ) -> None:
     with dask.config.set(scheduler=scheduler):
         ds = create_test_data(dim_sizes=(2, 3, 4)).drop_encoding().chunk(dim3=1)

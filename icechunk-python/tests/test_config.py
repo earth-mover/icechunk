@@ -13,7 +13,7 @@ from icechunk._icechunk_python import RepoUpdateRetryConfig
 
 @pytest.fixture(scope="function")
 def tmp_store(
-    tmpdir: Path, any_spec_version: SpecVersion | None
+    tmpdir: Path, any_spec_version: SpecVersion | int | None
 ) -> Generator[tuple[icechunk.IcechunkStore, str]]:
     repo_path = f"{tmpdir}"
     config = icechunk.RepositoryConfig.default()
@@ -30,7 +30,7 @@ def tmp_store(
     yield store, repo_path
 
 
-def test_config_fetch(any_spec_version: SpecVersion | None) -> None:
+def test_config_fetch(any_spec_version: SpecVersion | int | None) -> None:
     storage = icechunk.in_memory_storage()
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
@@ -45,7 +45,7 @@ def test_config_fetch(any_spec_version: SpecVersion | None) -> None:
     assert icechunk.Repository.fetch_config(storage) == config
 
 
-def test_config_save(any_spec_version: SpecVersion | None) -> None:
+def test_config_save(any_spec_version: SpecVersion | int | None) -> None:
     storage = icechunk.in_memory_storage()
     config = icechunk.RepositoryConfig.default()
     repo = icechunk.Repository.create(
@@ -151,7 +151,7 @@ def test_virtual_chunk_containers() -> None:
     assert config.virtual_chunk_containers["s3://testbucket/"] == container
 
 
-def test_can_change_deep_config_values(any_spec_version: SpecVersion | None) -> None:
+def test_can_change_deep_config_values(any_spec_version: SpecVersion | int | None) -> None:
     storage = icechunk.in_memory_storage()
     repo = icechunk.Repository.create(
         storage=storage,
@@ -278,7 +278,7 @@ def test_spec_version() -> None:
     assert icechunk.spec_version() in (SpecVersion.v1dot0, SpecVersion.v2dot0)
 
 
-def test_config_from_store(any_spec_version: SpecVersion | None) -> None:
+def test_config_from_store(any_spec_version: SpecVersion | int | None) -> None:
     storage = icechunk.in_memory_storage()
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5

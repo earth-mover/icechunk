@@ -24,7 +24,7 @@ from zarr.storage._common import make_store_path
 
 @pytest.fixture(params=["memory"])
 def store(
-    request: pytest.FixtureRequest, any_spec_version: SpecVersion | None
+    request: pytest.FixtureRequest, any_spec_version: SpecVersion | int | None
 ) -> IcechunkStore:
     repo = parse_repo(request.param, "test", any_spec_version)
     session = repo.writable_session("main")

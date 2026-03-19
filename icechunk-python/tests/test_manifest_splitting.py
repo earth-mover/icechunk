@@ -33,7 +33,7 @@ def test_splitting_config_dict_roundtrip(data: st.DataObject) -> None:
     assert ic.ManifestSplittingConfig.from_dict(config.to_dict()) == config
 
 
-def test_manifest_splitting_appends(any_spec_version: SpecVersion | None) -> None:
+def test_manifest_splitting_appends(any_spec_version: SpecVersion | int | None) -> None:
     array_condition = ManifestSplitCondition.or_conditions(
         [
             ManifestSplitCondition.name_matches("temperature"),
@@ -127,7 +127,7 @@ def test_manifest_splitting_appends(any_spec_version: SpecVersion | None) -> Non
 
 
 def test_manifest_overwrite_splitting_config_on_read(
-    any_spec_version: SpecVersion | None,
+    any_spec_version: SpecVersion | int | None,
 ) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {
@@ -197,7 +197,7 @@ def test_manifest_overwrite_splitting_config_on_read(
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
 
-def test_manifest_splitting_sparse_regions(any_spec_version: SpecVersion | None) -> None:
+def test_manifest_splitting_sparse_regions(any_spec_version: SpecVersion | int | None) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {
             ManifestSplitCondition.name_matches("temperature"): {
@@ -285,7 +285,7 @@ def test_manifest_splitting_sparse_regions(any_spec_version: SpecVersion | None)
 def test_manifest_splitting_complex_config(
     config: ic.ManifestSplitValues,
     expected_split_sizes: tuple[int, int, int],
-    any_spec_version: SpecVersion | None,
+    any_spec_version: SpecVersion | int | None,
 ) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {ManifestSplitCondition.AnyArray(): config}

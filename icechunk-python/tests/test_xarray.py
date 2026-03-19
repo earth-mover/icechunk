@@ -54,7 +54,7 @@ def roundtrip(
     data: xr.Dataset,
     *,
     commit: bool = False,
-    spec_version: SpecVersion | None,
+    spec_version: SpecVersion | int | None,
 ) -> Generator[xr.Dataset, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Repository.create(
@@ -67,13 +67,13 @@ def roundtrip(
             yield ds
 
 
-def test_xarray_to_icechunk(any_spec_version: SpecVersion | None) -> None:
+def test_xarray_to_icechunk(any_spec_version: SpecVersion | int | None) -> None:
     ds = create_test_data()
     with roundtrip(ds, spec_version=any_spec_version) as actual:
         assert_identical(actual, ds)
 
 
-def test_repeated_to_icechunk_serial(any_spec_version: SpecVersion | None) -> None:
+def test_repeated_to_icechunk_serial(any_spec_version: SpecVersion | int | None) -> None:
     ds = create_test_data()
     repo = Repository.create(
         in_memory_storage(),

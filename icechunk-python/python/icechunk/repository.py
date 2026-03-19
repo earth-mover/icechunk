@@ -41,7 +41,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
-        spec_version: SpecVersion | None = None,
+        spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> Self:
         """
@@ -90,7 +90,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
-        spec_version: SpecVersion | None = None,
+        spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> Self:
         """
@@ -227,7 +227,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
-        create_version: SpecVersion | None = None,
+        create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> Self:
         """
@@ -281,7 +281,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
-        create_version: SpecVersion | None = None,
+        create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> Self:
         """
@@ -376,7 +376,7 @@ class Repository:
     def fetch_spec_version(
         storage: Storage,
         storage_settings: StorageSettings | None = None,
-    ) -> SpecVersion | None:
+    ) -> SpecVersion | int | None:
         """
         Fetch the spec version of a repository without fully opening it.
 
@@ -402,7 +402,7 @@ class Repository:
     async def fetch_spec_version_async(
         storage: Storage,
         storage_settings: StorageSettings | None = None,
-    ) -> SpecVersion | None:
+    ) -> SpecVersion | int | None:
         """
         Fetch the spec version of a repository without fully opening it (async version).
 

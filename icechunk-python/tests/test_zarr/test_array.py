@@ -29,7 +29,7 @@ except ImportError:
 # @pytest.fixture(params=["local"])
 @pytest.fixture
 def store(
-    request: pytest.FixtureRequest, tmpdir: Path, any_spec_version: SpecVersion | None
+    request: pytest.FixtureRequest, tmpdir: Path, any_spec_version: SpecVersion | int | None
 ) -> IcechunkStore:
     repo = parse_repo(
         "local",

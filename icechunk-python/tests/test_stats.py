@@ -8,7 +8,7 @@ from icechunk import SpecVersion
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-def test_total_chunks_storage(any_spec_version: SpecVersion | None) -> None:
+def test_total_chunks_storage(any_spec_version: SpecVersion | int | None) -> None:
     """We only test the interface, more detailed test is done in Rust"""
 
     repo = ic.Repository.create(
@@ -36,7 +36,7 @@ def test_total_chunks_storage(any_spec_version: SpecVersion | None) -> None:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_total_chunks_storage_async(any_spec_version: SpecVersion | None) -> None:
+async def test_total_chunks_storage_async(any_spec_version: SpecVersion | int | None) -> None:
     """Test the async version of total_chunks_storage"""
 
     repo = await ic.Repository.create_async(

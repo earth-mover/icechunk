@@ -33,7 +33,7 @@ from tests.conftest import Permission
 
 @pytest.mark.parametrize("use_async", [True, False])
 async def test_session_fork(
-    use_async: bool, any_spec_version: SpecVersion | None
+    use_async: bool, any_spec_version: SpecVersion | int | None
 ) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Repository.create(
@@ -128,7 +128,7 @@ async def test_session_fork(
     ids=["inline", "native"],
 )
 async def test_chunk_type(
-    inline_threshold: int, chunk_type: ChunkType, any_spec_version: SpecVersion | None
+    inline_threshold: int, chunk_type: ChunkType, any_spec_version: SpecVersion | int | None
 ) -> None:
     config = RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = inline_threshold
@@ -208,7 +208,7 @@ def test_session_mode() -> None:
     assert writable.mode == SessionMode.readonly  # type: ignore[comparison-overlap]
 
 
-def test_repository_open_no_list_bucket(any_spec_version: SpecVersion | None) -> None:
+def test_repository_open_no_list_bucket(any_spec_version: SpecVersion | int | None) -> None:
     prefix = "test-repo__" + str(time.time())
     (access_key_id, secret_access_key) = Permission.MODIFY.keys()
     write_storage = s3_storage(

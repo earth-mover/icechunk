@@ -22,7 +22,7 @@ async def async_ancestry(
     "using_flush",
     [False, True],
 )
-def test_timetravel(using_flush: bool, any_spec_version: SpecVersion | None) -> None:
+def test_timetravel(using_flush: bool, any_spec_version: SpecVersion | int | None) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = ic.Repository.create(
@@ -233,7 +233,7 @@ Arrays deleted:
     assert actual == repo.lookup_snapshot(actual.id)
 
 
-async def test_branch_reset(any_spec_version: SpecVersion | None) -> None:
+async def test_branch_reset(any_spec_version: SpecVersion | int | None) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = ic.Repository.create(
@@ -282,7 +282,7 @@ async def test_branch_reset(any_spec_version: SpecVersion | None) -> None:
     ) is None
 
 
-async def test_tag_delete(any_spec_version: SpecVersion | None) -> None:
+async def test_tag_delete(any_spec_version: SpecVersion | int | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
@@ -299,7 +299,7 @@ async def test_tag_delete(any_spec_version: SpecVersion | None) -> None:
         repo.create_tag("tag", snap)
 
 
-async def test_session_with_as_of(any_spec_version: SpecVersion | None) -> None:
+async def test_session_with_as_of(any_spec_version: SpecVersion | int | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
@@ -335,7 +335,7 @@ async def test_session_with_as_of(any_spec_version: SpecVersion | None) -> None:
         assert expected_children == actual_children
 
 
-async def test_default_commit_metadata(any_spec_version: SpecVersion | None) -> None:
+async def test_default_commit_metadata(any_spec_version: SpecVersion | int | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
@@ -350,7 +350,7 @@ async def test_default_commit_metadata(any_spec_version: SpecVersion | None) -> 
     assert snap.metadata == {"user": "test"}
 
 
-def test_empty_commit(any_spec_version: SpecVersion | None) -> None:
+def test_empty_commit(any_spec_version: SpecVersion | int | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(),
         spec_version=any_spec_version,
@@ -434,7 +434,7 @@ async def test_update_metadata_async() -> None:
     [False, True],
 )
 async def test_timetravel_async(
-    using_flush: bool, any_spec_version: SpecVersion | None
+    using_flush: bool, any_spec_version: SpecVersion | int | None
 ) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
@@ -655,7 +655,7 @@ Arrays deleted:
         assert all(isinstance(o, e) for (o, e) in zip(ops, expected, strict=True))
 
 
-async def test_branch_reset_async(any_spec_version: SpecVersion | None) -> None:
+async def test_branch_reset_async(any_spec_version: SpecVersion | int | None) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = await ic.Repository.create_async(
@@ -692,7 +692,7 @@ async def test_branch_reset_async(any_spec_version: SpecVersion | None) -> None:
     ) is None
 
 
-async def test_tag_delete_async(any_spec_version: SpecVersion | None) -> None:
+async def test_tag_delete_async(any_spec_version: SpecVersion | int | None) -> None:
     repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(), spec_version=any_spec_version
     )
@@ -708,7 +708,7 @@ async def test_tag_delete_async(any_spec_version: SpecVersion | None) -> None:
         await repo.create_tag_async("tag", snap)
 
 
-async def test_session_with_as_of_async(any_spec_version: SpecVersion | None) -> None:
+async def test_session_with_as_of_async(any_spec_version: SpecVersion | int | None) -> None:
     repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(), spec_version=any_spec_version
     )
@@ -743,7 +743,7 @@ async def test_session_with_as_of_async(any_spec_version: SpecVersion | None) ->
         assert expected_children == actual_children
 
 
-async def test_tag_expiration_async(any_spec_version: SpecVersion | None) -> None:
+async def test_tag_expiration_async(any_spec_version: SpecVersion | int | None) -> None:
     repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(), spec_version=any_spec_version
     )
@@ -774,7 +774,7 @@ async def test_tag_expiration_async(any_spec_version: SpecVersion | None) -> Non
     assert await repo.list_tags_async() == set()
 
 
-async def test_branch_expiration_async(any_spec_version: SpecVersion | None) -> None:
+async def test_branch_expiration_async(any_spec_version: SpecVersion | int | None) -> None:
     repo = await ic.Repository.open_or_create_async(
         storage=ic.in_memory_storage(),
         create_version=any_spec_version,
@@ -813,7 +813,7 @@ async def test_branch_expiration_async(any_spec_version: SpecVersion | None) -> 
     await repo.lookup_snapshot_async(c)
 
 
-def test_tag_expiration(any_spec_version: SpecVersion | None) -> None:
+def test_tag_expiration(any_spec_version: SpecVersion | int | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(), spec_version=any_spec_version
     )
@@ -843,7 +843,7 @@ def test_tag_expiration(any_spec_version: SpecVersion | None) -> None:
     assert repo.list_tags() == set()
 
 
-def test_branch_expiration(any_spec_version: SpecVersion | None) -> None:
+def test_branch_expiration(any_spec_version: SpecVersion | int | None) -> None:
     repo = ic.Repository.create(
         storage=ic.in_memory_storage(), spec_version=any_spec_version
     )
@@ -881,7 +881,7 @@ def test_branch_expiration(any_spec_version: SpecVersion | None) -> None:
     repo.lookup_snapshot(c)
 
 
-async def test_repository_lifecycle_async(any_spec_version: SpecVersion | None) -> None:
+async def test_repository_lifecycle_async(any_spec_version: SpecVersion | int | None) -> None:
     """Test Repository configuration and lifecycle async methods."""
     storage = ic.in_memory_storage()
 
@@ -941,7 +941,7 @@ async def test_repository_lifecycle_async(any_spec_version: SpecVersion | None) 
     assert not await ic.Repository.exists_async(new_storage)
 
 
-async def test_rewrite_manifests_async(any_spec_version: SpecVersion | None) -> None:
+async def test_rewrite_manifests_async(any_spec_version: SpecVersion | int | None) -> None:
     """Test Repository.rewrite_manifests_async method."""
     repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),
@@ -1003,7 +1003,7 @@ async def test_rewrite_manifests_async(any_spec_version: SpecVersion | None) -> 
     "spec_version",
     [SpecVersion.v2dot0, None],
 )
-def test_amend(spec_version: SpecVersion | None) -> None:
+def test_amend(spec_version: SpecVersion | int | None) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 1
     repo = ic.Repository.create(
@@ -1086,7 +1086,7 @@ Chunks updated:
     "spec_version",
     [SpecVersion.v2dot0, None],
 )
-async def test_long_ops_log(spec_version: SpecVersion | None) -> None:
+async def test_long_ops_log(spec_version: SpecVersion | int | None) -> None:
     NUM_BRANCHES = 120
     repo = await ic.Repository.create_async(
         storage=ic.in_memory_storage(),

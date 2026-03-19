@@ -23,7 +23,7 @@ except ImportError:
     supports_rectilinear_chunk_grids = False
 
 
-def create(spec_version: SpecVersion | None) -> IcechunkStore:
+def create(spec_version: SpecVersion | int | None) -> IcechunkStore:
     repo = Repository.create(in_memory_storage(), spec_version=spec_version)
     return repo.writable_session("main").store
 
@@ -31,7 +31,7 @@ def create(spec_version: SpecVersion | None) -> IcechunkStore:
 @st.composite
 def icechunk_stores(
     draw: st.DrawFn,
-    spec_version: st.SearchStrategy[SpecVersion | None] = st.sampled_from(
+    spec_version: st.SearchStrategy[SpecVersion | int | None] = st.sampled_from(
         [None, SpecVersion.v1dot0, SpecVersion.v2dot0]
     ),
 ) -> IcechunkStore:
@@ -45,7 +45,7 @@ def icechunk_stores(
     spec_version=st.sampled_from([None, SpecVersion.v1dot0, SpecVersion.v2dot0]),
 )
 def test_roundtrip(
-    data: st.DataObject, nparray: Any, spec_version: SpecVersion | None
+    data: st.DataObject, nparray: Any, spec_version: SpecVersion | int | None
 ) -> None:
     zarray = data.draw(
         arrays(
@@ -69,7 +69,7 @@ def test_roundtrip(
     spec_version=st.sampled_from([None, SpecVersion.v1dot0, SpecVersion.v2dot0]),
 )
 def test_roundtrip_complex_chunk_grids(
-    data: st.DataObject, spec_version: SpecVersion | None
+    data: st.DataObject, spec_version: SpecVersion | int | None
 ) -> None:
     nparray, zarray = data.draw(
         complex_chunked_arrays(

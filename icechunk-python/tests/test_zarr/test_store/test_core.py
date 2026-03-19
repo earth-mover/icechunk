@@ -3,7 +3,7 @@ from tests.conftest import parse_repo
 from zarr.storage._common import make_store_path
 
 
-async def test_make_store_path(any_spec_version: SpecVersion | None) -> None:
+async def test_make_store_path(any_spec_version: SpecVersion | int | None) -> None:
     # Memory store
     repo = parse_repo(
         "memory",

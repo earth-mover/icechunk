@@ -11,7 +11,7 @@ from icechunk import SpecVersion
 
 @mock.patch.dict(os.environ, {"ICECHUNK_LOG": "debug"}, clear=True)
 def test_debug_logs_from_environment(
-    capfd: CaptureFixture[str], any_spec_version: SpecVersion | None
+    capfd: CaptureFixture[str], any_spec_version: SpecVersion | int | None
 ) -> None:
     ic.set_logs_filter(None)
     ic.Repository.create(
@@ -23,7 +23,7 @@ def test_debug_logs_from_environment(
 
 @mock.patch.dict(os.environ, clear=True)
 def test_no_logs_from_environment(
-    capfd: CaptureFixture[str], any_spec_version: SpecVersion | None
+    capfd: CaptureFixture[str], any_spec_version: SpecVersion | int | None
 ) -> None:
     ic.set_logs_filter(None)
     ic.Repository.create(
@@ -35,7 +35,7 @@ def test_no_logs_from_environment(
 
 @mock.patch.dict(os.environ, clear=True)
 def test_change_log_levels_from_env(
-    capfd: CaptureFixture[str], any_spec_version: SpecVersion | None
+    capfd: CaptureFixture[str], any_spec_version: SpecVersion | int | None
 ) -> None:
     # first with logs disabled
     ic.set_logs_filter(None)
@@ -56,7 +56,7 @@ def test_change_log_levels_from_env(
 
 
 def test_debug_logs_from_argument(
-    capfd: CaptureFixture[str], any_spec_version: SpecVersion | None
+    capfd: CaptureFixture[str], any_spec_version: SpecVersion | int | None
 ) -> None:
     ic.set_logs_filter("debug")
     ic.Repository.create(
@@ -68,7 +68,7 @@ def test_debug_logs_from_argument(
 
 @mock.patch.dict(os.environ, {"ICECHUNK_LOG": "debug"}, clear=True)
 def test_no_logs_from_argument(
-    capfd: CaptureFixture[str], any_spec_version: SpecVersion | None
+    capfd: CaptureFixture[str], any_spec_version: SpecVersion | int | None
 ) -> None:
     ic.set_logs_filter("false")
     ic.Repository.create(
@@ -79,7 +79,7 @@ def test_no_logs_from_argument(
 
 
 def test_change_log_levels_from_argument(
-    capfd: CaptureFixture[str], any_spec_version: SpecVersion | None
+    capfd: CaptureFixture[str], any_spec_version: SpecVersion | int | None
 ) -> None:
     # first with logs disabled
     ic.set_logs_filter("")
@@ -99,7 +99,7 @@ def test_change_log_levels_from_argument(
 
 
 def test_warn_on_small_caches(
-    capfd: CaptureFixture[str], any_spec_version: SpecVersion | None
+    capfd: CaptureFixture[str], any_spec_version: SpecVersion | int | None
 ) -> None:
     # first with logs disabled
     ic.set_logs_filter("warn")

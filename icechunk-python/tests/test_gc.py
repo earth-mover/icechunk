@@ -10,7 +10,7 @@ from icechunk import SpecVersion
 from tests.conftest import Permission, get_minio_client
 
 
-def mk_repo(spec_version: SpecVersion | None) -> tuple[str, ic.Repository]:
+def mk_repo(spec_version: SpecVersion | int | None) -> tuple[str, ic.Repository]:
     prefix = "test-repo__" + str(time.time())
     access_key_id, secret_access_key = Permission.MODIFY.keys()
     repo = ic.Repository.create(
@@ -33,7 +33,7 @@ def mk_repo(spec_version: SpecVersion | None) -> tuple[str, ic.Repository]:
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 @pytest.mark.parametrize("use_async", [True, False])
 async def test_expire_and_gc(
-    use_async: bool, any_spec_version: SpecVersion | None
+    use_async: bool, any_spec_version: SpecVersion | int | None
 ) -> None:
     prefix, repo = mk_repo(any_spec_version)
 
