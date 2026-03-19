@@ -882,7 +882,6 @@ impl Session {
     /// The helper function [`get_chunk`] manages the pattern matching of the result and returns
     /// the bytes.
     #[instrument(skip(self))]
-    #[allow(clippy::type_complexity)]
     pub async fn get_chunk_reader(
         &self,
         path: &Path,
@@ -3021,6 +3020,7 @@ mod tests {
     use proptest::prelude::{prop_assert, prop_assert_eq};
     use storage::logging::LoggingStorage;
     use test_strategy::proptest;
+    #[cfg(not(feature = "shuttle"))]
     use tokio::sync::Barrier;
 
     use crate::test_utils::spec_version_cases;
