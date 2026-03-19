@@ -206,11 +206,22 @@ jobs:
           source .venv/bin/activate
           pip list
 
+      - name: Install hypothesis nightly branch
+        if: always()
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          source .venv/bin/activate
+          uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
+
       - name: pytest
         id: pytest-icechunk
         if: always()
         shell: bash
         working-directory: icechunk-python
+        env:
+          HYPOTHESIS_PROFILE: nightly
+          HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
         run: |
           set -e
           python3 -m venv .venv

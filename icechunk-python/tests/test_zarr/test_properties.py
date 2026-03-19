@@ -7,7 +7,7 @@ from icechunk import IcechunkStore, Repository, in_memory_storage
 
 pytest.importorskip("hypothesis")
 import hypothesis.strategies as st
-from hypothesis import given, settings
+from hypothesis import given
 
 from zarr.testing.strategies import arrays, numpy_arrays
 
@@ -36,7 +36,6 @@ def icechunk_stores(
     return create(spec_version=draw(spec_version))
 
 
-@settings(report_multiple_bugs=True, deadline=None, max_examples=300)
 @given(data=st.data(), nparray=numpy_arrays(), spec_version=st.sampled_from([None, 1, 2]))
 def test_roundtrip(data: st.DataObject, nparray: Any, spec_version: int | None) -> None:
     zarray = data.draw(
@@ -55,7 +54,6 @@ def test_roundtrip(data: st.DataObject, nparray: Any, spec_version: int | None) 
 @pytest.mark.skipif(
     not supports_rectilinear_chunk_grids, reason="rectilinear chunk grids are unsupported"
 )
-@settings(report_multiple_bugs=True, deadline=None, max_examples=300)
 @given(data=st.data(), spec_version=st.sampled_from([None, 1, 2]))
 def test_roundtrip_complex_chunk_grids(
     data: st.DataObject, spec_version: int | None

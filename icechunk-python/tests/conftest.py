@@ -1,11 +1,43 @@
+import os
 from enum import Enum
 from typing import Literal, cast
 
 import boto3
 import pytest
+from hypothesis import HealthCheck, settings
 from mypy_boto3_s3.client import S3Client
 
 from icechunk import Repository, in_memory_storage, local_filesystem_storage
+
+# ---------------------------------------------------------------------------
+# Hypothesis profiles
+#
+# Inherits from hypothesis's built-in "default" and "ci" profiles.
+# hypothesis auto-selects "ci" when the CI env var is set.
+# Override with: HYPOTHESIS_PROFILE=nightly
+# ---------------------------------------------------------------------------
+settings.register_profile(
+    "default",
+    parent=settings.get_profile("default"),
+    deadline=None,
+    suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
+)
+settings.register_profile(
+    "ci",
+    parent=settings.get_profile("ci"),
+    max_examples=500,
+    stateful_step_count=200,
+    suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
+)
+settings.register_profile(
+    "nightly",
+    parent=settings.get_profile("ci"),
+    max_examples=1000,
+    stateful_step_count=500,
+    suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
+)
+if "HYPOTHESIS_PROFILE" in os.environ:
+    settings.load_profile(os.environ["HYPOTHESIS_PROFILE"])
 
 
 class Permission(Enum):
