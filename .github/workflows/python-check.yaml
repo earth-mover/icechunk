@@ -128,6 +128,7 @@ jobs:
         working-directory: icechunk-python
         env:
           HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
+          NOCOLOR: 1
         run: |
           set -e
           source .venv/bin/activate
