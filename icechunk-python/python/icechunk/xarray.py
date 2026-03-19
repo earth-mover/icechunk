@@ -318,10 +318,6 @@ def to_icechunk(
     is_dask = is_dask_collection(obj)
     fork: Session | ForkSession
     if is_dask:
-        if session.has_uncommitted_changes:
-            raise ValueError(
-                "Calling `to_icechunk` is not allowed on a Session with uncommitted changes. Please commit first."
-            )
         fork = session.fork()
     else:
         fork = session

@@ -673,21 +673,13 @@ class Session:
         ValueError
             When `self` is read-only.
         """
-        if self.has_uncommitted_changes:
-            raise ValueError(
-                "Cannot fork a Session with uncommitted changes. "
-                "Make a commit, create a new Session, and then fork that to execute distributed writes."
-            )
         if self.read_only:
             raise ValueError(
                 "You should not need to fork a read-only session. Read-only sessions can be pickled and transmitted directly."
             )
         self._allow_changes = True
-        # force a deep-copy of the underlying Session,
-        # so that multiple forks can be created and
-        # used independently in a local session.
-        # See test_dask.py::test_fork_session_deep_copies for an example
-        return ForkSession(PySession.from_bytes(self._session.as_bytes()))
+        # TODO: Do we still need ForkSession?
+        return ForkSession(self._session.fork())
 
 
 class ForkSession(Session):

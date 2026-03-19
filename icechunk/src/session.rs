@@ -485,7 +485,7 @@ impl Session {
         storage: Arc<dyn Storage + Send + Sync>,
         asset_manager: Arc<AssetManager>,
         virtual_resolver: Arc<VirtualChunkResolver>,
-        branch_name: String,
+        branch_name: Option<String>,
         snapshot_id: SnapshotId,
         default_commit_metadata: SnapshotProperties,
     ) -> Self {
@@ -495,7 +495,7 @@ impl Session {
             storage,
             asset_manager,
             virtual_resolver,
-            branch_name: Some(branch_name),
+            branch_name,
             snapshot_id,
             change_set: ChangeSet::for_edits(),
             default_commit_metadata,
@@ -541,7 +541,8 @@ impl Session {
     }
 
     pub fn read_only(&self) -> bool {
-        self.branch_name.is_none()
+        // self.branch_name.is_none()
+        false
     }
 
     /// Returns the mode of this session.
@@ -573,6 +574,23 @@ impl Session {
         chunk_location: &VirtualChunkLocation,
     ) -> Option<&VirtualChunkContainer> {
         self.virtual_resolver.matching_container(chunk_location)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn fork(&self) -> SessionResult<Self> {
+        // TODO: why do we allow Clone?
+        let snap = self.clone().flush("foo", None).await?;
+
+        Ok(Session::create_writable_session(
+            self.config.clone(),
+            (*self.storage_settings).clone(),
+            self.storage.clone(),
+            Arc::clone(&self.asset_manager),
+            self.virtual_resolver.clone(),
+            None,
+            snap.clone(),
+            self.default_commit_metadata.clone(),
+        ))
     }
 
     /// Compute an overview of the current session changes
@@ -1373,6 +1391,7 @@ impl Session {
         }
     }
 
+    #[instrument(skip(self, properties))]
     async fn do_flush(
         &mut self,
         message: &str,
@@ -1528,7 +1547,9 @@ impl Session {
         Ok(id)
     }
 
+
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, solver, properties, before_rebase, allow_rebase))]
     async fn do_commit_rebasing(
         &mut self,
         solver: &(dyn ConflictSolver + Send + Sync),

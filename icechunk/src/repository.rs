@@ -1856,7 +1856,7 @@ impl Repository {
             self.storage.clone(),
             Arc::clone(&self.asset_manager),
             self.virtual_resolver.clone(),
-            branch.to_string(),
+            Some(branch.to_string()),
             snapshot_id.clone(),
             self.default_commit_metadata.clone(),
         );
@@ -4111,6 +4111,128 @@ mod tests {
         )
         .await;
         assert!(result.is_ok());
+
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_concurrent_coordinated_writers()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(10, 10)]).unwrap();
+        session
+            .add_array(
+                array_path.clone(),
+                shape,
+                Some(vec!["x".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+        session.commit("init", None).await?;
+
+        let mut s1 = repo.writable_session("main").await?;
+        let mut s2 = repo.writable_session("main").await?;
+
+        Ok(())
+    }
+
+    #[cfg(feature = "object-store-fs")]
+    #[tokio_test]
+    async fn test_concurrent_distributer_writers_with_base_state()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::new_local_filesystem_storage;
+
+        let repo_dir = TempDir::new()?;
+        let storage: Arc<dyn Storage + Send + Sync> =
+            new_local_filesystem_storage(repo_dir.path()).await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(10, 1)]).unwrap();
+        session
+            .add_array(
+                array_path.clone(),
+                shape.clone(),
+                Some(vec!["x".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+        session.commit("init", None).await?;
+
+        let mut session = repo.writable_session("main").await?;
+
+        // zarr-python's mode="w" will delete, then re-create
+        session.delete_array(array_path.clone()).await?;
+        session
+            .add_array(
+                array_path.clone(),
+                shape,
+                Some(vec!["x".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+
+        // create a _clean_ writable session from that snapshot
+        let clean = session.fork().await?;
+
+        // distribute these clean sessions to two writers
+        // NOTE: this is explicitly modeling a python pickle/unpickle workflow;
+        // we could just send out a SnapshotId and call `create_writable_session`
+        // on the distributed worker instead
+        let clean_bytes = clean.as_bytes()?;
+        let mut s1 = Session::from_bytes(clean_bytes.clone())?;
+        let mut s2 = Session::from_bytes(clean_bytes)?;
+
+        // now both writers make independent changes
+        s1.set_chunk_ref(
+            array_path.clone(),
+            ChunkIndices(vec![0]),
+            Some(ChunkPayload::Inline(format!("0").into())),
+        )
+        .await?;
+        s2.set_chunk_ref(
+            array_path.clone(),
+            ChunkIndices(vec![1]),
+            Some(ChunkPayload::Inline(format!("1").into())),
+        )
+        .await?;
+        // merge the distributed writers' sessions
+        s1.merge(s2).await?;
+
+        // merge that in to the base
+        // TODO: we might reconstruct this from the transaction log
+        // Session::from_transaction_log?
+        session.merge(s1).await?;
+
+        for i in 0..2 {
+            let reader = session
+                .get_chunk_reader(&array_path, &ChunkIndices(vec![i]), &ByteRange::ALL)
+                .await?;
+            assert_eq!(get_chunk(reader).await?, Some(format!("{i}").into()));
+        }
 
         Ok(())
     }
