@@ -65,7 +65,7 @@ class Repository:
             environment, or anonymous credentials will be used if the container allows it.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
-        spec_version : int, optional
+        spec_version : SpecVersion, optional
             Use this version of the spec for the new repository. If not passed, the latest version
             of the spec that was available before the library version release will be used.
 
@@ -90,7 +90,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
-        spec_version: int | None = None,
+        spec_version: SpecVersion | None = None,
         check_clean_root: bool = True,
     ) -> Self:
         """
@@ -114,7 +114,7 @@ class Repository:
             environment, or anonymous credentials will be used if the container allows it.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
-        spec_version : int, optional
+        spec_version : SpecVersion, optional
             Use this version of the spec for the new repository. If not passed, the latest version
             of the spec that was available before the library version release will be used.
 
@@ -227,7 +227,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
-        create_version: int | None = None,
+        create_version: SpecVersion | None = None,
         check_clean_root: bool = True,
     ) -> Self:
         """
@@ -254,7 +254,7 @@ class Repository:
             environment, or anonymous credentials will be used if the container allows it.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
-        create_version : int, optional
+        create_version : SpecVersion, optional
             Use this version of the spec for the new repository, if it needs to be created.
             If not passed, the latest version of the spec that was available before the
             library version release will be used.
@@ -281,7 +281,7 @@ class Repository:
         storage: Storage,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, AnyCredential | None] | None = None,
-        create_version: int | None = None,
+        create_version: SpecVersion | None = None,
         check_clean_root: bool = True,
     ) -> Self:
         """
@@ -308,7 +308,7 @@ class Repository:
             environment, or anonymous credentials will be used if the container allows it.
             As a security measure, Icechunk will block access to virtual chunks if the
             container is not authorized using this argument.
-        create_version : int, optional
+        create_version : SpecVersion, optional
             Use this version of the spec for the new repository, if it needs to be created.
             If not passed, the latest version of the spec that was available before the
             library version release will be used.
@@ -392,7 +392,7 @@ class Repository:
 
         Returns
         -------
-        int | None
+        SpecVersion | None
             The spec version of the repository if it exists, None if no repository
             exists at the given location.
         """
@@ -402,7 +402,7 @@ class Repository:
     async def fetch_spec_version_async(
         storage: Storage,
         storage_settings: StorageSettings | None = None,
-    ) -> int | None:
+    ) -> SpecVersion | None:
         """
         Fetch the spec version of a repository without fully opening it (async version).
 
@@ -418,7 +418,7 @@ class Repository:
 
         Returns
         -------
-        int | None
+        SpecVersion | None
             The spec version of the repository if it exists, None if no repository
             exists at the given location.
         """
@@ -2007,5 +2007,5 @@ class Repository:
         return await self._repository.inspect_manifest_async(manifest_id, pretty=pretty)
 
     @property
-    def spec_version(self) -> int:
+    def spec_version(self) -> SpecVersion:
         return self._repository.spec_version

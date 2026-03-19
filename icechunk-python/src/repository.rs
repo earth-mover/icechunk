@@ -1018,7 +1018,7 @@ impl PyRepository {
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
-        spec_version: Option<u8>,
+        spec_version: Option<PySpecVersion>,
         check_clean_root: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
@@ -1026,12 +1026,7 @@ impl PyRepository {
         let authorize_virtual_chunk_access =
             map_credentials(authorize_virtual_chunk_access);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let version = match spec_version {
-                Some(n) => {
-                    Some(SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?)
-                }
-                None => None,
-            };
+            let version = spec_version.map(|v| v.into());
             let repository = Repository::create(
                 config,
                 storage.0,
@@ -1105,7 +1100,7 @@ impl PyRepository {
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
-        create_version: Option<u8>,
+        create_version: Option<PySpecVersion>,
         check_clean_root: bool,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
@@ -1115,12 +1110,7 @@ impl PyRepository {
                     let config = config
                         .map(|c| c.try_into().map_err(PyValueError::new_err))
                         .transpose()?;
-                    let version = match create_version {
-                        Some(n) => Some(
-                            SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?,
-                        ),
-                        None => None,
-                    };
+                    let version = create_version.map(|v| v.into());
                     Ok::<_, PyErr>(
                         Repository::open_or_create(
                             config,
@@ -1146,7 +1136,7 @@ impl PyRepository {
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
-        create_version: Option<u8>,
+        create_version: Option<PySpecVersion>,
         check_clean_root: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
@@ -1154,12 +1144,7 @@ impl PyRepository {
         let authorize_virtual_chunk_access =
             map_credentials(authorize_virtual_chunk_access);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let version = match create_version {
-                Some(n) => {
-                    Some(SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?)
-                }
-                None => None,
-            };
+            let version = create_version.map(|v| v.into());
             let repository = Repository::open_or_create(
                 config,
                 storage.0,
