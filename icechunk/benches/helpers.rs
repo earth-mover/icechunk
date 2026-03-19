@@ -4,10 +4,10 @@
 ///
 /// Supported values (case-insensitive):
 /// - `samply`  — wire up `tracing-samply` so `#[instrument]` spans appear as
-///               profiler markers in the samply UI.
+///   profiler markers in the samply UI.
 /// - `chrome`  — emit a Chrome trace JSON file (viewable in Perfetto UI or
-///               `chrome://tracing`). The file is written when the returned
-///               `FlushGuard` is dropped.
+///   `chrome://tracing`). The file is written when the returned
+///   `FlushGuard` is dropped.
 ///
 /// If unset or unrecognized, no tracing layer is installed.
 #[allow(dead_code)]
