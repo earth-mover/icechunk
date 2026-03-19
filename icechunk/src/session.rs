@@ -21,6 +21,7 @@ use std::{
     convert::Infallible,
     future::{Future, ready},
     ops::Range,
+    pin::Pin,
     sync::Arc,
 };
 use thiserror::Error;
@@ -158,6 +159,8 @@ pub enum SessionErrorKind {
     ManifestCreationError(#[from] Box<SessionError>),
     #[error("byte range {request:?} is out of bounds for chunk of length {chunk_length}")]
     InvalidByteRange { request: ByteRange, chunk_length: u64 },
+    #[error("invalid commit configuration: {reason}")]
+    InvalidCommitConfiguration { reason: &'static str },
     #[error("unknown error: {0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -251,6 +254,181 @@ impl ManifestSplits {
             ranges.push(edges[bin - 1]..edges[bin]);
         }
         Some(ManifestExtents::from_ranges_iter(ranges))
+    }
+}
+
+pub type RebaseHook =
+    Box<dyn Fn(u16) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
+enum CommitKind {
+    NewCommit,
+    Flush,
+    RewriteManifests,
+}
+
+pub struct CommitBuilder<'a> {
+    session: &'a mut Session,
+    message: String,
+    properties: Option<SnapshotProperties>,
+    max_concurrent_nodes: usize,
+    allow_empty: bool,
+    amend: bool,
+    kind: CommitKind,
+    rebase_solver: Option<&'a (dyn ConflictSolver + Send + Sync)>,
+    rebase_attempts: u16,
+    before_rebase: Option<RebaseHook>,
+    after_rebase: Option<RebaseHook>,
+}
+
+impl<'a> CommitBuilder<'a> {
+    fn new(session: &'a mut Session, message: String) -> Self {
+        Self {
+            session,
+            message,
+            properties: None,
+            max_concurrent_nodes: 1,
+            allow_empty: false,
+            amend: false,
+            kind: CommitKind::NewCommit,
+            rebase_solver: None,
+            rebase_attempts: 0,
+            before_rebase: None,
+            after_rebase: None,
+        }
+    }
+
+    pub fn properties(mut self, properties: SnapshotProperties) -> Self {
+        self.properties = Some(properties);
+        self
+    }
+
+    pub fn max_concurrent_nodes(mut self, n: usize) -> Self {
+        self.max_concurrent_nodes = n;
+        self
+    }
+
+    pub fn allow_empty(mut self, allow_empty: bool) -> Self {
+        self.allow_empty = allow_empty;
+        self
+    }
+
+    pub fn amend(mut self) -> Self {
+        self.amend = true;
+        self
+    }
+
+    pub fn anonymous(mut self) -> Self {
+        self.kind = CommitKind::Flush;
+        self
+    }
+
+    pub fn rewrite_manifests(mut self) -> Self {
+        self.kind = CommitKind::RewriteManifests;
+        self
+    }
+
+    pub fn rebase(
+        mut self,
+        solver: &'a (dyn ConflictSolver + Send + Sync),
+        attempts: u16,
+    ) -> Self {
+        self.rebase_solver = Some(solver);
+        self.rebase_attempts = attempts;
+        self
+    }
+
+    pub fn before_rebase_hook(mut self, hook: RebaseHook) -> Self {
+        self.before_rebase = Some(hook);
+        self
+    }
+
+    pub fn after_rebase_hook(mut self, hook: RebaseHook) -> Self {
+        self.after_rebase = Some(hook);
+        self
+    }
+
+    pub async fn execute(self) -> SessionResult<SnapshotId> {
+        let has_rebase = self.rebase_solver.is_some();
+        let has_hooks = self.before_rebase.is_some() || self.after_rebase.is_some();
+
+        if matches!(self.kind, CommitKind::Flush) && self.amend {
+            return Err(SessionErrorKind::InvalidCommitConfiguration {
+                reason: "anonymous commits cannot be amended",
+            }
+            .into());
+        }
+        if matches!(self.kind, CommitKind::Flush) && has_rebase {
+            return Err(SessionErrorKind::InvalidCommitConfiguration {
+                reason: "anonymous commits cannot use rebase",
+            }
+            .into());
+        }
+        if matches!(self.kind, CommitKind::RewriteManifests) && has_rebase {
+            return Err(SessionErrorKind::InvalidCommitConfiguration {
+                reason: "rewrite_manifests cannot be combined with rebase",
+            }
+            .into());
+        }
+        if has_hooks && !has_rebase {
+            return Err(SessionErrorKind::InvalidCommitConfiguration {
+                reason: "rebase hooks require .rebase() to be set",
+            }
+            .into());
+        }
+
+        if self.amend {
+            self.session
+                .asset_manager
+                .fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        }
+
+        let commit_method =
+            if self.amend { CommitMethod::Amend } else { CommitMethod::NewCommit };
+
+        match self.kind {
+            CommitKind::Flush => {
+                self.session
+                    .do_flush(&self.message, self.max_concurrent_nodes, self.properties)
+                    .await
+            }
+            CommitKind::RewriteManifests => {
+                self.session
+                    .do_rewrite_manifests(
+                        &self.message,
+                        self.max_concurrent_nodes,
+                        self.properties,
+                        commit_method,
+                    )
+                    .await
+            }
+            CommitKind::NewCommit => {
+                if let Some(solver) = self.rebase_solver {
+                    self.session
+                        .do_commit_rebasing(
+                            solver,
+                            self.rebase_attempts,
+                            &self.message,
+                            self.max_concurrent_nodes,
+                            self.properties,
+                            self.allow_empty,
+                            self.before_rebase,
+                            self.after_rebase,
+                        )
+                        .await
+                } else {
+                    self.session
+                        .commit_inner(
+                            &self.message,
+                            self.max_concurrent_nodes,
+                            self.properties,
+                            false,
+                            commit_method,
+                            self.allow_empty,
+                        )
+                        .await
+                }
+            }
+        }
     }
 }
 
@@ -1132,56 +1310,8 @@ impl Session {
         Ok(())
     }
 
-    #[instrument(skip(self, properties))]
-    pub async fn commit(
-        &mut self,
-        message: &str,
-        max_concurrent_manifests: usize,
-        properties: Option<SnapshotProperties>,
-    ) -> SessionResult<SnapshotId> {
-        self.commit_with_options(message, max_concurrent_manifests, properties, false)
-            .await
-    }
-
-    #[instrument(skip(self, properties))]
-    pub async fn commit_with_options(
-        &mut self,
-        message: &str,
-        max_concurrent_manifests: usize,
-        properties: Option<SnapshotProperties>,
-        allow_empty: bool,
-    ) -> SessionResult<SnapshotId> {
-        self._commit(
-            message,
-            max_concurrent_manifests,
-            properties,
-            false,
-            CommitMethod::NewCommit,
-            allow_empty,
-        )
-        .await
-    }
-
-    #[instrument(skip(self, properties))]
-    pub async fn amend(
-        &mut self,
-        message: &str,
-        max_concurrent_manifests: usize,
-        properties: Option<SnapshotProperties>,
-        allow_empty: bool,
-    ) -> SessionResult<SnapshotId> {
-        // Icechunk 1 doesn't support amend
-        self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
-
-        self._commit(
-            message,
-            max_concurrent_manifests,
-            properties,
-            false,
-            CommitMethod::Amend,
-            allow_empty,
-        )
-        .await
+    pub fn commit(&mut self, message: impl Into<String>) -> CommitBuilder<'_> {
+        CommitBuilder::new(self, message.into())
     }
 
     async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
@@ -1228,22 +1358,30 @@ impl Session {
         self.asset_manager.spec_version()
     }
 
-    pub async fn flush(
+    fn resolve_properties(
+        &self,
+        overrides: Option<SnapshotProperties>,
+    ) -> SnapshotProperties {
+        let default = self.default_commit_metadata.clone();
+        match overrides {
+            Some(p) => {
+                let mut merged = default;
+                merged.extend(p);
+                merged
+            }
+            None => default,
+        }
+    }
+
+    async fn do_flush(
         &mut self,
         message: &str,
-        max_concurrent_manifests: usize,
+        max_concurrent_nodes: usize,
         properties: Option<SnapshotProperties>,
     ) -> SessionResult<SnapshotId> {
         info!(old_snapshot_id=%self.snapshot_id(), "Flush started");
 
-        let default_metadata = self.default_commit_metadata.clone();
-        let properties = properties
-            .map(|p| {
-                let mut merged = default_metadata.clone();
-                merged.extend(p.into_iter());
-                merged
-            })
-            .unwrap_or(default_metadata);
+        let properties = self.resolve_properties(properties);
 
         let flush_data = FlushProcess::new(
             Arc::clone(&self.asset_manager),
@@ -1254,7 +1392,7 @@ impl Session {
         let new_snap = do_flush(
             flush_data,
             message,
-            max_concurrent_manifests,
+            max_concurrent_nodes,
             properties,
             false,
             CommitMethod::NewCommit,
@@ -1284,10 +1422,10 @@ impl Session {
     }
 
     #[instrument(skip(self, properties))]
-    pub async fn rewrite_manifests(
+    async fn do_rewrite_manifests(
         &mut self,
         message: &str,
-        max_concurrent_manifests: usize,
+        max_concurrent_nodes: usize,
         properties: Option<SnapshotProperties>,
         commit_method: CommitMethod,
     ) -> SessionResult<SnapshotId> {
@@ -1314,9 +1452,9 @@ impl Session {
             splitting_config_serialized,
         );
 
-        self._commit(
+        self.commit_inner(
             message,
-            max_concurrent_manifests,
+            max_concurrent_nodes,
             Some(properties),
             true,
             commit_method,
@@ -1326,10 +1464,10 @@ impl Session {
     }
 
     #[instrument(skip(self, properties))]
-    async fn _commit(
+    async fn commit_inner(
         &mut self,
         message: &str,
-        max_concurrent_manifests: usize,
+        max_concurrent_nodes: usize,
         properties: Option<SnapshotProperties>,
         rewrite_manifests: bool,
         commit_method: CommitMethod,
@@ -1347,14 +1485,7 @@ impl Session {
 
         let branch_name = branch_name.clone();
 
-        let default_metadata = self.default_commit_metadata.clone();
-        let properties = properties
-            .map(|p| {
-                let mut merged = default_metadata.clone();
-                merged.extend(p.into_iter());
-                merged
-            })
-            .unwrap_or(default_metadata);
+        let properties = self.resolve_properties(properties);
         let num_updates = self.config().num_updates_per_repo_info_file();
         {
             // we need to play this trick because we need to borrow from self twice
@@ -1374,7 +1505,7 @@ impl Session {
             &self.snapshot_id,
             change_set,
             message,
-            max_concurrent_manifests,
+            max_concurrent_nodes,
             Some(properties),
             rewrite_manifests,
             commit_method,
@@ -1398,25 +1529,17 @@ impl Session {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn commit_rebasing<F1, F2, Fut1, Fut2>(
+    async fn do_commit_rebasing(
         &mut self,
         solver: &(dyn ConflictSolver + Send + Sync),
         rebase_attempts: u16,
         message: &str,
-        max_concurrent_manifests: usize,
+        max_concurrent_nodes: usize,
         properties: Option<SnapshotProperties>,
-        // We would prefer to make this argument optional, but passing None
-        // for this argument is so hard. Callers should just pass noop closure like
-        // |_| async {},
-        before_rebase: F1,
-        after_rebase: F2,
-    ) -> SessionResult<SnapshotId>
-    where
-        F1: Fn(u16) -> Fut1,
-        F2: Fn(u16) -> Fut2,
-        Fut1: Future<Output = ()>,
-        Fut2: Future<Output = ()>,
-    {
+        allow_empty: bool,
+        before_rebase: Option<RebaseHook>,
+        after_rebase: Option<RebaseHook>,
+    ) -> SessionResult<SnapshotId> {
         for attempt in 0..rebase_attempts {
             let mut props = properties.clone().unwrap_or_default();
             inject_icechunk_metadata(
@@ -1424,12 +1547,26 @@ impl Session {
                 "rebase_attempts",
                 serde_json::Value::from(attempt),
             );
-            match self.commit(message, max_concurrent_manifests, Some(props)).await {
+            match self
+                .commit_inner(
+                    message,
+                    max_concurrent_nodes,
+                    Some(props),
+                    false,
+                    CommitMethod::NewCommit,
+                    allow_empty,
+                )
+                .await
+            {
                 Ok(snap) => return Ok(snap),
                 Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) => {
-                    before_rebase(attempt + 1).await;
+                    if let Some(ref hook) = before_rebase {
+                        hook(attempt + 1).await;
+                    }
                     self.rebase(solver).await?;
-                    after_rebase(attempt + 1).await;
+                    if let Some(ref hook) = after_rebase {
+                        hook(attempt + 1).await;
+                    }
                 }
                 Err(other_err) => return Err(other_err),
             }
@@ -1440,7 +1577,15 @@ impl Session {
             "rebase_attempts",
             serde_json::Value::from(rebase_attempts),
         );
-        self.commit(message, max_concurrent_manifests, Some(props)).await
+        self.commit_inner(
+            message,
+            max_concurrent_nodes,
+            Some(props),
+            false,
+            CommitMethod::NewCommit,
+            allow_empty,
+        )
+        .await
     }
 
     /// Detect and optionally fix conflicts between the current [`ChangeSet`] (or session) and
@@ -2130,7 +2275,7 @@ async fn write_manifest_with_changes(
         .collect::<Vec<_>>();
 
     // Hardcoded to 1: this fetches manifests for a single extent within a single node.
-    // Node-level parallelism is already controlled by max_concurrent_manifests in the
+    // Node-level parallelism is already controlled by max_concurrent_nodes in the
     // caller (do_flush), so adding concurrency here would compound it.
     let mut all_chunks_vec = stream::iter(futs)
         .buffer_unordered(1)
@@ -2447,7 +2592,7 @@ pub enum CommitMethod {
 async fn do_flush(
     mut flush_data: FlushProcess<'_>,
     message: &str,
-    max_concurrent_manifests: usize,
+    max_concurrent_nodes: usize,
     properties: SnapshotProperties,
     rewrite_manifests: bool,
     commit_method: CommitMethod,
@@ -2507,7 +2652,7 @@ async fn do_flush(
                 .await
             }
         }))
-        .buffer_unordered(max_concurrent_manifests)
+        .buffer_unordered(max_concurrent_nodes)
         .try_collect()
         .await?;
 
@@ -2550,7 +2695,7 @@ async fn do_flush(
                 .await
             }
         }))
-        .buffer_unordered(max_concurrent_manifests)
+        .buffer_unordered(max_concurrent_nodes)
         .try_collect()
         .await?;
 
@@ -2713,7 +2858,7 @@ async fn do_commit(
     snapshot_id: &SnapshotId,
     change_set: &ChangeSet,
     message: &str,
-    max_concurrent_manifests: usize,
+    max_concurrent_nodes: usize,
     properties: Option<SnapshotProperties>,
     rewrite_manifests: bool,
     commit_method: CommitMethod,
@@ -2744,7 +2889,7 @@ async fn do_commit(
     let new_snapshot = do_flush(
         flush_data,
         message,
-        max_concurrent_manifests,
+        max_concurrent_nodes,
         properties,
         rewrite_manifests,
         commit_method,
@@ -3264,7 +3409,7 @@ mod tests {
         let mut repo = create_memory_store_repository(spec_version).await;
         let mut ds = repo.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::new()).await?;
-        let snapshot = ds.commit("commit 1", 8, None).await?;
+        let snapshot = ds.commit("commit 1").max_concurrent_nodes(8).execute().await?;
 
         // Verify that the first commit has no metadata
         let v = VersionInfo::SnapshotId(snapshot.clone());
@@ -3280,7 +3425,7 @@ mod tests {
 
         let mut ds = repo.writable_session("main").await?;
         ds.add_group("/group".try_into().unwrap(), Bytes::new()).await?;
-        let snapshot = ds.commit("commit 2", 8, None).await?;
+        let snapshot = ds.commit("commit 2").max_concurrent_nodes(8).execute().await?;
 
         let v = VersionInfo::SnapshotId(snapshot.clone());
         let snapshot_info = repo.ancestry(&v).await?;
@@ -3293,7 +3438,12 @@ mod tests {
         metadata.insert("id".to_string(), "ideded".to_string().into());
         let mut ds = repo.writable_session("main").await?;
         ds.add_group("/group2".try_into().unwrap(), Bytes::new()).await?;
-        let snapshot = ds.commit("commit", 8, Some(metadata.clone())).await?;
+        let snapshot = ds
+            .commit("commit")
+            .max_concurrent_nodes(8)
+            .properties(metadata.clone())
+            .execute()
+            .await?;
 
         let v = VersionInfo::SnapshotId(snapshot.clone());
         let snapshot_info = repo.ancestry(&v).await?;
@@ -3363,7 +3513,8 @@ mod tests {
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
                 .await?;
         }
-        let first_snapshot = session.commit("None", 8, None).await?;
+        let first_snapshot =
+            session.commit("None").max_concurrent_nodes(8).execute().await?;
         let _session = repo
             .readonly_session(&VersionInfo::SnapshotId(first_snapshot.clone()))
             .await?;
@@ -3419,7 +3570,8 @@ mod tests {
         );
 
         // write manifests, check number of references in manifest
-        let _updated_snapshot = session.commit("updated", 8, None).await?;
+        let _updated_snapshot =
+            session.commit("updated").max_concurrent_nodes(8).execute().await?;
 
         // should still be deleted
         assert!(
@@ -3434,8 +3586,12 @@ mod tests {
 
         // empty commit should not alter manifests
         let mut session = repo.writable_session("main").await?;
-        let _empty_snapshot =
-            session.commit_with_options("empty commit", 8, None, true).await?;
+        let _empty_snapshot = session
+            .commit("empty commit")
+            .max_concurrent_nodes(8)
+            .allow_empty(true)
+            .execute()
+            .await?;
         assert_manifest_count(repo.asset_manager(), initial_manifest_count).await;
 
         Ok(())
@@ -3722,7 +3878,11 @@ mod tests {
         .await?;
         assert_eq!(chunk, Some(data.clone()));
 
-        ds.commit("commit", 8, Some(SnapshotProperties::default())).await?;
+        ds.commit("commit")
+            .max_concurrent_nodes(8)
+            .properties(SnapshotProperties::default())
+            .execute()
+            .await?;
 
         let chunk = get_chunk(
             ds.get_chunk_reader(&new_array_path, &ChunkIndices(vec![1]), &ByteRange::ALL)
@@ -3772,8 +3932,12 @@ mod tests {
         assert!(!diff.is_empty());
         assert_eq!(diff.new_groups, [Path::root()].into());
 
-        let first_commit =
-            ds.commit("commit", 8, Some(SnapshotProperties::default())).await?;
+        let first_commit = ds
+            .commit("commit")
+            .max_concurrent_nodes(8)
+            .properties(SnapshotProperties::default())
+            .execute()
+            .await?;
 
         // We need a new session after the commit
         let mut ds = repository.writable_session("main").await?;
@@ -3788,8 +3952,12 @@ mod tests {
 
         let user_data2 = Bytes::copy_from_slice(b"bar");
         ds.add_group("/group".try_into().unwrap(), user_data2.clone()).await?;
-        let _snapshot_id =
-            ds.commit("commit", 8, Some(SnapshotProperties::default())).await?;
+        let _snapshot_id = ds
+            .commit("commit")
+            .max_concurrent_nodes(8)
+            .properties(SnapshotProperties::default())
+            .execute()
+            .await?;
 
         let mut ds = repository.writable_session("main").await?;
         assert!(matches!(
@@ -3822,8 +3990,12 @@ mod tests {
         assert_eq!(diff.new_arrays, [new_array_path.clone()].into());
 
         // wo commit to test the case of a chunkless array
-        let _snapshot_id =
-            ds.commit("commit", 8, Some(SnapshotProperties::default())).await?;
+        let _snapshot_id = ds
+            .commit("commit")
+            .max_concurrent_nodes(8)
+            .properties(SnapshotProperties::default())
+            .execute()
+            .await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -3855,8 +4027,12 @@ mod tests {
             [(new_array_path.clone(), [ChunkIndices(vec![0, 0, 0])].into())].into()
         );
 
-        let _snapshot_id =
-            ds.commit("commit", 8, Some(SnapshotProperties::default())).await?;
+        let _snapshot_id = ds
+            .commit("commit")
+            .max_concurrent_nodes(8)
+            .properties(SnapshotProperties::default())
+            .execute()
+            .await?;
 
         let mut ds = repository.writable_session("main").await?;
         assert!(matches!(
@@ -3903,7 +4079,8 @@ mod tests {
         )
         .await?;
 
-        let previous_snapshot_id = ds.commit("commit", 8, None).await?;
+        let previous_snapshot_id =
+            ds.commit("commit").max_concurrent_nodes(8).execute().await?;
 
         let mut ds = repository.writable_session("main").await?;
 
@@ -3946,7 +4123,7 @@ mod tests {
         )
         .await?;
 
-        let snapshot_id = ds.commit("commit", 8, None).await?;
+        let snapshot_id = ds.commit("commit").max_concurrent_nodes(8).execute().await?;
 
         let snap = repository.asset_manager().fetch_snapshot(&snapshot_id).await?;
         match &snap.get_node(&new_array_path)?.node_data {
@@ -4094,7 +4271,7 @@ mod tests {
         ds.add_group("/1".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
         ds.delete_group("/1".try_into().unwrap()).await?;
         assert_eq!(ds.list_nodes(&Path::root()).await?.count(), 1);
-        ds.commit("commit", 8, None).await?;
+        ds.commit("commit").max_concurrent_nodes(8).execute().await?;
 
         let ds = repository
             .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
@@ -4114,7 +4291,7 @@ mod tests {
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         ds.add_group("/1".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
-        ds.commit("commit", 8, None).await?;
+        ds.commit("commit").max_concurrent_nodes(8).execute().await?;
 
         let mut ds = repository.writable_session("main").await?;
         ds.delete_group("/1".try_into().unwrap()).await?;
@@ -4132,11 +4309,11 @@ mod tests {
         let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        ds.commit("commit", 8, None).await?;
+        ds.commit("commit").max_concurrent_nodes(8).execute().await?;
 
         let mut ds = repository.writable_session("main").await?;
         ds.delete_group(Path::root()).await?;
-        ds.commit("commit", 8, None).await?;
+        ds.commit("commit").max_concurrent_nodes(8).execute().await?;
 
         let ds = repository
             .readonly_session(&VersionInfo::BranchTipRef("main".to_string()))
@@ -4154,7 +4331,7 @@ mod tests {
         let repository = create_memory_store_repository(spec_version).await;
         let mut ds = repository.writable_session("main").await?;
         ds.add_group(Path::root(), def.clone()).await?;
-        ds.commit("initialize", 8, None).await?;
+        ds.commit("initialize").max_concurrent_nodes(8).execute().await?;
 
         let mut ds = repository.writable_session("main").await?;
         ds.add_group("/a".try_into().unwrap(), def.clone()).await?;
@@ -4188,7 +4365,7 @@ mod tests {
         ds.add_group("/a".try_into().unwrap(), def.clone()).await?;
         ds.add_group("/b".try_into().unwrap(), def.clone()).await?;
         ds.add_group("/b/bb".try_into().unwrap(), def.clone()).await?;
-        ds.commit("commit", 8, None).await?;
+        ds.commit("commit").max_concurrent_nodes(8).execute().await?;
 
         let mut ds = repository.writable_session("main").await?;
         ds.delete_group("/b".try_into().unwrap()).await?;
@@ -4248,7 +4425,7 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        let snapshot_id = ds.commit("commit", 8, None).await?;
+        let snapshot_id = ds.commit("commit").max_concurrent_nodes(8).execute().await?;
         let ds = repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
 
         let coords = ds
@@ -4318,7 +4495,7 @@ mod tests {
         ds.add_array(a2path.clone(), shape.clone(), dimension_names.clone(), def.clone())
             .await?;
 
-        let _ = ds.commit("first commit", 8, None).await?;
+        let _ = ds.commit("first commit").max_concurrent_nodes(8).execute().await?;
 
         // there should be no manifests yet because we didn't add any chunks
         assert_eq!(
@@ -4364,7 +4541,7 @@ mod tests {
         )
         .await?;
 
-        let _snap_id = ds.commit("commit", 8, None).await?;
+        let _snap_id = ds.commit("commit").max_concurrent_nodes(8).execute().await?;
 
         // there should be two manifest now, one per array
         assert_eq!(
@@ -4392,7 +4569,8 @@ mod tests {
 
         let mut ds = repo.writable_session("main").await?;
         ds.delete_array(a2path).await?;
-        let _snap_id = ds.commit("array2 deleted", 8, None).await?;
+        let _snap_id =
+            ds.commit("array2 deleted").max_concurrent_nodes(8).execute().await?;
 
         // we should still have two manifests, the same as before because only array deletes happened
         assert_eq!(
@@ -4421,7 +4599,8 @@ mod tests {
         // delete a chunk
         let mut ds = repo.writable_session("main").await?;
         ds.set_chunk_ref(a1path.clone(), ChunkIndices(vec![0, 0]), None).await?;
-        let _snap_id = ds.commit("chunk deleted", 8, None).await?;
+        let _snap_id =
+            ds.commit("chunk deleted").max_concurrent_nodes(8).execute().await?;
 
         // there should be three manifests
         assert_eq!(
@@ -4458,7 +4637,8 @@ mod tests {
         // delete the second chunk, now there are no chunks, so there should be no manifests either
         let mut ds = repo.writable_session("main").await?;
         ds.set_chunk_ref(a1path.clone(), ChunkIndices(vec![0, 1]), None).await?;
-        let _snap_id = ds.commit("chunk deleted", 8, None).await?;
+        let _snap_id =
+            ds.commit("chunk deleted").max_concurrent_nodes(8).execute().await?;
 
         let manifests = match ds.get_array(&a1path).await?.node_data {
             NodeData::Array { manifests, .. } => manifests,
@@ -4502,7 +4682,8 @@ mod tests {
 
         // add a new array and retrieve its node
         ds.add_group(Path::root(), def.clone()).await?;
-        let new_snapshot_id = ds.commit("first commit", 8, None).await?;
+        let new_snapshot_id =
+            ds.commit("first commit").max_concurrent_nodes(8).execute().await?;
         assert_eq!(new_snapshot_id, repo.lookup_branch("main").await?);
         assert_eq!(&new_snapshot_id, ds.snapshot_id());
 
@@ -4541,7 +4722,8 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        let new_snapshot_id = ds.commit("second commit", 8, None).await?;
+        let new_snapshot_id =
+            ds.commit("second commit").max_concurrent_nodes(8).execute().await?;
         assert_eq!(new_snapshot_id, repo.lookup_branch("main").await?);
 
         let parents = repo
@@ -4567,28 +4749,43 @@ mod tests {
 
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        let amend_result =
-            session.amend("cannot amend initial commit", 8, None, false).await;
+        let amend_result = session
+            .commit("cannot amend initial commit")
+            .max_concurrent_nodes(8)
+            .amend()
+            .execute()
+            .await;
         assert!(amend_result.is_err());
         assert!(amend_result.unwrap_err().to_string().contains("first commit"));
 
         let mut session = repo.writable_session("main").await?;
-        let amend_result =
-            session.amend("cannot amend initial commit", 8, None, true).await;
+        let amend_result = session
+            .commit("cannot amend initial commit")
+            .max_concurrent_nodes(8)
+            .amend()
+            .allow_empty(true)
+            .execute()
+            .await;
         assert!(amend_result.is_err());
         assert!(amend_result.unwrap_err().to_string().contains("first commit"));
 
         // Now make a proper first commit
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        let snap1 = session.commit("make root", 8, None).await?;
+        let snap1 = session.commit("make root").max_concurrent_nodes(8).execute().await?;
 
         let mut session = repo.writable_session("main").await?;
         session.add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
-        let before_amend1 = session.commit("will be amended", 8, None).await?;
+        let before_amend1 =
+            session.commit("will be amended").max_concurrent_nodes(8).execute().await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b"")).await?;
-        let before_amend2 = session.amend("first amend", 8, None, false).await?;
+        let before_amend2 = session
+            .commit("first amend")
+            .max_concurrent_nodes(8)
+            .amend()
+            .execute()
+            .await?;
 
         let main_version = VersionInfo::BranchTipRef("main".to_string());
         let anc: Vec<_> = repo
@@ -4616,7 +4813,12 @@ mod tests {
         session
             .add_group("/error".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        let after_amend2 = session.amend("second amend", 8, None, false).await?;
+        let after_amend2 = session
+            .commit("second amend")
+            .max_concurrent_nodes(8)
+            .amend()
+            .execute()
+            .await?;
 
         let anc_from_tag: Vec<_> = repo
             .ancestry(&VersionInfo::TagRef("tag".to_string()))
@@ -4683,21 +4885,26 @@ mod tests {
         session
             .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        session.commit("setup", 8, None).await?;
+        session.commit("setup").max_concurrent_nodes(8).execute().await?;
 
         // Rearrange session, only has a move: should be fine
         let mut session = repo.rearrange_session("main").await?;
         session
             .move_node("/source".try_into().unwrap(), "/dest".try_into().unwrap())
             .await?;
-        session.commit("move commit", 8, None).await?;
+        session.commit("move commit").max_concurrent_nodes(8).execute().await?;
 
         // Amend on top of a move commit: should fail
         let mut session = repo.writable_session("main").await?;
         session
             .add_group("/fail".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        let result = session.amend("amend after move", 8, None, false).await;
+        let result = session
+            .commit("amend after move")
+            .max_concurrent_nodes(8)
+            .amend()
+            .execute()
+            .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err.kind, SessionErrorKind::RearrangeSessionOnly));
@@ -4707,8 +4914,12 @@ mod tests {
         session
             .move_node("/dest".try_into().unwrap(), "/another_dest".try_into().unwrap())
             .await?;
-        let result =
-            session.amend("amend after move, only new moves", 8, None, false).await;
+        let result = session
+            .commit("amend after move, only new moves")
+            .max_concurrent_nodes(8)
+            .amend()
+            .execute()
+            .await;
         assert!(result.is_ok());
         let snapshot_id = result.unwrap();
 
@@ -4734,7 +4945,7 @@ mod tests {
                 Bytes::copy_from_slice(b""),
             )
             .await?;
-        session.commit("add nested groups", 8, None).await?;
+        session.commit("add nested groups").max_concurrent_nodes(8).execute().await?;
 
         let mut session = repo.rearrange_session("main").await?;
         session
@@ -4749,7 +4960,11 @@ mod tests {
                 "/new_dest".try_into().unwrap(),
             )
             .await?;
-        let snapshot_id = session.commit("move nested groups", 8, None).await?;
+        let snapshot_id = session
+            .commit("move nested groups")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await?;
 
         // Check if moved nested groups still shows up properly after commit
         let session =
@@ -4766,8 +4981,12 @@ mod tests {
                 "/moved_again".try_into().unwrap(),
             )
             .await?;
-        let snapshot_id =
-            session.amend("amend nested groups move ", 8, None, false).await?;
+        let snapshot_id = session
+            .commit("amend nested groups move ")
+            .max_concurrent_nodes(8)
+            .amend()
+            .execute()
+            .await?;
 
         // Check if moved nested groups still shows up properly after amend
         let session =
@@ -4797,7 +5016,8 @@ mod tests {
         // Non-initial snapshot should NOT be marked as initial
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        let snap1 = session.commit("first commit", 8, None).await?;
+        let snap1 =
+            session.commit("first commit").max_concurrent_nodes(8).execute().await?;
 
         let snap1_info = asset_manager.fetch_snapshot_info(&snap1).await?;
         assert!(!snap1_info.is_initial());
@@ -4840,7 +5060,8 @@ mod tests {
         // Diff from initial snapshot to first real commit should show the new group
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        let snap1 = session.commit("first commit", 8, None).await?;
+        let snap1 =
+            session.commit("first commit").max_concurrent_nodes(8).execute().await?;
 
         let diff = repo
             .diff(
@@ -4868,17 +5089,23 @@ mod tests {
         let repo = create_memory_store_repository(spec_version).await;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        let snap1 = session.commit("make root", 8, None).await?;
+        let snap1 = session.commit("make root").max_concurrent_nodes(8).execute().await?;
 
         let mut session = repo.writable_session("main").await?;
-        let result = session.commit("an empty commit", 8, None).await;
+        let result =
+            session.commit("an empty commit").max_concurrent_nodes(8).execute().await;
         assert!(matches!(
             result,
             Err(SessionError { kind: SessionErrorKind::NoChangesToCommit, .. })
         ));
 
         let mut session = repo.writable_session("main").await?;
-        let snap2 = session.commit_with_options("an empty commit", 8, None, true).await?;
+        let snap2 = session
+            .commit("an empty commit")
+            .max_concurrent_nodes(8)
+            .allow_empty(true)
+            .execute()
+            .await?;
         let snap2_info = repo.lookup_snapshot(&snap2).await?;
         assert_eq!(snap2_info.parent_id, Some(snap1.clone()));
 
@@ -4922,12 +5149,12 @@ mod tests {
 
         let handle1 = tokio::spawn(async move {
             let _ = barrier_c.wait().await;
-            ds1.commit("from 1", 8, None).await
+            ds1.commit("from 1").max_concurrent_nodes(8).execute().await
         });
 
         let handle2 = tokio::spawn(async move {
             let _ = barrier_cc.wait().await;
-            ds2.commit("from 2", 8, None).await
+            ds2.commit("from 2").max_concurrent_nodes(8).execute().await
         });
 
         let res1 = handle1.await.unwrap();
@@ -4990,7 +5217,7 @@ mod tests {
         session.add_group(Path::new("/foo/old").unwrap(), Bytes::new()).await?;
         let apath: Path = "/foo/old/array".try_into()?;
         session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
-        session.commit("first commit", 8, None).await?;
+        session.commit("first commit").max_concurrent_nodes(8).execute().await?;
 
         let mut session = repo.rearrange_session("main").await?;
         session
@@ -5021,7 +5248,7 @@ mod tests {
             ],
         );
 
-        session.commit("moved", 8, None).await?;
+        session.commit("moved").max_concurrent_nodes(8).execute().await?;
 
         let session =
             repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
@@ -5055,7 +5282,7 @@ mod tests {
         session.add_group(Path::root(), Bytes::new()).await?;
         let apath: Path = "/foo/old/array".try_into()?;
         session.add_array(apath.clone(), shape, None, Bytes::new()).await?;
-        session.commit("first commit", 8, None).await?;
+        session.commit("first commit").max_concurrent_nodes(8).execute().await?;
 
         let mut session = repo.rearrange_session("main").await?;
         assert!(matches!(
@@ -5098,7 +5325,7 @@ mod tests {
 
         ds.add_array(apath.clone(), shape, None, Bytes::new()).await?;
 
-        ds.commit("first commit", 8, None).await?;
+        ds.commit("first commit").max_concurrent_nodes(8).execute().await?;
 
         // add 3 chunks
         // First 2 chunks are valid, third will be invalid chunk indices
@@ -5176,7 +5403,7 @@ mod tests {
                 .await?;
         }
 
-        session.commit("first commit", 8, None).await?;
+        session.commit("first commit").max_concurrent_nodes(8).execute().await?;
 
         let mut session = repo.writable_session("main").await?;
         session.shift_array(&apath, &[-1]).await?;
@@ -5219,7 +5446,13 @@ mod tests {
             )
             .await?;
         let meta: SnapshotProperties = [("test".to_string(), 42.into())].into();
-        let snap_id = session.flush("flush", 8, Some(meta.clone())).await?;
+        let snap_id = session
+            .commit("flush")
+            .max_concurrent_nodes(8)
+            .anonymous()
+            .properties(meta.clone())
+            .execute()
+            .await?;
 
         let chunk = get_chunk(
             session
@@ -5274,7 +5507,7 @@ mod tests {
             Bytes::new(),
         )
         .await?;
-        ds.commit("create directory", 8, None).await?;
+        ds.commit("create directory").max_concurrent_nodes(8).execute().await?;
 
         Ok(repository)
     }
@@ -5318,10 +5551,10 @@ mod tests {
 
         let conflict_path: Path = "/foo/bar/conflict".try_into().unwrap();
         ds1.add_group(conflict_path.clone(), user_data()).await?;
-        ds1.commit("create group", 8, None).await?;
+        ds1.commit("create group").max_concurrent_nodes(8).execute().await?;
 
         ds2.add_array(conflict_path.clone(), basic_shape(), None, user_data()).await?;
-        ds2.commit("create array", 8, None).await.unwrap_err();
+        ds2.commit("create array").max_concurrent_nodes(8).execute().await.unwrap_err();
         assert_has_conflict(
             &Conflict::NewNodeConflictsWithExistingNode(conflict_path),
             ds2.rebase(&ConflictDetector).await,
@@ -5340,12 +5573,12 @@ mod tests {
 
         let path: Path = "/foo/bar".try_into().unwrap();
         ds1.add_group("/foo/quux".try_into().unwrap(), user_data()).await?;
-        ds1.commit("add sibling group", 8, None).await?;
+        ds1.commit("add sibling group").max_concurrent_nodes(8).execute().await?;
 
         ds2.delete_group(path.clone()).await?;
         ds2.add_group(path.clone(), Bytes::new()).await?;
         assert!(matches!(
-            ds2.commit("delete+re-add group", 8, None).await,
+            ds2.commit("delete+re-add group").max_concurrent_nodes(8).execute().await,
             Err(SessionError {
                 kind: SessionErrorKind::Conflict {
                     expected_parent, actual_parent
@@ -5354,7 +5587,7 @@ mod tests {
         ));
 
         ds2.rebase(&ConflictDetector).await?;
-        ds2.commit("delete+re-add group", 8, None).await?;
+        ds2.commit("delete+re-add group").max_concurrent_nodes(8).execute().await?;
 
         Ok(())
     }
@@ -5371,13 +5604,13 @@ mod tests {
 
         let path: Path = "/foo/bar".try_into().unwrap();
         ds1.update_group(&path, Bytes::from("updated")).await?;
-        ds1.commit("update group metadata", 8, None).await?;
+        ds1.commit("update group metadata").max_concurrent_nodes(8).execute().await?;
 
         let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_group(path.clone()).await?;
         ds2.add_group(path.clone(), user_data()).await?;
         assert!(matches!(
-            ds2.commit("delete+re-add group", 8, None).await,
+            ds2.commit("delete+re-add group").max_concurrent_nodes(8).execute().await,
             Err(SessionError {
                 kind: SessionErrorKind::Conflict {
                     expected_parent, actual_parent
@@ -5404,11 +5637,15 @@ mod tests {
 
         let conflict_path: Path = "/foo/bar/conflict".try_into().unwrap();
         ds1.add_array(conflict_path.clone(), basic_shape(), None, user_data()).await?;
-        ds1.commit("create array", 8, None).await?;
+        ds1.commit("create array").max_concurrent_nodes(8).execute().await?;
 
         let inner_path: Path = "/foo/bar/conflict/inner".try_into().unwrap();
         ds2.add_array(inner_path.clone(), basic_shape(), None, user_data()).await?;
-        ds2.commit("create inner array", 8, None).await.unwrap_err();
+        ds2.commit("create inner array")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
+            .unwrap_err();
         assert_has_conflict(
             &Conflict::NewNodeInInvalidGroup(conflict_path),
             ds2.rebase(&ConflictDetector).await,
@@ -5427,10 +5664,14 @@ mod tests {
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         ds1.update_array(&path.clone(), basic_shape(), None, user_data()).await?;
-        ds1.commit("update array", 8, None).await?;
+        ds1.commit("update array").max_concurrent_nodes(8).execute().await?;
 
         ds2.update_array(&path.clone(), basic_shape(), None, user_data()).await?;
-        ds2.commit("update array again", 8, None).await.unwrap_err();
+        ds2.commit("update array again")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
+            .unwrap_err();
         assert_has_conflict(
             &Conflict::ZarrMetadataDoubleUpdate(path),
             ds2.rebase(&ConflictDetector).await,
@@ -5449,10 +5690,14 @@ mod tests {
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         ds1.delete_array(path.clone()).await?;
-        ds1.commit("delete array", 8, None).await?;
+        ds1.commit("delete array").max_concurrent_nodes(8).execute().await?;
 
         ds2.update_array(&path.clone(), basic_shape(), None, user_data()).await?;
-        ds2.commit("update array again", 8, None).await.unwrap_err();
+        ds2.commit("update array again")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
+            .unwrap_err();
         assert_has_conflict(
             &Conflict::ZarrMetadataUpdateOfDeletedArray(path),
             ds2.rebase(&ConflictDetector).await,
@@ -5471,11 +5716,11 @@ mod tests {
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         ds1.update_array(&path.clone(), basic_shape(), None, user_data()).await?;
-        ds1.commit("update array", 8, None).await?;
+        ds1.commit("update array").max_concurrent_nodes(8).execute().await?;
 
         let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_array(path.clone()).await?;
-        ds2.commit("delete array", 8, None).await.unwrap_err();
+        ds2.commit("delete array").max_concurrent_nodes(8).execute().await.unwrap_err();
         assert_has_conflict(
             &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             ds2.rebase(&ConflictDetector).await,
@@ -5499,11 +5744,11 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        ds1.commit("update chunks", 8, None).await?;
+        ds1.commit("update chunks").max_concurrent_nodes(8).execute().await?;
 
         let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_array(path.clone()).await?;
-        ds2.commit("delete array", 8, None).await.unwrap_err();
+        ds2.commit("delete array").max_concurrent_nodes(8).execute().await.unwrap_err();
         assert_has_conflict(
             &Conflict::DeleteOfUpdatedArray { path, node_id: node.id },
             ds2.rebase(&ConflictDetector).await,
@@ -5522,11 +5767,11 @@ mod tests {
 
         let path: Path = "/foo/bar".try_into().unwrap();
         ds1.update_group(&path, Bytes::new()).await?;
-        ds1.commit("update user attributes", 8, None).await?;
+        ds1.commit("update user attributes").max_concurrent_nodes(8).execute().await?;
 
         let node = ds2.get_node(&path).await.unwrap();
         ds2.delete_group(path.clone()).await?;
-        ds2.commit("delete group", 8, None).await.unwrap_err();
+        ds2.commit("delete group").max_concurrent_nodes(8).execute().await.unwrap_err();
         assert_has_conflict(
             &Conflict::DeleteOfUpdatedGroup { path, node_id: node.id },
             ds2.rebase(&ConflictDetector).await,
@@ -5547,7 +5792,7 @@ mod tests {
 
         let new_array_path: Path = "/array".try_into().unwrap();
         ds.add_array(new_array_path.clone(), basic_shape(), None, user_data()).await?;
-        ds.commit("create array", 8, None).await?;
+        ds.commit("create array").max_concurrent_nodes(8).execute().await?;
 
         // one writer sets chunks
         // other writer sets the same chunks, generating a conflict
@@ -5567,8 +5812,11 @@ mod tests {
             Some(ChunkPayload::Inline("hello".into())),
         )
         .await?;
-        let conflicting_snap =
-            ds1.commit("write two chunks with repo 1", 8, None).await?;
+        let conflicting_snap = ds1
+            .commit("write two chunks with repo 1")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await?;
 
         ds2.set_chunk_ref(
             new_array_path.clone(),
@@ -5578,8 +5826,11 @@ mod tests {
         .await?;
 
         // verify we cannot commit
-        if let Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) =
-            ds2.commit("write one chunk with repo2", 8, None).await
+        if let Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) = ds2
+            .commit("write one chunk with repo2")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
         {
             // detect conflicts using rebase
             let result = ds2.rebase(&ConflictDetector).await;
@@ -5611,7 +5862,8 @@ mod tests {
         ds.add_group("/".try_into().unwrap(), user_data()).await?;
         let new_array_path: Path = "/array".try_into().unwrap();
         ds.add_array(new_array_path.clone(), basic_shape(), None, user_data()).await?;
-        let _array_created_snap = ds.commit("create array", 8, None).await?;
+        let _array_created_snap =
+            ds.commit("create array").max_concurrent_nodes(8).execute().await?;
 
         let mut ds1 = repo.writable_session("main").await?;
         let mut ds2 = repo.writable_session("main").await?;
@@ -5638,8 +5890,11 @@ mod tests {
         )
         .await?;
 
-        let _conflicting_snap =
-            ds1.commit("write two chunks with repo 1", 8, None).await?;
+        let _conflicting_snap = ds1
+            .commit("write two chunks with repo 1")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await?;
 
         // let's try to create a new commit, that conflicts with the previous one but writes to
         // different chunks
@@ -5649,13 +5904,17 @@ mod tests {
             Some(ChunkPayload::Inline("hello2".into())),
         )
         .await?;
-        if let Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) =
-            ds2.commit("write one chunk with repo2", 8, None).await
+        if let Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) = ds2
+            .commit("write one chunk with repo2")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
         {
             let solver = BasicConflictSolver::default();
             // different chunks were written so this should fast forward
             ds2.rebase(&solver).await?;
-            let snapshot = ds2.commit("after conflict", 8, None).await?;
+            let snapshot =
+                ds2.commit("after conflict").max_concurrent_nodes(8).execute().await?;
             let data = ds2.get_chunk_ref(&new_array_path, &ChunkIndices(vec![2])).await?;
             assert_eq!(data, Some(ChunkPayload::Inline("hello2".into())));
 
@@ -5815,13 +6074,13 @@ mod tests {
 
         let path: Path = "/foo/bar/some-array".try_into().unwrap();
         ds1.update_array(&path, basic_shape(), None, user_data()).await?;
-        ds1.commit("update array", 8, None).await?;
+        ds1.commit("update array").max_concurrent_nodes(8).execute().await?;
 
         ds2.delete_array(path.clone()).await?;
-        ds2.commit("delete array", 8, None).await.unwrap_err();
+        ds2.commit("delete array").max_concurrent_nodes(8).execute().await.unwrap_err();
 
         ds2.rebase(&BasicConflictSolver::default()).await?;
-        ds2.commit("after conflict", 8, None).await?;
+        ds2.commit("after conflict").max_concurrent_nodes(8).execute().await?;
 
         assert!(matches!(
             ds2.get_node(&path).await,
@@ -5852,7 +6111,10 @@ mod tests {
                 Some(ChunkPayload::Inline("repo 1".into())),
             )
             .await?;
-            ds1.commit(format!("update chunk {coord}").as_str(), 8, None).await?;
+            ds1.commit(format!("update chunk {coord}").as_str())
+                .max_concurrent_nodes(8)
+                .execute()
+                .await?;
         }
 
         // write the same chunks with repo 2
@@ -5865,7 +6127,11 @@ mod tests {
             .await?;
         }
 
-        ds2.commit("update chunk on repo 2", 8, None).await.unwrap_err();
+        ds2.commit("update chunk on repo 2")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
+            .unwrap_err();
 
         let solver = BasicConflictSolver {
             on_chunk_conflict: VersionSelection::UseTheirs,
@@ -5873,7 +6139,7 @@ mod tests {
         };
 
         ds2.rebase(&solver).await?;
-        ds2.commit("after conflict", 8, None).await?;
+        ds2.commit("after conflict").max_concurrent_nodes(8).execute().await?;
         for coord in [0, 1, 2] {
             let payload = ds2.get_chunk_ref(&path, &ChunkIndices(vec![coord])).await?;
             assert_eq!(payload, Some(ChunkPayload::Inline("repo 1".into())));
@@ -5899,8 +6165,11 @@ mod tests {
             Some(ChunkPayload::Inline("repo 1".into())),
         )
         .await?;
-        let non_conflicting_snap =
-            ds1.commit("updated non-conflict chunk", 8, None).await?;
+        let non_conflicting_snap = ds1
+            .commit("updated non-conflict chunk")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await?;
 
         let mut ds1 = repo.writable_session("main").await?;
         ds1.set_chunk_ref(
@@ -5910,7 +6179,8 @@ mod tests {
         )
         .await?;
 
-        let conflicting_snap = ds1.commit("update chunk ref", 8, None).await?;
+        let conflicting_snap =
+            ds1.commit("update chunk ref").max_concurrent_nodes(8).execute().await?;
 
         ds2.set_chunk_ref(
             path.clone(),
@@ -5919,7 +6189,11 @@ mod tests {
         )
         .await?;
 
-        ds2.commit("update chunk ref", 8, None).await.unwrap_err();
+        ds2.commit("update chunk ref")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
+            .unwrap_err();
         // we setup a [`ConflictSolver`]` that can recover from the first but not the second
         // conflict
         let solver = BasicConflictSolver {
@@ -5988,7 +6262,10 @@ mod tests {
             Some(ChunkPayload::Inline("repo 1".into())),
         )
         .await?;
-        ds1.commit("writer 1 updated non-conflict chunk", 8, None).await?;
+        ds1.commit("writer 1 updated non-conflict chunk")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await?;
 
         let mut ds1 = repo.writable_session("main").await?;
         ds1.update_array(
@@ -6005,7 +6282,10 @@ mod tests {
             Some(ChunkPayload::Inline("repo 1 chunk 10".into())),
         )
         .await?;
-        ds1.commit("writer 1 updates array size and adds chunk 10", 8, None).await?;
+        ds1.commit("writer 1 updates array size and adds chunk 10")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await?;
 
         // now set a chunk ref that is valid with both old and new shape.
         ds2.set_chunk_ref(
@@ -6014,16 +6294,11 @@ mod tests {
             Some(ChunkPayload::Inline("repo 2".into())),
         )
         .await?;
-        ds2.commit_rebasing(
-            &YoloSolver,
-            1u16,
-            "writer 2 writes chunk 0",
-            8,
-            None,
-            async |_| {},
-            async |_| {},
-        )
-        .await?;
+        ds2.commit("writer 2 writes chunk 0")
+            .max_concurrent_nodes(8)
+            .rebase(&YoloSolver, 1u16)
+            .execute()
+            .await?;
 
         let ds3 = repo.writable_session("main").await?;
         // All three chunks should be present: [1] and [10] from ds1, [3] from ds2
@@ -6052,7 +6327,7 @@ mod tests {
         session
             .add_array("/array".try_into().unwrap(), basic_shape(), None, Bytes::new())
             .await?;
-        session.commit("create array", 8, None).await?;
+        session.commit("create array").max_concurrent_nodes(8).execute().await?;
 
         // This is the main session we'll be trying to commit (and rebase)
         let mut session = repo.writable_session("main").await?;
@@ -6076,41 +6351,46 @@ mod tests {
             )
             .await
             .unwrap();
-        session2.commit("conflicting", 8, None).await.unwrap();
+        session2.commit("conflicting").max_concurrent_nodes(8).execute().await.unwrap();
 
-        let repo_ref = &repo;
-        let attempts = AtomicU16::new(0);
-        let attempts_ref = &attempts;
+        let attempts = Arc::new(AtomicU16::new(0));
 
         // after each rebase attempt we'll run this closure that creates a new conflict
         // the result should be that it can never commit, failing after the indicated number of
         // attempts
-        let conflicting = |attempt| async move {
-            attempts_ref.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(attempt, attempts_ref.load(Ordering::SeqCst));
+        let conflicting: RebaseHook = {
+            let attempts = Arc::clone(&attempts);
+            let repo = Arc::clone(&repo);
+            Box::new(move |attempt| {
+                let attempts = Arc::clone(&attempts);
+                let repo = Arc::clone(&repo);
+                Box::pin(async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(attempt, attempts.load(Ordering::SeqCst));
 
-            let repo_c = Arc::clone(repo_ref);
-            let mut s = repo_c.writable_session("main").await.unwrap();
-            s.set_chunk_ref(
-                "/array".try_into().unwrap(),
-                ChunkIndices(vec![2]),
-                Some(ChunkPayload::Inline("repo 1".into())),
-            )
-            .await
-            .unwrap();
-            s.commit("conflicting", 8, None).await.unwrap();
+                    let mut s = repo.writable_session("main").await.unwrap();
+                    s.set_chunk_ref(
+                        "/array".try_into().unwrap(),
+                        ChunkIndices(vec![2]),
+                        Some(ChunkPayload::Inline("repo 1".into())),
+                    )
+                    .await
+                    .unwrap();
+                    s.commit("conflicting")
+                        .max_concurrent_nodes(8)
+                        .execute()
+                        .await
+                        .unwrap();
+                })
+            })
         };
 
         let res = session
-            .commit_rebasing(
-                &ConflictDetector,
-                3,
-                "updated non-conflict chunk",
-                8,
-                None,
-                |_| async {},
-                conflicting,
-            )
+            .commit("updated non-conflict chunk")
+            .max_concurrent_nodes(8)
+            .rebase(&ConflictDetector, 3)
+            .after_rebase_hook(conflicting)
+            .execute()
             .await;
 
         // It has to give up eventually
@@ -6120,40 +6400,45 @@ mod tests {
         ));
 
         // It has to rebase 3 times
-        assert_eq!(attempts.into_inner(), 3);
+        assert_eq!(Arc::try_unwrap(attempts).unwrap().into_inner(), 3);
 
-        let attempts = AtomicU16::new(0);
-        let attempts_ref = &attempts;
+        let attempts = Arc::new(AtomicU16::new(0));
 
         // now we'll create a new conflict twice, and finally do nothing so the commit can succeed
-        let conflicting_twice = |attempt| async move {
-            attempts_ref.fetch_add(1, Ordering::SeqCst); //*attempts_ref = *attempts_ref + 1;;
-            assert_eq!(attempt, attempts_ref.load(Ordering::SeqCst));
-            if attempt <= 2 {
-                let repo_c = Arc::clone(repo_ref);
-
-                let mut s = repo_c.writable_session("main").await.unwrap();
-                s.set_chunk_ref(
-                    "/array".try_into().unwrap(),
-                    ChunkIndices(vec![2]),
-                    Some(ChunkPayload::Inline("repo 1".into())),
-                )
-                .await
-                .unwrap();
-                s.commit("conflicting", 8, None).await.unwrap();
-            }
+        let conflicting_twice: RebaseHook = {
+            let attempts = Arc::clone(&attempts);
+            let repo = Arc::clone(&repo);
+            Box::new(move |attempt| {
+                let attempts = Arc::clone(&attempts);
+                let repo = Arc::clone(&repo);
+                Box::pin(async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(attempt, attempts.load(Ordering::SeqCst));
+                    if attempt <= 2 {
+                        let mut s = repo.writable_session("main").await.unwrap();
+                        s.set_chunk_ref(
+                            "/array".try_into().unwrap(),
+                            ChunkIndices(vec![2]),
+                            Some(ChunkPayload::Inline("repo 1".into())),
+                        )
+                        .await
+                        .unwrap();
+                        s.commit("conflicting")
+                            .max_concurrent_nodes(8)
+                            .execute()
+                            .await
+                            .unwrap();
+                    }
+                })
+            })
         };
 
         let res = session
-            .commit_rebasing(
-                &ConflictDetector,
-                42,
-                "updated non-conflict chunk",
-                8,
-                None,
-                |_| async {},
-                conflicting_twice,
-            )
+            .commit("updated non-conflict chunk")
+            .max_concurrent_nodes(8)
+            .rebase(&ConflictDetector, 42)
+            .after_rebase_hook(conflicting_twice)
+            .execute()
             .await;
 
         // The commit has to work after 3 rebase attempts
@@ -6164,7 +6449,7 @@ mod tests {
             infos[0].metadata.get("__icechunk"),
             Some(&serde_json::json!({ "rebase_attempts": 3 }))
         );
-        assert_eq!(attempts.into_inner(), 3);
+        assert_eq!(Arc::try_unwrap(attempts).unwrap().into_inner(), 3);
         Ok(())
     }
 

@@ -428,20 +428,21 @@ impl PySession {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
-                let snapshot_id = if let Some(solver) = rebase_with {
-                    session
-                        .commit_rebasing(
-                            solver.as_ref(),
-                            rebase_tries.unwrap_or(1_000),
-                            message,
-                            1,
-                            metadata,
-                            |_| async {},
-                            |_| async {},
-                        )
-                        .await
+                let snapshot_id = if let Some(solver) = &rebase_with {
+                    let mut builder = session
+                        .commit(message)
+                        .allow_empty(allow_empty)
+                        .rebase(solver.as_ref(), rebase_tries.unwrap_or(1_000));
+                    if let Some(props) = metadata {
+                        builder = builder.properties(props);
+                    }
+                    builder.execute().await
                 } else {
-                    session.commit_with_options(message, 1, metadata, allow_empty).await
+                    let mut builder = session.commit(message).allow_empty(allow_empty);
+                    if let Some(props) = metadata {
+                        builder = builder.properties(props);
+                    }
+                    builder.execute().await
                 }
                 .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())
@@ -465,20 +466,21 @@ impl PySession {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let metadata = metadata.map(|m| m.into());
             let mut session = session.write().await;
-            let snapshot_id = if let Some(solver) = rebase_with {
-                session
-                    .commit_rebasing(
-                        solver.as_ref(),
-                        rebase_tries.unwrap_or(1_000),
-                        &message,
-                        1,
-                        metadata,
-                        |_| async {},
-                        |_| async {},
-                    )
-                    .await
+            let snapshot_id = if let Some(solver) = &rebase_with {
+                let mut builder = session
+                    .commit(&message)
+                    .allow_empty(allow_empty)
+                    .rebase(solver.as_ref(), rebase_tries.unwrap_or(1_000));
+                if let Some(props) = metadata {
+                    builder = builder.properties(props);
+                }
+                builder.execute().await
             } else {
-                session.commit_with_options(&message, 1, metadata, allow_empty).await
+                let mut builder = session.commit(&message).allow_empty(allow_empty);
+                if let Some(props) = metadata {
+                    builder = builder.properties(props);
+                }
+                builder.execute().await
             }
             .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(snapshot_id.to_string())
@@ -498,8 +500,13 @@ impl PySession {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
-                let snapshot_id = session
-                    .amend(message, 1, metadata, allow_empty)
+                let mut builder =
+                    session.commit(message).amend().allow_empty(allow_empty);
+                if let Some(props) = metadata {
+                    builder = builder.properties(props);
+                }
+                let snapshot_id = builder
+                    .execute()
                     .await
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())
@@ -521,10 +528,12 @@ impl PySession {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let metadata = metadata.map(|m| m.into());
             let mut session = session.write().await;
-            let snapshot_id = session
-                .amend(&message, 1, metadata, allow_empty)
-                .await
-                .map_err(PyIcechunkStoreError::SessionError)?;
+            let mut builder = session.commit(&message).amend().allow_empty(allow_empty);
+            if let Some(props) = metadata {
+                builder = builder.properties(props);
+            }
+            let snapshot_id =
+                builder.execute().await.map_err(PyIcechunkStoreError::SessionError)?;
             Ok(snapshot_id.to_string())
         })
     }
@@ -541,8 +550,12 @@ impl PySession {
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async {
                 let mut session = self.0.write().await;
-                let snapshot_id = session
-                    .flush(message, 1, metadata)
+                let mut builder = session.commit(message).anonymous();
+                if let Some(props) = metadata {
+                    builder = builder.properties(props);
+                }
+                let snapshot_id = builder
+                    .execute()
                     .await
                     .map_err(PyIcechunkStoreError::SessionError)?;
                 Ok(snapshot_id.to_string())
@@ -562,10 +575,12 @@ impl PySession {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let metadata = metadata.map(|m| m.into());
             let mut session = session.write().await;
-            let snapshot_id = session
-                .flush(&message, 1, metadata)
-                .await
-                .map_err(PyIcechunkStoreError::SessionError)?;
+            let mut builder = session.commit(&message).anonymous();
+            if let Some(props) = metadata {
+                builder = builder.properties(props);
+            }
+            let snapshot_id =
+                builder.execute().await.map_err(PyIcechunkStoreError::SessionError)?;
             Ok(snapshot_id.to_string())
         })
     }

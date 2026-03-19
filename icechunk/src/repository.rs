@@ -2400,7 +2400,7 @@ mod tests {
         session
             .add_array(path.clone(), shape.clone(), dimension_names.clone(), def.clone())
             .await?;
-        session.commit("initialized", 8, None).await?;
+        session.commit("initialized").max_concurrent_nodes(8).execute().await?;
 
         Ok(repository)
     }
@@ -2446,7 +2446,7 @@ mod tests {
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
                 .await?;
         }
-        session.commit("first commit", 8, None).await?;
+        session.commit("first commit").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo.asset_manager(), 1).await;
 
         // Important we are not issuing any chunk deletes here (which is what Zarr does)
@@ -2462,7 +2462,7 @@ mod tests {
                 array_def.clone(),
             )
             .await?;
-        session.commit("second commit", 8, None).await?;
+        session.commit("second commit").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo.asset_manager(), 2).await;
 
         // Now we expand the size, but don't write chunks.
@@ -2477,7 +2477,7 @@ mod tests {
                 array_def.clone(),
             )
             .await?;
-        session.commit("second commit", 8, None).await?;
+        session.commit("second commit").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo.asset_manager(), 2).await;
 
         Ok(())
@@ -2627,7 +2627,7 @@ mod tests {
                 )
                 .await?
         }
-        session.commit("first split", 8, None).await?;
+        session.commit("first split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 4;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
@@ -2779,7 +2779,7 @@ mod tests {
                 )
                 .await?
         }
-        session.commit("first split", 8, None).await?;
+        session.commit("first split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 1;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
@@ -2793,7 +2793,7 @@ mod tests {
                 Some(ChunkPayload::Inline(format!("{last_chunk}").into())),
             )
             .await?;
-        session.commit("last split", 8, None).await?;
+        session.commit("last split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 1;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
@@ -2863,7 +2863,7 @@ mod tests {
                 )
                 .await?
         }
-        session.commit("wrote all splits", 8, None).await?;
+        session.commit("wrote all splits").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         let mut session = repository.writable_session("main").await?;
@@ -2879,7 +2879,7 @@ mod tests {
         // We are counting total manifests in the `assert_manifest_count` helper function
         // So we keep a running count of the total and update that at each step.
         total_manifests += dim_size.div_ceil(split_size) as usize;
-        session.commit("full overwrite", 8, None).await?;
+        session.commit("full overwrite").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // test reads
@@ -2908,7 +2908,7 @@ mod tests {
                 .await?;
         }
         total_manifests += 0;
-        session.commit("clear existing array", 8, None).await?;
+        session.commit("clear existing array").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // add a new array
@@ -2937,7 +2937,7 @@ mod tests {
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![1, 0, 0]), None)
             .await?;
         total_manifests += 0;
-        session.commit("clear new array", 8, None).await?;
+        session.commit("clear new array").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         Ok(())
@@ -3131,7 +3131,11 @@ mod tests {
 
             total_manifests +=
                 (axis_size as u32).div_ceil(expected_split_sizes[ax]) as usize;
-            session.commit(format!("finished axis {ax}").as_ref(), 8, None).await?;
+            session
+                .commit(format!("finished axis {ax}"))
+                .max_concurrent_nodes(8)
+                .execute()
+                .await?;
             assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
             verify_data(ax, &session).await;
@@ -3165,7 +3169,7 @@ mod tests {
         // the first split in the `t`-axis. Since the other splits
         // are not modified we preserve all the old manifests
         total_manifests += 1;
-        session.commit("finished time again".to_string().as_ref(), 8, None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
         verify_all_data(&repository).await;
 
@@ -3184,7 +3188,7 @@ mod tests {
         }
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
-        session.commit("finished time again".to_string().as_ref(), 8, None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
         verify_all_data(&repository).await;
 
@@ -3201,7 +3205,7 @@ mod tests {
             .await?;
         // Important: now we rewrite one split per dimension
         total_manifests += 3;
-        session.commit("finished time again".to_string().as_ref(), 8, None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
         verify_all_data(&repo_clone).await;
         verify_all_data(&repository).await;
@@ -3220,7 +3224,7 @@ mod tests {
         }
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
-        session.commit("finished time again".to_string().as_ref(), 8, None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo_clone.asset_manager(), total_manifests).await;
         verify_all_data(&repo_clone).await;
 
@@ -3238,7 +3242,7 @@ mod tests {
         }
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
-        session.commit("finished time again".to_string().as_ref(), 8, None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo_clone.asset_manager(), total_manifests).await;
         for idx in [0, 12, 24] {
             let actual = get_chunk(
@@ -3508,14 +3512,18 @@ mod tests {
             )
             .await?;
 
-        session1.commit("first commit", 8, None).await?;
+        session1.commit("first commit").max_concurrent_nodes(8).execute().await?;
         if let Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) =
-            session2.commit("second commit", 8, None).await
+            session2.commit("second commit").max_concurrent_nodes(8).execute().await
         {
             let solver = BasicConflictSolver::default();
             // different chunks were written so this should fast forward
             assert!(session2.rebase(&solver).await.is_ok());
-            session2.commit("second commit after rebase", 8, None).await?;
+            session2
+                .commit("second commit after rebase")
+                .max_concurrent_nodes(8)
+                .execute()
+                .await?;
         } else {
             panic!("this should have conflicted!");
         }
@@ -3656,7 +3664,7 @@ mod tests {
             )
             .await?;
 
-        session.commit("create arrays", 8, None).await?;
+        session.commit("create arrays").max_concurrent_nodes(8).execute().await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
@@ -3990,7 +3998,7 @@ mod tests {
                 )
                 .await?;
         }
-        session.commit("add virtual chunks", 8, None).await?;
+        session.commit("add virtual chunks").max_concurrent_nodes(8).execute().await?;
 
         // Verify manifests are NOT compressed (V1 never compresses)
         let snap_id =
@@ -4068,14 +4076,14 @@ mod tests {
         session
             .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        session.commit("init", 8, None).await?;
+        session.commit("init").max_concurrent_nodes(8).execute().await?;
 
         // Rearrange session: move a node
         let mut session = repo.rearrange_session("main").await?;
         session
             .move_node("/source".try_into().unwrap(), "/dest".try_into().unwrap())
             .await?;
-        session.commit("moved source to dest", 8, None).await?;
+        session.commit("moved source to dest").max_concurrent_nodes(8).execute().await?;
 
         // Open a fresh repo from the same storage (as the issue reproducer does)
         let repo2 = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;

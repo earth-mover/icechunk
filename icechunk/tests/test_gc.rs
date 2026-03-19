@@ -117,7 +117,7 @@ async fn do_test_gc(
             .await?;
     }
 
-    let first_snap_id = ds.commit("first", 8, None).await?;
+    let first_snap_id = ds.commit("first").max_concurrent_nodes(8).execute().await?;
     assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1100);
     assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 110);
 
@@ -131,7 +131,7 @@ async fn do_test_gc(
         ds.set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
     }
-    let _second_snap_id = ds.commit("second", 8, None).await?;
+    let _second_snap_id = ds.commit("second").max_concurrent_nodes(8).execute().await?;
     assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);
     assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 111);
 
@@ -224,56 +224,56 @@ async fn make_design_doc_repo(
     let mut session = repo.writable_session("main").await?;
     let user_data = Bytes::new();
     session.add_group(Path::root(), user_data.clone()).await?;
-    session.commit("1", 8, None).await?;
+    session.commit("1").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/2").unwrap(), user_data.clone()).await?;
-    let commit_2 = session.commit("2", 8, None).await?;
+    let commit_2 = session.commit("2").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/4").unwrap(), user_data.clone()).await?;
-    session.commit("4", 8, None).await?;
+    session.commit("4").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/5").unwrap(), user_data.clone()).await?;
-    let snap_id = session.commit("5", 8, None).await?;
+    let snap_id = session.commit("5").max_concurrent_nodes(8).execute().await?;
     repo.create_tag("tag2", &snap_id).await?;
 
     repo.create_branch("develop", &commit_2).await?;
     let mut session = repo.writable_session("develop").await?;
     session.add_group(Path::try_from("/3").unwrap(), user_data.clone()).await?;
-    let snap_id = session.commit("3", 8, None).await?;
+    let snap_id = session.commit("3").max_concurrent_nodes(8).execute().await?;
     repo.create_tag("tag1", &snap_id).await?;
     let mut session = repo.writable_session("develop").await?;
     session.add_group(Path::try_from("/6").unwrap(), user_data.clone()).await?;
-    let commit_6 = session.commit("6", 8, None).await?;
+    let commit_6 = session.commit("6").max_concurrent_nodes(8).execute().await?;
 
     repo.create_branch("test", &commit_6).await?;
     let mut session = repo.writable_session("test").await?;
     session.add_group(Path::try_from("/7").unwrap(), user_data.clone()).await?;
-    let commit_7 = session.commit("7", 8, None).await?;
+    let commit_7 = session.commit("7").max_concurrent_nodes(8).execute().await?;
 
     let expire_older_than = Utc::now();
 
     repo.create_branch("qa", &commit_7).await?;
     let mut session = repo.writable_session("qa").await?;
     session.add_group(Path::try_from("/8").unwrap(), user_data.clone()).await?;
-    session.commit("8", 8, None).await?;
+    session.commit("8").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/12").unwrap(), user_data.clone()).await?;
-    session.commit("12", 8, None).await?;
+    session.commit("12").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/13").unwrap(), user_data.clone()).await?;
-    session.commit("13", 8, None).await?;
+    session.commit("13").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/14").unwrap(), user_data.clone()).await?;
-    session.commit("14", 8, None).await?;
+    session.commit("14").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("develop").await?;
     session.add_group(Path::try_from("/10").unwrap(), user_data.clone()).await?;
-    session.commit("10", 8, None).await?;
+    session.commit("10").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("develop").await?;
     session.add_group(Path::try_from("/11").unwrap(), user_data.clone()).await?;
-    session.commit("11", 8, None).await?;
+    session.commit("11").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("test").await?;
     session.add_group(Path::try_from("/9").unwrap(), user_data.clone()).await?;
-    session.commit("9", 8, None).await?;
+    session.commit("9").max_concurrent_nodes(8).execute().await?;
 
     // let's double check the structuer of the commit tree
     assert_eq!(
@@ -551,7 +551,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
             def.clone(),
         )
         .await?;
-    session.commit("initialized", 8, None).await?;
+    session.commit("initialized").max_concurrent_nodes(8).execute().await?;
 
     let mut snaps = vec![];
     for i in 0..6 {
@@ -563,7 +563,11 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
                 Some(ChunkPayload::Inline(Bytes::from(format!("{i}")))),
             )
             .await?;
-        let snap = session.commit(&format!("commit {i}"), 8, None).await?;
+        let snap = session
+            .commit(&format!("commit {i}"))
+            .max_concurrent_nodes(8)
+            .execute()
+            .await?;
         snaps.push(snap);
     }
 

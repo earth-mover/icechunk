@@ -421,7 +421,7 @@ mod tests {
             .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await
             .unwrap();
-        session.commit("add group", 8, None).await.unwrap();
+        session.commit("add group").max_concurrent_nodes(8).execute().await.unwrap();
 
         // create a rearrange session while the flag is enabled
         let mut session = repo.rearrange_session("main").await.unwrap();
@@ -435,7 +435,7 @@ mod tests {
 
         // commit should fail
         assert!(matches!(
-            session.commit("should fail", 8, None).await,
+            session.commit("should fail").max_concurrent_nodes(8).execute().await,
             Err(SessionError {
                 kind: SessionErrorKind::RepositoryError(
                     RepositoryErrorKind::FormatError(
@@ -466,7 +466,7 @@ mod tests {
             .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await
             .unwrap();
-        session.commit("add group", 8, None).await.unwrap();
+        session.commit("add group").max_concurrent_nodes(8).execute().await.unwrap();
 
         // create a rearrange session while the flag is enabled
         let mut session = repo.rearrange_session("main").await.unwrap();
@@ -480,7 +480,7 @@ mod tests {
 
         // flush should fail
         assert!(matches!(
-            session.flush("should fail", 8, None).await,
+            session.commit("should fail").max_concurrent_nodes(8).anonymous().execute().await,
             Err(SessionError {
                 kind: SessionErrorKind::RepositoryError(
                     RepositoryErrorKind::FormatError(

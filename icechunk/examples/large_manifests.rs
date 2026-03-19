@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     set.join_all().await;
     eprintln!("Done writing refs, committing...");
 
-    session.write().await.commit("first", 8, None).await?;
+    session.write().await.commit("first").max_concurrent_nodes(8).execute().await?;
     eprintln!("Done.");
 
     Ok(())

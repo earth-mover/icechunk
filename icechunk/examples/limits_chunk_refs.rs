@@ -128,7 +128,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     info!("starting commit");
-    ds.write().await.commit("really big changeset", 8, None).await?;
+    ds.write()
+        .await
+        .commit("really big changeset")
+        .max_concurrent_nodes(8)
+        .execute()
+        .await?;
 
     Ok(())
 }
