@@ -224,3 +224,26 @@ def test_shift_persists_after_commit() -> None:
     np.testing.assert_equal(array[0:6], np.arange(4, 10))
     # Last 4 elements retain stale data (original values 6-9)
     np.testing.assert_equal(array[6:], np.arange(6, 10))
+
+
+def test_shift_with_missing_chunks() -> None:
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    arr = zarr.open_array(
+        session.store,
+        path="data",
+        mode="w",
+        shape=(3,),
+        chunks=(1,),
+        dtype="f4",
+        fill_value=-1,
+    )
+    # (), 2, ()
+    arr[1] = 2.0  # only c/1 written; c/0 and c/2 are fill
+    session.commit("initial")
+
+    session = repo.writable_session("main")
+    arr = zarr.open_array(session.store, path="data")
+    session.shift_array("/data", (1,))
+
+    np.testing.assert_equal(arr[:], [-1, -1, 2])
