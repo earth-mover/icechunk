@@ -187,6 +187,11 @@ def trees(
             children[name] = child
         return GroupNode(children=children), name_pool
 
+    # Two-step generation: first draw the tree structure (skeletons uses
+    # st.recursive which gives good structural shrinking), then assign real
+    # names via @composite (which allows pool-based derivation for realistic
+    # prefix collisions). Doing both in one step would sacrifice either
+    # structural shrinking or name similarity.
     skeleton = draw(
         skeletons(max_leaves=draw(max_leaves), max_children=draw(max_children))
     )
