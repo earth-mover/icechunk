@@ -56,9 +56,7 @@ pub fn serialize_snapshot(
     write: &mut impl Write,
 ) -> Result<(), std::io::Error> {
     match version {
-        SpecVersionBin::V1 | SpecVersionBin::V2 => {
-            write.write_all(snapshot.bytes())
-        }
+        SpecVersionBin::V1 | SpecVersionBin::V2 => write.write_all(snapshot.bytes()),
     }
 }
 
@@ -68,9 +66,7 @@ pub fn serialize_manifest(
     write: &mut impl Write,
 ) -> Result<(), std::io::Error> {
     match version {
-        SpecVersionBin::V1 | SpecVersionBin::V2 => {
-            write.write_all(manifest.bytes())
-        }
+        SpecVersionBin::V1 | SpecVersionBin::V2 => write.write_all(manifest.bytes()),
     }
 }
 
@@ -105,9 +101,7 @@ pub fn deserialize_snapshot(
     buffer: Vec<u8>,
 ) -> Result<Snapshot, IcechunkFormatError> {
     match version {
-        SpecVersionBin::V1 | SpecVersionBin::V2 => {
-            Snapshot::from_buffer(version, buffer)
-        }
+        SpecVersionBin::V1 | SpecVersionBin::V2 => Snapshot::from_buffer(version, buffer),
     }
 }
 
@@ -125,9 +119,7 @@ pub fn deserialize_transaction_log(
     buffer: Vec<u8>,
 ) -> Result<TransactionLog, IcechunkFormatError> {
     match version {
-        SpecVersionBin::V1 | SpecVersionBin::V2 => {
-            TransactionLog::from_buffer(buffer)
-        }
+        SpecVersionBin::V1 | SpecVersionBin::V2 => TransactionLog::from_buffer(buffer),
     }
 }
 

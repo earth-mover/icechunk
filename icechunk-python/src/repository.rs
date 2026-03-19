@@ -909,7 +909,10 @@ impl<'py> FromPyObject<'_, 'py> for PySpecVersion {
 
     /// Custom implementation that allows passing an integer or PySpecVersion
     fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
-        let value = if let Ok(v) = ob.extract::<u8>() {
+        // cast is cheaper, try it first
+        let value = if let Ok(spec) = ob.cast::<PySpecVersion>() {
+            spec.get().clone()
+        } else if let Ok(v) = ob.extract::<u8>() {
             match v {
                 1 => PySpecVersion::V1,
                 2 => PySpecVersion::V2,
@@ -919,8 +922,6 @@ impl<'py> FromPyObject<'_, 'py> for PySpecVersion {
                     )));
                 }
             }
-        } else if let Ok(spec) = ob.cast::<PySpecVersion>() {
-            spec.get().clone()
         } else {
             return Err(PyValueError::new_err("Couldn't parse a valid version"));
         };

@@ -391,8 +391,7 @@ impl Repository {
         }?;
         trace!(%spec_version, "Repository version found");
 
-        let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2
-        {
+        let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2 {
             // V2+ repos: config is always embedded in the repo info object.
             let (repo_info, _) = temp_am.fetch_repo_info().await?;
             (repo_info.config()?, storage::VersionInfo::for_creation())
@@ -1070,12 +1069,8 @@ impl Repository {
             .into());
         }
         match self.spec_version() {
-            SpecVersionBin::V1 => {
-                self.create_branch_v1(branch_name, snapshot_id).await
-            }
-            SpecVersionBin::V2 => {
-                self.create_branch_v2(branch_name, snapshot_id).await
-            }
+            SpecVersionBin::V1 => self.create_branch_v1(branch_name, snapshot_id).await,
+            SpecVersionBin::V2 => self.create_branch_v2(branch_name, snapshot_id).await,
         }
     }
 
