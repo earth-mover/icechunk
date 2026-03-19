@@ -8,11 +8,10 @@ import pytest
 
 import icechunk as ic
 import zarr
-from icechunk import SpecVersion
 
 
 def test_error_message_when_snapshot_deleted(
-    tmpdir: Path, any_spec_version: SpecVersion | int | None
+    tmpdir: Path, any_spec_version: int | None
 ) -> None:
     tmpdir = Path(tmpdir)
     storage = ic.local_filesystem_storage(str(tmpdir))
@@ -34,7 +33,7 @@ def test_error_message_when_snapshot_deleted(
 
 
 def test_error_message_when_manifest_file_altered(
-    tmpdir: Path, any_spec_version: SpecVersion | int | None
+    tmpdir: Path, any_spec_version: int | None
 ) -> None:
     tmpdir = Path(tmpdir)
     storage = ic.local_filesystem_storage(str(tmpdir))

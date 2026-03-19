@@ -4,16 +4,13 @@ import numpy as np
 
 import icechunk as ic
 import zarr
-from icechunk import SpecVersion
 from tests.conftest import parse_repo
 from zarr.core.buffer import cpu, default_buffer_prototype
 
 rng = np.random.default_rng(seed=12345)
 
 
-async def test_store_clear_metadata_list(
-    any_spec_version: SpecVersion | int | None,
-) -> None:
+async def test_store_clear_metadata_list(any_spec_version: int | None) -> None:
     repo = parse_repo("memory", "test", any_spec_version)
     session = repo.writable_session("main")
     store = session.store
@@ -28,7 +25,7 @@ async def test_store_clear_metadata_list(
     assert len([_ async for _ in store.list_prefix("/")]) == 1
 
 
-async def test_store_clear_chunk_list(any_spec_version: SpecVersion | int | None) -> None:
+async def test_store_clear_chunk_list(any_spec_version: int | None) -> None:
     repo = parse_repo("memory", "test", any_spec_version)
     session = repo.writable_session("main")
     store = session.store
@@ -57,9 +54,7 @@ async def test_store_clear_chunk_list(any_spec_version: SpecVersion | int | None
     assert len(keys) == 2 + 3, keys
 
 
-async def test_support_dimension_names_null(
-    any_spec_version: SpecVersion | int | None,
-) -> None:
+async def test_support_dimension_names_null(any_spec_version: int | None) -> None:
     repo = parse_repo("memory", "test", any_spec_version)
     session = repo.writable_session("main")
     store = session.store
@@ -75,16 +70,14 @@ async def test_support_dimension_names_null(
     assert "dimension_names" not in meta
 
 
-def test_doesnt_support_consolidated_metadata(
-    any_spec_version: SpecVersion | int | None,
-) -> None:
+def test_doesnt_support_consolidated_metadata(any_spec_version: int | None) -> None:
     repo = parse_repo("memory", "test", any_spec_version)
     session = repo.writable_session("main")
     store = session.store
     assert not store.supports_consolidated_metadata
 
 
-async def test_with_readonly(any_spec_version: SpecVersion | int | None) -> None:
+async def test_with_readonly(any_spec_version: int | None) -> None:
     repo = parse_repo("memory", "test", any_spec_version)
     session = repo.readonly_session("main")
     store = session.store
@@ -105,7 +98,7 @@ async def test_with_readonly(any_spec_version: SpecVersion | int | None) -> None
     assert reader.read_only
 
 
-async def test_transaction(any_spec_version: SpecVersion | int | None) -> None:
+async def test_transaction(any_spec_version: int | None) -> None:
     repo = parse_repo("memory", "test", any_spec_version)
     cid1 = repo.lookup_branch("main")
     # TODO: test metadata, rebase_with, and rebase_tries kwargs
@@ -117,9 +110,7 @@ async def test_transaction(any_spec_version: SpecVersion | int | None) -> None:
     assert cid1 != cid2, "Transaction did not commit changes"
 
 
-async def test_transaction_failed_no_commit(
-    any_spec_version: SpecVersion | int | None,
-) -> None:
+async def test_transaction_failed_no_commit(any_spec_version: int | None) -> None:
     repo = parse_repo("memory", "test", any_spec_version)
     cid1 = repo.lookup_branch("main")
     try:
@@ -134,7 +125,7 @@ async def test_transaction_failed_no_commit(
     assert cid1 == cid2, "Transaction committed changes despite error"
 
 
-def test_shards(any_spec_version: SpecVersion | int | None) -> None:
+def test_shards(any_spec_version: int | None) -> None:
     # regression test for GH1019
     storage = ic.in_memory_storage()
     repo = ic.Repository.create(

@@ -9,7 +9,7 @@ import textwrap
 from collections.abc import Iterator
 from dataclasses import dataclass, fields
 from functools import partial
-from typing import Any, Self, cast
+from typing import Any, Literal, Self, cast
 
 import numpy as np
 import pytest
@@ -45,7 +45,6 @@ from icechunk import (
     Repository,
     RepositoryConfig,
     SnapshotInfo,
-    SpecVersion,
     Storage,
 )
 from icechunk.testing import LatencyStorage
@@ -549,7 +548,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     def initialize(
         self,
         data: st.DataObject,
-        spec_version: SpecVersion,
+        spec_version: Literal[1, 2],
         latency: tuple[int, int] = (0, 0),
     ) -> str:
         write_latency_ms, read_latency_ms = latency
@@ -563,8 +562,8 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         else:
             self.storage = inner
         config = data.draw(repository_configs(ic_module=self.ic))
-        self.model.initial_spec_version = spec_version.value
-        self.model.spec_version = spec_version.value
+        self.model.initial_spec_version = spec_version
+        self.model.spec_version = spec_version
 
         if Version(self.ic.__version__).major >= 2:
             self.repo = self.actor.create(

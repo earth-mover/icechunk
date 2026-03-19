@@ -12,7 +12,6 @@ from termcolor import colored
 
 import icechunk
 import zarr
-from icechunk import SpecVersion
 from tests.conftest import Permission, write_chunks_to_minio
 
 N = 15
@@ -52,7 +51,7 @@ async def list_store(store: icechunk.IcechunkStore, barrier: asyncio.Barrier) ->
         await asyncio.sleep(0.1)
 
 
-async def test_concurrency(any_spec_version: SpecVersion | int | None) -> None:
+async def test_concurrency(any_spec_version: int | None) -> None:
     repo = icechunk.Repository.open_or_create(
         storage=icechunk.in_memory_storage(),
         create_version=any_spec_version,
@@ -98,7 +97,7 @@ async def test_concurrency(any_spec_version: SpecVersion | int | None) -> None:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_thread_concurrency(any_spec_version: SpecVersion | int | None) -> None:
+async def test_thread_concurrency(any_spec_version: int | None) -> None:
     """Run multiple threads doing different type of operations for SECONDS_TO_RUN seconds.
 
     The threads execute 5 types of operations: reads, native writes, virtual writes, deletes and lists.

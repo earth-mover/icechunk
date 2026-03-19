@@ -9,7 +9,7 @@ import pytest
 import zarr
 import zarr.api
 import zarr.api.asynchronous
-from icechunk import IcechunkError, IcechunkStore, SpecVersion
+from icechunk import IcechunkError, IcechunkStore
 from tests.conftest import parse_repo
 from zarr import Array, AsyncGroup, Group
 from zarr.api.asynchronous import create_array
@@ -23,9 +23,7 @@ from zarr.storage._common import make_store_path
 
 
 @pytest.fixture(params=["memory"])
-def store(
-    request: pytest.FixtureRequest, any_spec_version: SpecVersion | int | None
-) -> IcechunkStore:
+def store(request: pytest.FixtureRequest, any_spec_version: int | None) -> IcechunkStore:
     repo = parse_repo(request.param, "test", any_spec_version)
     session = repo.writable_session("main")
     return session.store

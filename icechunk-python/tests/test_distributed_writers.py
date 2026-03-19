@@ -9,7 +9,6 @@ import icechunk
 import zarr
 from dask.array.utils import assert_eq
 from dask.distributed import Client
-from icechunk import SpecVersion
 from icechunk.dask import store_dask
 from icechunk.storage import s3_object_store_storage, s3_storage
 from tests.conftest import Permission
@@ -25,7 +24,7 @@ CHUNKS_PER_TASK = 2
 
 
 def mk_repo(
-    spec_version: SpecVersion | int | None, use_object_store: bool = False
+    spec_version: int | None, use_object_store: bool = False
 ) -> icechunk.Repository:
     access_key_id, secret_access_key = Permission.MODIFY.keys()
     if use_object_store:
@@ -63,7 +62,7 @@ def mk_repo(
 
 @pytest.mark.parametrize("use_object_store", [False, True])
 async def test_distributed_writers(
-    use_object_store: bool, any_spec_version: SpecVersion | int | None
+    use_object_store: bool, any_spec_version: int | None
 ) -> None:
     """Write to an array using uncoordinated writers, distributed via Dask.
 

@@ -14,7 +14,6 @@ from icechunk import (
     ObjectStoreConfig,
     RepositoryConfig,
     S3Options,
-    SpecVersion,
     VirtualChunkContainer,
     VirtualChunkSpec,
     containers_credentials,
@@ -32,7 +31,7 @@ from tests.conftest import Permission, write_chunks_to_minio
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 @pytest.mark.parametrize("use_async", [True, False])
 async def test_write_minio_virtual_refs(
-    use_async: bool, any_spec_version: SpecVersion | int | None
+    use_async: bool, any_spec_version: int | None
 ) -> None:
     prefix = str(uuid.uuid4())
     etags = write_chunks_to_minio(
@@ -253,7 +252,7 @@ async def test_public_virtual_refs(
     url_prefix: str,
     store_config: ObjectStoreConfig.S3 | ObjectStoreConfig.Http,
     use_async: bool,
-    any_spec_version: SpecVersion | int | None,
+    any_spec_version: int | None,
 ) -> None:
     config = RepositoryConfig.default()
     container = VirtualChunkContainer(url_prefix, store_config)
@@ -376,7 +375,7 @@ async def test_public_virtual_refs(
 
 
 def test_error_on_nonexisting_virtual_chunk_container(
-    any_spec_version: SpecVersion | int | None,
+    any_spec_version: int | None,
 ) -> None:
     repo = Repository.open_or_create(
         storage=in_memory_storage(),
@@ -409,7 +408,7 @@ def test_error_on_nonexisting_virtual_chunk_container(
 
 
 def test_error_on_non_authorized_virtual_chunk_container(
-    any_spec_version: SpecVersion | int | None,
+    any_spec_version: int | None,
 ) -> None:
     store_config = local_filesystem_store("/foo")
     container = VirtualChunkContainer("file:///foo/", store_config)
@@ -445,7 +444,7 @@ def test_error_on_non_authorized_virtual_chunk_container(
         array[0]
 
 
-def test_cannot_write_invalid_urls(any_spec_version: SpecVersion | int | None) -> None:
+def test_cannot_write_invalid_urls(any_spec_version: int | None) -> None:
     repo = Repository.create(
         storage=in_memory_storage(),
         spec_version=any_spec_version,
@@ -495,7 +494,7 @@ def test_cannot_write_invalid_urls(any_spec_version: SpecVersion | int | None) -
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 async def test_write_minio_virtual_refs_with_vcc_urls(
-    any_spec_version: SpecVersion | int | None,
+    any_spec_version: int | None,
 ) -> None:
     """Write virtual refs using vcc:// relative URLs and verify they resolve correctly."""
     path = str(uuid.uuid4())

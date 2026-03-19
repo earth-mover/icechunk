@@ -18,7 +18,7 @@ from packaging.version import Version
 
 import icechunk as ic
 import zarr
-from icechunk import Repository, SpecVersion, Storage, in_memory_storage
+from icechunk import Repository, Storage, in_memory_storage
 from icechunk.testing import strategies as icst
 from zarr import Array
 from zarr.core.buffer import default_buffer_prototype
@@ -69,7 +69,7 @@ class ModelStore(MemoryStore):
             new_key = f"{prefix}{'/'.join(str(idx) for idx in new_idx)}"
             await self.set(new_key, data)
 
-    spec_version: SpecVersion | int
+    spec_version: int
 
     async def move(self, source: str, dest: str) -> None:
         """Move all keys from source to dest.
@@ -133,7 +133,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         zarr.group(store=self.model)
 
     @initialize(spec_version=st.sampled_from([1, 2]))
-    def init_store(self, spec_version: SpecVersion) -> None:
+    def init_store(self, spec_version: int) -> None:
         """Override parent's init_store to sample spec_version and create repository."""
         # necessary to control the order of calling. if multiple intiliazes they will be
         # called by hypothesis in a random order

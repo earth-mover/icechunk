@@ -14,14 +14,13 @@ from icechunk import (
     Repository,
     RepositoryConfig,
     S3StaticCredentials,
-    SpecVersion,
     local_filesystem_storage,
     s3_storage,
 )
 from tests.conftest import Permission
 
 
-def create_local_repo(path: str, spec_version: SpecVersion | int | None) -> Repository:
+def create_local_repo(path: str, spec_version: int | None) -> Repository:
     repo = Repository.create(
         storage=local_filesystem_storage(path), spec_version=spec_version
     )
@@ -30,7 +29,7 @@ def create_local_repo(path: str, spec_version: SpecVersion | int | None) -> Repo
 
 
 @pytest.fixture(scope="function")
-def tmp_repo(tmpdir: Path, any_spec_version: SpecVersion | int | None) -> Repository:
+def tmp_repo(tmpdir: Path, any_spec_version: int | None) -> Repository:
     store_path = f"{tmpdir}"
     repo = create_local_repo(
         store_path,
@@ -78,7 +77,7 @@ def get_credentials() -> S3StaticCredentials:
     return S3StaticCredentials(*Permission.MODIFY.keys())
 
 
-def test_pickle(any_spec_version: SpecVersion | int | None) -> None:
+def test_pickle(any_spec_version: int | None) -> None:
     # we test with refreshable credentials because that gave us problems in the past
 
     def mk_repo() -> tuple[str, Repository]:

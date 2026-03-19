@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from numpy.testing import assert_array_equal
 
-from icechunk import IcechunkStore, Repository, SpecVersion, in_memory_storage
+from icechunk import IcechunkStore, Repository, in_memory_storage
 
 pytest.importorskip("hypothesis")
 import hypothesis.strategies as st
@@ -23,7 +23,7 @@ except ImportError:
     supports_rectilinear_chunk_grids = False
 
 
-def create(spec_version: SpecVersion | int | None) -> IcechunkStore:
+def create(spec_version: int | None) -> IcechunkStore:
     repo = Repository.create(in_memory_storage(), spec_version=spec_version)
     return repo.writable_session("main").store
 
@@ -31,22 +31,14 @@ def create(spec_version: SpecVersion | int | None) -> IcechunkStore:
 @st.composite
 def icechunk_stores(
     draw: st.DrawFn,
-    spec_version: st.SearchStrategy[SpecVersion | int | None] = st.sampled_from(
-        [None, 1, 2]
-    ),
+    spec_version: st.SearchStrategy[int | None] = st.sampled_from([None, 1, 2]),  # noqa: B008
 ) -> IcechunkStore:
     return create(spec_version=draw(spec_version))
 
 
 @settings(report_multiple_bugs=True, deadline=None, max_examples=300)
-@given(
-    data=st.data(),
-    nparray=numpy_arrays(),
-    spec_version=st.sampled_from([None, 1, 2]),
-)
-def test_roundtrip(
-    data: st.DataObject, nparray: Any, spec_version: SpecVersion | int | None
-) -> None:
+@given(data=st.data(), nparray=numpy_arrays(), spec_version=st.sampled_from([None, 1, 2]))
+def test_roundtrip(data: st.DataObject, nparray: Any, spec_version: int | None) -> None:
     zarray = data.draw(
         arrays(
             stores=icechunk_stores(spec_version=st.just(spec_version)),
@@ -64,12 +56,9 @@ def test_roundtrip(
     not supports_rectilinear_chunk_grids, reason="rectilinear chunk grids are unsupported"
 )
 @settings(report_multiple_bugs=True, deadline=None, max_examples=300)
-@given(
-    data=st.data(),
-    spec_version=st.sampled_from([None, 1, 2]),
-)
+@given(data=st.data(), spec_version=st.sampled_from([None, 1, 2]))
 def test_roundtrip_complex_chunk_grids(
-    data: st.DataObject, spec_version: SpecVersion | int | None
+    data: st.DataObject, spec_version: int | None
 ) -> None:
     nparray, zarray = data.draw(
         complex_chunked_arrays(
