@@ -893,34 +893,14 @@ fn mk_update(
     eq_int,
     ord,
     rename_all = "snake_case",
-    skip_from_py_object,
+    from_py_object,
     name = "SpecVersion"
 )]
-#[derive(PartialEq, Default, Clone, PartialOrd)]
+#[derive(PartialEq, Default, Clone, PartialOrd, Debug)]
 pub enum PySpecVersion {
     V1dot0 = 1u8,
     #[default]
     V2dot0 = 2u8,
-}
-
-impl<'py> FromPyObject<'_, 'py> for PySpecVersion {
-    type Error = PyErr;
-
-    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
-        let value = if let Ok(v) = ob.extract::<u8>() {
-            match v {
-                1 => PySpecVersion::V1dot0,
-                2 => PySpecVersion::V2dot0,
-                _ => todo!(), //Err(PyValueError::new_err("")),
-            }
-        } else if let Ok(spec) = ob.extract::<PySpecVersion>() {
-            spec
-        } else {
-            todo!("throw error")
-        };
-
-        Ok(value)
-    }
 }
 
 impl From<PySpecVersion> for SpecVersionBin {
@@ -928,6 +908,15 @@ impl From<PySpecVersion> for SpecVersionBin {
         match value {
             PySpecVersion::V1dot0 => Self::V1dot0,
             PySpecVersion::V2dot0 => Self::V2dot0,
+        }
+    }
+}
+
+impl From<SpecVersionBin> for PySpecVersion {
+    fn from(value: SpecVersionBin) -> Self {
+        match value {
+            SpecVersionBin::V1dot0 => Self::V1dot0,
+            SpecVersionBin::V2dot0 => Self::V2dot0,
         }
     }
 }
@@ -1199,7 +1188,7 @@ impl PyRepository {
         py: Python<'_>,
         storage: PyStorage,
         storage_settings: Option<Py<PyStorageSettings>>,
-    ) -> PyResult<Option<u8>> {
+    ) -> PyResult<Option<PySpecVersion>> {
         let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -1207,7 +1196,7 @@ impl PyRepository {
                 let spec_version = Repository::fetch_spec_version(storage.0, settings)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
-                Ok(spec_version.map(|v| v as u8))
+                Ok(spec_version.map(|v| v.into()))
             })
         })
     }
@@ -1220,12 +1209,15 @@ impl PyRepository {
         storage_settings: Option<Py<PyStorageSettings>>,
     ) -> PyResult<Bound<'_, PyAny>> {
         let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
-        pyo3_async_runtimes::tokio::future_into_py::<_, Option<u8>>(py, async move {
-            let spec_version = Repository::fetch_spec_version(storage.0, settings)
-                .await
-                .map_err(PyIcechunkStoreError::RepositoryError)?;
-            Ok(spec_version.map(|v| v as u8))
-        })
+        pyo3_async_runtimes::tokio::future_into_py::<_, Option<PySpecVersion>>(
+            py,
+            async move {
+                let spec_version = Repository::fetch_spec_version(storage.0, settings)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(spec_version.map(|v| v.into()))
+            },
+        )
     }
 
     /// Reopen the repository changing its config and or virtual chunk credentials
@@ -2794,11 +2786,11 @@ impl PyRepository {
     }
 
     #[getter]
-    fn spec_version(&self) -> u8 {
+    fn spec_version(&self) -> PySpecVersion {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let repo = self.0.read().await;
-            repo.spec_version()
-        }) as u8
+            repo.spec_version().into()
+        })
     }
 }
 

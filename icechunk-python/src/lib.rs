@@ -137,8 +137,8 @@ fn set_logs_filter(py: Python, log_filter_directive: Option<String>) -> PyResult
 #[pyfunction]
 /// The spec version that this version of the Icechunk library
 /// uses to write metadata files
-fn spec_version() -> u8 {
-    SpecVersionBin::current() as u8
+fn spec_version() -> PySpecVersion {
+    SpecVersionBin::current().into()
 }
 
 #[pyfunction]
