@@ -2289,7 +2289,7 @@ async fn flush_existing_node(
         }
     } else {
         trace!(path=%node.path, "Node has no changes, keeping the previous manifest");
-        match &node.node_data {
+        match node.node_data {
             NodeData::Array { manifests: array_refs, .. } => {
                 let mut result = NodeFlushResult {
                     node_id: node_id.clone(),
@@ -2298,14 +2298,11 @@ async fn flush_existing_node(
                 };
                 result.manifest_files.extend(array_refs.iter().map(|mr| {
                     #[allow(clippy::expect_used)]
-                    old_snapshot
-                        .get_manifest_file(&mr.object_id)
-                        .expect(
-                            "Bug in flush function, no manifest file found in snapshot",
-                        )
-                        .clone()
+                    old_snapshot.get_manifest_file(&mr.object_id).expect(
+                        "Bug in flush function, no manifest file found in snapshot",
+                    )
                 }));
-                result.manifest_refs.extend(array_refs.iter().cloned());
+                result.manifest_refs.extend(array_refs.into_iter());
                 Ok(Some(result))
             }
             NodeData::Group => Ok(None),
