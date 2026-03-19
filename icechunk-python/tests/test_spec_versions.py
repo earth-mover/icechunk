@@ -122,6 +122,7 @@ def test_version_int_or_specversion() -> None:
     repo = ic.Repository.create(storage, spec_version=ic.SpecVersion.v2)
     assert repo.spec_version == ic.SpecVersion.v2
     assert repo.spec_version == 2
+    assert ic.SpecVersion.current() == ic.SpecVersion.v2
 
 
 def test_version_supported_listing() -> None:

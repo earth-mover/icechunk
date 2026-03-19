@@ -957,7 +957,8 @@ impl PySpecVersion {
         }
     }
 
-    pub(crate) fn current(&self) -> Self {
+    #[staticmethod]
+    pub(crate) fn current() -> Self {
         Default::default()
     }
 }
