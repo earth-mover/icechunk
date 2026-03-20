@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(config),
         storage,
         HashMap::new(),
-        Some(SpecVersionBin::V2dot0),
+        Some(SpecVersionBin::V2),
         true,
     )
     .await?;

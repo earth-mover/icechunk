@@ -29,7 +29,7 @@ pub async fn rewrite_manifests(
     commit_method: CommitMethod,
 ) -> ManifestOpsResult<SnapshotId> {
     if commit_method == CommitMethod::Amend
-        && repository.spec_version() < SpecVersionBin::V2dot0
+        && repository.spec_version() < SpecVersionBin::V2
     {
         return Err(ManifestOpsError::AmendNotSupportedForV1);
     }

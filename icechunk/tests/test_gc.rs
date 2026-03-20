@@ -33,14 +33,14 @@ use crate::common::Permission;
 pub async fn test_gc_in_minio_spec_v1() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_v1_{}", Utc::now().timestamp_millis());
     let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
-    do_test_gc(storage, Some(SpecVersionBin::V1dot0)).await
+    do_test_gc(storage, Some(SpecVersionBin::V1)).await
 }
 
 #[tokio_test]
 pub async fn test_gc_in_minio_spec_v2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_v2_{}", Utc::now().timestamp_millis());
     let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
-    do_test_gc(storage, Some(SpecVersionBin::V2dot0)).await
+    do_test_gc(storage, Some(SpecVersionBin::V2)).await
 }
 
 #[tokio_test]
