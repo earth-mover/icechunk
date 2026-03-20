@@ -205,6 +205,7 @@ impl PySession {
         })
     }
 
+    #[pyo3(signature = (array_path, forward, backward=None))]
     pub fn reindex_array<'py>(
         &mut self,
         py: Python<'py>,
