@@ -812,24 +812,24 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
                             })
                             .collect();
 
-                    let mut total = std::time::Duration::ZERO;
-                    let start = std::time::Instant::now();
-                    rt.block_on(async {
-                        for mut session in sessions {
-                            session
-                                .commit("foo")
-                                .max_concurrent_nodes(8)
-                                .rebase(&ConflictDetector, 10)
-                                .execute()
-                                .await
-                                .unwrap();
-                        }
-                    });
-                    total += start.elapsed();
-                    total
-                })
-            },
-        );
+                        let mut total = std::time::Duration::ZERO;
+                        let start = std::time::Instant::now();
+                        rt.block_on(async {
+                            for mut session in sessions {
+                                session
+                                    .commit("foo")
+                                    .max_concurrent_nodes(8)
+                                    .rebase(&ConflictDetector, 10)
+                                    .execute()
+                                    .await
+                                    .unwrap();
+                            }
+                        });
+                        total += start.elapsed();
+                        total
+                    })
+                },
+            );
         }
     }
     group.finish();
