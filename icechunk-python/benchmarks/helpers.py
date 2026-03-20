@@ -14,7 +14,7 @@ def setup_logger():
     return logger
 
 
-def get_coiled_kwargs(*, store: str, region: str | None = None) -> str:
+def get_coiled_kwargs(*, store: str, region: str | None = None) -> dict[str, str]:
     if store == "s3_ob":
         store = "s3"
     COILED_VM_TYPES = {
@@ -38,7 +38,7 @@ def get_coiled_kwargs(*, store: str, region: str | None = None) -> str:
         "gcs": "earthmover-devs-gcp",
         "az": "earthmover-devs-azure",
     }
-    TIGRIS_REGIONS = {"iad": "us-east-1"}
+    TIGRIS_REGIONS = {"us-east-2": "us-east-1", "iad": "us-east-1"}
 
     if region is None:
         region = DEFAULT_REGIONS[store]
@@ -73,13 +73,20 @@ def rdms() -> str:
 
 
 def repo_config_with(
-    *, inline_chunk_threshold_bytes: int | None = None, preload=None, splitting=None
+    *,
+    inline_chunk_threshold_bytes: int | None = None,
+    preload=None,
+    splitting=None,
+    virtual_chunk_containers: list | None = None,
 ) -> ic.RepositoryConfig:
     config = ic.RepositoryConfig.default()
     if inline_chunk_threshold_bytes is not None:
         config.inline_chunk_threshold_bytes = inline_chunk_threshold_bytes
-    if splitting is not None:
+    if splitting is not None or preload is not None:
         config.manifest = ic.ManifestConfig(preload=preload, splitting=splitting)
+    if virtual_chunk_containers is not None:
+        for cont in virtual_chunk_containers:
+            config.set_virtual_chunk_container(cont)
     return config
 
 

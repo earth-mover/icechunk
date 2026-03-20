@@ -199,10 +199,7 @@ def setup_dataset(
 
 def get_version() -> str:
     version = Version(ic.__version__)
-    if version.pre is not None and "a" in version.pre:
-        return f"icechunk-v{version.base_version}-alpha.{version.pre[1]}"
-    else:
-        return f"icechunk-v{version.base_version}"
+    return f"icechunk-v{version.base_version}"
 
 
 if __name__ == "__main__":

@@ -3,6 +3,28 @@
 This is a benchmark suite based on `pytest-benchmark`.
 It is best to think of these benchmarks as benchmarking "integration" workflows that exercise the ecosystem from the Xarray/Zarr level down to Icechunk.
 
+## Quick Start (uv)
+
+From the repo root:
+
+``` sh
+# Install benchmark deps and build icechunk (release mode)
+just bench-build
+
+# Create benchmark datasets (once, ~3 min)
+just bench-setup
+
+# Run all benchmarks
+just bench
+
+# Run specific benchmarks
+just bench "-k getsize"
+just bench "-k write"
+
+# Compare saved runs
+just bench-compare 0020 0021
+```
+
 ## Setup
 
 Install the necessary dependencies with the `[benchmarks]` extra.
@@ -18,7 +40,7 @@ pytest -nauto -m setup_benchmarks benchmarks/
 ```
 As of Jan 20, 2025 this command takes about 3 minutes to run.
 
-Use the `--force-setup` flag to avoid re-creating datasets if possible.
+Use `--force-setup=False` to avoid re-creating datasets if possible.
 
 ``` sh
 pytest -nauto -m setup_benchmarks --force-setup=False benchmarks/
@@ -90,12 +112,12 @@ test_time_getsize_prefix[era5-single] (NOW)               2.2133 (1.0)
 ### Notes
 ### Where to run the benchmarks?
 
-- Pass the `--where [local|s3|s3_ob|gcs|tigris]` flag to control where benchmarks are run.
+- Pass the `--where` flag to control where benchmarks are run: `local`, `s3`, `s3_ob`, `gcs`, `tigris`, `r2`.
 - `s3_ob` uses the `s3_object_store_storage` constructor.
-- Pass multiple stores with `--where 's3|gcs'`
+- Comma-separate for multiple stores: `--where s3,gcs`
 
 ```sh
-python benchmarks/runner.py --where gcs v0.1.2
+python benchmarks/runner.py --where gcs pypi-nightly
 ```
 
 By default all benchmarks are run locally:
@@ -105,37 +127,54 @@ By default all benchmarks are run locally:
 It is possible to run the benchmarks in the cloud using Coiled. You will need to be a member of the Coiled workspaces: `earthmover-devs` (AWS), `earthmover-devs-gcp` (GCS) and `earthmover-devs-azure` (Azure).
 1. We create a new "coiled software environment" with a specific name.
 2. We use `coiled run` targeting a specific machine type, with a specific software env.
+3. Two special refs install icechunk from PyPI instead of building from source:
+   - `pypi-nightly` — installs the latest pre-release from the [scientific-python-nightly-wheels](https://pypi.anaconda.org/scientific-python-nightly-wheels/simple) index
+   - `pypi-v1` — installs the latest stable v1 release (`icechunk<2`)
 4. The VM stays alive for 10 minutes to allow for quick iteration.
-5. Coiled does not sync stdout until the pytest command is done, for some reason. See the logs on the Coiled platform for quick feedback.
-6. We use the `--sync` flag, so you will need [`mutagen`](https://mutagen.io/documentation/synchronization/) installed on your system. This will sync the benchmark JSON outputs between the VM and your machine.
-Downsides:
-1. At the moment, we can only benchmark released versions of icechunk. We may need a more complicated Docker container strategy in the future to support dev branch benchmarks.
-2. When a new env is created, the first run always fails :/. The second run works though, so just re-run.
+5. Benchmark JSON results are uploaded from the VM to the target bucket via `object_store_python`, then downloaded locally for comparison.
+6. AWS credentials are forwarded to the VM via `--env` flags (resolved from your local boto3 session at startup).
+
+```sh
+# Run nightly benchmarks on S3 and GCS
+python benchmarks/runner.py --where s3,gcs pypi-nightly
+
+# Compare nightly vs stable v1
+python benchmarks/runner.py --where s3 pypi-nightly pypi-v1
+```
 
 ### `runner.py`
 
 `runner.py` abstracts the painful task of setting up envs with different versions (with potential format changes), and recreating datasets where needed.
-Datasets are written to `s3://icechunk-test/benchmarks/REFNAME_SHORTCOMMIT`.
+Datasets are written to `{bucket}/benchmarks/{REF}_{SHORTCOMMIT}/` where the bucket depends on `--where`:
+| Store   | Bucket                |
+|---------|-----------------------|
+| s3      | `icechunk-ci`         |
+| gcs     | `icechunk-test-gcp`   |
+| tigris  | `icechunk-test-github-actions`       |
+| r2      | `icechunk-test-r2`    |
 
 Usage:
 ``` sh
-python benchmarks/runner.py icechunk-v0.1.0-alpha.12 main
+python benchmarks/runner.py v0.1.2 main
 ```
 This will
 1. setup a virtual env with the icechunk version
 2. compile it,
-3. run `setup_benchmarks` with `force-setup=False`. This will recreate datasets if the version in the bucket cannot be opened by this icechunk version.
+3. run `setup_benchmarks`. This will recreate datasets if the version in the bucket cannot be opened by this icechunk version. Pass `--setup=force` to always recreate, or `--setup=skip` to skip setup entirely.
 4. Runs the benchmarks.
 5. Compares the benchmarks.
 
-### Just aliases
+### Just recipes
 
-> [!WARNING]
-> This doesn't work yet
+Some useful `just` recipes:
 
-Some useful `just` aliases:
-
-| Compare these benchmark runs | `just bench-compare 0020 0021 0022` |
+| Task                      | Command                             |
+|---------------------------|-------------------------------------|
+| Install deps + build      | `just bench-build`                  |
+| Create benchmark datasets | `just bench-setup`                  |
+| Run benchmarks            | `just bench`                        |
+| Run specific benchmarks   | `just bench "-k getsize"`           |
+| Compare benchmark runs    | `just bench-compare 0020 0021 0022` |
 
 ### Run the read benchmarks:
 ``` sh
@@ -183,9 +222,9 @@ pytest-benchmark list
 which for me prints
 ```
 ...
-/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0019_icechunk-v0.1.0-alpha.12.json
-/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0020_icechunk-v0.1.0-alpha.8.json
-/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0021_icechunk-v0.1.0-alpha.10.json
+/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0019_v0.1.2.json
+/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0020_v0.1.3.json
+/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0021_main.json
 ```
 
 Note the 4 digit ID of the runs you want. Then
@@ -200,7 +239,7 @@ To easily run benchmarks for some named refs use `benchmarks/run_refs.py`
 ### Comparing across multiple stores
 
 ```sh
-python benchmarks/runner.py --skip-setup --pytest '-k test_write_simple' --where 's3|s3_ob|gcs' main
+python benchmarks/runner.py --setup=skip --pytest '-k test_write_simple' --where s3,s3_ob,gcs pypi-nightly
 ```
 
 ``` sh

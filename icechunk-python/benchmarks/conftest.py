@@ -15,7 +15,13 @@ from benchmarks.datasets import (
     BenchmarkWriteDataset,
     Dataset,
 )
-from icechunk import Repository, local_filesystem_storage
+from icechunk import (
+    Repository,
+    RepositoryConfig,
+    VirtualChunkContainer,
+    local_filesystem_storage,
+    s3_store,
+)
 
 try:
     from icechunk import ManifestSplittingConfig  # noqa: F401
@@ -41,7 +47,11 @@ def request_to_dataset(request, moar_prefix: str = "") -> Dataset:
 
 @pytest.fixture(scope="function")
 def repo(tmpdir: str) -> Repository:
-    return Repository.create(storage=local_filesystem_storage(tmpdir))
+    config = RepositoryConfig.default()
+    config.set_virtual_chunk_container(
+        VirtualChunkContainer("s3://foo/", s3_store(region="us-east-1"))
+    )
+    return Repository.create(storage=local_filesystem_storage(tmpdir), config=config)
 
 
 @pytest.fixture(params=[pytest.param(PANCAKE_WRITES, id="pancake-writes")])
@@ -91,8 +101,6 @@ def synth_dataset(request) -> BenchmarkReadDataset:
     return cast(BenchmarkReadDataset, ds)
 
 
-# This hook is used instead of `pyproject.toml` so that we can run the benchmark infra
-# on versions older than alpha-13
 # TODO: Migrate to pyproject.toml after 1.0 has been released.
 def pytest_configure(config):
     config.addinivalue_line(
