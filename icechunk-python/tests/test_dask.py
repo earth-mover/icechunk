@@ -9,7 +9,7 @@ import dask
 import distributed
 import xarray as xr
 import zarr
-from icechunk import Repository, local_filesystem_storage
+from icechunk import IcechunkError, Repository, local_filesystem_storage
 from icechunk.dask import store_dask
 from icechunk.xarray import to_icechunk
 from tests.test_xarray import create_test_data, roundtrip
@@ -76,8 +76,9 @@ def test_xarray_to_icechunk_nested_pickling(
             session = repo.writable_session("main")
 
             to_icechunk(ds, session=session, mode="w")
-            # TODO: repeated writes will fail the merge check
-            to_icechunk(ds, session=session, mode="w")
+            with pytest.raises(IcechunkError):
+                # repeated writes will fail the merge check; since the merging of base sessions will fail.
+                to_icechunk(ds, session=session, mode="w")
             with xr.open_zarr(session.store, consolidated=False, chunks=None) as actual:
                 assert_identical(actual, ds)
             with xr.open_zarr(session.fork().store, consolidated=False) as actual:
