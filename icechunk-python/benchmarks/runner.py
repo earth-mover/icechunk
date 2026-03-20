@@ -93,7 +93,7 @@ class Runner:
     # Refs that install icechunk from PyPI instead of building from source.
     PYPI_REFS = {
         "pypi-nightly": "--pre icechunk",
-        "pypi-v1": "icechunk<2",
+        "pypi-v1": "icechunk==1.*",
     }
 
     def __init__(self, *, ref: str, where: str, save_prefix: str) -> None:
@@ -365,7 +365,7 @@ class CoiledRunner(Runner):
         store = ObjectStore(store_url, options=store_options)
         data = store.get(obj_key)
 
-        local_dir = f"/tmp/benchmarks/{self.save_prefix}"
+        local_dir = f"./.benchmarks/{self.save_prefix}"
         os.makedirs(local_dir, exist_ok=True)
         local_path = f"{local_dir}/{local_name}"
         with open(local_path, "wb") as f:
@@ -440,18 +440,11 @@ if __name__ == "__main__":
 
     refs = args.refs
 
-    if where == ("local",) and len(refs) > 1:
-        files = sorted(
-            glob.glob("./.benchmarks/**/*.json", recursive=True),
-            key=os.path.getmtime,
-            reverse=True,
-        )[: len(refs)]
-    else:
-        files = sorted(
-            glob.glob(f"/tmp/benchmarks/{save_prefix}/*.json", recursive=True),
-            key=os.path.getmtime,
-            reverse=True,
-        )
+    files = sorted(
+        glob.glob("./.benchmarks/**/*.json", recursive=True),
+        key=os.path.getmtime,
+        reverse=True,
+    )[: len(refs) * len(where)]
     #  TODO: Use `just` here when we figure that out.
     subprocess.run(
         [
