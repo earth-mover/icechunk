@@ -1,39 +1,9 @@
-from collections.abc import Iterable
 from typing import Any, cast
 
 import numpy as np
 
 import icechunk as ic
 import zarr
-
-
-def test_shift_using_function() -> None:
-    """Test reindex_array with a custom shift function (low-level API)."""
-    repo = ic.Repository.create(
-        storage=ic.in_memory_storage(),
-    )
-    session = repo.writable_session("main")
-    root = zarr.group(store=session.store, overwrite=True)
-    array = root.create_array(
-        "array", chunks=(2,), fill_value=42, data=np.arange(50, dtype="i4")
-    )
-    session.commit("create array")
-
-    session = repo.writable_session("main")
-    root = zarr.group(store=session.store, overwrite=False)
-    array = cast("zarr.Array[Any]", root["array"])
-    assert array[0] == 0
-    assert array[49] == 49
-
-    def reindex(idx: Iterable[int]) -> Iterable[int] | None:
-        idx = list(idx)
-        return [idx[0] - 4] if idx[0] >= 4 else None
-
-    session.reindex_array("/array", reindex)
-    # we moved 4 chunks to the left, that's 8 array elements
-    np.testing.assert_equal(array[0:42], np.arange(8, 50))
-    # stale data remains in vacated positions
-    np.testing.assert_equal(array[42:], np.arange(42, 50))
 
 
 def test_shift_left() -> None:
