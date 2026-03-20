@@ -20,7 +20,7 @@ use icechunk::conflicts::detector::ConflictDetector;
 use icechunk::format::snapshot::ArrayShape;
 use icechunk::format::{ByteRange, ChunkIndices, Path};
 use icechunk::repository::VersionInfo;
-use icechunk::session::{CommitMethod, get_chunk};
+use icechunk::session::get_chunk;
 use tokio::runtime::Runtime;
 
 use crate::helpers::{
@@ -149,7 +149,12 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                                 )
                                 .await
                                 .unwrap();
-                                session.commit("data", None).await.unwrap();
+                                session
+                                    .commit("data")
+                                    .max_concurrent_nodes(8)
+                                    .execute()
+                                    .await
+                                    .unwrap();
 
                                 // Re-open with the splitting config and rewrite
                                 // manifests. Using reopen() preserves VCC auth.
@@ -166,11 +171,11 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                                     let mut session =
                                         repo.writable_session("main").await.unwrap();
                                     session
-                                        .rewrite_manifests(
-                                            "rewrite",
-                                            None,
-                                            CommitMethod::Amend,
-                                        )
+                                        .commit("rewrite")
+                                        .max_concurrent_nodes(8)
+                                        .rewrite_manifests()
+                                        .amend()
+                                        .execute()
                                         .await
                                         .unwrap();
                                 }
@@ -291,7 +296,12 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
                         },
                         |mut session| {
                             rt.block_on(async {
-                                session.commit("foo", None).await.unwrap();
+                                session
+                                    .commit("foo")
+                                    .max_concurrent_nodes(8)
+                                    .execute()
+                                    .await
+                                    .unwrap();
                             })
                         },
                         // Make sure we run the set up before every iteration
@@ -364,7 +374,12 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
 
                             let start_commit = std::time::Instant::now();
                             rt.block_on(async {
-                                session.commit("commit", None).await.unwrap();
+                                session
+                                    .commit("commit")
+                                    .max_concurrent_nodes(8)
+                                    .execute()
+                                    .await
+                                    .unwrap();
                             });
                             let commit_elapsed = start_commit.elapsed();
 
@@ -442,14 +457,10 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
                     rt.block_on(async {
                         for mut session in sessions {
                             session
-                                .commit_rebasing(
-                                    &ConflictDetector,
-                                    10,
-                                    "foo",
-                                    None,
-                                    |_| async {},
-                                    |_| async {},
-                                )
+                                .commit("foo")
+                                .max_concurrent_nodes(8)
+                                .rebase(&ConflictDetector, 10)
+                                .execute()
                                 .await
                                 .unwrap();
                         }

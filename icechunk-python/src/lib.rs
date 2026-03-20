@@ -35,7 +35,7 @@ use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
 use repository::{
     PyDiff, PyFeatureFlag, PyGCSummary, PyManifestFileInfo, PyRepoAvailability,
-    PyRepoStatus, PyRepository, PySnapshotInfo, PyUpdate, PyUpdateType,
+    PyRepoStatus, PyRepository, PySnapshotInfo, PySpecVersion, PyUpdate, PyUpdateType,
 };
 use session::{ChunkType, PySession, PySessionMode};
 use stats::PyChunkStorageStats;
@@ -137,8 +137,8 @@ fn set_logs_filter(py: Python, log_filter_directive: Option<String>) -> PyResult
 #[pyfunction]
 /// The spec version that this version of the Icechunk library
 /// uses to write metadata files
-fn spec_version() -> u8 {
-    SpecVersionBin::current() as u8
+fn spec_version() -> PySpecVersion {
+    SpecVersionBin::current().into()
 }
 
 #[pyfunction]
@@ -214,6 +214,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDiff>()?;
     m.add_class::<PyRepoAvailability>()?;
     m.add_class::<PyRepoStatus>()?;
+    m.add_class::<PySpecVersion>()?;
     m.add_class::<PyUpdateType>()?;
     m.add_class::<PyUpdate>()?;
     m.add_class::<PyFeatureFlag>()?;

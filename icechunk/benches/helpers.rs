@@ -354,7 +354,7 @@ pub(crate) async fn setup_repo(
     let defn = Bytes::from_static(br#"{"this":"array"}"#);
     session.add_group(Path::root(), defn.clone()).await?;
     session.add_array(path, shape, dimension_names, defn.clone()).await?;
-    session.commit("initialized", None).await?;
+    session.commit("initialized").max_concurrent_nodes(8).execute().await?;
 
     Ok((repository, tmpdir))
 }
