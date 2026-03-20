@@ -181,6 +181,7 @@ jobs:
           source .venv/bin/activate
           python -m pytest -m hypothesis
 
+      # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
         if: always()
