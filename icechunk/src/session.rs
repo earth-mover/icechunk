@@ -864,6 +864,7 @@ impl Session {
 
         let mut original_chunks = self.chunk_coordinates(array_path).await?.boxed();
         let mut change_set = ChangeSet::for_edits();
+        let mut destinations = HashSet::new();
 
         let (forward, backwards) = match calculate_new_index {
             ReindexMapping::ForwardOnly(forward) => (forward, None),
@@ -881,6 +882,7 @@ impl Session {
                 let new_payload =
                     self.get_chunk_ref(array_path, &old_chunk_index).await?;
                 if shape.valid_chunk_coord(&new_chunk_index) {
+                    destinations.insert(new_chunk_index.clone());
                     change_set.set_chunk_ref(
                         node.id.clone(),
                         new_chunk_index,
@@ -895,6 +897,9 @@ impl Session {
                 }
             }
             if let Some(ref backwards) = backwards {
+                if destinations.contains(&old_chunk_index) {
+                    continue;
+                }
                 let should_delete = match backwards(&old_chunk_index)? {
                     None => true, // out of bounds
                     Some(source) => {
