@@ -101,7 +101,6 @@ jobs:
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
           uv pip install "$WHEEL" --group test
-          uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
           # Install specific versions based on matrix
           if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
             echo "Installing minimum versions:"
@@ -123,7 +122,55 @@ jobs:
               sleep 1
           done
 
-      - name: Run pytest
+      - name: Run pytest (non-hypothesis)
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          source .venv/bin/activate
+          python -m pytest -n 4 -m "not hypothesis"
+
+  test-hypothesis:
+    runs-on: ubuntu-latest
+    needs: [build-wheels]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: test-wheels
+          path: icechunk-python/dist
+
+      - name: Restore cached hypothesis directory
+        id: restore-hypothesis-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: icechunk-python/.hypothesis/
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            cache-hypothesis-
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        shell: bash
+        working-directory: icechunk-python
+        run: |
+          set -e
+          uv venv
+          source .venv/bin/activate
+          python --version
+          PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
+          WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
+          uv pip install "$WHEEL" --group test
+          uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
+
+      - name: Run hypothesis tests
         shell: bash
         working-directory: icechunk-python
         env:
@@ -132,16 +179,15 @@ jobs:
         run: |
           set -e
           source .venv/bin/activate
-          python -m pytest -n 4
+          python -m pytest -m hypothesis
 
-      # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory
         id: save-hypothesis-cache
         if: always()
         uses: actions/cache/save@v5
         with:
           path: icechunk-python/.hypothesis/
-          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}-${{ matrix.deps-version.name }}
+          key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
 
   compat-stateful:
     runs-on: ubuntu-latest
