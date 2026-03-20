@@ -86,8 +86,8 @@ pub(crate) mod test_utils {
 
     #[template]
     #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[case::v1(SpecVersionBin::V1)]
+    #[case::v2(SpecVersionBin::V2)]
     pub fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 }
 

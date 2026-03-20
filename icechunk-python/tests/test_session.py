@@ -41,8 +41,11 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         zarr.group(session.store)
         assert session.has_uncommitted_changes
 
-        with pytest.raises(ValueError):
-            session.fork()
+        # test that useless fork doesn't break anything
+        fork = session.fork()
+        # forks dont allow commits
+        with pytest.raises(IcechunkError, match="commits are not allowed"):
+            fork.commit("foo")
 
         if use_async:
             await session.commit_async("init")
@@ -50,11 +53,8 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
             session.commit("init")
 
         # forking a read-only session
-        with pytest.raises(ValueError):
+        with pytest.raises(IcechunkError, match="cannot fork a read-only session"):
             session.fork()
-        # readonly sessions can be pickled directly
-        with pytest.raises(ValueError, match="can be pickled"):
-            pickle.loads(pickle.dumps(session.fork()))
         pickle.loads(pickle.dumps(session))
 
         session = repo.writable_session("main")
@@ -62,9 +62,8 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         zarr.create_group(fork.store, path="/foo")
         assert not session.has_uncommitted_changes
         assert fork.has_uncommitted_changes
-        with pytest.warns(UserWarning):
-            with pytest.raises(IcechunkError, match="cannot commit"):
-                session.commit("foo")
+        with pytest.raises(IcechunkError, match="cannot commit"):
+            session.commit("foo")
         if use_async:
             await session.merge_async(fork)
             await session.commit_async("foo")
@@ -78,7 +77,7 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         zarr.create_group(fork1.store, path="/foo1")
         zarr.create_group(fork2.store, path="/foo2")
 
-        with pytest.raises(TypeError, match="Cannot commit a fork"):
+        with pytest.raises(IcechunkError, match="commits are not allowed"):
             fork1.commit("foo")
 
         fork1 = pickle.loads(pickle.dumps(fork1))
@@ -105,8 +104,6 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         fork1 = pickle.loads(pickle.dumps(session.fork()))
         fork2 = pickle.loads(pickle.dumps(fork1.fork()))
         zarr.create_group(fork1.store, path="/foo3")
-        with pytest.raises(ValueError):
-            fork1.fork()
         zarr.create_group(fork2.store, path="/foo4")
 
         fork1 = pickle.loads(pickle.dumps(fork1))

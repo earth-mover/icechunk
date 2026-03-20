@@ -107,11 +107,11 @@ impl From<StorageError> for MigrationError {
 }
 
 async fn validate_start(repo: &Repository) -> MigrationResult<()> {
-    if repo.spec_version() != SpecVersionBin::V1dot0 {
+    if repo.spec_version() != SpecVersionBin::V1 {
         error!("Target repository must be a 1.X Icechunk repository");
         return Err(MigrationErrorKind::InvalidRepositoryMigration {
-            expected: SpecVersionBin::V1dot0,
-            target: SpecVersionBin::V2dot0,
+            expected: SpecVersionBin::V1,
+            target: SpecVersionBin::V2,
             actual: repo.spec_version(),
         }
         .into());
@@ -270,7 +270,7 @@ async fn do_migrate(
 ) -> MigrationResult<()> {
     info!("Writing new repository info file");
     let new_asset_manager =
-        repo.asset_manager().clone_for_spec_version(SpecVersionBin::V2dot0);
+        repo.asset_manager().clone_for_spec_version(SpecVersionBin::V2);
     let new_version_info = new_asset_manager.create_repo_info(repo_info).await?;
 
     info!(version=?new_version_info, "Written repository info file");
@@ -293,7 +293,7 @@ async fn do_migrate(
     };
 
     let new_spec_version = migrated.spec_version();
-    if new_spec_version != SpecVersionBin::V2dot0 {
+    if new_spec_version != SpecVersionBin::V2 {
         error!("Unknown error during migration. Repository doesn't open as 2.0");
         delete_repo_info(repo).await?;
         error!("Migration failed");
@@ -323,7 +323,7 @@ async fn do_migrate(
         };
 
         let new_spec_version = migrated.spec_version();
-        if new_spec_version != SpecVersionBin::V2dot0 {
+        if new_spec_version != SpecVersionBin::V2 {
             error!("Unknown error during migration. Repository doesn't open as 2.0");
             delete_repo_info(repo).await?;
             error!("Migration failed");
@@ -517,7 +517,7 @@ pub async fn migrate_1_to_2(
     let root_time = root.flushed_at;
 
     let repo_info = Arc::new(RepoInfo::new(
-        SpecVersionBin::V2dot0,
+        SpecVersionBin::V2,
         tags,
         branches,
         deleted_tag_names.iter().copied(),
@@ -525,8 +525,8 @@ pub async fn migrate_1_to_2(
         &Default::default(),
         UpdateInfo {
             update_type: UpdateType::RepoMigratedUpdate {
-                from_version: SpecVersionBin::V1dot0,
-                to_version: SpecVersionBin::V2dot0,
+                from_version: SpecVersionBin::V1,
+                to_version: SpecVersionBin::V2,
             },
             update_time: Utc::now(),
             previous_updates,
@@ -774,8 +774,8 @@ mod tests {
         assert_eq!(
             *first_update,
             UpdateType::RepoMigratedUpdate {
-                from_version: SpecVersionBin::V1dot0,
-                to_version: SpecVersionBin::V2dot0,
+                from_version: SpecVersionBin::V1,
+                to_version: SpecVersionBin::V2,
             }
         );
 
@@ -894,7 +894,7 @@ mod tests {
         migrate_1_to_2(repo, true, true, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
 
-        assert_eq!(repo.spec_version(), SpecVersionBin::V1dot0);
+        assert_eq!(repo.spec_version(), SpecVersionBin::V1);
         Ok(())
     }
 
@@ -908,7 +908,7 @@ mod tests {
         migrate_1_to_2(repo, false, false, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
 
-        assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2);
 
         assert_eq!(
             refs::list_branches(repo.storage().as_ref(), repo.storage_settings()).await?,

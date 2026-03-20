@@ -141,10 +141,10 @@ pub async fn pointed_snapshots<'a>(
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> RepositoryResult<impl Stream<Item = RepositoryResult<Arc<Snapshot>>> + 'a> {
     match asset_manager.spec_version() {
-        SpecVersionBin::V1dot0 => {
+        SpecVersionBin::V1 => {
             Ok(pointed_snapshots_v1(asset_manager, extra_roots).await?.left_stream())
         }
-        SpecVersionBin::V2dot0 => {
+        SpecVersionBin::V2 => {
             Ok(pointed_snapshots_v2(asset_manager, extra_roots).await?.right_stream())
         }
     }
@@ -170,11 +170,11 @@ mod tests {
             Repository::create(None, storage.clone(), HashMap::new(), None, true).await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::new()).await?;
-        let snap = session.commit("commit", None).await?;
+        let snap = session.commit("commit").max_concurrent_nodes(8).execute().await?;
         repo.create_tag("tag1", &snap).await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group("/foo".try_into().unwrap(), Bytes::new()).await?;
-        let snap = session.commit("commit", None).await?;
+        let snap = session.commit("commit").max_concurrent_nodes(8).execute().await?;
         repo.create_tag("tag2", &snap).await?;
 
         let all_snaps = pointed_snapshots(repo.asset_manager().clone(), &HashSet::new())
