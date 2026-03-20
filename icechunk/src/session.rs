@@ -377,9 +377,7 @@ impl<'a> CommitBuilder<'a> {
         }
 
         if self.amend {
-            self.session
-                .asset_manager
-                .fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+            self.session.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2)?;
         }
 
         let commit_method =
