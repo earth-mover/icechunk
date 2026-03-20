@@ -91,6 +91,18 @@ pub enum SessionErrorKind {
     #[error("Read only sessions cannot modify the repository")]
     ReadOnlySession,
     #[error(
+        "commits are not allowed on read-only or forked sessions, merge forked sessions back into the base session before committing. See https://icechunk.io/en/latest/parallel/ for more"
+    )]
+    CommitNotAllowed,
+    #[error(
+        "cannot merge a branch session into a fork session, only fork sessions can be merged into a fork. See https://icechunk.io/en/latest/parallel/ for more"
+    )]
+    MergeNotAllowed,
+    #[error(
+        "cannot fork a read-only session, read-only sessions can be serialized and transmitted directly. See https://icechunk.io/en/latest/parallel/ for more"
+    )]
+    CannotForkReadOnlySession,
+    #[error(
         "This session was created to rearrange the hierarchy, other write operations cannot be executed. Commit or abandon the sessions and create a regular writable session"
     )]
     RearrangeSessionOnly,
@@ -448,6 +460,7 @@ pub struct Session {
     storage: Arc<dyn Storage + Send + Sync>,
     asset_manager: Arc<AssetManager>,
     virtual_resolver: Arc<VirtualChunkResolver>,
+    read_only: bool,
     branch_name: Option<String>,
     snapshot_id: SnapshotId,
     change_set: ChangeSet,
@@ -455,6 +468,9 @@ pub struct Session {
 }
 
 impl Session {
+    /// Create a read-only session pinned to a specific snapshot.
+    ///
+    /// The returned session can read chunks and metadata but cannot write or commit.
     pub fn create_readonly_session(
         config: RepositoryConfig,
         storage_settings: storage::Settings,
@@ -469,6 +485,7 @@ impl Session {
             storage,
             asset_manager,
             virtual_resolver,
+            read_only: true,
             branch_name: None,
             snapshot_id,
             change_set: ChangeSet::for_edits(),
@@ -476,6 +493,14 @@ impl Session {
         }
     }
 
+    /// Create a writable session for editing chunks and metadata.
+    ///
+    /// Changes are accumulated in a [`ChangeSet`] and can be committed if the
+    /// session is attached to a branch.
+    /// Writable sessions can be created on top of anonymous snapshots (when `branch_name` is `None`).
+    /// Such sessions can accept all modifications (other than move) but cannot be committed.
+    /// They should be merged back with a base writable Session (show `branch_name` is `Some`)
+    /// using [`Session::merge`], which can then be committed.
     #[allow(clippy::too_many_arguments)]
     pub fn create_writable_session(
         config: RepositoryConfig,
@@ -483,7 +508,7 @@ impl Session {
         storage: Arc<dyn Storage + Send + Sync>,
         asset_manager: Arc<AssetManager>,
         virtual_resolver: Arc<VirtualChunkResolver>,
-        branch_name: String,
+        branch_name: Option<String>,
         snapshot_id: SnapshotId,
         default_commit_metadata: SnapshotProperties,
     ) -> Self {
@@ -493,13 +518,17 @@ impl Session {
             storage,
             asset_manager,
             virtual_resolver,
-            branch_name: Some(branch_name),
+            read_only: false,
+            branch_name,
             snapshot_id,
             change_set: ChangeSet::for_edits(),
             default_commit_metadata,
         }
     }
 
+    /// Create a session for rearranging nodes (moves/renames).
+    ///
+    /// A branch name is required and modifications other than move are disallowed..
     #[allow(clippy::too_many_arguments)]
     pub fn create_rearrange_session(
         config: RepositoryConfig,
@@ -517,6 +546,7 @@ impl Session {
             storage,
             asset_manager,
             virtual_resolver,
+            read_only: false,
             branch_name: Some(branch_name),
             snapshot_id,
             change_set: ChangeSet::for_rearranging(),
@@ -539,7 +569,7 @@ impl Session {
     }
 
     pub fn read_only(&self) -> bool {
-        self.branch_name.is_none()
+        self.read_only
     }
 
     /// Returns the mode of this session.
@@ -571,6 +601,41 @@ impl Session {
         chunk_location: &VirtualChunkLocation,
     ) -> Option<&VirtualChunkContainer> {
         self.virtual_resolver.matching_container(chunk_location)
+    }
+
+    /// Create a "forked" [`Session`] from a "base" [`Session`]
+    /// Fork sessions:
+    /// 1. contain an empty [`ChangeSet`]
+    /// 2. Are built off an anonymous [`Snapshot`] that records the state of the base [`Session`].
+    /// 3. Cannot be committed.
+    ///
+    /// Such Sessions are useful for distributed writes. You are expected to communicate the forked
+    /// [`Session`] using [`Session.as_bytes()`] and [`Session.from_bytes`] methods to distributed workers,
+    /// do the necessary writes, communicate back the Sessions from each work, and merge them in to the
+    /// base Session, which can then be committed.
+    #[instrument(skip(self))]
+    pub async fn fork(&self) -> SessionResult<Self> {
+        if self.read_only() {
+            return Err(SessionErrorKind::CannotForkReadOnlySession.into());
+        }
+        // TODO: why do we allow Clone?
+        let snap = self.clone().commit("fork").anonymous().execute().await?;
+
+        Ok(Session::create_writable_session(
+            self.config.clone(),
+            (*self.storage_settings).clone(),
+            self.storage.clone(),
+            Arc::clone(&self.asset_manager),
+            self.virtual_resolver.clone(),
+            None,
+            snap.clone(),
+            self.default_commit_metadata.clone(),
+        ))
+    }
+
+    /// Returns true if this is a fork session (writable, not attached to a branch).
+    pub fn is_fork(&self) -> bool {
+        self.branch_name.is_none() && !self.read_only()
     }
 
     /// Compute an overview of the current session changes
@@ -1302,6 +1367,10 @@ impl Session {
         if self.read_only() {
             return Err(SessionErrorKind::ReadOnlySession.into());
         }
+        // A fork session cannot absorb a base session
+        if self.branch_name.is_none() && other.branch_name.is_some() {
+            return Err(SessionErrorKind::MergeNotAllowed.into());
+        }
         let Session { change_set, .. } = other;
 
         self.change_set.merge(change_set)?;
@@ -1371,6 +1440,7 @@ impl Session {
         }
     }
 
+    #[instrument(skip(self, properties))]
     async fn do_flush(
         &mut self,
         message: &str,
@@ -1414,6 +1484,7 @@ impl Session {
         self.snapshot_id = new_snap.id().clone();
         // Once committed, the session is now read only, which we control
         // by setting the branch_name to None (you can only write to a branch session)
+        self.read_only = true;
         self.branch_name = None;
 
         Ok(new_snap.id().clone())
@@ -1472,7 +1543,7 @@ impl Session {
         allow_empty: bool,
     ) -> SessionResult<SnapshotId> {
         let Some(branch_name) = &self.branch_name else {
-            return Err(SessionErrorKind::ReadOnlySession.into());
+            return Err(SessionErrorKind::CommitNotAllowed.into());
         };
 
         // amend is only allowed in spec v2, this should be checked at this point so we only assert
@@ -1521,12 +1592,14 @@ impl Session {
         self.snapshot_id = id.clone();
         // Once committed, the session is now read only, which we control
         // by setting the branch_name to None (you can only write to a branch session)
+        self.read_only = true;
         self.branch_name = None;
 
         Ok(id)
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, solver, properties, before_rebase, after_rebase))]
     async fn do_commit_rebasing(
         &mut self,
         solver: &(dyn ConflictSolver + Send + Sync),
@@ -1655,7 +1728,7 @@ impl Session {
         solver: &(dyn ConflictSolver + Send + Sync),
     ) -> SessionResult<()> {
         let Some(branch_name) = &self.branch_name else {
-            return Err(SessionErrorKind::ReadOnlySession.into());
+            return Err(SessionErrorKind::CommitNotAllowed.into());
         };
 
         debug!("Rebase started");

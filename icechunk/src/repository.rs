@@ -1851,7 +1851,7 @@ impl Repository {
             self.storage.clone(),
             Arc::clone(&self.asset_manager),
             self.virtual_resolver.clone(),
-            branch.to_string(),
+            Some(branch.to_string()),
             snapshot_id.clone(),
             self.default_commit_metadata.clone(),
         );
@@ -4106,6 +4106,137 @@ mod tests {
         )
         .await;
         assert!(result.is_ok());
+
+        Ok(())
+    }
+
+    #[cfg(feature = "object-store-fs")]
+    #[tokio_test]
+    async fn test_concurrent_distributer_writers_with_base_state()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::new_local_filesystem_storage;
+
+        let repo_dir = TempDir::new()?;
+        let storage: Arc<dyn Storage + Send + Sync> =
+            new_local_filesystem_storage(repo_dir.path()).await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(10, 10)]).unwrap();
+        session
+            .add_array(
+                array_path.clone(),
+                shape.clone(),
+                Some(vec!["x".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+        session.commit("init").execute().await?;
+
+        async fn do_distributed_writes(
+            session: &mut Session,
+            array_path: &Path,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            // create a _clean_ writable session from that snapshot
+            let clean = session.fork().await?;
+
+            // distribute these clean sessions to two writers
+            // NOTE: this is explicitly modeling a python pickle/unpickle workflow;
+            // we could just send out a SnapshotId and call `create_writable_session`
+            // on the distributed worker instead
+            let clean_bytes = clean.as_bytes()?;
+            let mut s1 = Session::from_bytes(clean_bytes.clone())?;
+            let mut s2 = Session::from_bytes(clean_bytes)?;
+
+            // now both writers make independent changes
+            s1.set_chunk_ref(
+                array_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("0".to_string().into())),
+            )
+            .await?;
+            s2.set_chunk_ref(
+                array_path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("1".to_string().into())),
+            )
+            .await?;
+
+            // forked sessions cannot be committed.
+            assert!(s1.commit("foo").execute().await.is_err());
+            assert!(s2.commit("foo").execute().await.is_err());
+
+            // merge the distributed writers' sessions
+            s1.merge(s2).await?;
+
+            assert!(s1.commit("foo").execute().await.is_err());
+
+            // merging a base session into a fork session is not allowed
+            let base_clone = session.clone();
+            assert!(matches!(
+                s1.merge(base_clone).await.unwrap_err().kind,
+                SessionErrorKind::MergeNotAllowed
+            ));
+
+            // flushing a fork session succeeds (anonymous snapshot)
+            let flush_result =
+                s1.clone().commit("fork-flush").anonymous().execute().await;
+            assert!(flush_result.is_ok());
+
+            // merge that in to the base
+            session.merge(s1).await?;
+
+            for i in 0..2 {
+                let reader = session
+                    .get_chunk_reader(array_path, &ChunkIndices(vec![i]), &ByteRange::ALL)
+                    .await?;
+                assert_eq!(get_chunk(reader).await?, Some(format!("{i}").into()));
+            }
+
+            // base session can be committed
+            session.commit("foo").execute().await?;
+
+            for i in 0..2 {
+                let reader = session
+                    .get_chunk_reader(array_path, &ChunkIndices(vec![i]), &ByteRange::ALL)
+                    .await?;
+                assert_eq!(get_chunk(reader).await?, Some(format!("{i}").into()));
+            }
+
+            Ok(())
+        }
+
+        // zarr-python's mode="w" will delete and array, then re-create it
+        let mut session = repo.writable_session("main").await?;
+        session.delete_array(array_path.clone()).await?;
+        session
+            .add_array(
+                array_path.clone(),
+                shape.clone(),
+                Some(vec!["x".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+        do_distributed_writes(&mut session, &array_path).await?;
+
+        // delete all chunks then do distributed writes
+        let mut session = repo.writable_session("main").await?;
+        for i in 0..10 {
+            session
+                .set_chunk_ref(array_path.clone(), ChunkIndices(vec![i]), None)
+                .await?;
+        }
+        do_distributed_writes(&mut session, &array_path).await?;
 
         Ok(())
     }

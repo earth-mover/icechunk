@@ -86,10 +86,26 @@ impl PySession {
         })
     }
 
+    fn fork(&self, py: Python<'_>) -> PyResult<Self> {
+        py.detach(move || {
+            let session = self.0.blocking_read();
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let forked =
+                    session.fork().await.map_err(PyIcechunkStoreError::SessionError)?;
+                Ok(Self(Arc::new(RwLock::new(forked))))
+            })
+        })
+    }
+
     #[getter]
     pub fn read_only(&self, py: Python<'_>) -> bool {
         // This is blocking function, we need to release the Gil
         py.detach(move || self.0.blocking_read().read_only())
+    }
+
+    #[getter]
+    pub fn is_fork(&self, py: Python<'_>) -> bool {
+        py.detach(move || self.0.blocking_read().is_fork())
     }
 
     #[getter]

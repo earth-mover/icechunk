@@ -97,7 +97,6 @@ def do_test(scheduler: str, spec_version: int | None = None) -> None:
             x_append_data, session=session, append_dim="x", split_every=SPLIT_EVERY
         )
     plot()
-    session.commit("append along x")
     assert (xr.open_zarr(session.store, consolidated=False)["a"] >= 1).all()
 
     print("-======================")
@@ -113,13 +112,11 @@ def do_test(scheduler: str, spec_version: int | None = None) -> None:
             ),
         }
     ).chunk(x=CHUNKX, y=-1)
-    session = repo.writable_session("main")
     with dask.config.set(scheduler=scheduler):
         to_icechunk(
             y_append_data, session=session, append_dim="y", split_every=SPLIT_EVERY
         )
     plot()
-    session.commit("append along y")
     assert (xr.open_zarr(session.store, consolidated=False)["a"] >= 1).all()
 
 
