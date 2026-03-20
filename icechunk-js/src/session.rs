@@ -55,7 +55,7 @@ impl JsSession {
     #[napi]
     pub async fn commit(&self, message: String) -> napi::Result<String> {
         let mut session = self.0.write().await;
-        let snapshot_id = session.commit(&message, None).await.map_napi_err()?;
+        let snapshot_id = session.commit(&message).execute().await.map_napi_err()?;
         Ok(snapshot_id.to_string())
     }
 
