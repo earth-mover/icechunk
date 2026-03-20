@@ -134,7 +134,7 @@ This pattern works identically whether your array is 1 KB or 1 PB, and whether i
 
 ## `reindex_array` { #reindex_array }
 
-For transformations that [`shift_array`][icechunk.Session.shift_array] can't express, [`reindex_array`][icechunk.Session.reindex_array] gives you complete control. You provide a `forward` function that maps each chunk's old position to its new position. Your function receives a chunk index (as a list) and returns a new index to move the chunk there, or `None` to discard it.
+For transformations that [`shift_array`][icechunk.Session.shift_array] can't express, [`reindex_array`][icechunk.Session.reindex_array] gives you complete control. You provide a `forward` function that maps each chunk's old position to its new position. Your function receives a chunk index (as a list) and returns a new index to move the chunk there, or `None` to skip it (leave it in place).
 
 However, `reindex_array` only visits chunk positions that contain data — empty (fill value) positions are skipped. This means that if an empty chunk would shift into an occupied position, the occupied position retains stale data. To handle this, provide a `backward` function — the inverse of `forward`. For each existing chunk position, the backward function determines whether a real chunk should have moved there; if not, the position is cleared to the fill value. See [Providing a Backward Function](#backward-function) for an example.
 

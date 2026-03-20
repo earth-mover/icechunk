@@ -213,12 +213,18 @@ class Session:
         ----------
         array_path : str
             Path to the array.
-        forward : Callable
-            Function that receives chunk coordinates and returns new coordinates,
-            or None to discard the chunk.
-        backward : Callable, optional
-            Inverse of ``forward``. When provided, stale positions are detected
-            and cleared to the fill value.
+        forward : Callable[[Iterable[int]], Iterable[int] | None]
+            Function that maps old chunk coordinates to new coordinates. Receives
+            a list of non-negative integers (the current chunk index) and must return
+            either a new index (as a list/tuple of non-negative integers within the
+            array's chunk grid bounds) or ``None`` to skip the chunk (leave it in place).
+        backward : Callable[[Iterable[int]], Iterable[int] | None], optional
+            Inverse of ``forward``: given a chunk position, returns the position
+            that would have mapped there under ``forward``. Must follow the same
+            return conventions as ``forward``. When provided, each existing chunk
+            position is checked to determine whether it should be cleared — if
+            ``backward`` returns ``None`` (out of bounds) or points to a position
+            with no chunk, that position is reset to the fill value.
         """
         return self._session.reindex_array(array_path, forward, backward)
 

@@ -842,7 +842,7 @@ impl Session {
     /// Only existing (non-empty) chunks are visited. The forward function receives each
     /// chunk's current coordinates and returns:
     /// - `Ok(Some(new_coords))` to move the chunk to new coordinates
-    /// - `Ok(None)` to discard the chunk
+    /// - `Ok(None)` to skip the chunk (leave it in place)
     /// - `Err(...)` to abort the operation
     ///
     /// With `ForwardOnly`, source positions that are not also destinations retain their
