@@ -42,7 +42,6 @@ from hypothesis.stateful import (
 import zarr.testing.strategies as zrst
 from icechunk import (
     IcechunkError,
-    Repository,
     RepositoryConfig,
     SnapshotInfo,
     Storage,
@@ -505,13 +504,12 @@ class VersionControlStateMachine(RuleBasedStateMachine):
     tags = Bundle("tags")
     branches = Bundle("branches")
 
-    def __init__(self, actor: Any = None, ic_module: Any = None) -> None:
+    def __init__(self, ic_module: Any = None) -> None:
         super().__init__()
 
         note("----------")
         self.model = Model()
         self.storage: Storage | None = None
-        self.actor = actor or Repository
         self.ic = ic_module or icechunk
 
     def _initialize_model_and_data(self, data: st.DataObject) -> None:
@@ -566,13 +564,13 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         self.model.spec_version = spec_version
 
         if Version(self.ic.__version__).major >= 2:
-            self.repo = self.actor.create(
+            self.repo = self.ic.Repository.create(
                 self.storage,
                 spec_version=spec_version,
                 config=config,
             )
         else:
-            self.repo = self.actor.create(
+            self.repo = self.ic.Repository.create(
                 self.storage,
                 config=config,
             )
@@ -669,7 +667,7 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         This discards any uncommitted changes.
         """
         assert self.storage is not None, "storage must be initialized"
-        self.repo = self.actor.open(self.storage, config=config)
+        self.repo = self.ic.Repository.open(self.storage, config=config)
         note(f"Reopened repository (spec_version={self.model.spec_version})")
 
         # Reopening discards uncommitted changes - reset model to last committed state
