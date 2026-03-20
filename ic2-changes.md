@@ -39,6 +39,14 @@
 
 ---
 
+## Consistency
+
+In V1, refs (branches/tags) and repository config were independent objects in storage. Updates could race, and operations like GC or config changes had no way to get a consistent view of the full repository state.
+
+In V2, all repository state is referenced from the unified repo info object. Every mutation, whether it's a commit, branch operation, config change, GC, or expiration, is applied to the freshest state using optimistic concurrency control with automatic retry and backoff on conflict.
+
+---
+
 ## New On-Disk Format (Spec V2)
 
 **Unified Repo Info file**: The biggest architectural change. V1 stored refs (branches/tags) as separate objects in the store. V2 consolidates everything into a single `repo` file containing:
