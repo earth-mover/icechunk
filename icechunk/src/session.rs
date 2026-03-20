@@ -839,12 +839,15 @@ impl Session {
     #[instrument(skip(self, calculate_new_index))]
     /// Reindex chunks in an array by applying a transformation function to each chunk's coordinates.
     ///
-    /// The `calculate_new_index` function receives each chunk's current coordinates and returns:
+    /// Only existing (non-empty) chunks are visited. The forward function receives each
+    /// chunk's current coordinates and returns:
     /// - `Ok(Some(new_coords))` to move the chunk to new coordinates
     /// - `Ok(None)` to discard the chunk
     /// - `Err(...)` to abort the operation
     ///
-    /// Source positions that are not also destinations retain their existing chunk refs.
+    /// With `ForwardOnly`, source positions that are not also destinations retain their
+    /// existing chunk refs (stale data). With `ForwardBackward`, the backward function
+    /// is used to detect and delete stale positions, ensuring empty chunks shift correctly.
     pub async fn reindex_array<'a>(
         &mut self,
         array_path: &Path,
@@ -870,16 +873,6 @@ impl Session {
         };
         // TODO: concurrency
         while let Some(old_chunk_index) = original_chunks.try_next().await? {
-            // say there is a chunk at index i
-            // say we are shifting by 1
-            // say there is no chunk at index i - 1
-            // then inde i still has a chunk after the shift
-            //
-            // first do what do now
-            // then ... for all indexes j that were not written to:
-            //    - check if there was a chunk at f-1(j)
-            //    - and if there wasn't a chunk there, delete chunk at index j
-            //    - if there was a chunk at f-1(j) it's already handled
             if let Some(new_chunk_index) = forward(&old_chunk_index)? {
                 let new_payload =
                     self.get_chunk_ref(array_path, &old_chunk_index).await?;
@@ -918,7 +911,7 @@ impl Session {
     /// Shift all chunks in an array by the given chunk offset.
     ///
     /// Out-of-bounds chunks are discarded. To preserve them, resize the array first
-    /// to make room. Vacated source positions retain stale references.
+    /// to make room. Vacated source positions are cleared (reset to fill value).
     #[instrument(skip(self))]
     pub async fn shift_array(
         &mut self,

@@ -32,7 +32,7 @@ Why chunks instead of elements? Because these are **metadata-only operations**. 
 
 ## `shift_array` { #shift_array }
 
-The [`shift_array`][icechunk.Session.shift_array] method moves all chunks by a fixed offset per dimension (negative to shift toward index 0, positive toward higher indices). Out-of-bounds chunks are discarded, and vacated positions retain stale data.
+The [`shift_array`][icechunk.Session.shift_array] method moves all chunks by a fixed offset per dimension (negative to shift toward index 0, positive toward higher indices). Out-of-bounds chunks are discarded, and vacated positions are cleared (reset to fill value).
 
 ```python exec="on" session="chunks" source="material-block" result="code"
 import numpy as np
@@ -58,7 +58,7 @@ session.shift_array("/arr", (-2,))  # Shift left by 2 chunks
 print("After: ", arr[:])
 ```
 
-The chunks containing `[0, 1, 2, 3]` were discarded. The vacated end retains stale data — you'll typically overwrite it with new data.
+The chunks containing `[0, 1, 2, 3]` were discarded. The vacated end is reset to the fill value (`-1`).
 
 ### Preserving Data with Resize
 
@@ -134,12 +134,9 @@ This pattern works identically whether your array is 1 KB or 1 PB, and whether i
 
 ## `reindex_array` { #reindex_array }
 
-For transformations that [`shift_array`][icechunk.Session.shift_array] can't express, [`reindex_array`][icechunk.Session.reindex_array] gives you complete control. You provide a function that maps each chunk's old position to its new position.
+For transformations that [`shift_array`][icechunk.Session.shift_array] can't express, [`reindex_array`][icechunk.Session.reindex_array] gives you complete control. You provide a `forward` function that maps each chunk's old position to its new position. Your function receives a chunk index (as a list) and returns a new index to move the chunk there, or `None` to discard it.
 
-Your function receives a chunk index (as a list) and returns:
-
-- A new index (as a list) to move the chunk there
-- `None` to discard the chunk
+However, `reindex_array` only visits chunk positions that contain data — empty (fill value) positions are skipped. This means that if an empty chunk would shift into an occupied position, the occupied position retains stale data. To handle this, provide a `backward` function — the inverse of `forward`. For each existing chunk position, the backward function determines whether a real chunk should have moved there; if not, the position is cleared to the fill value. See [Providing a Backward Function](#backward-function) for an example.
 
 ```python exec="on" session="chunks" source="material-block" result="code"
 repo = ic.Repository.create(ic.in_memory_storage())
@@ -160,11 +157,81 @@ def shift_and_filter(idx):
     new_idx = idx[0] - 2
     return None if new_idx < 0 else [new_idx]
 
-session.reindex_array("/arr", shift_and_filter)
+session.reindex_array("/arr", forward=shift_and_filter)
 print("After: ", arr[:])
 ```
 
-Source positions that are not also destinations retain stale data — you'll typically overwrite them with new data after reindexing.
+When all chunks contain data, the forward function alone produces correct results. Source positions that are not also destinations retain stale data — provide a `backward` function to clear them.
+
+### Providing a Backward Function { #backward-function }
+
+When your array has empty (fill value) chunks, a forward-only reindex can leave stale data behind. The `backward` function is the inverse of `forward`: given a chunk position, it returns the position that *would have mapped there*. This lets icechunk detect and clear positions that should now be empty.
+
+Here's a concrete example. We create an array with a gap — chunk 0 has value `1`, chunk 1 is empty (fill value `-1`), and chunk 2 has value `3`:
+
+```python exec="on" session="chunks" source="material-block" result="code"
+# Forward only: the empty chunk at index 1 doesn't shift into index 2
+repo = ic.Repository.create(ic.in_memory_storage())
+session = repo.writable_session("main")
+arr = zarr.create(
+    store=session.store, path="arr", shape=(3,), chunks=(1,),
+    dtype="i4", fill_value=-1,
+)
+arr[0] = 1
+arr[2] = 3
+session.commit("init")
+
+session = repo.writable_session("main")
+arr = zarr.open_array(session.store, path="arr")
+print("Before:      ", arr[:])  # [ 1, -1,  3]
+
+n_chunks = 3
+offset = 1
+
+def fwd(idx):
+    new = idx[0] + offset
+    return [new] if 0 <= new < n_chunks else None
+
+session.reindex_array("/arr", forward=fwd)
+print("Forward only:", arr[:])  # [ 1,  1,  3] — index 0 is stale!
+```
+
+Index 0 should be empty after the shift, but the empty chunk at index 1 was never visited, so nothing cleared it. Adding a backward function fixes this:
+
+```python exec="on" session="chunks" source="material-block" result="code"
+repo = ic.Repository.create(ic.in_memory_storage())
+session = repo.writable_session("main")
+arr = zarr.create(
+    store=session.store, path="arr", shape=(3,), chunks=(1,),
+    dtype="i4", fill_value=-1,
+)
+arr[0] = 1
+arr[2] = 3
+session.commit("init")
+
+session = repo.writable_session("main")
+arr = zarr.open_array(session.store, path="arr")
+print("Before:       ", arr[:])  # [ 1, -1,  3]
+
+n_chunks = 3
+offset = 1
+
+def fwd(idx):
+    new = idx[0] + offset
+    return [new] if 0 <= new < n_chunks else None
+
+def bwd(idx):
+    new = idx[0] - offset
+    return [new] if 0 <= new < n_chunks else None
+
+session.reindex_array("/arr", forward=fwd, backward=bwd)
+print("With backward:", arr[:])  # [-1,  1,  3] — index 0 correctly cleared
+```
+
+!!! tip
+    [`shift_array`][icechunk.Session.shift_array] always provides both forward and
+    backward functions internally, so it handles empty chunks correctly without
+    any extra work.
 
 ### Custom Transformations
 
@@ -188,7 +255,7 @@ def reverse_chunks(idx):
     """Reverse the order of all chunks."""
     return [4 - idx[0]]  # 0↔4, 1↔3, 2 stays
 
-session.reindex_array("/arr", reverse_chunks)
+session.reindex_array("/arr", forward=reverse_chunks)
 print("After: ", arr[:])
 ```
 
@@ -214,7 +281,7 @@ def swap_quadrants(idx):
     row, col = idx
     return [(row + 1) % 2, (col + 1) % 2]
 
-session.reindex_array("/arr2d", swap_quadrants)
+session.reindex_array("/arr2d", forward=swap_quadrants)
 print("\nAfter swapping quadrants:")
 print(arr[:])
 ```

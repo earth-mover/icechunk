@@ -2239,8 +2239,28 @@ class PySession:
     def reindex_array(
         self,
         array_path: str,
-        shift_chunk: Callable[[Iterable[int]], Iterable[int] | None],
-    ) -> None: ...
+        forward: Callable[[Iterable[int]], Iterable[int] | None],
+        backward: Callable[[Iterable[int]], Iterable[int] | None] | None = None,
+    ) -> None:
+        """Reindex chunks in an array by applying a transformation function.
+
+        Only existing (non-empty) chunks are visited — empty positions are
+        skipped. This means that if an empty chunk would have shifted into an
+        occupied position, that position retains stale data unless a backward
+        function is also provided.
+
+        Parameters
+        ----------
+        array_path : str
+            Path to the array.
+        forward : Callable
+            Function that receives chunk coordinates and returns new coordinates,
+            or None to discard the chunk.
+        backward : Callable, optional
+            Inverse of ``forward``. When provided, stale positions are detected
+            and cleared to the fill value.
+        """
+        ...
     def shift_array(self, array_path: str, chunk_offset: Iterable[int]) -> None: ...
     async def move_node_async(self, from_path: str, to_path: str) -> None: ...
     def all_virtual_chunk_locations(self) -> list[str]: ...

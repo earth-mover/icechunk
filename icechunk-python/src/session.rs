@@ -5,9 +5,12 @@ use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Store,
     format::{ChunkIndices, Path, manifest::ChunkPayload},
-    session::{ReindexMapping, Session, SessionErrorKind, SessionMode},
+    session::{
+        ReindexMapping, ReindexOperationResult, Session, SessionErrorKind, SessionMode,
+    },
     store::{StoreError, StoreErrorKind},
 };
+use itertools::Chunk;
 use pyo3::{
     prelude::*,
     types::{PyFunction, PyType},
@@ -207,39 +210,50 @@ impl PySession {
         &mut self,
         py: Python<'py>,
         array_path: String,
-        shift_chunk: Bound<'py, PyFunction>,
+        forward: Bound<'py, PyFunction>,
+        backward: Option<Bound<'py, PyFunction>>,
         //TODO: add a backwards shift as an option
     ) -> PyResult<()> {
         let array_path = Path::new(array_path.as_str())
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
-        let shift_chunk = |idx: &ChunkIndices| {
-            let python_index = idx
-                .0
-                .clone()
-                .into_pyobject(py)
-                .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
-            let new_index = shift_chunk
-                .call1((python_index,))
-                .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
-            if new_index.is_none() {
-                Ok(None)
-            } else {
-                let new_index: Vec<u32> = new_index
-                    .extract()
+        fn make_py_reindex_closure<'py>(
+            py: Python<'py>,
+            func: Bound<'py, PyFunction>,
+        ) -> Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'py> {
+            Box::new(move |idx: &ChunkIndices| {
+                let python_index = idx
+                    .0
+                    .clone()
+                    .into_pyobject(py)
                     .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
-                Ok(Some(ChunkIndices(new_index)))
-            }
-        };
+                let new_index = func
+                    .call1((python_index,))
+                    .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
+                if new_index.is_none() {
+                    Ok(None)
+                } else {
+                    let new_index: Vec<u32> = new_index
+                        .extract()
+                        .map_err(|e| SessionErrorKind::Other(Box::new(e)))?;
+                    Ok(Some(ChunkIndices(new_index)))
+                }
+            })
+        }
 
+        let forward = make_py_reindex_closure(py, forward);
+        let mapping = match backward {
+            Some(backward) => ReindexMapping::ForwardBackward {
+                forward,
+                backward: make_py_reindex_closure(py, backward),
+            },
+            None => ReindexMapping::ForwardOnly(forward),
+        };
         // TODO: detach
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let mut session = self.0.write().await;
             session
-                .reindex_array(
-                    &array_path,
-                    ReindexMapping::ForwardOnly(Box::new(shift_chunk)),
-                )
+                .reindex_array(&array_path, mapping)
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(())

@@ -199,19 +199,28 @@ class Session:
     def reindex_array(
         self,
         array_path: str,
-        shift_chunk: Callable[[Iterable[int]], Iterable[int] | None],
+        forward: Callable[[Iterable[int]], Iterable[int] | None],
+        backward: Callable[[Iterable[int]], Iterable[int] | None] | None = None,
     ) -> None:
         """Reindex chunks in an array by applying a transformation function.
+
+        Only existing (non-empty) chunks are visited — empty positions are
+        skipped. This means that if an empty chunk would have shifted into an
+        occupied position, that position retains stale data unless a backward
+        function is also provided.
 
         Parameters
         ----------
         array_path : str
             Path to the array.
-        shift_chunk : Callable
+        forward : Callable
             Function that receives chunk coordinates and returns new coordinates,
             or None to discard the chunk.
+        backward : Callable, optional
+            Inverse of ``forward``. When provided, stale positions are detected
+            and cleared to the fill value.
         """
-        return self._session.reindex_array(array_path, shift_chunk)
+        return self._session.reindex_array(array_path, forward, backward)
 
     def shift_array(
         self,
@@ -221,7 +230,7 @@ class Session:
         """Shift all chunks in an array by the given chunk offset.
 
         Out-of-bounds chunks are discarded. To preserve them, resize the array first
-        to make room. Vacated source positions retain stale references.
+        to make room. Vacated source positions are cleared (reset to fill value).
 
         Parameters
         ----------
