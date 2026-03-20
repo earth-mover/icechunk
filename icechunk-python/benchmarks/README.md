@@ -112,12 +112,12 @@ test_time_getsize_prefix[era5-single] (NOW)               2.2133 (1.0)
 ### Notes
 ### Where to run the benchmarks?
 
-- Pass the `--where [local|s3|s3_ob|gcs|tigris]` flag to control where benchmarks are run.
+- Pass the `--where` flag to control where benchmarks are run: `local`, `s3`, `s3_ob`, `gcs`, `tigris`, `r2`.
 - `s3_ob` uses the `s3_object_store_storage` constructor.
-- Pass multiple stores with `--where 's3|gcs'`
+- Comma-separate for multiple stores: `--where s3,gcs`
 
 ```sh
-python benchmarks/runner.py --where gcs v0.1.2
+python benchmarks/runner.py --where gcs pypi-nightly
 ```
 
 By default all benchmarks are run locally:
@@ -127,12 +127,20 @@ By default all benchmarks are run locally:
 It is possible to run the benchmarks in the cloud using Coiled. You will need to be a member of the Coiled workspaces: `earthmover-devs` (AWS), `earthmover-devs-gcp` (GCS) and `earthmover-devs-azure` (Azure).
 1. We create a new "coiled software environment" with a specific name.
 2. We use `coiled run` targeting a specific machine type, with a specific software env.
+3. Two special refs install icechunk from PyPI instead of building from source:
+   - `pypi-nightly` — installs the latest pre-release from the [scientific-python-nightly-wheels](https://pypi.anaconda.org/scientific-python-nightly-wheels/simple) index
+   - `pypi-v1` — installs the latest stable v1 release (`icechunk<2`)
 4. The VM stays alive for 10 minutes to allow for quick iteration.
-5. Coiled does not sync stdout until the pytest command is done, for some reason. See the logs on the Coiled platform for quick feedback.
-6. We use the `--sync` flag, so you will need [`mutagen`](https://mutagen.io/documentation/synchronization/) installed on your system. This will sync the benchmark JSON outputs between the VM and your machine.
-Downsides:
-1. At the moment, we can only benchmark released versions of icechunk. We may need a more complicated Docker container strategy in the future to support dev branch benchmarks.
-2. When a new env is created, the first run always fails :/. The second run works though, so just re-run.
+5. Benchmark JSON results are uploaded from the VM to the target bucket via `object_store_python`, then downloaded locally for comparison.
+6. AWS credentials are forwarded to the VM via `--env` flags (resolved from your local boto3 session at startup).
+
+```sh
+# Run nightly benchmarks on S3 and GCS
+python benchmarks/runner.py --where s3,gcs pypi-nightly
+
+# Compare nightly vs stable v1
+python benchmarks/runner.py --where s3 pypi-nightly pypi-v1
+```
 
 ### `runner.py`
 
@@ -231,7 +239,7 @@ To easily run benchmarks for some named refs use `benchmarks/run_refs.py`
 ### Comparing across multiple stores
 
 ```sh
-python benchmarks/runner.py --setup=skip --pytest '-k test_write_simple' --where 's3|s3_ob|gcs' main
+python benchmarks/runner.py --setup=skip --pytest '-k test_write_simple' --where s3,s3_ob,gcs pypi-nightly
 ```
 
 ``` sh
