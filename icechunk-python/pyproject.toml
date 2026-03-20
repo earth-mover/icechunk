@@ -53,10 +53,9 @@ test = [
   "rich",
 ]
 benchmark = [
+  "boto3",
+  "object-store-python",
   "pytest-benchmark[histogram]",
-  "pytest-xdist",
-  "s3fs",
-  "gcsfs",
   "h5netcdf",
   "pooch",
   "tqdm",

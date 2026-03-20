@@ -14,7 +14,7 @@ def setup_logger():
     return logger
 
 
-def get_coiled_kwargs(*, store: str, region: str | None = None) -> str:
+def get_coiled_kwargs(*, store: str, region: str | None = None) -> dict[str, str]:
     if store == "s3_ob":
         store = "s3"
     COILED_VM_TYPES = {

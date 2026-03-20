@@ -142,7 +142,7 @@ Datasets are written to `{bucket}/benchmarks/{REF}_{SHORTCOMMIT}/` where the buc
 |---------|-----------------------|
 | s3      | `icechunk-ci`         |
 | gcs     | `icechunk-test-gcp`   |
-| tigris  | `icechunk-test`       |
+| tigris  | `icechunk-test-github-actions`       |
 | r2      | `icechunk-test-r2`    |
 
 Usage:
