@@ -4167,13 +4167,13 @@ mod tests {
             s1.set_chunk_ref(
                 array_path.clone(),
                 ChunkIndices(vec![0]),
-                Some(ChunkPayload::Inline(format!("0").into())),
+                Some(ChunkPayload::Inline("0".to_string().into())),
             )
             .await?;
             s2.set_chunk_ref(
                 array_path.clone(),
                 ChunkIndices(vec![1]),
-                Some(ChunkPayload::Inline(format!("1").into())),
+                Some(ChunkPayload::Inline("1".to_string().into())),
             )
             .await?;
 
