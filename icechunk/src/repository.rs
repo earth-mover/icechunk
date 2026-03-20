@@ -266,7 +266,7 @@ impl Repository {
             let new_snapshot = Arc::new(Snapshot::initial(spec_version)?);
             let write_snap = asset_manager_c.write_snapshot(Arc::clone(&new_snapshot));
 
-            if spec_version >= SpecVersionBin::V2dot0 {
+            if spec_version >= SpecVersionBin::V2 {
                 let empty_tx_log = TransactionLog::new(
                     &Snapshot::INITIAL_SNAPSHOT_ID,
                     &ChangeSet::for_edits(),
@@ -311,7 +311,7 @@ impl Repository {
         }
         .in_current_span();
 
-        let config_version = if spec_version >= SpecVersionBin::V2dot0 {
+        let config_version = if spec_version >= SpecVersionBin::V2 {
             // V2+ repos: config is already embedded in repo info, no config.yaml needed
             create_repo_info.await?;
             storage::VersionInfo::for_creation()
@@ -391,8 +391,7 @@ impl Repository {
         }?;
         trace!(%spec_version, "Repository version found");
 
-        let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2dot0
-        {
+        let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2 {
             // V2+ repos: config is always embedded in the repo info object.
             let (repo_info, _) = temp_am.fetch_repo_info().await?;
             (repo_info.config()?, storage::VersionInfo::for_creation())
@@ -557,7 +556,7 @@ impl Repository {
                 ..
             }) => {
                 if is_v1 {
-                    Ok(Some(SpecVersionBin::V1dot0))
+                    Ok(Some(SpecVersionBin::V1))
                 } else {
                     Ok(None)
                 }
@@ -630,7 +629,7 @@ impl Repository {
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
 
-        if spec_version >= SpecVersionBin::V2dot0 {
+        if spec_version >= SpecVersionBin::V2 {
             // V2+ repos: config is always embedded in the repo info object.
             let (repo_info, version) = am.fetch_repo_info().await?;
             Ok(repo_info.config()?.map(|config| (config, version)))
@@ -643,7 +642,7 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn save_config(&self) -> RepositoryResult<storage::VersionInfo> {
         // For V2+ repos, write config into the repo info object atomically
-        if self.spec_version >= SpecVersionBin::V2dot0 {
+        if self.spec_version >= SpecVersionBin::V2 {
             let config = self.config().clone();
             let num_updates = self.config.num_updates_per_repo_info_file();
             let spec_version = self.spec_version();
@@ -685,7 +684,7 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn get_metadata(&self) -> RepositoryResult<SnapshotProperties> {
         // this feature is only available in IC2
-        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
         let (repo, _) = self.asset_manager().fetch_repo_info().await?;
         Ok(repo.metadata()?)
     }
@@ -752,14 +751,14 @@ impl Repository {
 
     #[instrument(skip_all)]
     pub async fn get_status(&self) -> RepositoryResult<RepoStatus> {
-        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
         let (repo, _) = self.asset_manager().fetch_repo_info().await?;
         Ok(repo.status()?)
     }
 
     #[instrument(skip(self))]
     pub async fn set_status(&self, status: &RepoStatus) -> RepositoryResult<()> {
-        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
         if !self.storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot set status".to_string(),
@@ -844,7 +843,7 @@ impl Repository {
         set_to: Option<bool>,
     ) -> RepositoryResult<()> {
         // this feature is only available in IC2
-        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
 
         let num_updates = self.config.num_updates_per_repo_info_file();
         let flag_id = find_feature_flag_id(feature_flag)?;
@@ -968,8 +967,8 @@ impl Repository {
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
     {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => Ok(self.ancestry_v1(version).await?.left_stream()),
-            SpecVersionBin::V2dot0 => {
+            SpecVersionBin::V1 => Ok(self.ancestry_v1(version).await?.left_stream()),
+            SpecVersionBin::V2 => {
                 let ri = match repo_info {
                     Some(ri) => ri,
                     None => self.get_repo_info().await?.0,
@@ -1070,12 +1069,8 @@ impl Repository {
             .into());
         }
         match self.spec_version() {
-            SpecVersionBin::V1dot0 => {
-                self.create_branch_v1(branch_name, snapshot_id).await
-            }
-            SpecVersionBin::V2dot0 => {
-                self.create_branch_v2(branch_name, snapshot_id).await
-            }
+            SpecVersionBin::V1 => self.create_branch_v1(branch_name, snapshot_id).await,
+            SpecVersionBin::V2 => self.create_branch_v2(branch_name, snapshot_id).await,
         }
     }
 
@@ -1150,8 +1145,8 @@ impl Repository {
     #[instrument(skip(self))]
     pub async fn list_branches(&self) -> RepositoryResult<BTreeSet<String>> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.list_branches_v1().await,
-            SpecVersionBin::V2dot0 => self.list_branches_v2().await,
+            SpecVersionBin::V1 => self.list_branches_v1().await,
+            SpecVersionBin::V2 => self.list_branches_v2().await,
         }
     }
 
@@ -1197,8 +1192,8 @@ impl Repository {
     #[instrument(skip(self))]
     pub async fn lookup_branch(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.lookup_branch_v1(branch).await,
-            SpecVersionBin::V2dot0 => self.lookup_branch_v2(branch, None).await,
+            SpecVersionBin::V1 => self.lookup_branch_v1(branch).await,
+            SpecVersionBin::V2 => self.lookup_branch_v2(branch, None).await,
         }
     }
 
@@ -1225,8 +1220,8 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<SnapshotInfo> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.lookup_snapshot_v1(snapshot_id).await,
-            SpecVersionBin::V2dot0 => self.lookup_snapshot_v2(snapshot_id).await,
+            SpecVersionBin::V1 => self.lookup_snapshot_v1(snapshot_id).await,
+            SpecVersionBin::V2 => self.lookup_snapshot_v2(snapshot_id).await,
         }
     }
 
@@ -1253,10 +1248,10 @@ impl Repository {
             .into());
         }
         match self.spec_version {
-            SpecVersionBin::V1dot0 => {
+            SpecVersionBin::V1 => {
                 self.reset_branch_v1(branch, to_snapshot_id, from_snapshot_id).await
             }
-            SpecVersionBin::V2dot0 => {
+            SpecVersionBin::V2 => {
                 self.reset_branch_v2(branch, to_snapshot_id, from_snapshot_id).await
             }
         }
@@ -1346,8 +1341,8 @@ impl Repository {
             Err(RepositoryErrorKind::CannotDeleteMain.into())
         } else {
             match self.spec_version {
-                SpecVersionBin::V1dot0 => self.delete_branch_v1(branch).await,
-                SpecVersionBin::V2dot0 => self.delete_branch_v2(branch).await,
+                SpecVersionBin::V1 => self.delete_branch_v1(branch).await,
+                SpecVersionBin::V2 => self.delete_branch_v2(branch).await,
             }
         }
     }
@@ -1396,8 +1391,8 @@ impl Repository {
             .into());
         }
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.delete_tag_v1(tag).await,
-            SpecVersionBin::V2dot0 => self.delete_tag_v2(tag).await,
+            SpecVersionBin::V1 => self.delete_tag_v1(tag).await,
+            SpecVersionBin::V2 => self.delete_tag_v2(tag).await,
         }
     }
 
@@ -1451,8 +1446,8 @@ impl Repository {
         }
 
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.create_tag_v1(tag_name, snapshot_id).await,
-            SpecVersionBin::V2dot0 => self.create_tag_v2(tag_name, snapshot_id).await,
+            SpecVersionBin::V1 => self.create_tag_v1(tag_name, snapshot_id).await,
+            SpecVersionBin::V2 => self.create_tag_v2(tag_name, snapshot_id).await,
         }
     }
 
@@ -1531,8 +1526,8 @@ impl Repository {
     #[instrument(skip(self))]
     pub async fn list_tags(&self) -> RepositoryResult<BTreeSet<String>> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.list_tags_v1().await,
-            SpecVersionBin::V2dot0 => self.list_tags_v2().await,
+            SpecVersionBin::V1 => self.list_tags_v1().await,
+            SpecVersionBin::V2 => self.list_tags_v2().await,
         }
     }
 
@@ -1572,8 +1567,8 @@ impl Repository {
     #[instrument(skip(self))]
     pub async fn lookup_tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.lookup_tag_v1(tag).await,
-            SpecVersionBin::V2dot0 => self.lookup_tag_v2(tag, None).await,
+            SpecVersionBin::V1 => self.lookup_tag_v1(tag).await,
+            SpecVersionBin::V2 => self.lookup_tag_v2(tag, None).await,
         }
     }
 
@@ -1638,8 +1633,8 @@ impl Repository {
         repo_info: Option<&RepoInfo>,
     ) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.resolve_version_v1(version).await,
-            SpecVersionBin::V2dot0 => {
+            SpecVersionBin::V1 => self.resolve_version_v1(version).await,
+            SpecVersionBin::V2 => {
                 let fetched;
                 let ri = match repo_info {
                     Some(ri) => ri,
@@ -1736,8 +1731,8 @@ impl Repository {
         to: &VersionInfo,
     ) -> SessionResult<Diff> {
         let repo_info = match self.spec_version {
-            SpecVersionBin::V1dot0 => None,
-            SpecVersionBin::V2dot0 => Some(self.get_repo_info().await?.0),
+            SpecVersionBin::V1 => None,
+            SpecVersionBin::V2 => Some(self.get_repo_info().await?.0),
         };
 
         let from = self.resolve_version_using(from, repo_info.as_deref()).await?;
@@ -1758,7 +1753,7 @@ impl Repository {
             .iter()
             .filter_map(|snap_info| {
                 // v1 repos don't have transaction logs for initial snapshots
-                if self.spec_version == SpecVersionBin::V1dot0 && snap_info.is_initial() {
+                if self.spec_version == SpecVersionBin::V1 && snap_info.is_initial() {
                     None
                 } else {
                     Some(
@@ -1824,7 +1819,7 @@ impl Repository {
     }
 
     async fn fail_unless_online_status(&self, error_msg: &str) -> RepositoryResult<()> {
-        if self.spec_version() >= SpecVersionBin::V2dot0 {
+        if self.spec_version() >= SpecVersionBin::V2 {
             let status = self.get_status().await?;
             if status.availability != RepoAvailability::Online {
                 return Err(RepositoryErrorKind::ReadonlyRepository(format!(
@@ -1856,7 +1851,7 @@ impl Repository {
             self.storage.clone(),
             Arc::clone(&self.asset_manager),
             self.virtual_resolver.clone(),
-            branch.to_string(),
+            Some(branch.to_string()),
             snapshot_id.clone(),
             self.default_commit_metadata.clone(),
         );
@@ -1876,7 +1871,7 @@ impl Repository {
         }
 
         // this feature is only available in IC2
-        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
 
         self.fail_unless_online_status("Cannot create rearrange session").await?;
 
@@ -2400,7 +2395,7 @@ mod tests {
         session
             .add_array(path.clone(), shape.clone(), dimension_names.clone(), def.clone())
             .await?;
-        session.commit("initialized", None).await?;
+        session.commit("initialized").max_concurrent_nodes(8).execute().await?;
 
         Ok(repository)
     }
@@ -2446,7 +2441,7 @@ mod tests {
                 .set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
                 .await?;
         }
-        session.commit("first commit", None).await?;
+        session.commit("first commit").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo.asset_manager(), 1).await;
 
         // Important we are not issuing any chunk deletes here (which is what Zarr does)
@@ -2462,7 +2457,7 @@ mod tests {
                 array_def.clone(),
             )
             .await?;
-        session.commit("second commit", None).await?;
+        session.commit("second commit").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo.asset_manager(), 2).await;
 
         // Now we expand the size, but don't write chunks.
@@ -2477,7 +2472,7 @@ mod tests {
                 array_def.clone(),
             )
             .await?;
-        session.commit("second commit", None).await?;
+        session.commit("second commit").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo.asset_manager(), 2).await;
 
         Ok(())
@@ -2627,13 +2622,13 @@ mod tests {
                 )
                 .await?
         }
-        session.commit("first split", None).await?;
+        session.commit("first split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 4;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         let commit_method = match spec_version {
-            SpecVersionBin::V1dot0 => CommitMethod::NewCommit,
-            SpecVersionBin::V2dot0 => CommitMethod::Amend,
+            SpecVersionBin::V1 => CommitMethod::NewCommit,
+            SpecVersionBin::V2 => CommitMethod::Amend,
         };
 
         // make sure data is correct
@@ -2679,6 +2674,7 @@ mod tests {
             &new_repo,
             "main",
             "rewrite_manifests with split-size=12",
+            8,
             None,
             commit_method,
         )
@@ -2712,6 +2708,7 @@ mod tests {
             &new_repo,
             "main",
             "rewrite_manifests with split-size=4",
+            8,
             None,
             commit_method,
         )
@@ -2777,7 +2774,7 @@ mod tests {
                 )
                 .await?
         }
-        session.commit("first split", None).await?;
+        session.commit("first split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 1;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
@@ -2791,7 +2788,7 @@ mod tests {
                 Some(ChunkPayload::Inline(format!("{last_chunk}").into())),
             )
             .await?;
-        session.commit("last split", None).await?;
+        session.commit("last split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 1;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
@@ -2861,7 +2858,7 @@ mod tests {
                 )
                 .await?
         }
-        session.commit("wrote all splits", None).await?;
+        session.commit("wrote all splits").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         let mut session = repository.writable_session("main").await?;
@@ -2877,7 +2874,7 @@ mod tests {
         // We are counting total manifests in the `assert_manifest_count` helper function
         // So we keep a running count of the total and update that at each step.
         total_manifests += dim_size.div_ceil(split_size) as usize;
-        session.commit("full overwrite", None).await?;
+        session.commit("full overwrite").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // test reads
@@ -2906,7 +2903,7 @@ mod tests {
                 .await?;
         }
         total_manifests += 0;
-        session.commit("clear existing array", None).await?;
+        session.commit("clear existing array").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         // add a new array
@@ -2935,7 +2932,7 @@ mod tests {
             .set_chunk_ref(array_path.clone(), ChunkIndices(vec![1, 0, 0]), None)
             .await?;
         total_manifests += 0;
-        session.commit("clear new array", None).await?;
+        session.commit("clear new array").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         Ok(())
@@ -3129,7 +3126,11 @@ mod tests {
 
             total_manifests +=
                 (axis_size as u32).div_ceil(expected_split_sizes[ax]) as usize;
-            session.commit(format!("finished axis {ax}").as_ref(), None).await?;
+            session
+                .commit(format!("finished axis {ax}"))
+                .max_concurrent_nodes(8)
+                .execute()
+                .await?;
             assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
             verify_data(ax, &session).await;
@@ -3163,7 +3164,7 @@ mod tests {
         // the first split in the `t`-axis. Since the other splits
         // are not modified we preserve all the old manifests
         total_manifests += 1;
-        session.commit("finished time again".to_string().as_ref(), None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
         verify_all_data(&repository).await;
 
@@ -3182,7 +3183,7 @@ mod tests {
         }
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
-        session.commit("finished time again".to_string().as_ref(), None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
         verify_all_data(&repository).await;
 
@@ -3199,7 +3200,7 @@ mod tests {
             .await?;
         // Important: now we rewrite one split per dimension
         total_manifests += 3;
-        session.commit("finished time again".to_string().as_ref(), None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
         verify_all_data(&repo_clone).await;
         verify_all_data(&repository).await;
@@ -3218,7 +3219,7 @@ mod tests {
         }
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
-        session.commit("finished time again".to_string().as_ref(), None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo_clone.asset_manager(), total_manifests).await;
         verify_all_data(&repo_clone).await;
 
@@ -3236,7 +3237,7 @@ mod tests {
         }
         total_manifests +=
             (shape.get(0).unwrap().array_length() as u32).div_ceil(t_split_size) as usize;
-        session.commit("finished time again".to_string().as_ref(), None).await?;
+        session.commit("finished time again").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repo_clone.asset_manager(), total_manifests).await;
         for idx in [0, 12, 24] {
             let actual = get_chunk(
@@ -3506,14 +3507,18 @@ mod tests {
             )
             .await?;
 
-        session1.commit("first commit", None).await?;
+        session1.commit("first commit").max_concurrent_nodes(8).execute().await?;
         if let Err(SessionError { kind: SessionErrorKind::Conflict { .. }, .. }) =
-            session2.commit("second commit", None).await
+            session2.commit("second commit").max_concurrent_nodes(8).execute().await
         {
             let solver = BasicConflictSolver::default();
             // different chunks were written so this should fast forward
             assert!(session2.rebase(&solver).await.is_ok());
-            session2.commit("second commit after rebase", None).await?;
+            session2
+                .commit("second commit after rebase")
+                .max_concurrent_nodes(8)
+                .execute()
+                .await?;
         } else {
             panic!("this should have conflicted!");
         }
@@ -3654,7 +3659,7 @@ mod tests {
             )
             .await?;
 
-        session.commit("create arrays", None).await?;
+        session.commit("create arrays").max_concurrent_nodes(8).execute().await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
         let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
@@ -3780,12 +3785,12 @@ mod tests {
             None,
             Arc::clone(&storage),
             HashMap::new(),
-            Some(SpecVersionBin::V2dot0),
+            Some(SpecVersionBin::V2),
             true,
         )
         .await?;
         let repo = Repository::open(None, storage, Default::default()).await?;
-        assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2);
         Ok(())
     }
 
@@ -3796,12 +3801,12 @@ mod tests {
             None,
             Arc::clone(&storage),
             HashMap::new(),
-            Some(SpecVersionBin::V1dot0),
+            Some(SpecVersionBin::V1),
             true,
         )
         .await?;
         let repo = Repository::open(None, storage, Default::default()).await?;
-        assert_eq!(repo.spec_version(), SpecVersionBin::V1dot0);
+        assert_eq!(repo.spec_version(), SpecVersionBin::V1);
         Ok(())
     }
 
@@ -3951,7 +3956,7 @@ mod tests {
             Some(config.clone()),
             Arc::clone(&storage),
             HashMap::new(),
-            Some(SpecVersionBin::V1dot0),
+            Some(SpecVersionBin::V1),
             true,
         )
         .await?;
@@ -3988,7 +3993,7 @@ mod tests {
                 )
                 .await?;
         }
-        session.commit("add virtual chunks", None).await?;
+        session.commit("add virtual chunks").max_concurrent_nodes(8).execute().await?;
 
         // Verify manifests are NOT compressed (V1 never compresses)
         let snap_id =
@@ -4012,13 +4017,14 @@ mod tests {
         migrate_1_to_2(repo, false, true, None).await.unwrap();
         let repo =
             Repository::open(Some(config), Arc::clone(&storage), HashMap::new()).await?;
-        assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2);
 
         // Rewrite manifests (now with IC2 compression enabled)
         rewrite_manifests(
             &repo,
             "main",
             "rewrite manifests",
+            8,
             None,
             CommitMethod::NewCommit,
         )
@@ -4065,14 +4071,14 @@ mod tests {
         session
             .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
             .await?;
-        session.commit("init", None).await?;
+        session.commit("init").max_concurrent_nodes(8).execute().await?;
 
         // Rearrange session: move a node
         let mut session = repo.rearrange_session("main").await?;
         session
             .move_node("/source".try_into().unwrap(), "/dest".try_into().unwrap())
             .await?;
-        session.commit("moved source to dest", None).await?;
+        session.commit("moved source to dest").max_concurrent_nodes(8).execute().await?;
 
         // Open a fresh repo from the same storage (as the issue reproducer does)
         let repo2 = Repository::open(None, Arc::clone(&storage), HashMap::new()).await?;
@@ -4082,6 +4088,7 @@ mod tests {
             &repo2,
             "main",
             "rewriting manifests",
+            8,
             None,
             CommitMethod::Amend,
         )
@@ -4093,11 +4100,143 @@ mod tests {
             &repo2,
             "main",
             "rewriting manifests",
+            8,
             None,
             CommitMethod::NewCommit,
         )
         .await;
         assert!(result.is_ok());
+
+        Ok(())
+    }
+
+    #[cfg(feature = "object-store-fs")]
+    #[tokio_test]
+    async fn test_concurrent_distributer_writers_with_base_state()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::new_local_filesystem_storage;
+
+        let repo_dir = TempDir::new()?;
+        let storage: Arc<dyn Storage + Send + Sync> =
+            new_local_filesystem_storage(repo_dir.path()).await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        let array_path: Path = "/array".to_string().try_into().unwrap();
+        let shape = ArrayShape::new(vec![(10, 10)]).unwrap();
+        session
+            .add_array(
+                array_path.clone(),
+                shape.clone(),
+                Some(vec!["x".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+        session.commit("init").execute().await?;
+
+        async fn do_distributed_writes(
+            session: &mut Session,
+            array_path: &Path,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            // create a _clean_ writable session from that snapshot
+            let clean = session.fork().await?;
+
+            // distribute these clean sessions to two writers
+            // NOTE: this is explicitly modeling a python pickle/unpickle workflow;
+            // we could just send out a SnapshotId and call `create_writable_session`
+            // on the distributed worker instead
+            let clean_bytes = clean.as_bytes()?;
+            let mut s1 = Session::from_bytes(clean_bytes.clone())?;
+            let mut s2 = Session::from_bytes(clean_bytes)?;
+
+            // now both writers make independent changes
+            s1.set_chunk_ref(
+                array_path.clone(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline("0".to_string().into())),
+            )
+            .await?;
+            s2.set_chunk_ref(
+                array_path.clone(),
+                ChunkIndices(vec![1]),
+                Some(ChunkPayload::Inline("1".to_string().into())),
+            )
+            .await?;
+
+            // forked sessions cannot be committed.
+            assert!(s1.commit("foo").execute().await.is_err());
+            assert!(s2.commit("foo").execute().await.is_err());
+
+            // merge the distributed writers' sessions
+            s1.merge(s2).await?;
+
+            assert!(s1.commit("foo").execute().await.is_err());
+
+            // merging a base session into a fork session is not allowed
+            let base_clone = session.clone();
+            assert!(matches!(
+                s1.merge(base_clone).await.unwrap_err().kind,
+                SessionErrorKind::MergeNotAllowed
+            ));
+
+            // flushing a fork session succeeds (anonymous snapshot)
+            let flush_result =
+                s1.clone().commit("fork-flush").anonymous().execute().await;
+            assert!(flush_result.is_ok());
+
+            // merge that in to the base
+            session.merge(s1).await?;
+
+            for i in 0..2 {
+                let reader = session
+                    .get_chunk_reader(array_path, &ChunkIndices(vec![i]), &ByteRange::ALL)
+                    .await?;
+                assert_eq!(get_chunk(reader).await?, Some(format!("{i}").into()));
+            }
+
+            // base session can be committed
+            session.commit("foo").execute().await?;
+
+            for i in 0..2 {
+                let reader = session
+                    .get_chunk_reader(array_path, &ChunkIndices(vec![i]), &ByteRange::ALL)
+                    .await?;
+                assert_eq!(get_chunk(reader).await?, Some(format!("{i}").into()));
+            }
+
+            Ok(())
+        }
+
+        // zarr-python's mode="w" will delete and array, then re-create it
+        let mut session = repo.writable_session("main").await?;
+        session.delete_array(array_path.clone()).await?;
+        session
+            .add_array(
+                array_path.clone(),
+                shape.clone(),
+                Some(vec!["x".into()]),
+                Bytes::from_static(b"{}"),
+            )
+            .await?;
+        do_distributed_writes(&mut session, &array_path).await?;
+
+        // delete all chunks then do distributed writes
+        let mut session = repo.writable_session("main").await?;
+        for i in 0..10 {
+            session
+                .set_chunk_ref(array_path.clone(), ChunkIndices(vec![i]), None)
+                .await?;
+        }
+        do_distributed_writes(&mut session, &array_path).await?;
 
         Ok(())
     }

@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - 'support/**'
+      - "support/**"
   pull_request:
     types: [opened, reopened, synchronize, labeled]
   merge_group:
@@ -88,6 +88,7 @@ jobs:
           uv pip install "$WHEEL" --group dev \
             --resolution highest \
             --index-strategy unsafe-best-match 2>&1 | tee setup-output.log
+          uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
           uv pip list
 
       - name: Create or update setup failure issue
@@ -211,11 +212,13 @@ jobs:
         if: always()
         shell: bash
         working-directory: icechunk-python
+        env:
+          HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
         run: |
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pytest -n 4 --report-log output-pytest-log.jsonl
+          pytest -n 4 --hypothesis-profile=nightly --report-log output-pytest-log.jsonl
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
       - name: Save cached hypothesis directory

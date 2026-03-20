@@ -887,6 +887,82 @@ fn mk_update(
     })
 }
 
+#[repr(u8)]
+#[pyclass(
+    eq,
+    eq_int,
+    ord,
+    rename_all = "snake_case",
+    skip_from_py_object,
+    name = "SpecVersion",
+    frozen
+)]
+#[derive(PartialEq, Default, Clone, PartialOrd, Debug)]
+pub enum PySpecVersion {
+    V1 = 1u8,
+    #[default]
+    V2 = 2u8,
+}
+
+impl<'py> FromPyObject<'_, 'py> for PySpecVersion {
+    type Error = PyErr;
+
+    /// Custom implementation that allows passing an integer or PySpecVersion
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        // cast is cheaper, try it first
+        let value = if let Ok(spec) = ob.cast::<PySpecVersion>() {
+            spec.get().clone()
+        } else if let Ok(v) = ob.extract::<u8>() {
+            match v {
+                1 => PySpecVersion::V1,
+                2 => PySpecVersion::V2,
+                v => {
+                    return Err(PyValueError::new_err(format!(
+                        "Unsupported version {v}"
+                    )));
+                }
+            }
+        } else {
+            return Err(PyValueError::new_err("Couldn't parse a valid version"));
+        };
+
+        Ok(value)
+    }
+}
+
+impl From<PySpecVersion> for SpecVersionBin {
+    fn from(value: PySpecVersion) -> Self {
+        match value {
+            PySpecVersion::V1 => Self::V1,
+            PySpecVersion::V2 => Self::V2,
+        }
+    }
+}
+
+impl From<SpecVersionBin> for PySpecVersion {
+    fn from(value: SpecVersionBin) -> Self {
+        match value {
+            SpecVersionBin::V1 => Self::V1,
+            SpecVersionBin::V2 => Self::V2,
+        }
+    }
+}
+
+#[pymethods]
+impl PySpecVersion {
+    pub(crate) fn __repr__(&self) -> String {
+        match self {
+            Self::V2 => "SpecVersion.v2 (current)".into(),
+            Self::V1 => "SpecVersion.v1".into(),
+        }
+    }
+
+    #[staticmethod]
+    pub(crate) fn current() -> Self {
+        Default::default()
+    }
+}
+
 #[pyclass]
 pub(crate) struct PyRepository(Arc<RwLock<Repository>>);
 
@@ -939,7 +1015,7 @@ impl PyRepository {
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
-        spec_version: Option<u8>,
+        spec_version: Option<PySpecVersion>,
         check_clean_root: bool,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
@@ -949,12 +1025,7 @@ impl PyRepository {
                     let config = config
                         .map(|c| c.try_into().map_err(PyValueError::new_err))
                         .transpose()?;
-                    let version = match spec_version {
-                        Some(n) => Some(
-                            SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?,
-                        ),
-                        None => None,
-                    };
+                    let version = spec_version.map(|v| v.into());
                     Repository::create(
                         config,
                         storage.0,
@@ -978,7 +1049,7 @@ impl PyRepository {
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
-        spec_version: Option<u8>,
+        spec_version: Option<PySpecVersion>,
         check_clean_root: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
@@ -986,12 +1057,7 @@ impl PyRepository {
         let authorize_virtual_chunk_access =
             map_credentials(authorize_virtual_chunk_access);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let version = match spec_version {
-                Some(n) => {
-                    Some(SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?)
-                }
-                None => None,
-            };
+            let version = spec_version.map(|v| v.into());
             let repository = Repository::create(
                 config,
                 storage.0,
@@ -1065,7 +1131,7 @@ impl PyRepository {
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
-        create_version: Option<u8>,
+        create_version: Option<PySpecVersion>,
         check_clean_root: bool,
     ) -> PyResult<Self> {
         // This function calls block_on, so we need to allow other thread python to make progress
@@ -1075,12 +1141,7 @@ impl PyRepository {
                     let config = config
                         .map(|c| c.try_into().map_err(PyValueError::new_err))
                         .transpose()?;
-                    let version = match create_version {
-                        Some(n) => Some(
-                            SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?,
-                        ),
-                        None => None,
-                    };
+                    let version = create_version.map(|v| v.into());
                     Ok::<_, PyErr>(
                         Repository::open_or_create(
                             config,
@@ -1106,7 +1167,7 @@ impl PyRepository {
         storage: PyStorage,
         config: Option<&PyRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
-        create_version: Option<u8>,
+        create_version: Option<PySpecVersion>,
         check_clean_root: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let config =
@@ -1114,12 +1175,7 @@ impl PyRepository {
         let authorize_virtual_chunk_access =
             map_credentials(authorize_virtual_chunk_access);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let version = match create_version {
-                Some(n) => {
-                    Some(SpecVersionBin::try_from(n).map_err(PyValueError::new_err)?)
-                }
-                None => None,
-            };
+            let version = create_version.map(|v| v.into());
             let repository = Repository::open_or_create(
                 config,
                 storage.0,
@@ -1174,7 +1230,7 @@ impl PyRepository {
         py: Python<'_>,
         storage: PyStorage,
         storage_settings: Option<Py<PyStorageSettings>>,
-    ) -> PyResult<Option<u8>> {
+    ) -> PyResult<Option<PySpecVersion>> {
         let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -1182,7 +1238,7 @@ impl PyRepository {
                 let spec_version = Repository::fetch_spec_version(storage.0, settings)
                     .await
                     .map_err(PyIcechunkStoreError::RepositoryError)?;
-                Ok(spec_version.map(|v| v as u8))
+                Ok(spec_version.map(|v| v.into()))
             })
         })
     }
@@ -1195,12 +1251,15 @@ impl PyRepository {
         storage_settings: Option<Py<PyStorageSettings>>,
     ) -> PyResult<Bound<'_, PyAny>> {
         let settings = storage_settings.map(|s| (&*s.borrow(py)).into());
-        pyo3_async_runtimes::tokio::future_into_py::<_, Option<u8>>(py, async move {
-            let spec_version = Repository::fetch_spec_version(storage.0, settings)
-                .await
-                .map_err(PyIcechunkStoreError::RepositoryError)?;
-            Ok(spec_version.map(|v| v as u8))
-        })
+        pyo3_async_runtimes::tokio::future_into_py::<_, Option<PySpecVersion>>(
+            py,
+            async move {
+                let spec_version = Repository::fetch_spec_version(storage.0, settings)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?;
+                Ok(spec_version.map(|v| v.into()))
+            },
+        )
     }
 
     /// Reopen the repository changing its config and or virtual chunk credentials
@@ -2414,7 +2473,7 @@ impl PyRepository {
             let result =
                 pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                     let lock = self.0.read().await;
-                    rewrite_manifests(&lock, branch, message, metadata, commit_method)
+                    rewrite_manifests(&lock, branch, message, 1, metadata, commit_method)
                         .await
                         .map_err(PyIcechunkStoreError::ManifestOpsError)
                 })?;
@@ -2443,6 +2502,7 @@ impl PyRepository {
                 &repository,
                 &branch,
                 &message,
+                1,
                 metadata,
                 commit_method,
             )
@@ -2768,11 +2828,11 @@ impl PyRepository {
     }
 
     #[getter]
-    fn spec_version(&self) -> u8 {
+    fn spec_version(&self) -> PySpecVersion {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let repo = self.0.read().await;
-            repo.spec_version()
-        }) as u8
+            repo.spec_version().into()
+        })
     }
 }
 

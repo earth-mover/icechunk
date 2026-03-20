@@ -24,8 +24,8 @@ use crate::common::Permission;
 
 #[template]
 #[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[case::v1(SpecVersionBin::V1)]
+#[case::v2(SpecVersionBin::V2)]
 fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
 const SIZE: usize = 10;
@@ -189,7 +189,7 @@ where
 
     let new_array_path: Path = "/array".try_into().unwrap();
     ds1.add_array(new_array_path.clone(), shape, None, user_data).await?;
-    ds1.commit("create array", None).await?;
+    ds1.commit("create array").max_concurrent_nodes(8).execute().await?;
 
     let repo2 = mk_repo(storage2, false, spec_version).await?;
     let repo3 = mk_repo(storage3, false, spec_version).await?;
@@ -245,7 +245,8 @@ where
 
     // Distributed commit now, using arbitrarily one of the repos as base and the others as extra
     // changesets
-    let _new_snapshot = ds1.commit("distributed commit", None).await?;
+    let _new_snapshot =
+        ds1.commit("distributed commit").max_concurrent_nodes(8).execute().await?;
 
     // We check we can read all chunks correctly
     verify(ds1).await?;

@@ -1,17 +1,17 @@
 # Rust benchmarks
 
 The benchmarks are written using `criterion.rs` as harness.
-1. Run all benchmarks in `benches/manifest.rs` with `cargo bench --bench manifest`
-2. Run the specific `commit_split_manifests` group of benchmarks with `cargo bench --bench manifest -- "commit_split_manifests"`. The name is set by statements like `c.benchmark_group("commit_split_manifests");`
-3. Run those benchmarks only for inline chunks: `cargo bench --bench manifest -- "commit_split_manifests/inline"`
-4. Run those benchmarks only for inline chunks and specifically 1000 manifests: `cargo bench --bench manifest -- "commit_split_manifests/virtual/1000$"`
-5. Examine logs for a particular benchmark: `ICECHUNK_LOG=icechunk=trace cargo bench --features logs --bench manifest -- "commit_rebase_split_manifests/inline" --test --nocapture`. You will need to add the `initialize_tracing(None)` line at the beginning of the benchmark function.
+1. Run all benchmarks with `cargo bench`
+2. Run the specific `commit_split_manifests` group of benchmarks with `cargo bench -- "commit_split_manifests"`. The name is set by statements like `c.benchmark_group("commit_split_manifests");`
+3. Run those benchmarks only for inline chunks: `cargo bench -- "commit_split_manifests/inline"`
+4. Run those benchmarks only for inline chunks and specifically 1000 manifests: `cargo bench -- "commit_split_manifests/virtual/1000$"`
+5. Examine logs for a particular benchmark: `ICECHUNK_LOG=icechunk=trace cargo bench --features logs -- "commit_rebase_split_manifests/inline" --test --nocapture`.
 6. To compare `main` vs `HEAD` do it manually using "baselines":
     ``` sh
     git switch support/v1.x \
-    && cargo bench --bench manifest -- --save-baseline v1  \
+    && cargo bench -- --save-baseline v1  \
     && git switch optimize-manifest-writes \
-    && cargo bench --bench manifest -- --baseline v1
+    && cargo bench -- --baseline v1
     ```
 
 Settings for the default `bench` profile have been edited to include some, but not all, optimizations for faster compiles and `debuginfo` for profiling.
@@ -22,7 +22,7 @@ Upon completion, you can find HTML output in `target/criterion/`.
 
 - `ICECHUNK_BENCH_LATENCY_MS=<ms>` — Run benchmarks against S3 (MinIO) behind toxiproxy instead of in-memory storage. The value sets downstream latency in ms (e.g. `100`). The latency toxic is applied only during the timed `get_chunk` iterations, not during setup. Requires `docker compose up -d` to start MinIO and toxiproxy. Example:
   ```sh
-  ICECHUNK_BENCH_LATENCY_MS=100 cargo bench --bench manifest -- get_chunks
+  ICECHUNK_BENCH_LATENCY_MS=100 cargo bench -- get_chunks
   ```
 
 # Profiling
@@ -52,10 +52,28 @@ An alternative is to find useful cargo subcommands that make our life easy.
 samply is an extremely good cross-platform profiler. I have found it quite useful, though reading the traces takes some effort given our heavy use of iterators.
 
 ``` sh
-cargo samply --bench manifest -- "commit_rebase_split_manifests/type/inline" --test
+just samply "commit_rebase_split_manifests/type/inline"
 ```
 
 will run that benchmark once and open up a profile in the Firefox Profiler.
+
+The `just samply` command sets `ICECHUNK_TRACE=samply` so all `#[instrument]`
+annotations in the codebase appear as profiler markers in the samply UI.
+
+## tracing-chrome / Perfetto
+
+Run a benchmark and emit a Chrome trace JSON file:
+
+``` sh
+just chrome-trace "commit_split_manifests/inline"
+```
+
+This sets `ICECHUNK_TRACE=chrome` and runs the benchmark once (`--test`). On exit, a `trace-{timestamp}.json` file is written to the current directory. Open it in:
+
+- https://ui.perfetto.dev/
+- `chrome://tracing`
+
+All `#[instrument]` spans in the codebase appear as trace events.
 
 ## [`cargo-instruments`](https://github.com/cmyr/cargo-instruments)
 
@@ -69,7 +87,7 @@ cargo instruments -t Allocations --profile bench --example large_manifests
 ```
 
 ``` sh
-cargo instruments -t Allocations --profile bench --bench manifest -- "commit/virtual/1000$"
+cargo instruments -t Allocations --profile bench -- "commit/virtual/1000$"
 ```
 
  Sadly this one doesn't allow profiling tests directly; you'll have to do something manual like
