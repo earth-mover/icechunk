@@ -118,5 +118,5 @@ In V2, all repository state is referenced from the unified repo info object. Eve
 
 ## Python API Changes
 
-- Enums changed to **snake_case** (e.g., `session_type.writable` instead of `SessionType.Writable`)
+- Enums variants changed to **snake_case** (e.g., `SessionMode.writable` instead of `SessionMode.Writable`)
 - `manifest_files()` renamed to `list_manifest_files()`
