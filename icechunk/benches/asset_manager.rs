@@ -1,12 +1,8 @@
-#![allow(clippy::unwrap_used)]
-
 use std::convert::Infallible;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group};
 use icechunk::asset_manager::AssetManager;
 use icechunk::format::format_constants::SpecVersionBin;
 use icechunk::format::manifest::{ChunkInfo, ChunkPayload, Manifest};
@@ -142,5 +138,8 @@ fn benchmark_write_new_manifest(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark_write_new_snapshot, benchmark_write_new_manifest);
-criterion_main!(benches);
+criterion_group!(
+    asset_manager_benches,
+    benchmark_write_new_snapshot,
+    benchmark_write_new_manifest
+);
