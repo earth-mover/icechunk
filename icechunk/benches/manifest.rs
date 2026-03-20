@@ -37,7 +37,7 @@ use icechunk::format::{ByteRange, ChunkIndices, Path};
 use icechunk::initialize_tracing;
 use icechunk::new_s3_storage;
 use icechunk::repository::{Repository, VersionInfo};
-use icechunk::session::{CommitMethod, Session, get_chunk};
+use icechunk::session::{Session, get_chunk};
 use icechunk::storage::new_in_memory_storage;
 use icechunk::virtual_chunks::VirtualChunkContainer;
 use icechunk::{RepositoryConfig, Storage};
@@ -297,7 +297,7 @@ async fn setup_repo(
     let defn = Bytes::from_static(br#"{"this":"array"}"#);
     session.add_group(Path::root(), defn.clone()).await?;
     session.add_array(path, shape, dimension_names, defn.clone()).await?;
-    session.commit("initialized", None).await?;
+    session.commit("initialized").max_concurrent_nodes(8).execute().await?;
 
     Ok((repository, tmpdir))
 }
@@ -505,7 +505,12 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                                 )
                                 .await
                                 .unwrap();
-                                session.commit("data", None).await.unwrap();
+                                session
+                                    .commit("data")
+                                    .max_concurrent_nodes(8)
+                                    .execute()
+                                    .await
+                                    .unwrap();
 
                                 // Re-open with the splitting config and rewrite
                                 // manifests. Using reopen() preserves VCC auth.
@@ -522,11 +527,11 @@ fn benchmark_get_chunks(c: &mut Criterion) {
                                     let mut session =
                                         repo.writable_session("main").await.unwrap();
                                     session
-                                        .rewrite_manifests(
-                                            "rewrite",
-                                            None,
-                                            CommitMethod::Amend,
-                                        )
+                                        .commit("rewrite")
+                                        .max_concurrent_nodes(8)
+                                        .rewrite_manifests()
+                                        .amend()
+                                        .execute()
                                         .await
                                         .unwrap();
                                 }
@@ -647,7 +652,12 @@ fn benchmark_commit_split_manifests(c: &mut Criterion) {
                         },
                         |mut session| {
                             rt.block_on(async {
-                                session.commit("foo", None).await.unwrap();
+                                session
+                                    .commit("foo")
+                                    .max_concurrent_nodes(8)
+                                    .execute()
+                                    .await
+                                    .unwrap();
                             })
                         },
                         // Make sure we run the set up before every iteration
@@ -720,7 +730,12 @@ fn benchmark_append_split_manifests(c: &mut Criterion) {
 
                             let start_commit = std::time::Instant::now();
                             rt.block_on(async {
-                                session.commit("commit", None).await.unwrap();
+                                session
+                                    .commit("commit")
+                                    .max_concurrent_nodes(8)
+                                    .execute()
+                                    .await
+                                    .unwrap();
                             });
                             let commit_elapsed = start_commit.elapsed();
 
@@ -800,14 +815,10 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
                     rt.block_on(async {
                         for mut session in sessions {
                             session
-                                .commit_rebasing(
-                                    &ConflictDetector,
-                                    10,
-                                    "foo",
-                                    None,
-                                    |_| async {},
-                                    |_| async {},
-                                )
+                                .commit("foo")
+                                .max_concurrent_nodes(8)
+                                .rebase(&ConflictDetector, 10)
+                                .execute()
                                 .await
                                 .unwrap();
                         }
