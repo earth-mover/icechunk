@@ -4237,4 +4237,86 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio_test]
+    async fn rearrange_session_amend_on_top_of_amend() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            HashMap::new(),
+            Some(SpecVersionBin::current()),
+            true,
+        )
+        .await?;
+
+        // Create initial structure
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
+        session
+            .add_group("/source".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await?;
+        let initial_snap_id = session.commit("init").execute().await?;
+
+        // Rearrange session: move a node
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/source".try_into().unwrap(), "/dest".try_into().unwrap())
+            .await?;
+        let first_rearr_snap_id = session
+            .commit("moved source to dest")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await?;
+
+        // Rearrange session: move node again, amend this time
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/dest".try_into().unwrap(), "/another_dest".try_into().unwrap())
+            .await?;
+        let first_amend_snap_id =
+            session.commit("moved dest to another_dest").amend().execute().await?;
+
+        // Rearrange session: move node again, amend gain
+        let mut session = repo.rearrange_session("main").await?;
+        session
+            .move_node("/another_dest".try_into().unwrap(), "/src".try_into().unwrap())
+            .await?;
+        let second_amend_snap_id =
+            session.commit("moved another_dest to src").amend().execute().await?;
+
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        dbg!(&ops);
+        assert_eq!(ops.len(), 5);
+        assert!(matches!(ops[4].1, UpdateType::RepoInitializedUpdate));
+        assert!(matches!(
+            &ops[3].1,
+            UpdateType::NewCommitUpdate { new_snap_id, .. }
+              if *new_snap_id == initial_snap_id
+        ));
+        assert!(matches!(
+            &ops[2].1,
+            UpdateType::NewCommitUpdate { new_snap_id, .. }
+              if *new_snap_id == first_rearr_snap_id
+        ));
+        assert!(matches!(
+            &ops[1].1,
+            UpdateType::CommitAmendedUpdate {
+                previous_snap_id,
+                new_snap_id,
+                ..
+            } if *previous_snap_id == first_rearr_snap_id && *new_snap_id == first_amend_snap_id
+        ));
+        assert!(matches!(
+            &ops[0].1,
+            UpdateType::CommitAmendedUpdate {
+                previous_snap_id,
+                new_snap_id,
+                ..
+            } if *previous_snap_id == first_amend_snap_id && *new_snap_id == second_amend_snap_id
+        ));
+
+        Ok(())
+    }
 }
