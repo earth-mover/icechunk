@@ -228,7 +228,7 @@ class CoiledRunner(Runner):
                 workspace=ckwargs["workspace"],
                 conda={
                     "channels": ["conda-forge"],
-                    "dependencies": ["rust", "python=3.12", "pip"],
+                    "dependencies": ["rust", "python=3.14", "pip"],
                 },
                 pip=[self.pip_github_url, "coiled", *deps],
             )
