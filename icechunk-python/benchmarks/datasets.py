@@ -41,13 +41,8 @@ CONSTRUCTORS = {
 TEST_BUCKETS = {
     "s3": dict(store="s3", bucket="icechunk-ci", region="us-east-1"),
     "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
-    # "gcs": dict(store="gcs", bucket="arraylake-scratch", region="us-east1"),
-    # not using region="auto", because for now we pass this directly to coiled.
     "r2": dict(store="r2", bucket="icechunk-test-r2", region="us-east-1"),
-    # "tigris": dict(
-    #     store="tigris", bucket="deepak-private-bucket" + "-test", region="iad"
-    # ),
-    "tigris": dict(store="tigris", bucket="icechunk-test", region="iad"),
+    "tigris": dict(store="tigris", bucket="test-icechunk-github-actions", region="iad"),
     "local": dict(store="local", bucket=platformdirs.site_cache_dir()),
 }
 TEST_BUCKETS["s3_ob"] = TEST_BUCKETS["s3"]

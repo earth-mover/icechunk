@@ -22,15 +22,35 @@ from helpers import (
     rdms,
     setup_logger,
 )
+from object_store import ObjectStore
 
 logger = setup_logger()
 
 PYTEST_OPTIONS = "-q --durations 10 --rootdir=benchmarks --tb=line"
 TMP = tempfile.gettempdir()
 CURRENTDIR = os.getcwd()
+NIGHTLY_INDEX_URL = "https://pypi.anaconda.org/scientific-python-nightly-wheels/simple"
 
 
 assert_cwd_is_icechunk_python()
+
+# Resolve AWS credentials eagerly at import time, before process_map forks
+# child processes. boto3.Session() reads AWS_PROFILE / env vars / instance roles,
+# but child processes spawned by ProcessPoolExecutor don't inherit the parent's
+# env reliably, so we freeze the credentials here.
+_AWS_CREDENTIALS: dict[str, str] = {}
+try:
+    import boto3
+
+    _creds = boto3.Session().get_credentials()
+    if _creds:
+        _frozen = _creds.get_frozen_credentials()
+        _AWS_CREDENTIALS["AWS_ACCESS_KEY_ID"] = _frozen.access_key
+        _AWS_CREDENTIALS["AWS_SECRET_ACCESS_KEY"] = _frozen.secret_key
+        if _frozen.token:
+            _AWS_CREDENTIALS["AWS_SESSION_TOKEN"] = _frozen.token
+except Exception:
+    pass
 
 
 def process_map(*, serial: bool, func: Callable, iterable):
@@ -64,10 +84,20 @@ def get_benchmark_deps(filepath: str) -> str:
 class Runner:
     bench_store_dir = None
 
+    # Refs that install icechunk from PyPI instead of building from source.
+    PYPI_REFS = {
+        "pypi-nightly": "--pre icechunk",
+        "pypi-v1": "icechunk<2",
+    }
+
     def __init__(self, *, ref: str, where: str, save_prefix: str) -> None:
         self.ref = ref
-        self.full_commit = get_full_commit(ref)
-        self.commit = self.full_commit[:8]
+        if ref in self.PYPI_REFS:
+            self.full_commit = ref
+            self.commit = ref
+        else:
+            self.full_commit = get_full_commit(ref)
+            self.commit = self.full_commit[:8]
         self.where = where
         self.save_prefix = save_prefix
         # shorten the name so `pytest-benchmark compare` is readable
@@ -94,7 +124,7 @@ class Runner:
         """Sync the benchmarks folder over to the cwd."""
         raise NotImplementedError
 
-    def execute(cmd: str) -> None:
+    def execute(self, cmd: str, **kwargs) -> None:
         """Execute a command"""
         raise NotImplementedError
 
@@ -193,9 +223,9 @@ class LocalRunner(Runner):
 class CoiledRunner(Runner):
     bench_store_dir = "."
 
-    def get_coiled_run_args(self) -> tuple[str]:
+    def get_coiled_run_args(self) -> tuple[str, ...]:
         ckwargs = self.get_coiled_kwargs()
-        return (
+        args = [
             "coiled",
             "run",
             "--interactive",
@@ -205,7 +235,13 @@ class CoiledRunner(Runner):
             f"--vm-type={ckwargs['vm_type']}",
             f"--software={ckwargs['software']}",
             f"--region={ckwargs['region']}",
-        )
+        ]
+        # Forward AWS credentials to the VM so it can access S3/R2/etc
+        # regardless of which cloud the VM is on. Uses pre-resolved
+        # _AWS_CREDENTIALS (frozen at import time, before process forks).
+        for key, val in _AWS_CREDENTIALS.items():
+            args.extend(["--env", f"{key}={val}"])
+        return tuple(args)
 
     def get_coiled_kwargs(self):
         # using the default region here
@@ -222,16 +258,38 @@ class CoiledRunner(Runner):
 
         ckwargs = self.get_coiled_kwargs()
         envs = coiled.list_software_environments(workspace=ckwargs["workspace"])
+        pypi_spec = self.PYPI_REFS.get(self.ref)
         if ckwargs["software"] not in envs:
+            if pypi_spec is not None:
+                pip_deps = ["coiled", *deps]
+            else:
+                # TODO: support building wheels for arbitrary git refs.
+                # The pip_github_url approach below doesn't work because Coiled
+                # ignores git+ URLs with "Local path requirement ... is not supported".
+                # pip_deps = [self.pip_github_url, "coiled", *deps]
+                raise NotImplementedError(
+                    f"Coiled runner only supports PYPI_REFS ({list(self.PYPI_REFS)}). "
+                    f"Got ref={self.ref!r}. Use LocalRunner (--where local) for git refs."
+                )
             coiled.create_software_environment(
                 name=ckwargs["software"],
                 workspace=ckwargs["workspace"],
                 conda={
                     "channels": ["conda-forge"],
-                    "dependencies": ["rust", "python=3.14", "pip"],
+                    "dependencies": ["python=3.14"],
                 },
-                pip=[self.pip_github_url, "coiled", *deps],
+                pip=pip_deps,
             )
+
+        if pypi_spec is not None:
+            # Install icechunk on the VM. Coiled's pip= doesn't support flags
+            # like --pre or --extra-index-url, so we run pip install separately.
+            pip_cmd = f"pip install {pypi_spec}"
+            if self.ref == "pypi-nightly":
+                pip_cmd += f" --extra-index-url {NIGHTLY_INDEX_URL}"
+            logger.info(f"Installing icechunk on VM: {pip_cmd}")
+            self.execute(pip_cmd, check=True)
+
         super().initialize()
 
     def execute(self, cmd, **kwargs):
@@ -250,12 +308,45 @@ class CoiledRunner(Runner):
 
     def run(self, *, pytest_extra: str = "") -> None:
         super().run(pytest_extra=pytest_extra)
-        filename = f"{self.save_prefix}/{self.where}_{self.clean_ref}_{self.commit}.json"
-        # This is crappy; but for some reason coiled.function doesn't see the right files :/
-        # So we need to use 'coiled run'; upload to a bucket; and then download from bucket
-        # pytest-benchmark cannot write directly to a bucket yet, sadly.
-        # TODO: explore a mounting a bucket as a volume.
-        self.execute(f"sh benchmarks/most_recent.sh {filename}")
+        self._fetch_benchmark_json()
+
+    def _fetch_benchmark_json(self) -> None:
+        """Fetch benchmark JSON: upload from VM to object store, download locally.
+
+        Uses object_store_python which supports S3/GCS/Tigris/R2 with a
+        single API. The VM already has credentials for the target store.
+        """
+        from datasets import TEST_BUCKETS
+
+        SCHEMES = {"s3": "s3", "gcs": "gs", "tigris": "s3", "r2": "s3"}
+        bucket_info = TEST_BUCKETS[self.where]
+        store_url = f"{SCHEMES[bucket_info['store']]}://{bucket_info['bucket']}"
+
+        local_name = f"{self.where}_{self.clean_ref}_{self.commit}.json"
+        obj_key = f"_bench_results/{self.save_prefix}/{local_name}"
+
+        # Upload from VM using object_store
+        upload_cmd = (
+            'python -c "'
+            "from object_store import ObjectStore; "
+            "import glob,os; "
+            "f=sorted(glob.glob('./.benchmarks/**/*',recursive=True),key=os.path.getmtime,reverse=True)[0]; "
+            f"store=ObjectStore('{store_url}'); "
+            f"store.put('{obj_key}',open(f,'rb').read())"
+            '"'
+        )
+        self.execute(upload_cmd, check=True)
+
+        # Download locally
+        store = ObjectStore(store_url)
+        data = store.get(obj_key)
+
+        local_dir = f"/tmp/benchmarks/{self.save_prefix}"
+        os.makedirs(local_dir, exist_ok=True)
+        local_path = f"{local_dir}/{local_name}"
+        with open(local_path, "wb") as f:
+            f.write(data)
+        logger.info(f"Saved benchmark results to {local_path}")
 
 
 def read_latest_benchmark_json() -> str:
@@ -326,21 +417,8 @@ if __name__ == "__main__":
         iterable=where,
     )
 
-    if any(w != "local" for w in where):
-        subprocess.run(
-            [
-                "aws",
-                "s3",
-                "cp",
-                f"s3://earthmover-scratch/benchmarks/{save_prefix}/",
-                f"/tmp/benchmarks/{save_prefix}/",
-                "--recursive",
-            ],
-            check=True,
-        )
     refs = args.refs
 
-    # TODO: clean this up
     if where == ("local",) and len(refs) > 1:
         files = sorted(
             glob.glob("./.benchmarks/**/*.json", recursive=True),
