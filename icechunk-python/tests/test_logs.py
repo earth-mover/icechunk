@@ -63,6 +63,7 @@ def test_debug_logs_from_argument(
         spec_version=any_spec_version,
     )
     assert "Creating Repository" in capfd.readouterr().out
+    ic.set_logs_filter(None)
 
 
 @mock.patch.dict(os.environ, {"ICECHUNK_LOG": "debug"}, clear=True)
@@ -75,6 +76,7 @@ def test_no_logs_from_argument(
         spec_version=any_spec_version,
     )
     assert capfd.readouterr().out == ""
+    ic.set_logs_filter(None)
 
 
 def test_change_log_levels_from_argument(
@@ -95,6 +97,7 @@ def test_change_log_levels_from_argument(
         spec_version=any_spec_version,
     )
     assert "Creating Repository" in capfd.readouterr().out
+    ic.set_logs_filter(None)
 
 
 def test_warn_on_small_caches(
@@ -142,6 +145,7 @@ def test_warn_on_small_caches(
     assert re.search("keep 0 references", out)
     assert re.search("3 nodes", out)
     assert re.search("keep 0 nodes", out)
+    ic.set_logs_filter(None)
 
 
 def test_misspelling_warnings_for_icechunk(capfd: CaptureFixture[str]) -> None:
@@ -162,6 +166,7 @@ def test_misspelling_warnings_for_icechunk(capfd: CaptureFixture[str]) -> None:
     ic.set_logs_filter("ichunk:warn")
     err_output = capfd.readouterr().err
     assert "WARNING" in err_output and "ichunk" in err_output
+    ic.set_logs_filter(None)
 
 
 def test_no_false_positives_for_correct_spelling(capfd: CaptureFixture[str]) -> None:
@@ -171,6 +176,7 @@ def test_no_false_positives_for_correct_spelling(capfd: CaptureFixture[str]) -> 
 
     ic.set_logs_filter("icechunk::repository:trace")
     assert "WARNING" not in capfd.readouterr().err
+    ic.set_logs_filter(None)
 
 
 def test_no_warnings_for_generic_log_levels(capfd: CaptureFixture[str]) -> None:
@@ -183,6 +189,7 @@ def test_no_warnings_for_generic_log_levels(capfd: CaptureFixture[str]) -> None:
 
     ic.set_logs_filter("info")
     assert "WARNING" not in capfd.readouterr().err
+    ic.set_logs_filter(None)
 
 
 def test_no_warnings_for_unrelated_modules(capfd: CaptureFixture[str]) -> None:
@@ -195,6 +202,7 @@ def test_no_warnings_for_unrelated_modules(capfd: CaptureFixture[str]) -> None:
 
     ic.set_logs_filter("my_app::module:warn")
     assert "WARNING" not in capfd.readouterr().err
+    ic.set_logs_filter(None)
 
 
 def test_complex_filter_strings_with_misspellings(capfd: CaptureFixture[str]) -> None:
@@ -208,6 +216,7 @@ def test_complex_filter_strings_with_misspellings(capfd: CaptureFixture[str]) ->
     ic.set_logs_filter("debug,icecunk:info,warn")
     err_output = capfd.readouterr().err
     assert "WARNING" in err_output and "icecunk" in err_output
+    ic.set_logs_filter(None)
 
 
 def test_nested_module_paths_with_misspellings(capfd: CaptureFixture[str]) -> None:
@@ -219,6 +228,7 @@ def test_nested_module_paths_with_misspellings(capfd: CaptureFixture[str]) -> No
     ic.set_logs_filter("icecunk::store::manager:debug")
     err_output = capfd.readouterr().err
     assert "WARNING" in err_output and "icecunk" in err_output
+    ic.set_logs_filter(None)
 
 
 def test_short_strings_not_flagged(capfd: CaptureFixture[str]) -> None:
@@ -228,3 +238,4 @@ def test_short_strings_not_flagged(capfd: CaptureFixture[str]) -> None:
 
     ic.set_logs_filter("chunk:info")
     assert "WARNING" not in capfd.readouterr().err
+    ic.set_logs_filter(None)
