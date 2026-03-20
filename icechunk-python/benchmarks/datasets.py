@@ -9,13 +9,12 @@ from typing import Any, Literal, Self, TypeAlias
 
 import fsspec
 import numpy as np
-import platformdirs
-import pytest
 
 import icechunk as ic
 import icechunk.xarray
 import xarray as xr
 import zarr
+from benchmarks.buckets import BUCKETS, TEST_BUCKETS
 from benchmarks.helpers import (
     get_coiled_kwargs,
     get_splitting_config,
@@ -25,9 +24,7 @@ from benchmarks.helpers import (
 )
 
 rng = np.random.default_rng(seed=123)
-
 Store: TypeAlias = Literal["s3", "gcs", "az", "tigris"]
-PUBLIC_DATA_BUCKET = "icechunk-public-data"
 ZARR_KWARGS = dict(zarr_format=3, consolidated=False)
 
 CONSTRUCTORS = {
@@ -38,25 +35,11 @@ CONSTRUCTORS = {
     "local": ic.local_filesystem_storage,
     "r2": ic.s3_storage,
 }
-TEST_BUCKETS = {
-    "s3": dict(store="s3", bucket="icechunk-ci", region="us-east-1"),
-    "gcs": dict(store="gcs", bucket="icechunk-test-gcp", region="us-east1"),
-    "r2": dict(store="r2", bucket="icechunk-test-r2", region="us-east-1"),
-    "tigris": dict(store="tigris", bucket="test-icechunk-github-actions", region="iad"),
-    "local": dict(store="local", bucket=platformdirs.site_cache_dir()),
-}
-TEST_BUCKETS["s3_ob"] = TEST_BUCKETS["s3"]
-BUCKETS = {
-    "s3": dict(store="s3", bucket=PUBLIC_DATA_BUCKET, region="us-east-1"),
-    "gcs": dict(store="gcs", bucket=PUBLIC_DATA_BUCKET + "-gcs", region="us-east1"),
-    "tigris": dict(store="tigris", bucket=PUBLIC_DATA_BUCKET + "-tigris", region="iad"),
-    "r2": dict(store="r2", bucket=PUBLIC_DATA_BUCKET + "-r2", region="us-east-1"),
-}
 
 logger = setup_logger()
 
 
-def set_env_credentials() -> tuple[str, str]:
+def set_env_credentials() -> dict[str, str]:
     import boto3
 
     session = boto3.Session()
@@ -125,7 +108,7 @@ class StorageConfig:
         force_idempotent: bool = False,
     ) -> Self:
         if self.prefix is not None:
-            if force_idempotent and self.prefix.startswith(prefix):
+            if force_idempotent and prefix is not None and self.prefix.startswith(prefix):
                 return self
             new_prefix = (prefix or "") + self.prefix
         else:
@@ -163,7 +146,10 @@ class StorageConfig:
         else:
             return f"{self.protocol}://{self.bucket}/{self.prefix}"
 
-    def get_coiled_kwargs(self) -> str:
+    def get_coiled_kwargs(self) -> dict[str, str]:
+        assert self.store is not None, (
+            "store must be set before calling get_coiled_kwargs"
+        )
         return get_coiled_kwargs(store=self.store, region=self.region)
 
 
@@ -381,7 +367,7 @@ def setup_ingest_for_benchmarks(dataset: Dataset, *, ingest: IngestDataset) -> N
 
 
 def setup_era5(*args, **kwargs):
-    from benchmarks.create_era5 import setup_for_benchmarks
+    from benchmarks.create_era5 import setup_for_benchmarks  # type: ignore[attr-defined]
 
     return setup_for_benchmarks(*args, **kwargs, arrays_to_write=[])
 
@@ -390,14 +376,9 @@ def setup_split_manifest_refs(dataset: Dataset, *, split_size: int | None):
     shape = (500_000 * 1000,)
     chunks = (1000,)
 
+    splitting = None
     if split_size is not None:
-        try:
-            splitting = get_splitting_config(split_size=split_size)
-        except ImportError:
-            logger.info("splitting not supported")
-            pytest.skip("splitting not supported on this version")
-    else:
-        splitting = None
+        splitting = get_splitting_config(split_size=split_size)
     config = repo_config_with(splitting=splitting)
     assert config is not None
     if hasattr(config.manifest, "splitting"):

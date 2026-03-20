@@ -11,10 +11,12 @@ import subprocess
 import tempfile
 import tomllib
 from collections.abc import Callable
+from datetime import UTC, datetime
 from functools import partial
 
 import tqdm
 import tqdm.contrib.concurrent
+from buckets import RESULT_STORE_URLS
 from helpers import (
     assert_cwd_is_icechunk_python,
     get_coiled_kwargs,
@@ -35,20 +37,24 @@ NIGHTLY_INDEX_URL = "https://pypi.anaconda.org/scientific-python-nightly-wheels/
 assert_cwd_is_icechunk_python()
 
 # Resolve AWS credentials eagerly at import time, before process_map forks
-# child processes. boto3.Session() reads AWS_PROFILE / env vars / instance roles,
-# but child processes spawned by ProcessPoolExecutor don't inherit the parent's
-# env reliably, so we freeze the credentials here.
+# child processes. ProcessPoolExecutor spawns fresh interpreters that may not
+# have AWS_PROFILE available, so we freeze everything here.
 _AWS_CREDENTIALS: dict[str, str] = {}
 try:
     import boto3
 
-    _creds = boto3.Session().get_credentials()
+    _session = boto3.Session()
+    _creds = _session.get_credentials()
     if _creds:
         _frozen = _creds.get_frozen_credentials()
         _AWS_CREDENTIALS["AWS_ACCESS_KEY_ID"] = _frozen.access_key
         _AWS_CREDENTIALS["AWS_SECRET_ACCESS_KEY"] = _frozen.secret_key
         if _frozen.token:
             _AWS_CREDENTIALS["AWS_SESSION_TOKEN"] = _frozen.token
+    _client = boto3.client("s3")
+    _endpoint = _client.meta.endpoint_url
+    if _endpoint and _endpoint != "https://s3.amazonaws.com":
+        _AWS_CREDENTIALS["AWS_ENDPOINT_URL"] = _endpoint
 except Exception:
     pass
 
@@ -246,8 +252,8 @@ class CoiledRunner(Runner):
     def get_coiled_kwargs(self):
         # using the default region here
         kwargs = get_coiled_kwargs(store=self.where)
-        kwargs["software"] = f"icechunk-bench-{self.commit}"
-        kwargs["name"] = f"icebench-{self.commit}-{self.where}"
+        kwargs["software"] = f"icechunk-bench-{self.ref}"
+        kwargs["name"] = f"icebench-{self.ref}-{self.where}"
         kwargs["keepalive"] = "10m"
         return kwargs
 
@@ -314,31 +320,49 @@ class CoiledRunner(Runner):
         """Fetch benchmark JSON: upload from VM to object store, download locally.
 
         Uses object_store_python which supports S3/GCS/Tigris/R2 with a
-        single API. The VM already has credentials for the target store.
+        single API. Region and endpoint_url are read from RESULT_STORE_URLS
+        and passed as ObjectStore options (no env var hacks needed).
         """
-        from datasets import TEST_BUCKETS
-
-        SCHEMES = {"s3": "s3", "gcs": "gs", "tigris": "s3", "r2": "s3"}
-        bucket_info = TEST_BUCKETS[self.where]
-        store_url = f"{SCHEMES[bucket_info['store']]}://{bucket_info['bucket']}"
-
-        local_name = f"{self.where}_{self.clean_ref}_{self.commit}.json"
+        result_info = RESULT_STORE_URLS[self.where]
+        store_url = result_info["url"]
+        region = result_info["region"]
+        endpoint = result_info["endpoint_url"]
+        ts = datetime.now(UTC).strftime("%Y%m%d-%H%M")
+        local_name = f"{self.where}_{self.clean_ref}_{self.commit}_{ts}.json"
         obj_key = f"_bench_results/{self.save_prefix}/{local_name}"
 
-        # Upload from VM using object_store
+        # Upload from VM using object_store.
+        # The VM has forwarded AWS creds as env vars. We set region/endpoint
+        # as env vars too so ObjectStore picks up everything from the environment.
+        env_setup = f"os.environ['AWS_DEFAULT_REGION']='{region}'; " if region else ""
+        if endpoint:
+            env_setup += f"os.environ['AWS_ENDPOINT_URL']='{endpoint}'; "
         upload_cmd = (
             'python -c "'
+            "import os,glob; "
+            f"{env_setup}"
             "from object_store import ObjectStore; "
-            "import glob,os; "
-            "f=sorted(glob.glob('./.benchmarks/**/*',recursive=True),key=os.path.getmtime,reverse=True)[0]; "
+            "files=sorted(glob.glob('./.benchmarks/**/*',recursive=True),key=os.path.getmtime,reverse=True); "
+            "assert files, 'No benchmark JSON found in .benchmarks/'; "
+            "f=files[0]; "
             f"store=ObjectStore('{store_url}'); "
             f"store.put('{obj_key}',open(f,'rb').read())"
             '"'
         )
         self.execute(upload_cmd, check=True)
 
-        # Download locally
-        store = ObjectStore(store_url)
+        # Download locally using options= so we don't pollute the process env.
+        # For S3-compatible stores, pass pre-resolved AWS credentials (ObjectStore
+        # doesn't support AWS_PROFILE). GCS uses application default credentials.
+        store_options: dict[str, str] = {}
+        if store_url.startswith("s3://"):
+            if region:
+                store_options["aws_default_region"] = region
+            if endpoint:
+                store_options["aws_endpoint"] = endpoint
+            for key, val in _AWS_CREDENTIALS.items():
+                store_options[key.lower()] = val
+        store = ObjectStore(store_url, options=store_options)
         data = store.get(obj_key)
 
         local_dir = f"/tmp/benchmarks/{self.save_prefix}"
@@ -393,7 +417,7 @@ if __name__ == "__main__":
     parser.add_argument("--serial", action="store_true", default=False)
     parser.add_argument(
         "--where",
-        help="where to run? [local|s3|s3_ob|gcs], combinations are allowed: [s3|gcs]",
+        help="where to run: local,s3,s3_ob,gcs,tigris,r2. Comma-separated for multiple.",
         default="local",
     )
     parser.add_argument(
@@ -404,10 +428,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if "|" in args.where:
-        where = args.where.split("|")
-    else:
-        where = (args.where,)
+    where = tuple(w.strip() for w in args.where.split(","))
 
     save_prefix = rdms()
 

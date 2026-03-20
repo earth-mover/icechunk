@@ -38,7 +38,7 @@ def get_coiled_kwargs(*, store: str, region: str | None = None) -> dict[str, str
         "gcs": "earthmover-devs-gcp",
         "az": "earthmover-devs-azure",
     }
-    TIGRIS_REGIONS = {"iad": "us-east-1"}
+    TIGRIS_REGIONS = {"us-east-2": "us-east-1", "iad": "us-east-1"}
 
     if region is None:
         region = DEFAULT_REGIONS[store]
