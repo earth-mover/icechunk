@@ -313,18 +313,8 @@ def to_icechunk(
 
     as_dataset = _make_dataset(obj)
 
-    # This ugliness is needed so that we allow users to call `to_icechunk` with a dirty Session
-    # for _serial_ writes
     is_dask = is_dask_collection(obj)
-    fork: Session | ForkSession
-    if is_dask:
-        if session.has_uncommitted_changes:
-            raise ValueError(
-                "Calling `to_icechunk` is not allowed on a Session with uncommitted changes. Please commit first."
-            )
-        fork = session.fork()
-    else:
-        fork = session
+    fork: Session | ForkSession = session.fork() if is_dask else session
 
     writer = _XarrayDatasetWriter(
         as_dataset, store=fork.store, safe_chunks=safe_chunks, align_chunks=align_chunks
