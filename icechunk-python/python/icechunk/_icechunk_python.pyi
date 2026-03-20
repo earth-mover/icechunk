@@ -8,7 +8,8 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from enum import Enum
+from enum import Enum, IntEnum
+from functools import total_ordering
 from typing import Any, TypeAlias, final
 
 from icechunk.types import CommitMethod
@@ -1896,6 +1897,17 @@ class ManifestFileInfo:
         """The number of chunk references contained in this manifest"""
         ...
 
+@final
+@total_ordering
+class SpecVersion(IntEnum):
+    v1 = 1
+    v2 = 2
+
+    def __eq__(self, other: object) -> bool: ...
+    def __lt__(self, other: object) -> bool: ...
+    @staticmethod
+    def current() -> SpecVersion: ...
+
 class PyRepository:
     @classmethod
     def create(
@@ -1904,7 +1916,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        spec_version: int | None = None,
+        spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1914,7 +1926,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        spec_version: int | None = None,
+        spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1940,7 +1952,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        create_version: int | None = None,
+        create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1950,7 +1962,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        create_version: int | None = None,
+        create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @staticmethod
@@ -1964,11 +1976,11 @@ class PyRepository:
     @staticmethod
     def fetch_spec_version(
         storage: Storage, storage_settings: StorageSettings | None = None
-    ) -> int | None: ...
+    ) -> SpecVersion | None: ...
     @staticmethod
     async def fetch_spec_version_async(
         storage: Storage, storage_settings: StorageSettings | None = None
-    ) -> int | None: ...
+    ) -> SpecVersion | None: ...
     @classmethod
     def from_bytes(cls, bytes: bytes) -> PyRepository: ...
     def as_bytes(self) -> bytes: ...
@@ -2164,7 +2176,7 @@ class PyRepository:
         self, manifest_id: str, *, pretty: bool = True
     ) -> str: ...
     @property
-    def spec_version(self) -> int: ...
+    def spec_version(self) -> SpecVersion: ...
 
 class ChunkType(Enum):
     """Enum for Zarr chunk types
@@ -3126,7 +3138,7 @@ def set_logs_filter(log_filter_directive: str | None) -> None:
     """
     ...
 
-def spec_version() -> int:
+def spec_version() -> SpecVersion:
     """
     The version of the Icechunk specification that the library is compatible with.
 

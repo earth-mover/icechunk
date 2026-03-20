@@ -389,9 +389,7 @@ impl<'a> CommitBuilder<'a> {
         }
 
         if self.amend {
-            self.session
-                .asset_manager
-                .fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+            self.session.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2)?;
         }
 
         let commit_method =
@@ -818,7 +816,7 @@ impl Session {
     #[instrument(skip(self))]
     pub async fn move_node(&mut self, from: Path, to: Path) -> SessionResult<()> {
         // Icechunk 1 has no way to represent move in its on-disk format
-        self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.asset_manager.fail_unless_spec_at_least(SpecVersionBin::V2)?;
         // does the source node exist?
         let _ = self.get_node(&from).await?;
         // are we overwriting the destination node?
@@ -1471,8 +1469,8 @@ impl Session {
         .await?;
 
         match self.spec_version() {
-            SpecVersionBin::V1dot0 => self.flush_v1(Arc::clone(&new_snap)).await,
-            SpecVersionBin::V2dot0 => self.flush_v2(Arc::clone(&new_snap)).await,
+            SpecVersionBin::V1 => self.flush_v1(Arc::clone(&new_snap)).await,
+            SpecVersionBin::V2 => self.flush_v2(Arc::clone(&new_snap)).await,
         }?;
 
         info!(
@@ -1550,7 +1548,7 @@ impl Session {
 
         // amend is only allowed in spec v2, this should be checked at this point so we only assert
         assert!(
-            self.spec_version() >= SpecVersionBin::V2dot0
+            self.spec_version() >= SpecVersionBin::V2
                 || commit_method == CommitMethod::NewCommit
         );
 
@@ -1736,12 +1734,8 @@ impl Session {
         debug!("Rebase started");
 
         let new_commits = match self.spec_version() {
-            SpecVersionBin::V1dot0 => {
-                self.commits_to_rebase_v1(branch_name.as_str()).await?
-            }
-            SpecVersionBin::V2dot0 => {
-                self.commits_to_rebase_v2(branch_name.as_str()).await?
-            }
+            SpecVersionBin::V1 => self.commits_to_rebase_v1(branch_name.as_str()).await?,
+            SpecVersionBin::V2 => self.commits_to_rebase_v2(branch_name.as_str()).await?,
         };
 
         trace!("Found {} commits to rebase over", new_commits.len());
@@ -2305,7 +2299,7 @@ async fn write_manifest_from_stream(
     let mut to = vec![];
     let chunks = aggregate_extents(&mut from, &mut to, chunks, |ci| &ci.coord);
 
-    let compression_config = if asset_manager.spec_version() >= SpecVersionBin::V2dot0 {
+    let compression_config = if asset_manager.spec_version() >= SpecVersionBin::V2 {
         Some(manifest_config.virtual_chunk_location_compression())
     } else {
         None
@@ -2828,7 +2822,7 @@ async fn do_flush(
         .sort_by(|a, b| a.path.to_string().as_str().cmp(b.path.to_string().as_str()));
 
     // Icechunk 2 no longer stores the parent snapshot id in the snapshot
-    let parent_id = if flush_data.asset_manager.spec_version() == SpecVersionBin::V1dot0 {
+    let parent_id = if flush_data.asset_manager.spec_version() == SpecVersionBin::V1 {
         Some(flush_data.parent_id.clone())
     } else {
         None
@@ -2972,7 +2966,7 @@ async fn do_commit(
     let new_snapshot_id = new_snapshot.id();
 
     let res = match asset_manager.spec_version() {
-        SpecVersionBin::V1dot0 =>
+        SpecVersionBin::V1 =>
         {
             #[allow(deprecated)]
             do_commit_v1(
@@ -2984,7 +2978,7 @@ async fn do_commit(
             )
             .await
         }
-        SpecVersionBin::V2dot0 => {
+        SpecVersionBin::V2 => {
             do_commit_v2(
                 asset_manager,
                 branch_name,
@@ -4313,7 +4307,7 @@ mod tests {
 
         repository.save_config().await?;
 
-        if spec_version == SpecVersionBin::V2dot0 {
+        if spec_version == SpecVersionBin::V2 {
             let overwritten = repository
                 .asset_manager()
                 .list_overwritten_objects()
@@ -5106,7 +5100,7 @@ mod tests {
     ) -> Result<(), Box<dyn Error>> {
         let repo = create_memory_store_repository(spec_version).await;
 
-        if spec_version == SpecVersionBin::V1dot0 {
+        if spec_version == SpecVersionBin::V1 {
             // Transaction logs for initial commit are a V2-only feature
             let initial_snap_id = repo.lookup_branch("main").await?;
             let result =

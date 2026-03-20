@@ -60,7 +60,7 @@ async fn measure_size(
     status: &RepoStatus,
 ) -> Result<SizeResult, Box<dyn std::error::Error>> {
     let repo_info = RepoInfo::new(
-        SpecVersionBin::V2dot0,
+        SpecVersionBin::V2,
         tags.to_vec(),
         branches.to_vec(),
         std::iter::empty::<&str>(),
@@ -86,7 +86,7 @@ async fn measure_size(
     let am = AssetManager::new_no_cache(
         Arc::clone(&stor),
         settings.clone(),
-        SpecVersionBin::V2dot0,
+        SpecVersionBin::V2,
         3,
         16,
     );

@@ -266,7 +266,7 @@ impl Repository {
             let new_snapshot = Arc::new(Snapshot::initial(spec_version)?);
             let write_snap = asset_manager_c.write_snapshot(Arc::clone(&new_snapshot));
 
-            if spec_version >= SpecVersionBin::V2dot0 {
+            if spec_version >= SpecVersionBin::V2 {
                 let empty_tx_log = TransactionLog::new(
                     &Snapshot::INITIAL_SNAPSHOT_ID,
                     &ChangeSet::for_edits(),
@@ -311,7 +311,7 @@ impl Repository {
         }
         .in_current_span();
 
-        let config_version = if spec_version >= SpecVersionBin::V2dot0 {
+        let config_version = if spec_version >= SpecVersionBin::V2 {
             // V2+ repos: config is already embedded in repo info, no config.yaml needed
             create_repo_info.await?;
             storage::VersionInfo::for_creation()
@@ -391,8 +391,7 @@ impl Repository {
         }?;
         trace!(%spec_version, "Repository version found");
 
-        let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2dot0
-        {
+        let (persisted_config, config_version) = if spec_version >= SpecVersionBin::V2 {
             // V2+ repos: config is always embedded in the repo info object.
             let (repo_info, _) = temp_am.fetch_repo_info().await?;
             (repo_info.config()?, storage::VersionInfo::for_creation())
@@ -557,7 +556,7 @@ impl Repository {
                 ..
             }) => {
                 if is_v1 {
-                    Ok(Some(SpecVersionBin::V1dot0))
+                    Ok(Some(SpecVersionBin::V1))
                 } else {
                     Ok(None)
                 }
@@ -630,7 +629,7 @@ impl Repository {
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         );
 
-        if spec_version >= SpecVersionBin::V2dot0 {
+        if spec_version >= SpecVersionBin::V2 {
             // V2+ repos: config is always embedded in the repo info object.
             let (repo_info, version) = am.fetch_repo_info().await?;
             Ok(repo_info.config()?.map(|config| (config, version)))
@@ -643,7 +642,7 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn save_config(&self) -> RepositoryResult<storage::VersionInfo> {
         // For V2+ repos, write config into the repo info object atomically
-        if self.spec_version >= SpecVersionBin::V2dot0 {
+        if self.spec_version >= SpecVersionBin::V2 {
             let config = self.config().clone();
             let num_updates = self.config.num_updates_per_repo_info_file();
             let spec_version = self.spec_version();
@@ -685,7 +684,7 @@ impl Repository {
     #[instrument(skip_all)]
     pub async fn get_metadata(&self) -> RepositoryResult<SnapshotProperties> {
         // this feature is only available in IC2
-        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
         let (repo, _) = self.asset_manager().fetch_repo_info().await?;
         Ok(repo.metadata()?)
     }
@@ -752,14 +751,14 @@ impl Repository {
 
     #[instrument(skip_all)]
     pub async fn get_status(&self) -> RepositoryResult<RepoStatus> {
-        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
         let (repo, _) = self.asset_manager().fetch_repo_info().await?;
         Ok(repo.status()?)
     }
 
     #[instrument(skip(self))]
     pub async fn set_status(&self, status: &RepoStatus) -> RepositoryResult<()> {
-        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
         if !self.storage.can_write().await? {
             return Err(RepositoryErrorKind::ReadonlyStorage(
                 "Cannot set status".to_string(),
@@ -844,7 +843,7 @@ impl Repository {
         set_to: Option<bool>,
     ) -> RepositoryResult<()> {
         // this feature is only available in IC2
-        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
 
         let num_updates = self.config.num_updates_per_repo_info_file();
         let flag_id = find_feature_flag_id(feature_flag)?;
@@ -968,8 +967,8 @@ impl Repository {
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
     {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => Ok(self.ancestry_v1(version).await?.left_stream()),
-            SpecVersionBin::V2dot0 => {
+            SpecVersionBin::V1 => Ok(self.ancestry_v1(version).await?.left_stream()),
+            SpecVersionBin::V2 => {
                 let ri = match repo_info {
                     Some(ri) => ri,
                     None => self.get_repo_info().await?.0,
@@ -1070,12 +1069,8 @@ impl Repository {
             .into());
         }
         match self.spec_version() {
-            SpecVersionBin::V1dot0 => {
-                self.create_branch_v1(branch_name, snapshot_id).await
-            }
-            SpecVersionBin::V2dot0 => {
-                self.create_branch_v2(branch_name, snapshot_id).await
-            }
+            SpecVersionBin::V1 => self.create_branch_v1(branch_name, snapshot_id).await,
+            SpecVersionBin::V2 => self.create_branch_v2(branch_name, snapshot_id).await,
         }
     }
 
@@ -1150,8 +1145,8 @@ impl Repository {
     #[instrument(skip(self))]
     pub async fn list_branches(&self) -> RepositoryResult<BTreeSet<String>> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.list_branches_v1().await,
-            SpecVersionBin::V2dot0 => self.list_branches_v2().await,
+            SpecVersionBin::V1 => self.list_branches_v1().await,
+            SpecVersionBin::V2 => self.list_branches_v2().await,
         }
     }
 
@@ -1197,8 +1192,8 @@ impl Repository {
     #[instrument(skip(self))]
     pub async fn lookup_branch(&self, branch: &str) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.lookup_branch_v1(branch).await,
-            SpecVersionBin::V2dot0 => self.lookup_branch_v2(branch, None).await,
+            SpecVersionBin::V1 => self.lookup_branch_v1(branch).await,
+            SpecVersionBin::V2 => self.lookup_branch_v2(branch, None).await,
         }
     }
 
@@ -1225,8 +1220,8 @@ impl Repository {
         snapshot_id: &SnapshotId,
     ) -> RepositoryResult<SnapshotInfo> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.lookup_snapshot_v1(snapshot_id).await,
-            SpecVersionBin::V2dot0 => self.lookup_snapshot_v2(snapshot_id).await,
+            SpecVersionBin::V1 => self.lookup_snapshot_v1(snapshot_id).await,
+            SpecVersionBin::V2 => self.lookup_snapshot_v2(snapshot_id).await,
         }
     }
 
@@ -1253,10 +1248,10 @@ impl Repository {
             .into());
         }
         match self.spec_version {
-            SpecVersionBin::V1dot0 => {
+            SpecVersionBin::V1 => {
                 self.reset_branch_v1(branch, to_snapshot_id, from_snapshot_id).await
             }
-            SpecVersionBin::V2dot0 => {
+            SpecVersionBin::V2 => {
                 self.reset_branch_v2(branch, to_snapshot_id, from_snapshot_id).await
             }
         }
@@ -1346,8 +1341,8 @@ impl Repository {
             Err(RepositoryErrorKind::CannotDeleteMain.into())
         } else {
             match self.spec_version {
-                SpecVersionBin::V1dot0 => self.delete_branch_v1(branch).await,
-                SpecVersionBin::V2dot0 => self.delete_branch_v2(branch).await,
+                SpecVersionBin::V1 => self.delete_branch_v1(branch).await,
+                SpecVersionBin::V2 => self.delete_branch_v2(branch).await,
             }
         }
     }
@@ -1396,8 +1391,8 @@ impl Repository {
             .into());
         }
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.delete_tag_v1(tag).await,
-            SpecVersionBin::V2dot0 => self.delete_tag_v2(tag).await,
+            SpecVersionBin::V1 => self.delete_tag_v1(tag).await,
+            SpecVersionBin::V2 => self.delete_tag_v2(tag).await,
         }
     }
 
@@ -1451,8 +1446,8 @@ impl Repository {
         }
 
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.create_tag_v1(tag_name, snapshot_id).await,
-            SpecVersionBin::V2dot0 => self.create_tag_v2(tag_name, snapshot_id).await,
+            SpecVersionBin::V1 => self.create_tag_v1(tag_name, snapshot_id).await,
+            SpecVersionBin::V2 => self.create_tag_v2(tag_name, snapshot_id).await,
         }
     }
 
@@ -1531,8 +1526,8 @@ impl Repository {
     #[instrument(skip(self))]
     pub async fn list_tags(&self) -> RepositoryResult<BTreeSet<String>> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.list_tags_v1().await,
-            SpecVersionBin::V2dot0 => self.list_tags_v2().await,
+            SpecVersionBin::V1 => self.list_tags_v1().await,
+            SpecVersionBin::V2 => self.list_tags_v2().await,
         }
     }
 
@@ -1572,8 +1567,8 @@ impl Repository {
     #[instrument(skip(self))]
     pub async fn lookup_tag(&self, tag: &str) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.lookup_tag_v1(tag).await,
-            SpecVersionBin::V2dot0 => self.lookup_tag_v2(tag, None).await,
+            SpecVersionBin::V1 => self.lookup_tag_v1(tag).await,
+            SpecVersionBin::V2 => self.lookup_tag_v2(tag, None).await,
         }
     }
 
@@ -1638,8 +1633,8 @@ impl Repository {
         repo_info: Option<&RepoInfo>,
     ) -> RepositoryResult<SnapshotId> {
         match self.spec_version {
-            SpecVersionBin::V1dot0 => self.resolve_version_v1(version).await,
-            SpecVersionBin::V2dot0 => {
+            SpecVersionBin::V1 => self.resolve_version_v1(version).await,
+            SpecVersionBin::V2 => {
                 let fetched;
                 let ri = match repo_info {
                     Some(ri) => ri,
@@ -1736,8 +1731,8 @@ impl Repository {
         to: &VersionInfo,
     ) -> SessionResult<Diff> {
         let repo_info = match self.spec_version {
-            SpecVersionBin::V1dot0 => None,
-            SpecVersionBin::V2dot0 => Some(self.get_repo_info().await?.0),
+            SpecVersionBin::V1 => None,
+            SpecVersionBin::V2 => Some(self.get_repo_info().await?.0),
         };
 
         let from = self.resolve_version_using(from, repo_info.as_deref()).await?;
@@ -1758,7 +1753,7 @@ impl Repository {
             .iter()
             .filter_map(|snap_info| {
                 // v1 repos don't have transaction logs for initial snapshots
-                if self.spec_version == SpecVersionBin::V1dot0 && snap_info.is_initial() {
+                if self.spec_version == SpecVersionBin::V1 && snap_info.is_initial() {
                     None
                 } else {
                     Some(
@@ -1824,7 +1819,7 @@ impl Repository {
     }
 
     async fn fail_unless_online_status(&self, error_msg: &str) -> RepositoryResult<()> {
-        if self.spec_version() >= SpecVersionBin::V2dot0 {
+        if self.spec_version() >= SpecVersionBin::V2 {
             let status = self.get_status().await?;
             if status.availability != RepoAvailability::Online {
                 return Err(RepositoryErrorKind::ReadonlyRepository(format!(
@@ -1876,7 +1871,7 @@ impl Repository {
         }
 
         // this feature is only available in IC2
-        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
 
         self.fail_unless_online_status("Cannot create rearrange session").await?;
 
@@ -2632,8 +2627,8 @@ mod tests {
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
 
         let commit_method = match spec_version {
-            SpecVersionBin::V1dot0 => CommitMethod::NewCommit,
-            SpecVersionBin::V2dot0 => CommitMethod::Amend,
+            SpecVersionBin::V1 => CommitMethod::NewCommit,
+            SpecVersionBin::V2 => CommitMethod::Amend,
         };
 
         // make sure data is correct
@@ -3790,12 +3785,12 @@ mod tests {
             None,
             Arc::clone(&storage),
             HashMap::new(),
-            Some(SpecVersionBin::V2dot0),
+            Some(SpecVersionBin::V2),
             true,
         )
         .await?;
         let repo = Repository::open(None, storage, Default::default()).await?;
-        assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2);
         Ok(())
     }
 
@@ -3806,12 +3801,12 @@ mod tests {
             None,
             Arc::clone(&storage),
             HashMap::new(),
-            Some(SpecVersionBin::V1dot0),
+            Some(SpecVersionBin::V1),
             true,
         )
         .await?;
         let repo = Repository::open(None, storage, Default::default()).await?;
-        assert_eq!(repo.spec_version(), SpecVersionBin::V1dot0);
+        assert_eq!(repo.spec_version(), SpecVersionBin::V1);
         Ok(())
     }
 
@@ -3961,7 +3956,7 @@ mod tests {
             Some(config.clone()),
             Arc::clone(&storage),
             HashMap::new(),
-            Some(SpecVersionBin::V1dot0),
+            Some(SpecVersionBin::V1),
             true,
         )
         .await?;
@@ -4022,7 +4017,7 @@ mod tests {
         migrate_1_to_2(repo, false, true, None).await.unwrap();
         let repo =
             Repository::open(Some(config), Arc::clone(&storage), HashMap::new()).await?;
-        assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2);
 
         // Rewrite manifests (now with IC2 compression enabled)
         rewrite_manifests(
