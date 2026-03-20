@@ -177,6 +177,14 @@ pub enum SessionErrorKind {
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
+pub enum ReindexMapping<'a> {
+    ForwardOnly(Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'a>),
+    ForwardBackward {
+        forward: Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'a>,
+        backward: Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'a>,
+    },
+}
+
 pub type SessionError = ICError<SessionErrorKind>;
 
 // it would be great to define this impl in error.rs, but it conflicts with the blanket
@@ -831,20 +839,20 @@ impl Session {
     #[instrument(skip(self, calculate_new_index))]
     /// Reindex chunks in an array by applying a transformation function to each chunk's coordinates.
     ///
-    /// The `calculate_new_index` function receives each chunk's current coordinates and returns:
+    /// Only existing (non-empty) chunks are visited. The forward function receives each
+    /// chunk's current coordinates and returns:
     /// - `Ok(Some(new_coords))` to move the chunk to new coordinates
-    /// - `Ok(None)` to discard the chunk
+    /// - `Ok(None)` to skip the chunk (leave it in place)
     /// - `Err(...)` to abort the operation
     ///
-    /// Source positions that are not also destinations retain their existing chunk refs.
-    pub async fn reindex_array<F>(
+    /// With `ForwardOnly`, source positions that are not also destinations retain their
+    /// existing chunk refs (stale data). With `ForwardBackward`, the backward function
+    /// is used to detect and delete stale positions, ensuring empty chunks shift correctly.
+    pub async fn reindex_array<'a>(
         &mut self,
         array_path: &Path,
-        calculate_new_index: F,
-    ) -> SessionResult<()>
-    where
-        F: Fn(&ChunkIndices) -> ReindexOperationResult,
-    {
+        calculate_new_index: ReindexMapping<'a>,
+    ) -> SessionResult<()> {
         let node = self.get_array(array_path).await?;
         #[allow(clippy::panic)]
         let shape = if let NodeData::Array { shape, .. } = node.node_data {
@@ -856,13 +864,25 @@ impl Session {
 
         let mut original_chunks = self.chunk_coordinates(array_path).await?.boxed();
         let mut change_set = ChangeSet::for_edits();
+        let mut destinations = HashSet::new();
 
+        let (forward, backwards) = match calculate_new_index {
+            ReindexMapping::ForwardOnly(forward) => (forward, None),
+            ReindexMapping::ForwardBackward { forward, backward } => {
+                (forward, Some(backward))
+            }
+        };
         // TODO: concurrency
         while let Some(old_chunk_index) = original_chunks.try_next().await? {
-            if let Some(new_chunk_index) = calculate_new_index(&old_chunk_index)? {
+            // Skip out-of-bounds indices (e.g. ghost deletes from a prior resize)
+            if !shape.valid_chunk_coord(&old_chunk_index) {
+                continue;
+            }
+            if let Some(new_chunk_index) = forward(&old_chunk_index)? {
                 let new_payload =
                     self.get_chunk_ref(array_path, &old_chunk_index).await?;
                 if shape.valid_chunk_coord(&new_chunk_index) {
+                    destinations.insert(new_chunk_index.clone());
                     change_set.set_chunk_ref(
                         node.id.clone(),
                         new_chunk_index,
@@ -876,6 +896,20 @@ impl Session {
                     .into());
                 }
             }
+            if let Some(ref backwards) = backwards {
+                if destinations.contains(&old_chunk_index) {
+                    continue;
+                }
+                let should_delete = match backwards(&old_chunk_index)? {
+                    None => true, // out of bounds
+                    Some(source) => {
+                        self.get_chunk_ref(array_path, &source).await?.is_none()
+                    } // empty source chunk or not?
+                };
+                if should_delete {
+                    change_set.set_chunk_ref(node.id.clone(), old_chunk_index, None)?
+                }
+            }
         }
         drop(original_chunks);
         self.change_set_mut()?.merge(change_set)?;
@@ -886,7 +920,7 @@ impl Session {
     /// Shift all chunks in an array by the given chunk offset.
     ///
     /// Out-of-bounds chunks are discarded. To preserve them, resize the array first
-    /// to make room. Vacated source positions retain stale references.
+    /// to make room. Vacated source positions are cleared (reset to fill value).
     #[instrument(skip(self))]
     pub async fn shift_array(
         &mut self,
@@ -899,26 +933,45 @@ impl Session {
             _ => unreachable!("get_array returned non-array"),
         };
 
-        let chunk_offset = chunk_offset.to_vec();
-        let num_chunks = num_chunks.to_vec();
-        self.reindex_array(array_path, move |index: &ChunkIndices| {
-            let new_indices: Option<Vec<u32>> = index
-                .0
-                .iter()
-                .enumerate()
-                .map(|(dim, &idx)| {
-                    let n = num_chunks[dim] as i64;
-                    // On overflow, checked_add returns None, which ? propagates
-                    // to the map closure, causing .collect() to yield None and
-                    // discarding the chunk
-                    // So, we are setting the semantics of this to
-                    // automatically discard out of bounds chunks
-                    let new_idx = (idx as i64).checked_add(chunk_offset[dim])?;
-                    if new_idx < 0 || new_idx >= n { None } else { Some(new_idx as u32) }
-                })
-                .collect();
-            Ok(new_indices.map(ChunkIndices))
-        })
+        fn make_shift_closure(
+            chunk_offset: &[i64],
+            num_chunks: &[u32],
+        ) -> Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult> {
+            let chunk_offset = chunk_offset.to_vec();
+
+            let num_chunks = num_chunks.to_vec();
+            Box::new(move |index: &ChunkIndices| {
+                let new_indices: Option<Vec<u32>> = index
+                    .0
+                    .iter()
+                    .enumerate()
+                    .map(|(dim, &idx)| {
+                        let n = num_chunks[dim] as i64;
+                        // On overflow, checked_add returns None, which ? propagates
+                        // to the map closure, causing .collect() to yield None and
+                        // discarding the chunk
+                        // So, we are setting the semantics of this to
+                        // automatically discard out of bounds chunks
+                        let new_idx = (idx as i64).checked_add(chunk_offset[dim])?;
+                        if new_idx < 0 || new_idx >= n {
+                            None
+                        } else {
+                            Some(new_idx as u32)
+                        }
+                    })
+                    .collect();
+                Ok(new_indices.map(ChunkIndices))
+            })
+        }
+        let negated_offset: Vec<i64> = chunk_offset.iter().map(|&o| -o).collect();
+
+        self.reindex_array(
+            array_path,
+            ReindexMapping::ForwardBackward {
+                forward: make_shift_closure(chunk_offset, &num_chunks),
+                backward: make_shift_closure(&negated_offset, &num_chunks),
+            },
+        )
         .await
     }
 
@@ -5497,10 +5550,7 @@ mod tests {
             )
         }
 
-        assert_eq!(
-            session.get_chunk_ref(&apath, &ChunkIndices(vec![9])).await?,
-            Some(ChunkPayload::Inline("9".into()))
-        );
+        assert_eq!(session.get_chunk_ref(&apath, &ChunkIndices(vec![9])).await?, None);
         Ok(())
     }
 
