@@ -78,9 +78,9 @@ In V2, all repository state is referenced from the unified repo info object. Eve
 
 ## Performance
 
-**Parallel flush**: Array nodes are flushed in parallel during commit (`buffer_unordered` with configurable concurrency), significantly speeding up commits with many arrays.
+**Parallel flush**: Array nodes are flushed in parallel during commit,  significantly speeding up commits with many arrays.
 
-**Optimized manifest writes**: Manifest splitting without caching splits, `Manifest::from_sorted_vec` avoids re-sorting, `get_existing_node` avoids cloning `Vec<ManifestRef>`.
+**Optimized manifest writes**: Manifest splitting without caching splits.
 
 **NodeSnapshot cache**: cache on `Snapshot` for frequently accessed nodes, reducing deserialization.
 
