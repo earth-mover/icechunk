@@ -2018,7 +2018,9 @@ mod tests {
         //let chunk_id = in_mem_storage.chunk_ids().iter().next().cloned().unwrap();
         //assert_eq!(in_mem_storage.fetch_chunk(&chunk_id, &None).await?, big_data);
 
-        let _oid = { ds.write().await.commit("commit", None).await? };
+        let _oid = {
+            ds.write().await.commit("commit").max_concurrent_nodes(8).execute().await?
+        };
 
         let ds =
             repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
@@ -2258,7 +2260,7 @@ mod tests {
         );
         assert_eq!(all_keys(&store).await.unwrap(), keys(&store, "").await.unwrap());
 
-        session.write().await.commit("foo", None).await?;
+        session.write().await.commit("foo").max_concurrent_nodes(8).execute().await?;
 
         let session = repo.writable_session("main").await?;
         let store = Store::from_session(Arc::new(RwLock::new(session))).await;
@@ -2526,8 +2528,15 @@ mod tests {
         store.set_if_not_exists("array/c/0/1/0", data.clone()).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), data);
 
-        let snapshot_id =
-            { ds.write().await.commit("initial commit", None).await.unwrap() };
+        let snapshot_id = {
+            ds.write()
+                .await
+                .commit("initial commit")
+                .max_concurrent_nodes(8)
+                .execute()
+                .await
+                .unwrap()
+        };
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds)).await;
@@ -2539,7 +2548,15 @@ mod tests {
         store.set("array/c/0/1/0", new_data.clone()).await.unwrap();
         assert_eq!(store.get("array/c/0/1/0", &ByteRange::ALL).await.unwrap(), new_data);
 
-        let new_snapshot_id = { ds.write().await.commit("update", None).await.unwrap() };
+        let new_snapshot_id = {
+            ds.write()
+                .await
+                .commit("update")
+                .max_concurrent_nodes(8)
+                .execute()
+                .await
+                .unwrap()
+        };
 
         let ds = repo.readonly_session(&VersionInfo::SnapshotId(snapshot_id)).await?;
         let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
@@ -2572,8 +2589,15 @@ mod tests {
         let ds = Arc::new(RwLock::new(repo.writable_session("dev").await?));
         let store = Store::from_session(Arc::clone(&ds)).await;
         store.set("array/c/0/1/0", new_data.clone()).await?;
-        let dev_snapshot =
-            { ds.write().await.commit("update dev branch", None).await.unwrap() };
+        let dev_snapshot = {
+            ds.write()
+                .await
+                .commit("update dev branch")
+                .max_concurrent_nodes(8)
+                .execute()
+                .await
+                .unwrap()
+        };
 
         let ds = repo.readonly_session(&VersionInfo::SnapshotId(dev_snapshot)).await?;
         let store = Store::from_session(Arc::new(RwLock::new(ds))).await;
@@ -2623,7 +2647,13 @@ mod tests {
         store.set("array/c/1/0/0", new_data.clone()).await.unwrap();
         store.set("group/array/c/1/0/0", new_data.clone()).await.unwrap();
 
-        ds.write().await.commit("initial commit", None).await.unwrap();
+        ds.write()
+            .await
+            .commit("initial commit")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
+            .unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds)).await;
@@ -2645,8 +2675,14 @@ mod tests {
             empty
         );
 
-        let empty_snap =
-            ds.write().await.commit("no content commit", None).await.unwrap();
+        let empty_snap = ds
+            .write()
+            .await
+            .commit("no content commit")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
+            .unwrap();
 
         assert_eq!(
             store.list_prefix("").await?.try_collect::<Vec<String>>().await?,
@@ -2696,7 +2732,13 @@ mod tests {
         store.set("zarr.json", meta1).await.unwrap();
         store.set("array/zarr.json", zarr_meta1.clone()).await.unwrap();
 
-        ds.write().await.commit("initial commit", None).await.unwrap();
+        ds.write()
+            .await
+            .commit("initial commit")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
+            .unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds)).await;
@@ -2705,7 +2747,13 @@ mod tests {
         store.set("zarr.json", meta2.clone()).await.unwrap();
         store.set("array/zarr.json", zarr_meta2.clone()).await.unwrap();
         assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
-        ds.write().await.commit("commit 2", None).await.unwrap();
+        ds.write()
+            .await
+            .commit("commit 2")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
+            .unwrap();
         assert_eq!(&store.get("zarr.json", &ByteRange::ALL).await.unwrap(), &meta2);
         assert_eq!(
             &store.get("array/zarr.json", &ByteRange::ALL).await.unwrap(),
@@ -2729,7 +2777,13 @@ mod tests {
             .await
             .unwrap();
 
-        ds.write().await.commit("root group", None).await.unwrap();
+        ds.write()
+            .await
+            .commit("root group")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
+            .unwrap();
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds)).await;
@@ -2742,7 +2796,8 @@ mod tests {
             .await
             .unwrap();
 
-        let prev_snap = ds.write().await.commit("group a", None).await?;
+        let prev_snap =
+            ds.write().await.commit("group a").max_concurrent_nodes(8).execute().await?;
 
         let ds = Arc::new(RwLock::new(repo.writable_session("main").await?));
         let store = Store::from_session(Arc::clone(&ds)).await;
@@ -2755,7 +2810,13 @@ mod tests {
             .await
             .unwrap();
 
-        ds.write().await.commit("group b", None).await.unwrap();
+        ds.write()
+            .await
+            .commit("group b")
+            .max_concurrent_nodes(8)
+            .execute()
+            .await
+            .unwrap();
         assert!(store.exists("a/zarr.json").await?);
         assert!(store.exists("b/zarr.json").await?);
 
@@ -2825,7 +2886,7 @@ mod tests {
             .await
             .unwrap();
 
-        ds.write().await.commit("first", None).await.unwrap();
+        ds.write().await.commit("first").max_concurrent_nodes(8).execute().await.unwrap();
 
         let store_bytes = store.as_bytes().await.unwrap();
         let store2: Store = Store::from_bytes(store_bytes).unwrap();

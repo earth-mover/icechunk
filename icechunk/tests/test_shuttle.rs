@@ -78,14 +78,9 @@ async fn mk_commit(
         )
         .await?;
     Ok(session
-        .commit_rebasing(
-            &icechunk::conflicts::detector::ConflictDetector,
-            3,
-            "write chunk",
-            None,
-            |_| async {},
-            |_| async {},
-        )
+        .commit("write chunk")
+        .rebase(&icechunk::conflicts::detector::ConflictDetector, 3)
+        .execute()
         .await?)
 }
 
@@ -101,7 +96,7 @@ async fn mk_concurrent_commits_same_branch() -> Result<(), Box<dyn Error + Send 
     session.add_array(path.clone(), shape, None, Bytes::new()).await?;
 
     let mut snaps = vec![];
-    snaps.push(session.commit("init array", None).await?);
+    snaps.push(session.commit("init array").execute().await?);
 
     repo.create_branch("feature", &snaps[0]).await?;
 
@@ -253,7 +248,7 @@ async fn execute_action(
                     Some(ChunkPayload::Inline("amend".into())),
                 )
                 .await?;
-            let new_snap = session.amend("amend commit", None, false).await?;
+            let new_snap = session.commit("amend commit").amend().execute().await?;
             ActionResult::Amend { branch, new_snap, previous_snap }
         }
         ResetBranch => {
@@ -365,7 +360,7 @@ async fn execute_concurrent_actions(
     let shape = ArrayShape::new(vec![(10, 10)]).unwrap();
     let path: Path = "/array".try_into()?;
     session.add_array(path.clone(), shape, None, Bytes::new()).await?;
-    session.commit("foo", None).await?;
+    session.commit("foo").execute().await?;
 
     setup_branches(repo.clone(), &actions, &branches).await?;
 

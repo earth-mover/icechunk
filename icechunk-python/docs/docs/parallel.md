@@ -111,7 +111,7 @@ There are three key points to keep in mind:
    These changes *must* be manually communicated back to the coordinating process, since each of the distributed processes
    are working with their own independent `Session` instance.
 2. Icechunk requires that users obtain a distributable *writable* `Session` using `Session.fork()`.
-   This creates a new `ForkSession` object that can be pickled. Sessions can be forked _only_ when they have no uncommitted changes.
+   This creates a new `ForkSession` object that can be pickled.
 3. The user *must* manually merge the `ForkSession` objects into the `Session` to create a meaningful commit.
 
 First we modify `write_task` to return the `Session`:

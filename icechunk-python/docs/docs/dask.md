@@ -47,7 +47,6 @@ zarray = group.create_array(
     dtype="f8",
     fill_value=float("nan"),
 )
-session.commit("initialize array")
 ```
 Note that the chunks in the store are a divisor of the dask chunks. This means each individual
 write task is independent, and will not conflict. It is your responsibility to ensure that such
@@ -59,7 +58,6 @@ a single merged `ForkSession`.
 ```python exec="on" session="dask" source="material-block" result="code"
 import icechunk.dask
 
-session = repo.writable_session("main")
 fork = session.fork()
 zarray = zarr.open_array(fork.store, path="array")
 remote_session = icechunk.dask.store_dask(
@@ -97,7 +95,7 @@ dataset = xr.tutorial.open_dataset(
     chunks={"time": 1}).isel(time=slice(24)
     )
 
-# `to_icechunk` takes care of handling the forking
+# Note: `to_icechunk` takes care of handling the forking
 icechunk.xarray.to_icechunk(dataset, session, mode="w")
 # remember you must commit before executing a distributed read.
 print(session.commit("wrote an Xarray dataset!"))

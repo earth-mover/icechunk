@@ -41,6 +41,7 @@ from icechunk._icechunk_python import (
     S3StaticCredentials,
     SessionMode,
     SnapshotInfo,
+    SpecVersion,
     Storage,
     StorageConcurrencySettings,
     StorageRetriesSettings,
@@ -151,6 +152,7 @@ __all__ = [
     "Session",
     "SessionMode",
     "SnapshotInfo",
+    "SpecVersion",
     "Storage",
     "StorageConcurrencySettings",
     "StorageRetriesSettings",
@@ -301,6 +303,10 @@ def upgrade_icechunk_repository(
     if not dry_run:
         repo._repository = _InvalidatedRepository()  # type: ignore[assignment]
     return Repository(new_repo)
+
+
+def supported_spec_versions() -> list[SpecVersion]:
+    return [SpecVersion.v2, SpecVersion.v1]
 
 
 ManifestSplittingConfig.from_dict = staticmethod(from_dict)  # type: ignore[method-assign]

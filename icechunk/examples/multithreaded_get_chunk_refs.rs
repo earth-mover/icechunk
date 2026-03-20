@@ -67,7 +67,7 @@ async fn do_writes(path: &std::path::Path) -> Result<(), Box<dyn std::error::Err
     let dimension_names = Some(vec!["i".into(), "j".into(), "k".into(), "l".into()]);
     let path: Path = "/array".try_into().unwrap();
     session.add_array(path.clone(), shape, dimension_names, user_data).await?;
-    session.commit("array created", None).await?;
+    session.commit("array created").max_concurrent_nodes(8).execute().await?;
 
     let session = Arc::new(RwLock::new(repo.writable_session("main").await?));
     println!("Doing {} writes, wait...", MAX_I * MAX_J * MAX_K * MAX_L);
@@ -99,7 +99,13 @@ async fn do_writes(path: &std::path::Path) -> Result<(), Box<dyn std::error::Err
     println!("Time to execute writes: {:?}", before.elapsed());
     let before = Instant::now();
     println!("Committing");
-    session.write().await.commit("array created", None).await?;
+    session
+        .write()
+        .await
+        .commit("array created")
+        .max_concurrent_nodes(8)
+        .execute()
+        .await?;
     println!("Time to execute commit: {:?}", before.elapsed());
     Ok(())
 }

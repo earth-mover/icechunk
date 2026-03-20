@@ -44,8 +44,8 @@ use pretty_assertions::assert_eq;
 
 #[template]
 #[rstest]
-#[case::v1(SpecVersionBin::V1dot0)]
-#[case::v2(SpecVersionBin::V2dot0)]
+#[case::v1(SpecVersionBin::V1)]
+#[case::v2(SpecVersionBin::V2)]
 fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
 fn minio_s3_config() -> (S3Options, S3Credentials) {
@@ -533,7 +533,7 @@ async fn test_repository_with_minio_virtual_refs(
     }
 
     // check if we can fetch the virtual chunks in multiple small requests
-    ds.commit("done", None).await?;
+    ds.commit("done").max_concurrent_nodes(8).execute().await?;
 
     let mut config = repo.config().clone();
     config.storage = Some(storage::Settings {
@@ -1224,7 +1224,14 @@ async fn test_virtual_refs_with_vcc_relative_urls(
     }
 
     // Commit and verify all_virtual_chunk_locations returns expanded absolute URLs
-    store.session().write().await.commit("vcc test", None).await?;
+    store
+        .session()
+        .write()
+        .await
+        .commit("vcc test")
+        .max_concurrent_nodes(8)
+        .execute()
+        .await?;
 
     let session =
         repo.readonly_session(&VersionInfo::BranchTipRef("main".to_string())).await?;
