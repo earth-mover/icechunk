@@ -193,6 +193,39 @@ async fn do_test_gc(
         assert_eq!(&42i8.to_be_bytes(), bytes.as_ref());
     }
 
+    // Create 5 anonymous snapshots (detached, not on any branch)
+    let mut anon_snaps = vec![];
+    for i in 0..5 {
+        let mut session = repo.writable_session("main").await?;
+        let bytes = Bytes::copy_from_slice(&(100i8 + i as i8).to_be_bytes());
+        let payload = session.get_chunk_writer()?(bytes.clone()).await?;
+        session
+            .set_chunk_ref(array_path.clone(), ChunkIndices(vec![0]), Some(payload))
+            .await?;
+        let snap_id = session.commit(format!("anon {i}")).anonymous().execute().await?;
+        anon_snaps.push(snap_id);
+    }
+
+    // expire the first two
+    let cutoff = repo.lookup_snapshot(&anon_snaps[2]).await?.flushed_at;
+    let gc_config = GCConfig::clean_all(
+        cutoff,
+        cutoff,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    let summary =
+        garbage_collect(repo.asset_manager().clone(), &gc_config, None, 100).await?;
+    assert_eq!(summary.snapshots_deleted, 2);
+
+    // The last 3 should still be accessible
+    for snap_id in &anon_snaps[2..] {
+        repo.readonly_session(&VersionInfo::SnapshotId(snap_id.clone())).await?;
+    }
+
     Ok(())
 }
 
