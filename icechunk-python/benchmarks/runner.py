@@ -71,7 +71,7 @@ class Runner:
         self.where = where
         self.save_prefix = save_prefix
         # shorten the name so `pytest-benchmark compare` is readable
-        self.clean_ref = self.ref.removeprefix("icechunk-v0.1.0-alph")
+        self.clean_ref = self.ref.removeprefix("icechunk-v")
 
     @property
     def pip_github_url(self) -> str:
@@ -208,16 +208,9 @@ class CoiledRunner(Runner):
         )
 
     def get_coiled_kwargs(self):
-        COILED_SOFTWARE = {
-            "icechunk-v0.1.0-alpha.1": "icechunk-alpha-release",
-            "icechunk-v0.1.0-alpha.12": "icechunk-alpha-12",
-        }
-
         # using the default region here
         kwargs = get_coiled_kwargs(store=self.where)
-        kwargs["software"] = COILED_SOFTWARE.get(
-            self.ref, f"icechunk-bench-{self.commit}"
-        )
+        kwargs["software"] = f"icechunk-bench-{self.commit}"
         kwargs["name"] = f"icebench-{self.commit}-{self.where}"
         kwargs["keepalive"] = "10m"
         return kwargs
@@ -228,7 +221,6 @@ class CoiledRunner(Runner):
         deps = get_benchmark_deps(f"{CURRENTDIR}/pyproject.toml").split(" ")
 
         ckwargs = self.get_coiled_kwargs()
-        # repeated calls are a no-op!
         envs = coiled.list_software_environments(workspace=ckwargs["workspace"])
         if ckwargs["software"] not in envs:
             coiled.create_software_environment(
