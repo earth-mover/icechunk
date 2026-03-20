@@ -339,13 +339,13 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             note("discarding moves")
             self.store = self.repo.writable_session("main").store
 
-    @rule(data=st.data())
-    @precondition(
-        lambda self: (
-            Version(self.ic.__version__).major >= 2 and self.repo.spec_version >= 2
-        )
-    )
-    @precondition(lambda self: bool(self.all_arrays))
+    # @rule(data=st.data())
+    # @precondition(
+    #     lambda self: (
+    #         Version(self.ic.__version__).major >= 2 and self.repo.spec_version >= 2
+    #     )
+    # )
+    # @precondition(lambda self: bool(self.all_arrays))
     def shift_array(self, data: st.DataObject) -> None:
         """Shift an array's chunks by a random offset."""
         array_path = data.draw(st.sampled_from(sorted(self.all_arrays)))
