@@ -52,7 +52,6 @@ We use [pixi](https://pixi.prefix.dev/latest/) to manage both the python and rus
         ```
         This is used e.g. in the [Readthedocs build](https://github.com/earth-mover/icechunk/blob/main/.readthedocs.yaml).
 
-
 === "uv"
 
     The easiest way to get started is with [uv](https://docs.astral.sh/uv/), which handles virtual environments and dependencies:
@@ -102,7 +101,6 @@ All build, test, and code quality tasks are managed with [`just`](https://github
 
 ### Python Development Workflow
 
-
 #### Testing
 
 === "pixi (Recommended)"
@@ -141,10 +139,35 @@ All build, test, and code quality tasks are managed with [`just`](https://github
 
     By default pytest will run tests in parallel on all available cores of your machine. If you want to specify the number of cores manually set the `-n <number-of-workers>` manually (set 0 to run the test in serial)
 
+#### Hypothesis Profiles
+
+We use [Hypothesis](https://hypothesis.readthedocs.io/) for property-based and stateful testing.
+Three profiles control how many examples and steps Hypothesis explores:
+
+| Profile   | `max_examples` | `stateful_step_count` | Used in |
+|-----------|---------------:|----------------------:|---------|
+| `default` | 100            | 50                    | Local dev |
+| `ci`      | 500            | 200                   | PR checks |
+| `nightly` | 1000           | 500                   | Nightly CI |
+
+Hypothesis auto-selects the `ci` profile on GitHub Actions (via the `CI` env var).
+Select a profile with the built-in pytest flag:
+
+```bash
+# Run with nightly settings locally
+uv run pytest --hypothesis-profile=nightly
+
+# Run with CI settings locally
+uv run pytest --hypothesis-profile=ci
+```
+
+Profiles are registered in `tests/conftest.py`. Individual tests should **not** override
+`max_examples` or `stateful_step_count` — let the profile control these so that nightly
+runs automatically explore more.
+
 !!! important
 
     The full Python test suite depends on S3 and Azure compatible object stores. See [here](#docker-setup-for-local-storage-testing) for detailed instructions. If this is not set up some tests will fail
-
 
 #### Code Quality Checks
 
@@ -157,7 +180,6 @@ All build, test, and code quality tasks are managed with [`just`](https://github
     just mypy
     just py-pre-commit
     ```
-
 
 #### Testing with Upstream Dependencies
 
@@ -263,9 +285,11 @@ Ensure you have navigated to the root directory of the cloned repo (i.e. not the
 
 For running the tests we also leverage [cargo-nextest](https://nexte.st/),
 for building it from source run
+
 ```bash
 cargo install cargo-nextest
 ```
+
 or check the [installation instructions](https://nexte.st/docs/installation/)
 for pre-built binaries or using package managers.
 
@@ -457,6 +481,7 @@ significantly faster linking (~5-10x improvement on incremental builds).
 It can be installed with `apt install mold` or `dnf install mold`
 
 Then edit your `~/.cargo/config.toml` to include these configs:
+
 ```toml
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]

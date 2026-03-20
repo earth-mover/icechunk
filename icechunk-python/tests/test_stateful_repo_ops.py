@@ -27,7 +27,7 @@ import copy
 import hypothesis.extra.numpy as npst
 import hypothesis.strategies as st
 import pytest
-from hypothesis import assume, event, note, settings
+from hypothesis import assume, event, note
 from hypothesis.stateful import (
     Bundle,
     RuleBasedStateMachine,
@@ -1174,8 +1174,4 @@ class VersionControlStateMachine(RuleBasedStateMachine):
         )
 
 
-VersionControlStateMachine.TestCase.settings = settings(
-    deadline=None,
-    # report_multiple_bugs=False,
-)
 VersionControlTest = VersionControlStateMachine.TestCase
