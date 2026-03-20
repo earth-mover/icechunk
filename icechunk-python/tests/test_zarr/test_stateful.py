@@ -468,6 +468,7 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
         pickle.loads(pickle.dumps(self.repo))
 
 
+@pytest.mark.hypothesis
 def test_zarr_hierarchy() -> None:
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(in_memory_storage())

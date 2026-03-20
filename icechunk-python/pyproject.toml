@@ -119,6 +119,7 @@ xfail_strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers", "-n", "auto"]
 markers = [
   "gpu", # need this to run the zarr tests
+  "hypothesis", # auto-applied by hypothesis to @given tests
 ]
 filterwarnings = [
   "error",
