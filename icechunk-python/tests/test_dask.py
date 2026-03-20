@@ -94,7 +94,7 @@ def test_xarray_to_icechunk_nested_pickling(
 
             to_icechunk(ds, session=session, mode="w")
             # TODO: repeated writes will fail the merge check
-            # to_icechunk(ds, session=session, mode="w")
+            to_icechunk(ds, session=session, mode="w")
             with xr.open_zarr(session.store, consolidated=False, chunks=None) as actual:
                 assert_identical(actual, ds)
             with xr.open_zarr(session.fork().store, consolidated=False) as actual:

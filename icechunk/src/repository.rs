@@ -4115,40 +4115,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio_test]
-    async fn test_concurrent_coordinated_writers()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-        let repo = Repository::create(
-            None,
-            Arc::clone(&storage),
-            HashMap::new(),
-            Some(SpecVersionBin::current()),
-            true,
-        )
-        .await?;
-
-        // Create initial structure
-        let mut session = repo.writable_session("main").await?;
-        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
-        let array_path: Path = "/array".to_string().try_into().unwrap();
-        let shape = ArrayShape::new(vec![(10, 10)]).unwrap();
-        session
-            .add_array(
-                array_path.clone(),
-                shape,
-                Some(vec!["x".into()]),
-                Bytes::from_static(b"{}"),
-            )
-            .await?;
-        session.commit("init", None).await?;
-
-        let mut s1 = repo.writable_session("main").await?;
-        let mut s2 = repo.writable_session("main").await?;
-
-        Ok(())
-    }
-
     #[cfg(feature = "object-store-fs")]
     #[tokio_test]
     async fn test_concurrent_distributer_writers_with_base_state()
@@ -4171,7 +4137,7 @@ mod tests {
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await?;
         let array_path: Path = "/array".to_string().try_into().unwrap();
-        let shape = ArrayShape::new(vec![(10, 1)]).unwrap();
+        let shape = ArrayShape::new(vec![(10, 10)]).unwrap();
         session
             .add_array(
                 array_path.clone(),
