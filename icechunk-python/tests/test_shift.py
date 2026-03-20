@@ -55,8 +55,8 @@ def test_shift_left() -> None:
 
     # First 42 elements should be shifted (8 array elements shifted left)
     np.testing.assert_equal(array[0:42], np.arange(8, 50))
-    # Last 8 elements retain stale data (original values 42-49)
-    np.testing.assert_equal(array[42:], np.arange(42, 50))
+    # Last 8 elements are now empty
+    np.testing.assert_equal(array[42:], 42)
 
 
 def test_shift_right() -> None:
@@ -76,8 +76,8 @@ def test_shift_right() -> None:
     session.shift_array("/array", (4,))
     array = cast("zarr.Array[Any]", root["array"])
 
-    # First 8 elements retain stale data (original values 0-7)
-    np.testing.assert_equal(array[0:8], np.arange(0, 8))
+    # First 8 elements now empty (fill value -1)
+    np.testing.assert_equal(array[0:8], -1)
     # Rest should be shifted data (last 8 elements of original are lost)
     np.testing.assert_equal(array[8:50], np.arange(0, 42))
 
@@ -107,7 +107,7 @@ def test_resize_then_shift_right() -> None:
     session.shift_array("/array", (4,))
 
     # First 8 elements retain stale data (original values 0-7)
-    np.testing.assert_equal(array[0:8], np.arange(0, 8))
+    np.testing.assert_equal(array[0:8], 42)
     # Original data shifted to positions 8-57
     np.testing.assert_equal(array[8:58], np.arange(50))
 
@@ -117,7 +117,7 @@ def test_resize_then_shift_right() -> None:
     session = repo.readonly_session(branch="main")
     array = zarr.open_array(store=session.store, path="array", mode="r")
     assert array.shape == (58,)
-    np.testing.assert_equal(array[0:8], np.arange(0, 8))
+    np.testing.assert_equal(array[0:8], 42)
     np.testing.assert_equal(array[8:58], np.arange(50))
 
 
@@ -143,7 +143,7 @@ def test_shift_2d() -> None:
     array = cast("zarr.Array[Any]", root["array"])
 
     # First 2 rows retain stale data (original rows 0-1)
-    np.testing.assert_equal(array[0:2, :], np.arange(8).reshape(2, 4))
+    np.testing.assert_equal(array[0:2, :], -1)
     # Rows 2-3 should have original rows 0-1 (shifted from chunk 0 to chunk 1)
     np.testing.assert_equal(array[2:4, :], np.arange(8).reshape(2, 4))
 
@@ -170,9 +170,9 @@ def test_shift_3d_mixed_offset() -> None:
     array = cast("zarr.Array[Any]", root["array"])
 
     # Verify data shifted correctly:
-    # - Dim 0: shifted left by 1 chunk (2 elements), last 2 rows have stale data
+    # - Dim 0: shifted left by 1 chunk (2 elements), last 2 rows are fill value
     # - Dim 1: unchanged
-    # - Dim 2: shifted left by 1 chunk (4 elements), last 4 columns have stale data
+    # - Dim 2: shifted left by 1 chunk (4 elements), last 4 columns are fill data
     original = np.arange(6 * 4 * 8).reshape(6, 4, 8)
 
     # Non-vacated region: [0:4, :, 0:4] should have data from [2:6, :, 4:8]
@@ -223,7 +223,7 @@ def test_shift_persists_after_commit() -> None:
     # First 6 elements should be shifted
     np.testing.assert_equal(array[0:6], np.arange(4, 10))
     # Last 4 elements retain stale data (original values 6-9)
-    np.testing.assert_equal(array[6:], np.arange(6, 10))
+    np.testing.assert_equal(array[6:], -1)
 
 
 def test_shift_with_missing_chunks() -> None:
