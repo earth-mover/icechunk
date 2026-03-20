@@ -10,7 +10,6 @@ use icechunk::{
     },
     store::{StoreError, StoreErrorKind},
 };
-use itertools::Chunk;
 use pyo3::{
     prelude::*,
     types::{PyFunction, PyType},
