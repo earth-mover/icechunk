@@ -466,7 +466,6 @@ class Session:
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
         """
-
         return self._session.amend(message, metadata, allow_empty=allow_empty)
 
     async def amend_async(
@@ -506,7 +505,6 @@ class Session:
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
         """
-
         return await self._session.amend_async(message, metadata, allow_empty=allow_empty)
 
     def flush(
@@ -531,7 +529,6 @@ class Session:
         str
             The ID of the new snapshot.
         """
-
         return self._session.flush(message, metadata)
 
     async def flush_async(

@@ -69,6 +69,7 @@ class IcechunkStore(Store, SyncMixin):
             raise ValueError(
                 "You must opt-in to pickle writable sessions in a distributed context "
                 "using Session.fork(). "
+                "See https://icechunk.io/en/stable/icechunk-python/parallel/#cooperative-distributed-writes. "
                 "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
                 "please use `icechunk.xarray.to_icechunk` instead. "
             )

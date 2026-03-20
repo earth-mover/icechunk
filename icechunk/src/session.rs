@@ -607,7 +607,7 @@ impl Session {
             return Err(SessionErrorKind::CannotForkReadOnlySession.into());
         }
         // TODO: why do we allow Clone?
-        let snap = self.clone().flush("foo", None).await?;
+        let snap = self.clone().commit("fork").anonymous().execute().await?;
 
         Ok(Session::create_writable_session(
             self.config.clone(),
@@ -1586,9 +1586,8 @@ impl Session {
         Ok(id)
     }
 
-
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip(self, solver, properties, before_rebase, allow_rebase))]
+    #[instrument(skip(self, solver, properties, before_rebase, after_rebase))]
     async fn do_commit_rebasing(
         &mut self,
         solver: &(dyn ConflictSolver + Send + Sync),

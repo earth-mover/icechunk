@@ -4146,7 +4146,7 @@ mod tests {
                 Bytes::from_static(b"{}"),
             )
             .await?;
-        session.commit("init", None).await?;
+        session.commit("init").execute().await?;
 
         async fn do_distributed_writes(
             session: &mut Session,
@@ -4178,13 +4178,13 @@ mod tests {
             .await?;
 
             // forked sessions cannot be committed.
-            assert!(s1.commit("foo", None).await.is_err());
-            assert!(s2.commit("foo", None).await.is_err());
+            assert!(s1.commit("foo").execute().await.is_err());
+            assert!(s2.commit("foo").execute().await.is_err());
 
             // merge the distributed writers' sessions
             s1.merge(s2).await?;
 
-            assert!(s1.commit("foo", None).await.is_err());
+            assert!(s1.commit("foo").execute().await.is_err());
 
             // merging a base session into a fork session is not allowed
             let base_clone = session.clone();
@@ -4194,7 +4194,8 @@ mod tests {
             ));
 
             // flushing a fork session succeeds (anonymous snapshot)
-            let flush_result = s1.clone().flush("fork-flush", None).await;
+            let flush_result =
+                s1.clone().commit("fork-flush").anonymous().execute().await;
             assert!(flush_result.is_ok());
 
             // merge that in to the base
@@ -4208,7 +4209,7 @@ mod tests {
             }
 
             // base session can be committed
-            session.commit("foo", None).await?;
+            session.commit("foo").execute().await?;
 
             for i in 0..2 {
                 let reader = session

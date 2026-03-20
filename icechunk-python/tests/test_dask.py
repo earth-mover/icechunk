@@ -37,23 +37,6 @@ def test_store_dask(any_spec_version: int | None) -> None:
             dtype="f8",
             fill_value=float("nan"),
         )
-        # can't fork a dirty session
-        # with dask.config.set(scheduler="processes"):
-        #     with pytest.raises(ValueError):
-        #         store_dask(sources=[dask_array], targets=[zarray])
-
-        # session = repo.writable_session("main")
-        # Can't fork a dirty session
-        # with pytest.raises(ValueError):
-        #     fork = session.fork()
-
-        # session.commit("i am forced to commit to make progress")
-        # session = repo.writable_session("main")
-
-        # Can we enable merging for non ForkSession?
-        # zarray = zarr.open_array(session.store, path="array")
-        # with dask.config.set(scheduler="processes"):
-        #     store_dask(sources=[dask_array], targets=[zarray])
 
         fork = session.fork()
         zarray = zarr.open_array(fork.store, path="array")

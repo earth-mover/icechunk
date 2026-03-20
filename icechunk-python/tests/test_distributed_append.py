@@ -117,8 +117,6 @@ def do_test(scheduler: str, spec_version: int | None = None) -> None:
             y_append_data, session=session, append_dim="y", split_every=SPLIT_EVERY
         )
     plot()
-    print("finished writing")
-    print("-===============")
     assert (xr.open_zarr(session.store, consolidated=False)["a"] >= 1).all()
 
 
