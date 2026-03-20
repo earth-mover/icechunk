@@ -169,6 +169,8 @@ pub enum SessionErrorKind {
     NoAmendForInitialCommit,
     #[error("failed to create manifest from chunk stream")]
     ManifestCreationError(#[from] Box<SessionError>),
+    #[error("failed to merge sessions: {0}")]
+    SessionMerge(String),
     #[error("byte range {request:?} is out of bounds for chunk of length {chunk_length}")]
     InvalidByteRange { request: ByteRange, chunk_length: u64 },
     #[error("invalid commit configuration: {reason}")]
