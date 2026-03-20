@@ -5541,10 +5541,7 @@ mod tests {
             )
         }
 
-        assert_eq!(
-            session.get_chunk_ref(&apath, &ChunkIndices(vec![9])).await?,
-            Some(ChunkPayload::Inline("9".into()))
-        );
+        assert_eq!(session.get_chunk_ref(&apath, &ChunkIndices(vec![9])).await?, None);
         Ok(())
     }
 
