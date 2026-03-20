@@ -35,7 +35,7 @@ repo_ops_mod.IcechunkError = (ic.IcechunkError, ic_v1.IcechunkError)  # type: ig
 
 
 import hypothesis.strategies as st
-from hypothesis import note, settings
+from hypothesis import note
 from hypothesis.stateful import initialize, precondition, rule, run_state_machine_as_test
 
 from tests.test_stateful_repo_ops import (
@@ -162,7 +162,4 @@ def test_two_actors_zarr_cross_version() -> None:
     def mk_test_instance_sync() -> CrossVersionTwoActorZarrHierarchyStateMachine:
         return CrossVersionTwoActorZarrHierarchyStateMachine(tempfile.mkdtemp())
 
-    run_state_machine_as_test(  # type: ignore[no-untyped-call]
-        mk_test_instance_sync,
-        settings=settings(max_examples=150, stateful_step_count=100),
-    )
+    run_state_machine_as_test(mk_test_instance_sync)  # type: ignore[no-untyped-call]
