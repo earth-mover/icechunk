@@ -52,8 +52,8 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
         self.serial = self.repo.writable_session("main")
         self.parallel = self.repo.writable_session("parallel")
 
-        self.fork1: ic.Session | None = None
-        self.fork2: ic.Session | None = None
+        self.fork1: ic.Session | ic.ForkSession | None = None
+        self.fork2: ic.Session | ic.ForkSession | None = None
 
         self.all_arrays: set[str] = set()
 
@@ -193,12 +193,12 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
         assert self.fork2 is not None
         if two_to_one:
             note("merging forks to base session, merging 2→1→parallel")
-            self.fork1.merge(self.fork2)
-            self.parallel.merge(self.fork1)
+            self.fork1.merge(self.fork2)  # type: ignore[arg-type]
+            self.parallel.merge(self.fork1)  # type: ignore[arg-type]
         else:
             note("merging forks to base session, merging 1→2→parallel")
-            self.fork2.merge(self.fork1)
-            self.parallel.merge(self.fork2)
+            self.fork2.merge(self.fork1)  # type: ignore[arg-type]
+            self.parallel.merge(self.fork2)  # type: ignore[arg-type]
 
         self.fork1 = None
         self.fork2 = None
@@ -229,7 +229,7 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
             p = zarr.open_array(path=path, store=self.parallel.store)
             npt.assert_array_equal(s, p)
 
-    def teardown(self):
+    def teardown(self) -> None:
         ic.set_logs_filter(None)
 
 
