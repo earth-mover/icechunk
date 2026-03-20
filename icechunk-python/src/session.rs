@@ -5,7 +5,7 @@ use futures::{StreamExt, TryStreamExt};
 use icechunk::{
     Store,
     format::{ChunkIndices, Path, manifest::ChunkPayload},
-    session::{Session, SessionErrorKind, SessionMode},
+    session::{ReindexMapping, Session, SessionErrorKind, SessionMode},
     store::{StoreError, StoreErrorKind},
 };
 use pyo3::{
@@ -208,6 +208,7 @@ impl PySession {
         py: Python<'py>,
         array_path: String,
         shift_chunk: Bound<'py, PyFunction>,
+        //TODO: add a backwards shift as an option
     ) -> PyResult<()> {
         let array_path = Path::new(array_path.as_str())
             .map_err(|e| StoreError::from(StoreErrorKind::PathError(e)))
@@ -235,7 +236,10 @@ impl PySession {
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let mut session = self.0.write().await;
             session
-                .reindex_array(&array_path, shift_chunk)
+                .reindex_array(
+                    &array_path,
+                    ReindexMapping::ForwardOnly(Box::new(shift_chunk)),
+                )
                 .await
                 .map_err(PyIcechunkStoreError::SessionError)?;
             Ok(())
