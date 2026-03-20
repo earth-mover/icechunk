@@ -106,8 +106,8 @@ def test_reindex_with_missing_chunks() -> None:
     session.reindex_array("/data", forward=fwd)
     np.testing.assert_equal(arr[:], [1, 1, 3])
 
-    # Forward + backward: index 0 is correctly cleared
+    # Forward + backward: stale positions are cleared
     session = repo.writable_session("main")
     arr = zarr.open_array(session.store, path="data")
     session.reindex_array("/data", forward=fwd, backward=bwd)
-    np.testing.assert_equal(arr[:], [-1, 1, 3])
+    np.testing.assert_equal(arr[:], [-1, 1, -1])
