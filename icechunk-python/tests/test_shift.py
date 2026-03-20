@@ -217,3 +217,27 @@ def test_shift_with_missing_chunks() -> None:
     session.shift_array("/data", (1,))
 
     np.testing.assert_equal(arr[:], [-1, -1, 2])
+
+
+def test_resize_then_shift_same_session() -> None:
+    """Resize records out-of-bounds deletes in the change set; shift must skip them."""
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    arr = zarr.open_array(
+        session.store,
+        path="d",
+        mode="w",
+        shape=(3,),
+        chunks=(1,),
+        dtype="f4",
+        fill_value=-1,
+    )
+    arr[:] = [1.0, 2.0, 3.0]
+    session.commit("init")
+
+    session = repo.writable_session("main")
+    arr = zarr.open_array(session.store, path="d")
+    arr.resize((2,))
+    session.shift_array("/d", (-1,))
+    arr = zarr.open_array(session.store, path="d")
+    np.testing.assert_equal(arr[:], [2.0, -1.0])

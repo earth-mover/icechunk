@@ -873,6 +873,10 @@ impl Session {
         };
         // TODO: concurrency
         while let Some(old_chunk_index) = original_chunks.try_next().await? {
+            // Skip out-of-bounds indices (e.g. ghost deletes from a prior resize)
+            if !shape.valid_chunk_coord(&old_chunk_index) {
+                continue;
+            }
             if let Some(new_chunk_index) = forward(&old_chunk_index)? {
                 let new_payload =
                     self.get_chunk_ref(array_path, &old_chunk_index).await?;
