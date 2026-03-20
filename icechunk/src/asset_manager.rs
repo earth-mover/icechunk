@@ -491,7 +491,7 @@ impl AssetManager {
     pub async fn fetch_repo_info(
         &self,
     ) -> RepositoryResult<(Arc<RepoInfo>, VersionInfo)> {
-        self.fail_unless_spec_at_least(SpecVersionBin::V2dot0)?;
+        self.fail_unless_spec_at_least(SpecVersionBin::V2)?;
 
         let repo_cache = if self.use_repo_info_cache {
             // Cloning here so lock is immediately released

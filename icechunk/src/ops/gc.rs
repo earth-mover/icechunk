@@ -333,7 +333,7 @@ pub async fn garbage_collect(
     }
 
     // Check repo status (only available on IC2+)
-    if asset_manager.spec_version() >= SpecVersionBin::V2dot0 {
+    if asset_manager.spec_version() >= SpecVersionBin::V2 {
         let (repo_info, _) = asset_manager.fetch_repo_info().await?;
         if repo_info.status()?.availability != RepoAvailability::Online {
             return Err(GCError::Repository(
@@ -410,7 +410,7 @@ async fn garbage_collect_one_attempt(
     let mut non_pointed_but_new = HashSet::new();
 
     let mut all_snaps = HashSet::new();
-    let repo_info = if asset_manager.spec_version() > SpecVersionBin::V1dot0 {
+    let repo_info = if asset_manager.spec_version() > SpecVersionBin::V1 {
         let (ri, _) = asset_manager.fetch_repo_info().await?;
         non_pointed_but_new = ri
             .all_snapshots()?
@@ -798,7 +798,7 @@ pub async fn expire(
     }
 
     // Check repo status (only available on IC2+)
-    if asset_manager.spec_version() >= SpecVersionBin::V2dot0 {
+    if asset_manager.spec_version() >= SpecVersionBin::V2 {
         let (repo_info, _) = asset_manager.fetch_repo_info().await?;
         if repo_info.status()?.availability != RepoAvailability::Online {
             return Err(GCError::Repository(
@@ -811,7 +811,7 @@ pub async fn expire(
     }
 
     match asset_manager.spec_version() {
-        SpecVersionBin::V1dot0 => {
+        SpecVersionBin::V1 => {
             super::expiration_v1::expire(
                 asset_manager,
                 older_than,
@@ -820,7 +820,7 @@ pub async fn expire(
             )
             .await
         }
-        SpecVersionBin::V2dot0 => {
+        SpecVersionBin::V2 => {
             expire_v2(
                 asset_manager,
                 older_than,

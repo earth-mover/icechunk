@@ -56,7 +56,7 @@ pub fn node_paths() -> impl Strategy<Value = Path> {
 }
 
 pub fn spec_version() -> BoxedStrategy<SpecVersionBin> {
-    prop_oneof![Just(SpecVersionBin::V2dot0), Just(SpecVersionBin::V1dot0)].boxed()
+    prop_oneof![Just(SpecVersionBin::V2), Just(SpecVersionBin::V1)].boxed()
 }
 
 prop_compose! {
