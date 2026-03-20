@@ -152,7 +152,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
             self.store.session.commit("foo")
 
         self.store = self.repo.writable_session("main").store
-        self.model.new_session()
 
         lsafter = sorted(self._sync_iter(self.store.list_prefix("")))
         get_after = self._sync(self.store.get(path, prototype=PROTOTYPE))
@@ -377,7 +376,6 @@ class ModifiedZarrHierarchyStateMachine(ZarrHierarchyStateMachine):
 
         self.repo = self.actor.open(self.storage)
         self.store = self.repo.writable_session("main").store
-        self.model.new_session()
 
     @rule()
     def pickle_objects(self) -> None:
