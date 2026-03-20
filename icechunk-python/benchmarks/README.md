@@ -147,7 +147,7 @@ Datasets are written to `{bucket}/benchmarks/{REF}_{SHORTCOMMIT}/` where the buc
 
 Usage:
 ``` sh
-python benchmarks/runner.py icechunk-v0.1.0-alpha.12 main
+python benchmarks/runner.py v0.1.2 main
 ```
 This will
 1. setup a virtual env with the icechunk version
@@ -214,9 +214,9 @@ pytest-benchmark list
 which for me prints
 ```
 ...
-/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0019_icechunk-v0.1.0-alpha.12.json
-/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0020_icechunk-v0.1.0-alpha.8.json
-/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0021_icechunk-v0.1.0-alpha.10.json
+/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0019_v0.1.2.json
+/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0020_v0.1.3.json
+/Users/deepak/repos/icechunk/icechunk-python/.benchmarks/Darwin-CPython-3.12-64bit/0021_main.json
 ```
 
 Note the 4 digit ID of the runs you want. Then
