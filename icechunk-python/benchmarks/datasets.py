@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Literal, Self, TypeAlias
 
-import fsspec
 import numpy as np
+from object_store import ObjectStore
 
 import icechunk as ic
 import icechunk.xarray
@@ -129,22 +129,30 @@ class StorageConfig:
         #     return {"AWS_ENDPOINT_URL_IAM": "https://fly.iam.storage.tigris.dev"}
         return {}
 
-    @property
-    def protocol(self) -> str:
-        if self.store in ("s3", "tigris"):
-            protocol = "s3"
-        elif self.store == "gcs":
-            protocol = "gcs"
-        else:
-            protocol = "file"
-        return protocol
+    _SCHEMES = {"s3": "s3", "s3_ob": "s3", "gcs": "gs", "tigris": "s3", "r2": "s3"}
 
-    def clear_uri(self) -> str:
-        """URI to clear when re-creating data from scratch."""
+    def clear_prefix(self) -> None:
+        """Delete all objects under this prefix using object_store."""
+        import shutil
+
         if self.store == "local":
-            return f"{self.protocol}://{self.path}"
-        else:
-            return f"{self.protocol}://{self.bucket}/{self.prefix}"
+            shutil.rmtree(self.path, ignore_errors=True)
+            return
+
+        scheme = self._SCHEMES.get(self.store)
+        if scheme is None:
+            warnings.warn(
+                f"Clearing not supported for store {self.store!r}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+
+        store_url = f"{scheme}://{self.bucket}"
+        store = ObjectStore(store_url)
+        objects = store.list(prefix=self.prefix)
+        for obj in objects:
+            store.delete(obj["path"])
 
     def get_coiled_kwargs(self) -> dict[str, str]:
         assert self.store is not None, (
@@ -174,22 +182,7 @@ class Dataset:
         self, clear: bool = False, config: ic.RepositoryConfig | None = None
     ) -> ic.Repository:
         if clear:
-            clear_uri = self.storage_config.clear_uri()
-            if clear_uri is None:
-                raise NotImplementedError
-            if self.storage_config.protocol not in ["file", "s3", "gcs"]:
-                warnings.warn(
-                    f"Only clearing of GCS, S3-compatible URIs supported at the moment. Received {clear_uri!r}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-            else:
-                fs = fsspec.filesystem(self.storage_config.protocol)
-                try:
-                    logger.info(f"Clearing prefix: {clear_uri!r}")
-                    fs.rm(clear_uri, recursive=True)
-                except FileNotFoundError:
-                    pass
+            self.storage_config.clear_prefix()
         logger.info(repr(self.storage))
         return ic.Repository.create(self.storage, config=config)
 

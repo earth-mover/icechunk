@@ -54,8 +54,6 @@ test = [
 benchmark = [
   "boto3",
   "object-store-python",
-  "s3fs",
-  "gcsfs",
   "pytest-benchmark[histogram]",
   "h5netcdf",
   "pooch",
