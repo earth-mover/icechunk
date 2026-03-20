@@ -470,6 +470,9 @@ pub struct Session {
 }
 
 impl Session {
+    /// Create a read-only session pinned to a specific snapshot.
+    ///
+    /// The returned session can read chunks and metadata but cannot write or commit.
     pub fn create_readonly_session(
         config: RepositoryConfig,
         storage_settings: storage::Settings,
@@ -492,6 +495,14 @@ impl Session {
         }
     }
 
+    /// Create a writable session for editing chunks and metadata.
+    ///
+    /// Changes are accumulated in a [`ChangeSet`] and can be committed if the
+    /// session is attached to a branch.
+    /// Writable sessions can be created on top of anonymous snapshots (when `branch_name` is `None`).
+    /// Such sessions can accept all modifications (other than move) but cannot be committed.
+    /// They should be merged back with a base writable Session (show `branch_name` is `Some`)
+    /// using [`Session::merge`], which can then be committed.
     #[allow(clippy::too_many_arguments)]
     pub fn create_writable_session(
         config: RepositoryConfig,
@@ -517,6 +528,9 @@ impl Session {
         }
     }
 
+    /// Create a session for rearranging nodes (moves/renames).
+    ///
+    /// A branch name is required and modifications other than move are disallowed..
     #[allow(clippy::too_many_arguments)]
     pub fn create_rearrange_session(
         config: RepositoryConfig,
