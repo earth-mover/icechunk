@@ -830,6 +830,7 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
                 })
             },
         );
+        }
     }
     group.finish();
 }
