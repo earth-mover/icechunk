@@ -391,6 +391,8 @@ pub mod format_constants {
 
     use serde::{Deserialize, Serialize};
 
+    use super::IcechunkFormatErrorKind;
+
     /// Binary file type identifier in the file header.
     #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -439,16 +441,21 @@ pub mod format_constants {
         V1 = 1u8,
         #[default]
         V2 = 2u8,
+        // When adding new versions here, don't forget to update the
+        // PySpecVersion enum in icechunk-python/src/repository.rs too!
     }
 
     impl TryFrom<u8> for SpecVersionBin {
-        type Error = String;
+        type Error = IcechunkFormatErrorKind;
 
         fn try_from(value: u8) -> Result<Self, Self::Error> {
             match value {
                 n if n == SpecVersionBin::V1 as u8 => Ok(SpecVersionBin::V1),
                 n if n == SpecVersionBin::V2 as u8 => Ok(SpecVersionBin::V2),
-                n => Err(format!("Bad spec version code: {n}")),
+                n => Err(IcechunkFormatErrorKind::InvalidSpecVersion {
+                    found: n,
+                    max_supported: Self::current() as u8,
+                }),
             }
         }
     }
@@ -671,11 +678,8 @@ mod tests {
         let future_version: u8 = 3;
         let result = SpecVersionBin::try_from(future_version);
         assert!(result.is_err());
+        let err = result.unwrap_err();
 
-        let err = IcechunkFormatErrorKind::InvalidSpecVersion {
-            found: future_version,
-            max_supported: SpecVersionBin::current() as u8,
-        };
         let msg = err.to_string();
         assert!(
             msg.contains("format version 3"),
