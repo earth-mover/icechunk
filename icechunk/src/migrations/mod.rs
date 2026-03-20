@@ -23,7 +23,7 @@ use crate::{
         CONFIG_FILE_PATH, IcechunkFormatError, IcechunkFormatErrorKind,
         REPO_INFO_FILE_PATH, SnapshotId, V1_REFS_FILE_PATH,
         format_constants::SpecVersionBin,
-        repo_info::{RepoInfo, UpdateInfo, UpdateType},
+        repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateInfo, UpdateType},
         snapshot::SnapshotInfo,
     },
     refs::{
@@ -107,11 +107,11 @@ impl From<StorageError> for MigrationError {
 }
 
 async fn validate_start(repo: &Repository) -> MigrationResult<()> {
-    if repo.spec_version() != SpecVersionBin::V1dot0 {
+    if repo.spec_version() != SpecVersionBin::V1 {
         error!("Target repository must be a 1.X Icechunk repository");
         return Err(MigrationErrorKind::InvalidRepositoryMigration {
-            expected: SpecVersionBin::V1dot0,
-            target: SpecVersionBin::V2dot0,
+            expected: SpecVersionBin::V1,
+            target: SpecVersionBin::V2,
             actual: repo.spec_version(),
         }
         .into());
@@ -270,7 +270,7 @@ async fn do_migrate(
 ) -> MigrationResult<()> {
     info!("Writing new repository info file");
     let new_asset_manager =
-        repo.asset_manager().clone_for_spec_version(SpecVersionBin::V2dot0);
+        repo.asset_manager().clone_for_spec_version(SpecVersionBin::V2);
     let new_version_info = new_asset_manager.create_repo_info(repo_info).await?;
 
     info!(version=?new_version_info, "Written repository info file");
@@ -293,7 +293,7 @@ async fn do_migrate(
     };
 
     let new_spec_version = migrated.spec_version();
-    if new_spec_version != SpecVersionBin::V2dot0 {
+    if new_spec_version != SpecVersionBin::V2 {
         error!("Unknown error during migration. Repository doesn't open as 2.0");
         delete_repo_info(repo).await?;
         error!("Migration failed");
@@ -323,7 +323,7 @@ async fn do_migrate(
         };
 
         let new_spec_version = migrated.spec_version();
-        if new_spec_version != SpecVersionBin::V2dot0 {
+        if new_spec_version != SpecVersionBin::V2 {
             error!("Unknown error during migration. Repository doesn't open as 2.0");
             delete_repo_info(repo).await?;
             error!("Migration failed");
@@ -511,8 +511,13 @@ pub async fn migrate_1_to_2(
             Box::new(e),
         ))
     })?;
+
+    // main_ancestry is tip-to-root, so last element is the root
+    let root = &main_ancestry[main_ancestry.len() - 1];
+    let root_time = root.flushed_at;
+
     let repo_info = Arc::new(RepoInfo::new(
-        SpecVersionBin::V2dot0,
+        SpecVersionBin::V2,
         tags,
         branches,
         deleted_tag_names.iter().copied(),
@@ -520,8 +525,8 @@ pub async fn migrate_1_to_2(
         &Default::default(),
         UpdateInfo {
             update_type: UpdateType::RepoMigratedUpdate {
-                from_version: SpecVersionBin::V1dot0,
-                to_version: SpecVersionBin::V2dot0,
+                from_version: SpecVersionBin::V1,
+                to_version: SpecVersionBin::V2,
             },
             update_time: Utc::now(),
             previous_updates,
@@ -532,6 +537,11 @@ pub async fn migrate_1_to_2(
         Some(config_bytes.as_slice()),
         None::<std::iter::Empty<u16>>,
         None::<std::iter::Empty<u16>>,
+        &RepoStatus {
+            availability: RepoAvailability::Online,
+            set_at: root_time,
+            limited_availability_reason: None,
+        },
     )?);
 
     if dry_run {
@@ -557,20 +567,43 @@ async fn delete_repo_info(repo: &Repository) -> MigrationResult<()> {
     Ok(())
 }
 
+const V1_DEFAULT_BRANCH_KEY: &str = "branch.main/ref.json";
+
+/// Delete V1 references during migration.
+///
+/// We delete the `main` branch first to ensure old IC1 clients fail fast
+/// with a "branch not found" error instead of potentially making writes
+/// that would be lost when the rest of the V1 refs are cleaned up.
+/// This minimizes the window where the repo appears as both valid V1 and V2.
 async fn delete_v1_refs(repo: &Repository) -> MigrationResult<()> {
     info!("Deleting V1 references");
-    let all =
-        repo.storage().list_objects(repo.storage_settings(), V1_REFS_FILE_PATH).await?;
-    let delete_keys = all.map_ok(|li| (li.id, 0)).boxed().try_collect::<Vec<_>>().await?;
 
+    // Delete the main branch first to break IC1 clients immediately
     repo.storage()
         .delete_objects(
             repo.storage_settings(),
             V1_REFS_FILE_PATH,
-            stream::iter(delete_keys).boxed(),
+            stream::iter([(V1_DEFAULT_BRANCH_KEY.to_string(), 0)]).boxed(),
         )
         .await?;
-    info!("V1 references deleted, verifying");
+    info!("V1 main branch reference deleted");
+
+    // Then delete remaining V1 refs, as long as main is gone the repo is broken for v1 usage
+    let all =
+        repo.storage().list_objects(repo.storage_settings(), V1_REFS_FILE_PATH).await?;
+    let delete_keys = all.map_ok(|li| (li.id, 0)).boxed().try_collect::<Vec<_>>().await?;
+
+    if !delete_keys.is_empty() {
+        repo.storage()
+            .delete_objects(
+                repo.storage_settings(),
+                V1_REFS_FILE_PATH,
+                stream::iter(delete_keys).boxed(),
+            )
+            .await?;
+    }
+
+    info!("All V1 references deleted, verifying");
     let remaining = repo
         .storage()
         .list_objects(repo.storage_settings(), V1_REFS_FILE_PATH)
@@ -657,7 +690,9 @@ mod tests {
     use icechunk_macros::tokio_test;
     use tempfile::{TempDir, tempdir};
 
-    use crate::{new_local_filesystem_storage, refs};
+    use futures::TryStreamExt as _;
+
+    use crate::{RepositoryConfig, new_local_filesystem_storage, refs};
 
     use super::*;
 
@@ -739,8 +774,8 @@ mod tests {
         assert_eq!(
             *first_update,
             UpdateType::RepoMigratedUpdate {
-                from_version: SpecVersionBin::V1dot0,
-                to_version: SpecVersionBin::V2dot0,
+                from_version: SpecVersionBin::V1,
+                to_version: SpecVersionBin::V2,
             }
         );
 
@@ -796,10 +831,10 @@ mod tests {
         let deleted_tag_snap_id = ops_log
             .iter()
             .find_map(|(_, ut, _)| {
-                if let UpdateType::TagDeletedUpdate { name, previous_snap_id } = ut {
-                    if name == "deleted" {
-                        return Some(previous_snap_id.clone());
-                    }
+                if let UpdateType::TagDeletedUpdate { name, previous_snap_id } = ut
+                    && name == "deleted"
+                {
+                    return Some(previous_snap_id.clone());
                 }
                 None
             })
@@ -859,7 +894,7 @@ mod tests {
         migrate_1_to_2(repo, true, true, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
 
-        assert_eq!(repo.spec_version(), SpecVersionBin::V1dot0);
+        assert_eq!(repo.spec_version(), SpecVersionBin::V1);
         Ok(())
     }
 
@@ -873,12 +908,76 @@ mod tests {
         migrate_1_to_2(repo, false, false, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
 
-        assert_eq!(repo.spec_version(), SpecVersionBin::V2dot0);
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2);
 
         assert_eq!(
             refs::list_branches(repo.storage().as_ref(), repo.storage_settings()).await?,
             ["main".to_string(), "my-branch".to_string()].into()
         );
+        Ok(())
+    }
+
+    #[tokio_test]
+    /// Verify the ops log chain isn't broken when post-migration writes overflow
+    /// synthetic (backup_path=None) entries.
+    async fn test_ops_log_chain_after_migration() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let (repo, _tmp) = prepare_v1_repo().await?;
+        let storage = repo.storage().clone();
+
+        migrate_1_to_2(repo, false, true, None).await.unwrap();
+
+        // Reopen with a very small num_updates_per_file to force overflow
+        // of synthetic migration entries immediately.
+        let config = RepositoryConfig {
+            num_updates_per_repo_info_file: Some(3),
+            ..Default::default()
+        };
+        let repo =
+            Repository::open(Some(config), storage.clone(), Default::default()).await?;
+
+        // Record initial ops log length after migration
+        let (stream, _, _) = repo.ops_log().await?;
+        let ops: Vec<_> = stream.try_collect().await?;
+        let mut expected_len = ops.len();
+
+        // The last entry must be RepoInitializedUpdate
+        assert!(
+            matches!(ops.last().unwrap().1, UpdateType::RepoInitializedUpdate),
+            "ops log chain broken after migration: last entry is not RepoInitializedUpdate"
+        );
+
+        let snap_id = repo.lookup_branch("main").await?;
+
+        for i in 0..5 {
+            repo.create_tag(&format!("post-migration-tag-{i}"), &snap_id).await?;
+            expected_len += 1;
+
+            let (stream, _, _) = repo.ops_log().await?;
+            let ops: Vec<_> = stream.try_collect().await?;
+
+            assert_eq!(
+                ops.len(),
+                expected_len,
+                "ops log length mismatch on iteration {i}"
+            );
+
+            assert!(
+                matches!(ops.last().unwrap().1, UpdateType::RepoInitializedUpdate),
+                "ops log chain broken on iteration {i}: last entry is not RepoInitializedUpdate"
+            );
+
+            // Verify timestamps are strictly decreasing
+            for window in ops.windows(2) {
+                let (time_a, _, _) = &window[0];
+                let (time_b, _, _) = &window[1];
+                assert!(
+                    time_a > time_b,
+                    "ops log timestamps must be strictly decreasing: {time_a} should be > {time_b}"
+                );
+            }
+        }
+
         Ok(())
     }
 }

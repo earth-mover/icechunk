@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt, TryStream, TryStreamExt, stream};
 use itertools::Itertools;
 use tokio::task::{self};
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, error, info, instrument, trace};
 
 use crate::{
     StorageError,
@@ -22,7 +22,7 @@ use crate::{
         ChunkId, FileTypeTag, IcechunkFormatError, ManifestId, ObjectId, SnapshotId,
         format_constants::SpecVersionBin,
         manifest::{ChunkPayload, Manifest},
-        repo_info::{RepoInfo, UpdateInfo, UpdateType},
+        repo_info::{RepoAvailability, RepoInfo, UpdateInfo, UpdateType},
         snapshot::{ManifestFileInfo, Snapshot, SnapshotInfo},
     },
     ops::pointed_snapshots,
@@ -332,6 +332,19 @@ pub async fn garbage_collect(
         ));
     }
 
+    // Check repo status (only available on IC2+)
+    if asset_manager.spec_version() >= SpecVersionBin::V2 {
+        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+        if repo_info.status()?.availability != RepoAvailability::Online {
+            return Err(GCError::Repository(
+                RepositoryErrorKind::ReadonlyRepository(
+                    "Cannot garbage collect".to_string(),
+                )
+                .into(),
+            ));
+        }
+    }
+
     let default_retry_config = RepoUpdateRetryConfig::default();
     let retry_config = repo_update_retries.unwrap_or(&default_retry_config).retries();
 
@@ -397,7 +410,7 @@ async fn garbage_collect_one_attempt(
     let mut non_pointed_but_new = HashSet::new();
 
     let mut all_snaps = HashSet::new();
-    let repo_info = if asset_manager.spec_version() > SpecVersionBin::V1dot0 {
+    let repo_info = if asset_manager.spec_version() > SpecVersionBin::V1 {
         let (ri, _) = asset_manager.fetch_repo_info().await?;
         non_pointed_but_new = ri
             .all_snapshots()?
@@ -592,6 +605,7 @@ async fn delete_snapshots_from_repo_info(
             config_bytes.as_deref(),
             repo_info.enabled_feature_flags()?,
             repo_info.disabled_feature_flags()?,
+            &repo_info.status()?,
         )?;
 
         Ok(Arc::new(new_repo_info))
@@ -628,7 +642,7 @@ pub async fn gc_chunks(
     let to_delete = asset_manager
         .list_chunks()
         .await?
-        // TODO: don't skip over errors
+        .inspect_err(|e| error!("Deleting chunks: {e}"))
         .filter_map(move |chunk| {
             ready(chunk.ok().and_then(|chunk| {
                 if config.must_delete_chunk(&chunk) && !keep_ids.contains(&chunk.id) {
@@ -656,7 +670,7 @@ pub async fn gc_manifests(
     let to_delete = asset_manager
         .list_manifests()
         .await?
-        // TODO: don't skip over errors
+        .inspect_err(|e| error!("Deleting manifests: {e}"))
         .filter_map(move |manifest| {
             ready(manifest.ok().and_then(|manifest| {
                 if config.must_delete_manifest(&manifest)
@@ -687,7 +701,7 @@ pub async fn gc_snapshots(
     let to_delete = asset_manager
         .list_snapshots()
         .await?
-        // TODO: don't skip over errors
+        .inspect_err(|e| error!("Deleting snapshots: {e}"))
         .filter_map(move |snapshot| {
             ready(snapshot.ok().and_then(|snapshot| {
                 if config.must_delete_snapshot(&snapshot)
@@ -718,7 +732,7 @@ pub async fn gc_transaction_logs(
     let to_delete = asset_manager
         .list_transaction_logs()
         .await?
-        // TODO: don't skip over errors
+        .inspect_err(|e| error!("Deleting transaction logs: {e}"))
         .filter_map(move |tx| {
             ready(tx.ok().and_then(|tx| {
                 if config.must_delete_transaction_log(&tx) && !keep_ids.contains(&tx.id) {
@@ -783,8 +797,21 @@ pub async fn expire(
         ));
     }
 
+    // Check repo status (only available on IC2+)
+    if asset_manager.spec_version() >= SpecVersionBin::V2 {
+        let (repo_info, _) = asset_manager.fetch_repo_info().await?;
+        if repo_info.status()?.availability != RepoAvailability::Online {
+            return Err(GCError::Repository(
+                RepositoryErrorKind::ReadonlyRepository(
+                    "Cannot garbage collect".to_string(),
+                )
+                .into(),
+            ));
+        }
+    }
+
     match asset_manager.spec_version() {
-        SpecVersionBin::V1dot0 => {
+        SpecVersionBin::V1 => {
             super::expiration_v1::expire(
                 asset_manager,
                 older_than,
@@ -793,7 +820,7 @@ pub async fn expire(
             )
             .await
         }
-        SpecVersionBin::V2dot0 => {
+        SpecVersionBin::V2 => {
             expire_v2(
                 asset_manager,
                 older_than,
@@ -1055,6 +1082,7 @@ async fn expire_v2_one_attempt(
             config_bytes.as_deref(),
             repo_info.enabled_feature_flags()?,
             repo_info.disabled_feature_flags()?,
+            &repo_info.status()?,
         )?;
 
         Ok(Arc::new(new_repo_info))

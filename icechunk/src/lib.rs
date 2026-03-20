@@ -32,6 +32,9 @@
 //!                                   └── Storage (S3, GCS, Azure, local, etc.)
 //! ```
 //!
+#[cfg(feature = "shuttle")]
+extern crate shuttle_tokio as tokio;
+
 pub mod asset_manager;
 pub mod change_set;
 pub mod cli;
@@ -65,6 +68,13 @@ pub use storage::new_s3_storage;
 pub use storage::{ObjectStorage, Storage, StorageError, new_in_memory_storage};
 pub use store::Store;
 
+/// Returns the user-agent string for icechunk HTTP requests.
+///
+/// Format: `icechunk-rust-<version>` (e.g., `icechunk-rust-2.0.0-alpha.3`).
+pub fn user_agent() -> &'static str {
+    concat!("icechunk-rust-", env!("CARGO_PKG_VERSION"))
+}
+
 #[cfg(test)]
 pub(crate) mod test_utils {
     #[allow(unused_imports)]
@@ -76,8 +86,8 @@ pub(crate) mod test_utils {
 
     #[template]
     #[rstest]
-    #[case::v1(SpecVersionBin::V1dot0)]
-    #[case::v2(SpecVersionBin::V2dot0)]
+    #[case::v1(SpecVersionBin::V1)]
+    #[case::v2(SpecVersionBin::V2)]
     pub fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 }
 

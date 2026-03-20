@@ -56,7 +56,7 @@ pub fn node_paths() -> impl Strategy<Value = Path> {
 }
 
 pub fn spec_version() -> BoxedStrategy<SpecVersionBin> {
-    prop_oneof![Just(SpecVersionBin::V2dot0), Just(SpecVersionBin::V1dot0)].boxed()
+    prop_oneof![Just(SpecVersionBin::V2), Just(SpecVersionBin::V1)].boxed()
 }
 
 prop_compose! {
@@ -98,30 +98,36 @@ pub struct ShapeDim {
     pub dimension_names: Option<Vec<DimensionName>>,
 }
 
-pub fn shapes_and_dims(max_ndim: Option<usize>) -> impl Strategy<Value = ShapeDim> {
+pub fn shapes_and_dims(
+    max_ndim: Option<usize>,
+    min_dim_size: Option<usize>,
+) -> impl Strategy<Value = ShapeDim> {
     // FIXME: ndim = 0
     let max_ndim = max_ndim.unwrap_or(MAX_NDIM);
-    vec(1u64..26u64, 1..max_ndim)
-        .prop_flat_map(|shape| {
+    let min_size = min_dim_size.unwrap_or(0);
+    vec((min_size as u64)..26u64, 1..max_ndim)
+        .prop_flat_map(move |shape| {
             let ndim = shape.len();
-            let chunk_shape: Vec<BoxedStrategy<NonZeroU64>> = shape
+            let chunk_shape: Vec<BoxedStrategy<u64>> = shape
                 .clone()
                 .into_iter()
-                .map(|size| {
-                    (1u64..=size)
-                        .prop_map(|chunk_size| {
-                            NonZeroU64::new(chunk_size)
-                                .expect("logic bug no zeros allowed")
-                        })
-                        .boxed()
-                })
+                .map(move |size| ((min_size as u64)..=size).boxed())
                 .collect();
             (Just(shape), chunk_shape, option::of(vec(option::of(any::<String>()), ndim)))
         })
         .prop_map(|(shape, chunk_shape, dimension_names)| ShapeDim {
-            shape: ArrayShape::new(
-                shape.into_iter().zip(chunk_shape.iter().map(|n| n.get())),
-            )
+            shape: ArrayShape::new(shape.into_iter().zip(chunk_shape.iter()).map(
+                |(dim_length, chunk_size)| {
+                    (
+                        dim_length,
+                        if chunk_size == &0 {
+                            0
+                        } else {
+                            dim_length.div_ceil(*chunk_size) as u32
+                        },
+                    )
+                },
+            ))
             .expect("Invalid array shape"),
             dimension_names: dimension_names.map(|ds| {
                 ds.iter().map(|s| From::from(s.as_ref().map(|s| s.as_str()))).collect()
@@ -549,11 +555,11 @@ pub fn path() -> impl Strategy<Value = Path> {
     })
 }
 
-type DimensionShapeInfo = (u64, u64);
+type DimensionShapeInfo = (u64, u32);
 
 prop_compose! {
-    fn dimension_shape_info()(dim_length in any::<u64>(), chunk_length in any::<NonZeroU64>()) -> DimensionShapeInfo {
-        (dim_length, chunk_length.get())
+    fn dimension_shape_info()(dim_length in any::<u64>(), chunk_length in any::<u64>()) -> DimensionShapeInfo {
+        (dim_length, dim_length.div_ceil(chunk_length) as u32)
     }
 }
 

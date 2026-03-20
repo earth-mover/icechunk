@@ -22,8 +22,7 @@ use icechunk::{
 };
 use noxious_client::{Client, StreamDirection, Toxic, ToxicKind};
 
-mod common;
-use common::Permission;
+use crate::common::Permission;
 
 /// Create S3 storage pointing to toxiproxy (which proxies to MinIO)
 fn create_proxied_storage(
@@ -97,6 +96,7 @@ async fn setup_toxiproxy(
 fn create_test_manager(storage: Arc<S3Storage>) -> AssetManager {
     let settings = icechunk::storage::Settings {
         retries: Some(RetriesSettings {
+            #[allow(clippy::unwrap_used)]
             max_tries: Some(NonZeroU16::new(3).unwrap()),
             initial_backoff_ms: Some(100),
             max_backoff_ms: Some(1000),

@@ -1,13 +1,14 @@
 //! Repository state at a point in time (arrays, groups, and manifest references).
 
-use std::{
-    collections::BTreeMap, convert::Infallible, num::NonZeroU64, ops::Range, sync::Arc,
-};
+use std::{collections::BTreeMap, convert::Infallible, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto;
-use flatbuffers::{FlatBufferBuilder, VerifierOptions};
+use flatbuffers::{
+    FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, VerifierOptions,
+    WIPOffset,
+};
 use itertools::Itertools as _;
 use quick_cache::sync::{Cache, GuardResult};
 use serde::{Deserialize, Serialize};
@@ -26,18 +27,18 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DimensionShape {
     dim_length: u64,
-    chunk_length: u64,
+    num_chunks: u32,
 }
 
 impl DimensionShape {
-    pub fn new(array_length: u64, chunk_length: NonZeroU64) -> Self {
-        Self { dim_length: array_length, chunk_length: chunk_length.get() }
+    pub fn new(array_length: u64, num_chunks: u32) -> Self {
+        Self { dim_length: array_length, num_chunks }
     }
     pub fn array_length(&self) -> u64 {
         self.dim_length
     }
-    pub fn chunk_length(&self) -> u64 {
-        self.chunk_length
+    pub fn num_chunks(&self) -> u32 {
+        self.num_chunks
     }
 }
 
@@ -61,17 +62,14 @@ impl ArrayShape {
     }
 
     pub fn num_chunks(&self) -> impl Iterator<Item = u32> {
-        self.max_chunk_indices_permitted().map(|x| x + 1)
+        self.0.iter().map(|x| x.num_chunks())
     }
 
     pub fn new<I>(it: I) -> Option<Self>
     where
-        I: IntoIterator<Item = (u64, u64)>,
+        I: IntoIterator<Item = (u64, u32)>,
     {
-        let v = it.into_iter().map(|(al, cl)| {
-            let cl = NonZeroU64::new(cl)?;
-            Some(DimensionShape::new(al, cl))
-        });
+        let v = it.into_iter().map(|(al, nc)| Some(DimensionShape::new(al, nc)));
         v.collect::<Option<Vec<_>>>().map(Self)
     }
 
@@ -94,23 +92,8 @@ impl ArrayShape {
         coord
             .0
             .iter()
-            .zip(self.max_chunk_indices_permitted())
-            .all(|(index, index_permitted)| *index <= index_permitted)
-    }
-
-    /// Returns an iterator over the maximum permitted chunk indices for the array.
-    ///
-    /// This function calculates the maximum chunk indices based on the shape of the array
-    /// and the chunk shape, using (shape - 1) / chunk_shape. Given integer division is truncating,
-    /// this will always result in proper indices at the boundaries.
-    fn max_chunk_indices_permitted(&self) -> impl Iterator<Item = u32> + '_ {
-        self.0.iter().map(|dim_shape| {
-            if dim_shape.chunk_length == 0 || dim_shape.dim_length == 0 {
-                0
-            } else {
-                ((dim_shape.dim_length - 1) / dim_shape.chunk_length) as u32
-            }
-        })
+            .zip(self.num_chunks())
+            .all(|(index, index_permitted)| *index <= (index_permitted.max(1) - 1))
     }
 }
 
@@ -211,23 +194,55 @@ impl<'a> From<generated::ManifestRef<'a>> for ManifestRef {
     }
 }
 
-impl From<&generated::DimensionShape> for DimensionShape {
-    fn from(value: &generated::DimensionShape) -> Self {
+impl TryFrom<&generated::DimensionShape> for DimensionShape {
+    type Error = IcechunkFormatError;
+
+    fn try_from(value: &generated::DimensionShape) -> Result<Self, Self::Error> {
+        if value.chunk_length() == 0 && value.array_length() != 0 {
+            return Err(IcechunkFormatErrorKind::InvalidArrayMetadata(format!(
+                "Array metadata has chunk_length = 0 while array_length={:?}",
+                value.array_length()
+            ))
+            .into());
+        }
+        let num_chunks = if value.chunk_length() == 0 {
+            0
+        } else {
+            value.array_length().div_ceil(value.chunk_length()) as u32
+        };
+        Ok(DimensionShape { dim_length: value.array_length(), num_chunks })
+    }
+}
+
+impl<'a> From<&generated::DimensionShapeV2<'a>> for DimensionShape {
+    fn from(value: &generated::DimensionShapeV2<'a>) -> Self {
         DimensionShape {
             dim_length: value.array_length(),
-            chunk_length: value.chunk_length(),
+            num_chunks: value.num_chunks(),
         }
     }
 }
 
-impl<'a> From<generated::ArrayNodeData<'a>> for NodeData {
-    fn from(value: generated::ArrayNodeData<'a>) -> Self {
+impl<'a> TryFrom<generated::ArrayNodeData<'a>> for NodeData {
+    type Error = IcechunkFormatError;
+
+    fn try_from(value: generated::ArrayNodeData<'a>) -> Result<Self, Self::Error> {
         let dimension_names = value
             .dimension_names()
             .map(|dn| dn.iter().map(|name| name.name().into()).collect());
-        let shape = ArrayShape(value.shape().iter().map(|dim| dim.into()).collect());
+        // In our flatbuffers the V1 `shape` is required and will be an empty `[]` for V2 repos
+        // Note that `shape` is *also* `[]` for scalars in V1 repos.
+        // So we branch on `shape_v2` which is optional, and thus None, on V1 repos.
+        let shape = ArrayShape(match value.shape_v2() {
+            None => value
+                .shape()
+                .iter()
+                .map(|dim| dim.try_into())
+                .collect::<Result<Vec<_>, IcechunkFormatError>>()?,
+            Some(x) => x.iter().map(|dim| (&dim).into()).collect(),
+        });
         let manifests = value.manifests().iter().map(|m| m.into()).collect();
-        Self::Array { shape, dimension_names, manifests }
+        Ok(Self::Array { shape, dimension_names, manifests })
     }
 }
 
@@ -243,9 +258,10 @@ impl<'a> TryFrom<generated::NodeSnapshot<'a>> for NodeSnapshot {
     fn try_from(value: generated::NodeSnapshot<'a>) -> Result<Self, Self::Error> {
         #[allow(clippy::expect_used, clippy::panic)]
         let node_data: NodeData = match value.node_data_type() {
-            generated::NodeData::Array => {
-                value.node_data_as_array().expect("Bug in flatbuffers library").into()
-            }
+            generated::NodeData::Array => value
+                .node_data_as_array()
+                .expect("Bug in flatbuffers library")
+                .try_into()?,
             generated::NodeData::Group => {
                 value.node_data_as_group().expect("Bug in flatbuffers library").into()
             }
@@ -444,7 +460,7 @@ impl Snapshot {
             .iter()
             .map(|(k, v)| {
                 let name = builder.create_shared_string(k.as_str());
-                let serialized = if spec_version == SpecVersionBin::V1dot0 {
+                let serialized = if spec_version == SpecVersionBin::V1 {
                     rmp_serde::to_vec(v).map_err(Box::new)?
                 } else {
                     flexbuffers::to_vec(v).map_err(Box::new)?
@@ -467,7 +483,10 @@ impl Snapshot {
 
         let nodes: Vec<_> = sorted_iter
             .into_iter()
-            .map(|node| node.err_into().and_then(|node| mk_node(&mut builder, &node)))
+            .map(|node| {
+                node.err_into()
+                    .and_then(|node| mk_node(&mut builder, &node, spec_version))
+            })
             .try_collect()?;
         let nodes = builder.create_vector(&nodes);
 
@@ -541,7 +560,7 @@ impl Snapshot {
             .iter()
             .map(|item| {
                 let key = item.name().to_string();
-                let value = if self.spec_version == SpecVersionBin::V1dot0 {
+                let value = if self.spec_version == SpecVersionBin::V1 {
                     rmp_serde::from_slice(item.value().bytes()).map_err(Box::new)?
                 } else {
                     flexbuffers::from_slice(item.value().bytes()).map_err(Box::new)?
@@ -590,7 +609,7 @@ impl Snapshot {
         Snapshot::from_iter(
             Some(new_child.id()),
             Some(self.id()),
-            SpecVersionBin::V1dot0, // 2.0 doesn't use adopt
+            SpecVersionBin::V1, // 2.0 doesn't use adopt
             new_child.message().clone(),
             Some(new_child.metadata()?.clone()),
             new_child.manifest_files().collect(),
@@ -685,26 +704,37 @@ impl Iterator for NodeIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         let nodes = self.snapshot.root().nodes();
-        if self.next_index < nodes.len() {
+        loop {
+            // we need to loop over all nodes starting from the index
+            // until we are sure we'll see no more children
+            if self.next_index >= nodes.len() {
+                return None;
+            }
+
             let node: IcechunkResult<NodeSnapshot> =
                 nodes.get(self.next_index).try_into();
 
             match node {
                 Ok(res) => {
+                    let node_path = res.path.to_string();
                     if let Some(after_prefix) =
-                        res.path.to_string().strip_prefix(self.prefix.as_str())
+                        node_path.strip_prefix(self.prefix.as_str())
                         && (after_prefix.is_empty() || after_prefix.starts_with('/'))
                     {
                         self.next_index += 1;
-                        Some(Ok(res))
+                        return Some(Ok(res));
+                    } else if node_path.as_str() > self.prefix.as_str()
+                        && !node_path.starts_with(self.prefix.as_str())
+                    {
+                        // We've passed all possible children of the prefix
+                        return None;
                     } else {
-                        None
+                        // Not a match but there may be matches later (foo-bar" comes before "foo/bar")
+                        self.next_index += 1;
                     }
                 }
-                Err(err) => Some(Err(err)),
+                Err(err) => return Some(Err(err)),
             }
-        } else {
-            None
         }
     }
 }
@@ -712,10 +742,12 @@ impl Iterator for NodeIterator {
 fn mk_node<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
     node: &NodeSnapshot,
-) -> IcechunkResult<flatbuffers::WIPOffset<generated::NodeSnapshot<'bldr>>> {
+    spec_version: SpecVersionBin,
+) -> IcechunkResult<WIPOffset<generated::NodeSnapshot<'bldr>>> {
     let id = generated::ObjectId8::new(&node.id.0);
     let path = builder.create_string(node.path.to_string().as_str());
-    let (node_data_type, node_data) = mk_node_data(builder, &node.node_data)?;
+    let (node_data_type, node_data) =
+        mk_node_data(builder, &node.node_data, spec_version)?;
     let user_data = Some(builder.create_vector(&node.user_data));
     Ok(generated::NodeSnapshot::create(
         builder,
@@ -730,13 +762,67 @@ fn mk_node<'bldr>(
     ))
 }
 
+type ShapeV1<'a> = WIPOffset<Vector<'a, generated::DimensionShape>>;
+type ShapeV2<'a> =
+    WIPOffset<Vector<'a, ForwardsUOffset<generated::DimensionShapeV2<'a>>>>;
+
+fn mk_array_shapes<'a>(
+    builder: &mut FlatBufferBuilder<'a>,
+    spec_version: SpecVersionBin,
+    shape: &ArrayShape,
+) -> (Option<ShapeV1<'a>>, Option<ShapeV2<'a>>) {
+    use SpecVersionBin::*;
+    match spec_version {
+        V1 => {
+            let shape = shape
+                .0
+                .iter()
+                .map(|ds| {
+                    let chunk_length = if ds.num_chunks == 0 {
+                        debug_assert_eq!(ds.dim_length, 0);
+                        0
+                    } else {
+                        // FIXME: this can be *very* wrong, but I'm not sure it really matters
+                        //        we still preserve num_chunks, and return the proper Zarr JSON metadata
+                        //        which is stored in NodeData::user_data which stores the zarr.json exactly
+                        //        as provided by Zarr
+                        ds.dim_length.div_ceil(ds.num_chunks as u64)
+                    };
+
+                    generated::DimensionShape::new(ds.dim_length, chunk_length)
+                })
+                .collect::<Vec<_>>();
+            (Some(builder.create_vector(shape.as_slice())), None)
+        }
+        V2 => {
+            let shape = shape
+                .0
+                .iter()
+                .map(|ds| {
+                    generated::DimensionShapeV2::create(
+                        builder,
+                        &generated::DimensionShapeV2Args {
+                            array_length: ds.dim_length,
+                            num_chunks: ds.num_chunks,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            let empty_shape_for_v1_compat =
+                builder.create_vector(&[] as &[generated::DimensionShape]);
+            (
+                Some(empty_shape_for_v1_compat),
+                Some(builder.create_vector(shape.as_slice())),
+            )
+        }
+    }
+}
+
 fn mk_node_data(
     builder: &mut FlatBufferBuilder<'_>,
     node_data: &NodeData,
-) -> IcechunkResult<(
-    generated::NodeData,
-    Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>,
-)> {
+    spec_version: SpecVersionBin,
+) -> IcechunkResult<(generated::NodeData, Option<WIPOffset<UnionWIPOffset>>)> {
     match node_data {
         NodeData::Array { manifests, dimension_names, shape } => {
             let manifests = manifests
@@ -780,26 +866,17 @@ fn mk_node_data(
                     .collect::<Vec<_>>();
                 builder.create_vector(names.as_slice())
             });
-            let shape = shape
-                .0
-                .iter()
-                .map(|ds| generated::DimensionShape::new(ds.dim_length, ds.chunk_length))
-                .collect::<Vec<_>>();
-            let shape = builder.create_vector(shape.as_slice());
-            Ok((
-                generated::NodeData::Array,
-                Some(
-                    generated::ArrayNodeData::create(
-                        builder,
-                        &generated::ArrayNodeDataArgs {
-                            manifests: Some(manifests),
-                            shape: Some(shape),
-                            dimension_names: dimensions,
-                        },
-                    )
-                    .as_union_value(),
-                ),
-            ))
+            let (shape_v1, shape_v2) = mk_array_shapes(builder, spec_version, shape);
+            let node_data = generated::ArrayNodeData::create(
+                builder,
+                &generated::ArrayNodeDataArgs {
+                    manifests: Some(manifests),
+                    shape: shape_v1,
+                    shape_v2,
+                    dimension_names: dimensions,
+                },
+            );
+            Ok((generated::NodeData::Array, Some(node_data.as_union_value())))
         }
         NodeData::Group => Ok((
             generated::NodeData::Group,
@@ -822,7 +899,7 @@ mod tests {
     use super::*;
     use crate::{
         roundtrip_serialization_tests,
-        strategies::{manifest_file_info, node_snapshot},
+        strategies::{ShapeDim, manifest_file_info, node_snapshot, shapes_and_dims},
     };
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
@@ -1017,8 +1094,7 @@ mod tests {
     #[icechunk_macros::test]
     fn test_valid_chunk_coord() {
         let shape1 =
-            ArrayShape::new(vec![(10_000, 1_000), (10_001, 1_000), (9_999, 1_000)])
-                .unwrap();
+            ArrayShape::new(vec![(10_000, 10), (10_001, 11), (9_999, 10)]).unwrap();
         let shape2 = ArrayShape::new(vec![(0, 1_000), (0, 1_000), (0, 1_000)]).unwrap();
         let coord1 = ChunkIndices(vec![9, 10, 9]);
         let coord2 = ChunkIndices(vec![10, 11, 10]);
@@ -1026,7 +1102,37 @@ mod tests {
 
         assert!(shape1.valid_chunk_coord(&coord1));
         assert!(!shape1.valid_chunk_coord(&coord2));
-
         assert!(shape2.valid_chunk_coord(&coord3));
+    }
+
+    #[icechunk_macros::test]
+    fn test_valid_chunk_coord_zero_length_dim() {
+        let shape = ArrayShape::new(vec![(0, 0)]).unwrap();
+        assert!(shape.valid_chunk_coord(&ChunkIndices(vec![0])));
+        assert!(!shape.valid_chunk_coord(&ChunkIndices(vec![1])));
+    }
+
+    #[test_strategy::proptest]
+    fn test_prop_valid_chunk_coord(
+        #[strategy(shapes_and_dims(None, Some(1)))] shape_dim: ShapeDim,
+        axis_offset: usize,
+    ) {
+        let shape = &shape_dim.shape;
+        let ndim = shape.len();
+        let axis = axis_offset % ndim;
+
+        // origin is always valid
+        let origin = ChunkIndices(vec![0; ndim]);
+        prop_assert!(shape.valid_chunk_coord(&origin));
+
+        // max valid coord is in bounds
+        let max_valid =
+            ChunkIndices(shape.num_chunks().map(|nc| nc.saturating_sub(1)).collect());
+        prop_assert!(shape.valid_chunk_coord(&max_valid));
+
+        // bumping one axis out of bounds is rejected
+        let mut oob = max_valid.0.clone();
+        oob[axis] = shape.iter().nth(axis).unwrap().num_chunks().max(1);
+        prop_assert!(!shape.valid_chunk_coord(&ChunkIndices(oob)));
     }
 }

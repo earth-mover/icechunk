@@ -33,12 +33,15 @@ from icechunk._icechunk_python import (
     ManifestVirtualChunkLocationCompressionConfig,
     ObjectStoreConfig,
     RebaseFailedError,
+    RepoAvailability,
     RepositoryConfig,
+    RepoStatus,
     S3Credentials,
     S3Options,
     S3StaticCredentials,
     SessionMode,
     SnapshotInfo,
+    SpecVersion,
     Storage,
     StorageConcurrencySettings,
     StorageRetriesSettings,
@@ -54,6 +57,7 @@ from icechunk._icechunk_python import (
     initialize_logs,
     set_logs_filter,
     spec_version,
+    user_agent,
 )
 from icechunk.credentials import (
     AnyAzureCredential,
@@ -138,6 +142,8 @@ __all__ = [
     "ManifestVirtualChunkLocationCompressionConfig",
     "ObjectStoreConfig",
     "RebaseFailedError",
+    "RepoAvailability",
+    "RepoStatus",
     "Repository",
     "RepositoryConfig",
     "S3Credentials",
@@ -146,6 +152,7 @@ __all__ = [
     "Session",
     "SessionMode",
     "SnapshotInfo",
+    "SpecVersion",
     "Storage",
     "StorageConcurrencySettings",
     "StorageRetriesSettings",
@@ -188,6 +195,7 @@ __all__ = [
     "set_logs_filter",
     "spec_version",
     "tigris_storage",
+    "user_agent",
 ]
 
 
@@ -295,6 +303,10 @@ def upgrade_icechunk_repository(
     if not dry_run:
         repo._repository = _InvalidatedRepository()  # type: ignore[assignment]
     return Repository(new_repo)
+
+
+def supported_spec_versions() -> list[SpecVersion]:
+    return [SpecVersion.v2, SpecVersion.v1]
 
 
 ManifestSplittingConfig.from_dict = staticmethod(from_dict)  # type: ignore[method-assign]

@@ -1,3 +1,4 @@
+#![cfg(not(feature = "shuttle"))]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
 use chrono::Utc;
@@ -24,7 +25,7 @@ use tokio::{
 
 use futures::TryStreamExt;
 
-mod common;
+use crate::common;
 
 const N: usize = 20;
 
@@ -70,7 +71,8 @@ async fn test_concurrency_in_tigris() -> Result<(), Box<dyn std::error::Error>> 
 async fn do_test_concurrency(
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let shape = ArrayShape::new(vec![(N as u64, 1), (N as u64, 1)]).unwrap();
+    let shape =
+        ArrayShape::new(vec![(N as u64, N as u32), (N as u64, N as u32)]).unwrap();
 
     let config = RepositoryConfig {
         manifest: Some(ManifestConfig {

@@ -117,6 +117,7 @@
                 pkgs.cargo-deny
                 pkgs.cargo-edit
                 pkgs.cargo-msrv
+                pkgs.cargo-machete
 
                 pkgs.mold
                 pkgs.taplo # toml lsp server

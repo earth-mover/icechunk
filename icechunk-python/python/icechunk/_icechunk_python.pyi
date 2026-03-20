@@ -8,7 +8,8 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from enum import Enum
+from enum import Enum, IntEnum
+from functools import total_ordering
 from typing import Any, TypeAlias, final
 
 from icechunk.types import CommitMethod
@@ -1398,6 +1399,11 @@ class RepositoryConfig:
             The manifest configuration for the repository.
         repo_update_retries: RepoUpdateRetryConfig | None
             Retry configuration for repo info update operations.
+        num_updates_per_repo_info_file: int | None
+            Maximum number of updates stored in a single repo info file. When this
+            limit is reached, a new repo info file is created. Lower values produce
+            slightly smaller repo info files but require more object fetches to
+            reconstruct the ops log. Default is 1000.
         """
         ...
     @staticmethod
@@ -1601,7 +1607,11 @@ class RepositoryConfig:
     def repo_update_retries(self, value: RepoUpdateRetryConfig | None) -> None: ...
     @property
     def num_updates_per_repo_info_file(self) -> int | None:
-        """The number of updates per repo info file."""
+        """Maximum number of updates stored in a single repo info file. When this
+        limit is reached, a new repo info file is created. Lower values produce
+        slightly smaller repo info files but require more object fetches to
+        reconstruct the ops log. Default is 1000.
+        """
         ...
     @num_updates_per_repo_info_file.setter
     def num_updates_per_repo_info_file(self, value: int | None) -> None: ...
@@ -1721,6 +1731,49 @@ class GCSummary:
         ...
 
 @final
+class RepoAvailability(Enum):
+    """The availability status of a repository.
+
+    Attributes
+    ----------
+    online: int
+        The repository is fully available for reads and writes.
+    read_only: int
+        The repository is available for reads only.
+    """
+
+    online = 0
+    read_only = 1
+
+@final
+class RepoStatus:
+    """The current status of a repository."""
+
+    availability: RepoAvailability
+    set_at: datetime.datetime
+    limited_availability_reason: str | None
+
+    def __new__(
+        cls,
+        availability: RepoAvailability,
+        set_at: datetime.datetime | None = None,
+        limited_availability_reason: str | None = None,
+    ) -> RepoStatus:
+        """
+        Create a new `RepoStatus` object
+
+        Parameters
+        ----------
+        availability: RepoAvailability
+            The availability status of the repository.
+        set_at: datetime.datetime | None
+            The time at which the status was set. Defaults to the current time.
+        limited_availability_reason: str | None
+            An optional reason for limited availability.
+        """
+        ...
+
+@final
 class Update:
     @property
     def kind(self) -> UpdateType: ...
@@ -1800,6 +1853,11 @@ class UpdateType:
         def to_version(self) -> int: ...
 
     @final
+    class RepoStatusChanged(UpdateType):
+        @property
+        def status(self) -> RepoStatus: ...
+
+    @final
     class TagCreated(UpdateType):
         @property
         def name(self) -> str: ...
@@ -1839,6 +1897,17 @@ class ManifestFileInfo:
         """The number of chunk references contained in this manifest"""
         ...
 
+@final
+@total_ordering
+class SpecVersion(IntEnum):
+    v1 = 1
+    v2 = 2
+
+    def __eq__(self, other: object) -> bool: ...
+    def __lt__(self, other: object) -> bool: ...
+    @staticmethod
+    def current() -> SpecVersion: ...
+
 class PyRepository:
     @classmethod
     def create(
@@ -1847,7 +1916,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        spec_version: int | None = None,
+        spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1857,7 +1926,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        spec_version: int | None = None,
+        spec_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1883,7 +1952,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        create_version: int | None = None,
+        create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @classmethod
@@ -1893,7 +1962,7 @@ class PyRepository:
         *,
         config: RepositoryConfig | None = None,
         authorize_virtual_chunk_access: dict[str, _AnyCredential | None] | None = None,
-        create_version: int | None = None,
+        create_version: SpecVersion | int | None = None,
         check_clean_root: bool = True,
     ) -> PyRepository: ...
     @staticmethod
@@ -1907,11 +1976,11 @@ class PyRepository:
     @staticmethod
     def fetch_spec_version(
         storage: Storage, storage_settings: StorageSettings | None = None
-    ) -> int | None: ...
+    ) -> SpecVersion | None: ...
     @staticmethod
     async def fetch_spec_version_async(
         storage: Storage, storage_settings: StorageSettings | None = None
-    ) -> int | None: ...
+    ) -> SpecVersion | None: ...
     @classmethod
     def from_bytes(cls, bytes: bytes) -> PyRepository: ...
     def as_bytes(self) -> bytes: ...
@@ -1946,6 +2015,10 @@ class PyRepository:
     async def set_metadata_async(self, metadata: dict[str, Any]) -> None: ...
     def update_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]: ...
     async def update_metadata_async(self, metadata: dict[str, Any]) -> dict[str, Any]: ...
+    def get_status(self) -> RepoStatus: ...
+    async def get_status_async(self) -> RepoStatus: ...
+    def set_status(self, status: RepoStatus) -> None: ...
+    async def set_status_async(self, status: RepoStatus) -> None: ...
     def feature_flags(self) -> list[FeatureFlag]: ...
     async def feature_flags_async(self) -> list[FeatureFlag]: ...
     def enabled_feature_flags(self) -> list[FeatureFlag]: ...
@@ -2103,7 +2176,7 @@ class PyRepository:
         self, manifest_id: str, *, pretty: bool = True
     ) -> str: ...
     @property
-    def spec_version(self) -> int: ...
+    def spec_version(self) -> SpecVersion: ...
 
 class ChunkType(Enum):
     """Enum for Zarr chunk types
@@ -2147,8 +2220,11 @@ class PySession:
     def from_bytes(cls, bytes: bytes) -> PySession: ...
     def __eq__(self, value: object) -> bool: ...
     def as_bytes(self) -> bytes: ...
+    def fork(self) -> PySession: ...
     @property
     def read_only(self) -> bool: ...
+    @property
+    def is_fork(self) -> bool: ...
     @property
     def mode(self) -> SessionMode: ...
     @property
@@ -2612,6 +2688,68 @@ class Credentials:
 
 _AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
 
+@final
+class LatencyStorage(Storage):
+    """Storage wrapper that adds artificial read/write latency for testing.
+
+    Wraps any ``Storage`` backend and injects configurable delays before
+    write and read operations. Useful for reproducing timing-sensitive bugs
+    or for benchmarking.
+
+    Parameters
+    ----------
+    inner : Storage
+        The storage backend to wrap.
+    write_latency_ms : int, default 0
+        Delay in milliseconds before each write operation.
+    read_latency_ms : int, default 0
+        Delay in milliseconds before each read operation.
+
+    Examples
+    --------
+    >>> from icechunk.testing import LatencyStorage
+    >>> storage = LatencyStorage(ic.in_memory_storage(), write_latency_ms=15)
+    >>> repo = ic.Repository.create(storage=storage, ...)
+    >>> storage.write_latency_ms = 50  # adjust at runtime
+    """
+
+    def __new__(
+        cls,
+        inner: Storage,
+        *,
+        write_latency_ms: int = 0,
+        read_latency_ms: int = 0,
+    ) -> LatencyStorage: ...
+    @property
+    def write_latency_ms(self) -> int: ...
+    @write_latency_ms.setter
+    def write_latency_ms(self, ms: int) -> None: ...
+    @property
+    def read_latency_ms(self) -> int: ...
+    @read_latency_ms.setter
+    def read_latency_ms(self, ms: int) -> None: ...
+
+@final
+class StorageObjectInfo:
+    """Metadata for an object in storage.
+
+    Parameters
+    ----------
+    key : str
+        The object key (path relative to the storage prefix).
+    size_bytes : int
+        Size of the object in bytes.
+    created_at : datetime.datetime
+        Timestamp when the object was written to storage.
+    """
+
+    @property
+    def key(self) -> str: ...
+    @property
+    def size_bytes(self) -> int: ...
+    @property
+    def created_at(self) -> datetime.datetime: ...
+
 class Storage:
     """Storage configuration for an IcechunkStore
 
@@ -2703,6 +2841,9 @@ class Storage:
     ) -> list[tuple[str, int]]:
         """List objects in the storage backend, optionally filtered by a key prefix.
 
+        Deprecated: use ``list_objects_metadata`` instead, which also returns
+        the ``created_at`` timestamp.
+
         Parameters
         ----------
         settings : StorageSettings | None
@@ -2715,6 +2856,24 @@ class Storage:
         -------
         list[tuple[str, int]]
             A list of ``(key, size_in_bytes)`` tuples for each object found.
+        """
+        ...
+    def list_objects_metadata(
+        self, settings: StorageSettings | None = None, prefix: str | None = None
+    ) -> list[StorageObjectInfo]:
+        """List objects with full metadata, optionally filtered by a key prefix.
+
+        Parameters
+        ----------
+        settings : StorageSettings | None
+            Optional storage settings to override the defaults.
+        prefix : str | None
+            If provided, only objects whose keys start with this prefix are returned.
+
+        Returns
+        -------
+        list[StorageObjectInfo]
+            A list of :class:`StorageObjectInfo` objects.
         """
         ...
 
@@ -2979,12 +3138,21 @@ def set_logs_filter(log_filter_directive: str | None) -> None:
     """
     ...
 
-def spec_version() -> int:
+def spec_version() -> SpecVersion:
     """
     The version of the Icechunk specification that the library is compatible with.
 
     Returns:
         int: The version of the Icechunk specification that the library is compatible with
+    """
+    ...
+
+def user_agent() -> str:
+    """
+    The user-agent string sent with icechunk storage requests.
+
+    Returns:
+        str: The user-agent string (e.g., "icechunk-rust-2.0.0-alpha.3")
     """
     ...
 

@@ -42,7 +42,7 @@
 //!   the spec
 //! - The `serializers` module root has functions `serialize_X` and `deserialize_X` that take a
 //!   spec version number and use the right (de)-serializer to do the job.
-use std::io::{Read, Write};
+use std::io::Write;
 
 use super::{
     IcechunkFormatError, IcechunkFormatErrorKind, format_constants::SpecVersionBin,
@@ -56,9 +56,7 @@ pub fn serialize_snapshot(
     write: &mut impl Write,
 ) -> Result<(), std::io::Error> {
     match version {
-        SpecVersionBin::V1dot0 | SpecVersionBin::V2dot0 => {
-            write.write_all(snapshot.bytes())
-        }
+        SpecVersionBin::V1 | SpecVersionBin::V2 => write.write_all(snapshot.bytes()),
     }
 }
 
@@ -68,9 +66,7 @@ pub fn serialize_manifest(
     write: &mut impl Write,
 ) -> Result<(), std::io::Error> {
     match version {
-        SpecVersionBin::V1dot0 | SpecVersionBin::V2dot0 => {
-            write.write_all(manifest.bytes())
-        }
+        SpecVersionBin::V1 | SpecVersionBin::V2 => write.write_all(manifest.bytes()),
     }
 }
 
@@ -80,7 +76,7 @@ pub fn serialize_transaction_log(
     write: &mut impl Write,
 ) -> Result<(), std::io::Error> {
     match version {
-        SpecVersionBin::V1dot0 | SpecVersionBin::V2dot0 => {
+        SpecVersionBin::V1 | SpecVersionBin::V2 => {
             write.write_all(transaction_log.bytes())
         }
     }
@@ -92,8 +88,8 @@ pub fn serialize_repo_info(
     write: &mut impl Write,
 ) -> Result<(), std::io::Error> {
     match version {
-        SpecVersionBin::V2dot0 => write.write_all(info.bytes()),
-        SpecVersionBin::V1dot0 => Err(std::io::Error::new(
+        SpecVersionBin::V2 => write.write_all(info.bytes()),
+        SpecVersionBin::V1 => Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "Trying to write to an old Icechunk format version. Aborting.",
         )),
@@ -102,64 +98,40 @@ pub fn serialize_repo_info(
 
 pub fn deserialize_snapshot(
     version: SpecVersionBin,
-    mut read: Box<dyn Read>,
+    buffer: Vec<u8>,
 ) -> Result<Snapshot, IcechunkFormatError> {
     match version {
-        SpecVersionBin::V1dot0 | SpecVersionBin::V2dot0 => {
-            // TODO: what's a good capacity?
-            let mut buffer = Vec::with_capacity(8_192);
-            read.read_to_end(&mut buffer)?;
-            buffer.shrink_to_fit();
-            Snapshot::from_buffer(version, buffer)
-        }
+        SpecVersionBin::V1 | SpecVersionBin::V2 => Snapshot::from_buffer(version, buffer),
     }
 }
 
 pub fn deserialize_manifest(
     version: SpecVersionBin,
-    mut read: Box<dyn Read>,
+    buffer: Vec<u8>,
 ) -> Result<Manifest, IcechunkFormatError> {
     match version {
-        SpecVersionBin::V1dot0 | SpecVersionBin::V2dot0 => {
-            // TODO: what's a good capacity?
-            let mut buffer = Vec::with_capacity(1024 * 1024);
-            read.read_to_end(&mut buffer)?;
-            buffer.shrink_to_fit();
-            Manifest::from_buffer(buffer)
-        }
+        SpecVersionBin::V1 | SpecVersionBin::V2 => Manifest::from_buffer(buffer),
     }
 }
 
 pub fn deserialize_transaction_log(
     version: SpecVersionBin,
-    mut read: Box<dyn Read>,
+    buffer: Vec<u8>,
 ) -> Result<TransactionLog, IcechunkFormatError> {
     match version {
-        SpecVersionBin::V1dot0 | SpecVersionBin::V2dot0 => {
-            // TODO: what's a good capacity?
-            let mut buffer = Vec::with_capacity(1024 * 1024);
-            read.read_to_end(&mut buffer)?;
-            buffer.shrink_to_fit();
-            TransactionLog::from_buffer(buffer)
-        }
+        SpecVersionBin::V1 | SpecVersionBin::V2 => TransactionLog::from_buffer(buffer),
     }
 }
 
 pub fn deserialize_repo_info(
     version: SpecVersionBin,
-    mut read: Box<dyn Read>,
+    buffer: Vec<u8>,
 ) -> Result<RepoInfo, IcechunkFormatError> {
     match version {
-        SpecVersionBin::V2dot0 => {
-            // TODO: what's a good capacity?
-            let mut buffer = Vec::with_capacity(1024 * 1024);
-            read.read_to_end(&mut buffer)?;
-            buffer.shrink_to_fit();
-            RepoInfo::from_buffer(buffer)
-        }
-        SpecVersionBin::V1dot0 => {
+        SpecVersionBin::V2 => RepoInfo::from_buffer(buffer),
+        SpecVersionBin::V1 => {
             Err(IcechunkFormatErrorKind::UnsupportedOperationForVersion {
-                version: SpecVersionBin::V1dot0 as u8,
+                version: SpecVersionBin::V1 as u8,
             }
             .into())
         }

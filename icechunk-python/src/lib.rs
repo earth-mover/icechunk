@@ -13,11 +13,11 @@ use std::env;
 use config::{
     PyAzureCredentials, PyAzureStaticCredentials, PyCachingConfig,
     PyCompressionAlgorithm, PyCompressionConfig, PyCredentials, PyGcsBearerCredential,
-    PyGcsCredentials, PyGcsStaticCredentials, PyManifestConfig,
+    PyGcsCredentials, PyGcsStaticCredentials, PyLatencyStorage, PyManifestConfig,
     PyManifestPreloadCondition, PyManifestPreloadConfig,
     PyManifestVirtualChunkLocationCompressionConfig, PyObjectStoreConfig,
     PyRepoUpdateRetryConfig, PyRepositoryConfig, PyS3Credentials, PyS3Options,
-    PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings,
+    PyS3StaticCredentials, PyStorage, PyStorageConcurrencySettings, PyStorageObjectInfo,
     PyStorageRetriesSettings, PyStorageSettings, PyStorageTimeoutSettings,
     PyVirtualChunkContainer,
 };
@@ -34,8 +34,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
 use repository::{
-    PyDiff, PyFeatureFlag, PyGCSummary, PyManifestFileInfo, PyRepository, PySnapshotInfo,
-    PyUpdate, PyUpdateType,
+    PyDiff, PyFeatureFlag, PyGCSummary, PyManifestFileInfo, PyRepoAvailability,
+    PyRepoStatus, PyRepository, PySnapshotInfo, PySpecVersion, PyUpdate, PyUpdateType,
 };
 use session::{ChunkType, PySession, PySessionMode};
 use stats::PyChunkStorageStats;
@@ -137,8 +137,14 @@ fn set_logs_filter(py: Python, log_filter_directive: Option<String>) -> PyResult
 #[pyfunction]
 /// The spec version that this version of the Icechunk library
 /// uses to write metadata files
-fn spec_version() -> u8 {
-    SpecVersionBin::current() as u8
+fn spec_version() -> PySpecVersion {
+    SpecVersionBin::current().into()
+}
+
+#[pyfunction]
+/// The user-agent string sent with icechunk storage requests
+fn user_agent() -> &'static str {
+    icechunk::user_agent()
 }
 
 #[pyfunction]
@@ -185,7 +191,9 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCredentials>()?;
     m.add_class::<PyS3Options>()?;
     m.add_class::<PyObjectStoreConfig>()?;
+    m.add_class::<PyStorageObjectInfo>()?;
     m.add_class::<PyStorage>()?;
+    m.add_class::<PyLatencyStorage>()?;
     m.add_class::<PyVirtualChunkContainer>()?;
     m.add_class::<PyCompressionAlgorithm>()?;
     m.add_class::<PyCompressionConfig>()?;
@@ -204,6 +212,9 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStorageSettings>()?;
     m.add_class::<PyGCSummary>()?;
     m.add_class::<PyDiff>()?;
+    m.add_class::<PyRepoAvailability>()?;
+    m.add_class::<PyRepoStatus>()?;
+    m.add_class::<PySpecVersion>()?;
     m.add_class::<PyUpdateType>()?;
     m.add_class::<PyUpdate>()?;
     m.add_class::<PyFeatureFlag>()?;
@@ -211,6 +222,7 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
+    m.add_function(wrap_pyfunction!(user_agent, m)?)?;
     m.add_function(wrap_pyfunction!(cli_entrypoint, m)?)?;
     m.add_function(wrap_pyfunction!(_upgrade_icechunk_repository, m)?)?;
     m.add("__version__", pep440_version())?;

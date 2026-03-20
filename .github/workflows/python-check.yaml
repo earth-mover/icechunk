@@ -7,6 +7,7 @@ on:
       - 'support/**'
   pull_request:
     types: [opened, reopened, synchronize, labeled]
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -100,6 +101,7 @@ jobs:
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
           uv pip install "$WHEEL" --group test
+          uv pip install "hypothesis @ git+https://github.com/ianhi/hypothesis.git@flaky-feedback#subdirectory=hypothesis-python"
           # Install specific versions based on matrix
           if [ "${{ matrix.deps-version.name }}" = "minimum" ]; then
             echo "Installing minimum versions:"
@@ -124,10 +126,12 @@ jobs:
       - name: Run pytest
         shell: bash
         working-directory: icechunk-python
+        env:
+          HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
+          NOCOLOR: 1
         run: |
           set -e
           source .venv/bin/activate
-          # Run tests
           python -m pytest -n 4
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
@@ -229,7 +233,7 @@ jobs:
           PYTHON_TAG="cp$(echo ${{ env.PYTHON_VERSION }} | tr -d '.')"
           WHEEL=$(ls dist/*-${PYTHON_TAG}-*.whl)
           uv pip install "$WHEEL" --group test
-          uv pip install pytest-mypy-plugins
+          uv pip install "pytest-mypy-plugins<4"
           # Install specific xarray version based on matrix
           if [ "${{ matrix.xarray-version.version }}" != "latest-release" ]; then
             echo "Installing xarray ${{ matrix.xarray-version.version }}"

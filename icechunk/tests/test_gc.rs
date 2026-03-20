@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
-
 use std::{
     collections::HashMap,
     num::{NonZeroU16, NonZeroUsize},
@@ -28,21 +26,21 @@ use icechunk::{
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
 
-mod common;
-use common::Permission;
+use crate::common;
+use crate::common::Permission;
 
 #[tokio_test]
 pub async fn test_gc_in_minio_spec_v1() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_v1_{}", Utc::now().timestamp_millis());
     let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
-    do_test_gc(storage, Some(SpecVersionBin::V1dot0)).await
+    do_test_gc(storage, Some(SpecVersionBin::V1)).await
 }
 
 #[tokio_test]
 pub async fn test_gc_in_minio_spec_v2() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = format!("test_gc_v2_{}", Utc::now().timestamp_millis());
     let storage = common::make_minio_integration_storage(prefix, &Permission::Modify)?;
-    do_test_gc(storage, Some(SpecVersionBin::V2dot0)).await
+    do_test_gc(storage, Some(SpecVersionBin::V2)).await
 }
 
 #[tokio_test]
@@ -72,11 +70,11 @@ pub async fn test_gc_in_tigris() -> Result<(), Box<dyn std::error::Error>> {
 /// Create a repo with two commits, reset the branch to "forget" the last commit, run gc
 ///
 /// It runs [`garbage_collect`] to verify it's doing its job.
-pub async fn do_test_gc(
+async fn do_test_gc(
     storage: Arc<dyn Storage + Send + Sync>,
     spec_version: Option<SpecVersionBin>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let shape = ArrayShape::new(vec![(1100, 1)]).unwrap();
+    let shape = ArrayShape::new(vec![(1100, 1100)]).unwrap();
     // intentionally small to create garbage
     let manifest_split_size = 10;
     let split_sizes = Some(vec![(
@@ -119,7 +117,7 @@ pub async fn do_test_gc(
             .await?;
     }
 
-    let first_snap_id = ds.commit("first", None).await?;
+    let first_snap_id = ds.commit("first").max_concurrent_nodes(8).execute().await?;
     assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1100);
     assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 110);
 
@@ -133,7 +131,7 @@ pub async fn do_test_gc(
         ds.set_chunk_ref(array_path.clone(), ChunkIndices(vec![idx]), Some(payload))
             .await?;
     }
-    let _second_snap_id = ds.commit("second", None).await?;
+    let _second_snap_id = ds.commit("second").max_concurrent_nodes(8).execute().await?;
     assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 1110);
     assert_eq!(repo.asset_manager().list_manifests().await?.count().await, 111);
 
@@ -195,6 +193,39 @@ pub async fn do_test_gc(
         assert_eq!(&42i8.to_be_bytes(), bytes.as_ref());
     }
 
+    // Create 5 anonymous snapshots (detached, not on any branch)
+    let mut anon_snaps = vec![];
+    for i in 0..5 {
+        let mut session = repo.writable_session("main").await?;
+        let bytes = Bytes::copy_from_slice(&(100i8 + i as i8).to_be_bytes());
+        let payload = session.get_chunk_writer()?(bytes.clone()).await?;
+        session
+            .set_chunk_ref(array_path.clone(), ChunkIndices(vec![0]), Some(payload))
+            .await?;
+        let snap_id = session.commit(format!("anon {i}")).anonymous().execute().await?;
+        anon_snaps.push(snap_id);
+    }
+
+    // expire the first two
+    let cutoff = repo.lookup_snapshot(&anon_snaps[2]).await?.flushed_at;
+    let gc_config = GCConfig::clean_all(
+        cutoff,
+        cutoff,
+        None,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        false,
+    );
+    let summary =
+        garbage_collect(repo.asset_manager().clone(), &gc_config, None, 100).await?;
+    assert_eq!(summary.snapshots_deleted, 2);
+
+    // The last 3 should still be accessible
+    for snap_id in &anon_snaps[2..] {
+        repo.readonly_session(&VersionInfo::SnapshotId(snap_id.clone())).await?;
+    }
+
     Ok(())
 }
 
@@ -226,56 +257,56 @@ async fn make_design_doc_repo(
     let mut session = repo.writable_session("main").await?;
     let user_data = Bytes::new();
     session.add_group(Path::root(), user_data.clone()).await?;
-    session.commit("1", None).await?;
+    session.commit("1").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/2").unwrap(), user_data.clone()).await?;
-    let commit_2 = session.commit("2", None).await?;
+    let commit_2 = session.commit("2").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/4").unwrap(), user_data.clone()).await?;
-    session.commit("4", None).await?;
+    session.commit("4").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/5").unwrap(), user_data.clone()).await?;
-    let snap_id = session.commit("5", None).await?;
+    let snap_id = session.commit("5").max_concurrent_nodes(8).execute().await?;
     repo.create_tag("tag2", &snap_id).await?;
 
     repo.create_branch("develop", &commit_2).await?;
     let mut session = repo.writable_session("develop").await?;
     session.add_group(Path::try_from("/3").unwrap(), user_data.clone()).await?;
-    let snap_id = session.commit("3", None).await?;
+    let snap_id = session.commit("3").max_concurrent_nodes(8).execute().await?;
     repo.create_tag("tag1", &snap_id).await?;
     let mut session = repo.writable_session("develop").await?;
     session.add_group(Path::try_from("/6").unwrap(), user_data.clone()).await?;
-    let commit_6 = session.commit("6", None).await?;
+    let commit_6 = session.commit("6").max_concurrent_nodes(8).execute().await?;
 
     repo.create_branch("test", &commit_6).await?;
     let mut session = repo.writable_session("test").await?;
     session.add_group(Path::try_from("/7").unwrap(), user_data.clone()).await?;
-    let commit_7 = session.commit("7", None).await?;
+    let commit_7 = session.commit("7").max_concurrent_nodes(8).execute().await?;
 
     let expire_older_than = Utc::now();
 
     repo.create_branch("qa", &commit_7).await?;
     let mut session = repo.writable_session("qa").await?;
     session.add_group(Path::try_from("/8").unwrap(), user_data.clone()).await?;
-    session.commit("8", None).await?;
+    session.commit("8").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/12").unwrap(), user_data.clone()).await?;
-    session.commit("12", None).await?;
+    session.commit("12").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/13").unwrap(), user_data.clone()).await?;
-    session.commit("13", None).await?;
+    session.commit("13").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::try_from("/14").unwrap(), user_data.clone()).await?;
-    session.commit("14", None).await?;
+    session.commit("14").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("develop").await?;
     session.add_group(Path::try_from("/10").unwrap(), user_data.clone()).await?;
-    session.commit("10", None).await?;
+    session.commit("10").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("develop").await?;
     session.add_group(Path::try_from("/11").unwrap(), user_data.clone()).await?;
-    session.commit("11", None).await?;
+    session.commit("11").max_concurrent_nodes(8).execute().await?;
     let mut session = repo.writable_session("test").await?;
     session.add_group(Path::try_from("/9").unwrap(), user_data.clone()).await?;
-    session.commit("9", None).await?;
+    session.commit("9").max_concurrent_nodes(8).execute().await?;
 
     // let's double check the structuer of the commit tree
     assert_eq!(
@@ -352,7 +383,7 @@ pub async fn test_expire_and_garbage_collect_in_tigris()
 ///
 /// We then, expire old snapshots and garbage collect. We verify we end up
 /// with what is expected according to the design document.
-pub async fn do_test_expire_and_garbage_collect(
+async fn do_test_expire_and_garbage_collect(
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings().await?;
@@ -542,7 +573,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut session = repo.writable_session("main").await?;
     let array_path: Path = "/array".to_string().try_into().unwrap();
-    let shape = ArrayShape::new(vec![(4, 1)]).unwrap();
+    let shape = ArrayShape::new(vec![(4, 4)]).unwrap();
     let dimension_names = Some(vec!["t".into()]);
     let def = Bytes::from_static(br#"{"this":"other array"}"#);
     session
@@ -553,7 +584,7 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
             def.clone(),
         )
         .await?;
-    session.commit("initialized", None).await?;
+    session.commit("initialized").max_concurrent_nodes(8).execute().await?;
 
     let mut snaps = vec![];
     for i in 0..6 {
@@ -565,7 +596,11 @@ async fn test_gc_reset_branch() -> Result<(), Box<dyn std::error::Error>> {
                 Some(ChunkPayload::Inline(Bytes::from(format!("{i}")))),
             )
             .await?;
-        let snap = session.commit(&format!("commit {i}"), None).await?;
+        let snap = session
+            .commit(format!("commit {i}"))
+            .max_concurrent_nodes(8)
+            .execute()
+            .await?;
         snaps.push(snap);
     }
 
