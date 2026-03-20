@@ -7,6 +7,8 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
+    fmt::Display,
+    hash::Hash,
     iter,
     sync::LazyLock,
 };
@@ -68,76 +70,54 @@ impl EditChanges {
         self == &Default::default()
     }
 
+    fn check_shared<K: Display + Hash + Eq, V: PartialEq>(
+        a: &HashMap<K, V>,
+        b: &HashMap<K, V>,
+        reason: &str,
+        feature: &str,
+    ) -> SessionResult<()> {
+        let shared: Vec<_> = a
+            .iter()
+            .filter_map(|(k, v)| {
+                let theirs = b.get(k);
+                if theirs.is_none() || Some(v) == theirs { None } else { Some(k) }
+            })
+            .collect();
+        if !shared.is_empty() {
+            return Err(SessionErrorKind::SessionMerge(format!(
+                "Multiple writers {reason} the same {feature}: {}",
+                shared.into_iter().join(", ")
+            ))
+            .into());
+        }
+
+        Ok(())
+    }
+
     fn merge(&mut self, other: EditChanges) -> SessionResult<()> {
         // TODO: the conflict  detection is not comprehensive
 
         // check if both created same group with different metadata
-        let shared: Vec<_> = self
-            .new_groups
-            .iter()
-            .filter_map(|(k, v)| {
-                let theirs = other.new_groups.get(k);
-                if theirs.is_none() || theirs == Some(v) { None } else { Some(k) }
-            })
-            .collect();
-        if !shared.is_empty() {
-            return Err(SessionErrorKind::SessionMerge(format!(
-                "Multiple writers created the same groups: {}",
-                shared.into_iter().join(", ")
-            ))
-            .into());
-        }
+        Self::check_shared(&self.new_groups, &other.new_groups, "created", "groups")?;
 
         // check if both updated same group with different metadata
-        let shared: Vec<_> = self
-            .updated_groups
-            .iter()
-            .filter_map(|(k, v)| {
-                let theirs = other.updated_groups.get(k);
-                if theirs.is_none() || theirs == Some(v) { None } else { Some(k) }
-            })
-            .collect();
-        if !shared.is_empty() {
-            return Err(SessionErrorKind::SessionMerge(format!(
-                "Multiple writers updated the same groups: {}",
-                shared.into_iter().join(", ")
-            ))
-            .into());
-        }
+        Self::check_shared(
+            &self.updated_groups,
+            &other.updated_groups,
+            "updated",
+            "groups",
+        )?;
 
         // check if both create same array with different metadata
-        let shared: Vec<_> = self
-            .new_arrays
-            .iter()
-            .filter_map(|(k, v)| {
-                let theirs = other.new_arrays.get(k);
-                if theirs.is_none() || theirs == Some(v) { None } else { Some(k) }
-            })
-            .collect();
-        if !shared.is_empty() {
-            return Err(SessionErrorKind::SessionMerge(format!(
-                "Multiple writers created the same arrays: {}",
-                shared.into_iter().join(", ")
-            ))
-            .into());
-        }
+        Self::check_shared(&self.new_arrays, &other.new_arrays, "created", "arrays")?;
 
         // check if both updated same array with different metadata
-        let shared: Vec<_> = self
-            .updated_arrays
-            .iter()
-            .filter_map(|(k, v)| {
-                let theirs = other.updated_arrays.get(k);
-                if theirs.is_none() || theirs == Some(v) { None } else { Some(k) }
-            })
-            .collect();
-        if !shared.is_empty() {
-            return Err(SessionErrorKind::SessionMerge(format!(
-                "Multiple writers updated the same arrays: {}",
-                shared.into_iter().join(", ")
-            ))
-            .into());
-        }
+        Self::check_shared(
+            &self.updated_arrays,
+            &other.updated_arrays,
+            "updated",
+            "arrays",
+        )?;
 
         let check_deleted_and_updated_arrays = |a: &Self, b: &Self| {
             let shared: Vec<_> = a
