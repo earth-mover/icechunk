@@ -769,65 +769,68 @@ fn benchmark_commit_rebase_split_manifests(c: &mut Criterion) {
     let split_size = num_chunks.div_ceil(num_manifests);
     let split_config = ManifestSplittingConfig::with_size(split_size);
 
-    for kind in [ChunkKind::Inline, ChunkKind::Virtual] {
-        group.bench_with_input(
-            BenchmarkId::new("type", kind.to_string()),
-            &kind,
-            |b, &kind| {
-                b.iter_custom(|_iters| {
-                    // Fresh repo per sample
-                    let shape =
-                        ArrayShape::new(vec![(num_chunks.into(), num_chunks)]).unwrap();
-                    let (repo, _tmpdir) = rt.block_on(async {
-                        setup_repo(
-                            path.clone(),
-                            shape,
-                            None,
-                            Some(split_config.clone()),
-                            default_storage_kind(),
-                        )
-                        .await
-                        .unwrap()
-                    });
-
-                    // Create all sessions from the same branch tip
-                    let sessions: Vec<_> = (0..num_manifests)
-                        .map(|batch| {
-                            rt.block_on(async {
-                                let mut session =
-                                    repo.writable_session("main").await.unwrap();
-                                set_chunks(
-                                    path.clone(),
-                                    &mut session,
-                                    batch * split_size..(batch + 1) * split_size,
-                                    kind,
-                                    default_storage_kind(),
-                                )
-                                .await
+    for storage_kind in [StorageKind::InMemory, StorageKind::Rustfs] {
+        for kind in [ChunkKind::Inline, ChunkKind::Virtual] {
+            group.bench_with_input(
+                BenchmarkId::new(format!("{storage_kind}/{kind}"), num_manifests),
+                &kind,
+                |b, &kind| {
+                    b.iter_custom(|_iters| {
+                        // Fresh repo per sample
+                        let shape =
+                            ArrayShape::new(vec![(num_chunks.into(), num_chunks)])
                                 .unwrap();
-                                session
+                        let (repo, _tmpdir) = rt.block_on(async {
+                            setup_repo(
+                                path.clone(),
+                                shape,
+                                None,
+                                Some(split_config.clone()),
+                                storage_kind,
+                            )
+                            .await
+                            .unwrap()
+                        });
+
+                        // Create all sessions from the same branch tip
+                        let sessions: Vec<_> = (0..num_manifests)
+                            .map(|batch| {
+                                rt.block_on(async {
+                                    let mut session =
+                                        repo.writable_session("main").await.unwrap();
+                                    set_chunks(
+                                        path.clone(),
+                                        &mut session,
+                                        batch * split_size..(batch + 1) * split_size,
+                                        kind,
+                                        storage_kind,
+                                    )
+                                    .await
+                                    .unwrap();
+                                    session
+                                })
                             })
-                        })
-                        .collect();
+                            .collect();
 
-                    let mut total = std::time::Duration::ZERO;
-                    let start = std::time::Instant::now();
-                    rt.block_on(async {
-                        for mut session in sessions {
-                            session
-                                .commit("foo")
-                                .max_concurrent_nodes(8)
-                                .rebase(&ConflictDetector, 10)
-                                .execute()
-                                .await
-                                .unwrap();
-                        }
-                    });
-                    total += start.elapsed();
-                    total
-                })
-            },
-        );
+                        let mut total = std::time::Duration::ZERO;
+                        let start = std::time::Instant::now();
+                        rt.block_on(async {
+                            for mut session in sessions {
+                                session
+                                    .commit("foo")
+                                    .max_concurrent_nodes(8)
+                                    .rebase(&ConflictDetector, 10)
+                                    .execute()
+                                    .await
+                                    .unwrap();
+                            }
+                        });
+                        total += start.elapsed();
+                        total
+                    })
+                },
+            );
+        }
     }
     group.finish();
 }

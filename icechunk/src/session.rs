@@ -1740,11 +1740,21 @@ impl Session {
 
         trace!("Found {} commits to rebase over", new_commits.len());
 
+        let am = Arc::clone(&self.asset_manager);
         // we need to reverse the iterator to process them in order of oldest first
-        for snap_id in new_commits.into_iter().rev() {
-            debug!("Rebasing snapshot {}", &snap_id);
-            let tx_log = self.asset_manager.fetch_transaction_log(&snap_id).await?;
+        let mut logs = stream::iter(new_commits.into_iter().rev())
+            .map(move |snap_id| {
+                let am = am.clone();
+                async move {
+                    let tx_log = am.fetch_transaction_log(&snap_id).await?;
+                    Ok::<_, SessionError>((snap_id, tx_log))
+                }
+            })
+            .buffered(2);
 
+        while let Some(res) = logs.next().await {
+            let (snap_id, tx_log) = res?;
+            debug!("Rebasing snapshot {}", &snap_id);
             let session = Self::create_readonly_session(
                 self.config.clone(),
                 self.storage_settings.as_ref().clone(),
