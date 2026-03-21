@@ -7,10 +7,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable};
+use backon::{BackoffBuilder as _, ExponentialBuilder, Retryable as _};
 use chrono::{DateTime, Utc};
-use futures::{Stream, StreamExt, TryStream, TryStreamExt, stream};
-use itertools::Itertools;
+use futures::{Stream, StreamExt as _, TryStream, TryStreamExt as _, stream};
+use itertools::Itertools as _;
 use tokio::task::{self};
 use tracing::{debug, error, info, instrument, trace};
 
@@ -55,7 +55,7 @@ pub struct GCConfig {
 }
 
 impl GCConfig {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         extra_roots: HashSet<SnapshotId>,
         dangling_chunks: Action,
@@ -302,7 +302,7 @@ pub async fn find_retained(
 
     debug_assert_eq!(limiter.current_usage(), 0);
 
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used)]
     Ok((
         Arc::try_unwrap(keep_chunks)
             .expect("Logic error: multiple owners to retained chunks")
@@ -500,18 +500,18 @@ async fn garbage_collect_one_attempt(
 ///
 /// There are a few complex cases:
 ///
-/// 1. A reset_branch operation may generate a snapshot we want to retain (because it's new),
+/// 1. A `reset_branch` operation may generate a snapshot we want to retain (because it's new),
 ///    with a parent (that is old) we want to drop. We avoid this issue by setting the parent
-///    to INITIAL_SNAPSHOT_ID
+///    to `INITIAL_SNAPSHOT_ID`
 /// 2. There may be new snapshots in the repo info object since we started GC
-///    a.  New snapshots with parents not in drop_snapshots can be retained (their manifests and
+///    a.  New snapshots with parents not in `drop_snapshots` can be retained (their manifests and
 ///    chunks are new so they won't be deleted)
-///    b. New snapshots with parents in drop_snapshot means we need to restart GC to rebuild the tree
+///    b. New snapshots with parents in `drop_snapshot` means we need to restart GC to rebuild the tree
 ///    of pointed snaps.
 /// 3. Branches or tags pointing to drop snapshots must generate a retry
 ///
-/// How to distinguish 1 from 2b: snapshots in 1. are in retain_snapshots but not in
-/// drop_snapshots; snapshots in 2b are in neither map.
+/// How to distinguish 1 from 2b: snapshots in 1. are in `retain_snapshots` but not in
+/// `drop_snapshots`; snapshots in 2b are in neither map.
 ///
 /// It adds any new snapshots that must be kept to `keep_snapshots`
 async fn delete_snapshots_from_repo_info(
@@ -526,7 +526,7 @@ async fn delete_snapshots_from_repo_info(
         for si in repo_info.all_snapshots()? {
             let si = si?;
 
-            #[allow(clippy::panic)]
+            #[expect(clippy::panic)]
             match (keep_snapshots.contains(&si.id), drop_snapshots.contains(&si.id)) {
                 (true, false) => {
                     // a snapshot that we explicitly want to keep
@@ -834,7 +834,7 @@ pub async fn expire(
     }
 }
 
-/// Since expire_v2 is a relatively fast operation (repo object only) we retry it if the repo info
+/// Since `expire_v2` is a relatively fast operation (repo object only) we retry it if the repo info
 /// object was modified since it started
 #[instrument(skip(asset_manager))]
 pub async fn expire_v2(

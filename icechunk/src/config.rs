@@ -62,7 +62,7 @@ pub enum CompressionAlgorithm {
     Zstd,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
 pub struct CompressionConfig {
     #[serde(default)]
     pub algorithm: Option<CompressionAlgorithm>,
@@ -88,7 +88,7 @@ impl CompressionConfig {
 }
 
 /// Cache size configuration for in-memory caches.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
 pub struct CachingConfig {
     #[serde(default)]
     pub num_snapshot_nodes: Option<u64>,
@@ -319,7 +319,7 @@ impl ManifestPreloadConfig {
 static DEFAULT_MANIFEST_PRELOAD_CONDITION: OnceLock<ManifestPreloadCondition> =
     OnceLock::new();
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
 pub struct ManifestVirtualChunkLocationCompressionConfig {
     #[serde(default)]
     pub min_num_chunks: Option<u16>,
@@ -391,7 +391,7 @@ impl ManifestConfig {
             ) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
         }
@@ -434,7 +434,7 @@ impl ManifestConfig {
 }
 
 /// Retry configuration for repo info update operations.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RepoUpdateRetryConfig {
     /// Default retry settings for all repo update operations.
     #[serde(default)]
@@ -461,7 +461,7 @@ impl RepoUpdateRetryConfig {
             default: match (&self.default, other.default) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
         }
@@ -475,7 +475,7 @@ pub struct RepositoryConfig {
     #[serde(default)]
     pub inline_chunk_threshold_bytes: Option<u16>,
 
-    /// Concurrency used by the get_partial_values operation to fetch different keys in parallel
+    /// Concurrency used by the `get_partial_values` operation to fetch different keys in parallel
     #[serde(default)]
     pub get_partial_values_concurrency: Option<u16>,
 
@@ -574,7 +574,7 @@ impl RepositoryConfig {
             compression: match (&self.compression, other.compression) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
             max_concurrent_requests: match (
@@ -589,7 +589,7 @@ impl RepositoryConfig {
             caching: match (&self.caching, other.caching) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
             storage: match (&self.storage, other.storage) {
@@ -627,7 +627,7 @@ impl RepositoryConfig {
             ) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
             num_updates_per_repo_info_file: match (
@@ -676,7 +676,7 @@ impl RepositoryConfig {
     }
 
     pub fn clear_virtual_chunk_containers(&mut self) {
-        self.virtual_chunk_containers = Some(Default::default())
+        self.virtual_chunk_containers = Some(Default::default());
     }
 }
 
@@ -714,7 +714,6 @@ macro_rules! roundtrip_serialization_tests {
     }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use crate::{
         ObjectStoreConfig, RepositoryConfig,
@@ -901,7 +900,7 @@ virtual_chunk_containers:
                 assert_eq!(opts.network_stream_timeout_seconds, Some(60));
                 assert!(!opts.requester_pays);
             }
-            other => panic!("Expected S3, got {:?}", other),
+            other => panic!("Expected S3, got {other:?}"),
         }
 
         // HTTP container

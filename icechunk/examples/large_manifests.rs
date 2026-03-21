@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TASKS));
 
     for i in 0..NUM_TASKS {
-        let semaphore = semaphore.clone();
+        let semaphore = Arc::clone(&semaphore);
         let cloned_session = Arc::clone(&session);
         set.spawn(async move {
             let _permit = semaphore.acquire().await.unwrap();

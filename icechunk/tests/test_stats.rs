@@ -93,7 +93,7 @@ async fn do_test_repo_chunks_storage(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage_settings = storage.default_settings().await?;
     let asset_manager = Arc::new(AssetManager::new_no_cache(
-        storage.clone(),
+        Arc::clone(&storage),
         storage_settings.clone(),
         spec_version,
         1,
@@ -254,7 +254,7 @@ pub async fn test_virtual_chunk_deduplication(
     let storage = new_in_memory_storage().await?;
     let storage_settings = storage.default_settings().await?;
     let asset_manager = Arc::new(AssetManager::new_no_cache(
-        storage.clone(),
+        Arc::clone(&storage),
         storage_settings.clone(),
         spec_version,
         1,

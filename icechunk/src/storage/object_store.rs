@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::{
-    Stream, StreamExt, TryStreamExt,
+    Stream, StreamExt as _, TryStreamExt as _,
     stream::{self, BoxStream},
 };
 #[cfg(any(
@@ -99,7 +99,7 @@ impl From<&GcsBearerCredential> for GcpCredential {
 #[cfg(feature = "object-store-gcs")]
 #[async_trait]
 #[typetag::serde(tag = "gcs_credentials_fetcher_type")]
-pub trait GcsCredentialsFetcher: fmt::Debug + Sync + Send {
+pub trait GcsCredentialsFetcher: Debug + Sync + Send {
     async fn get(&self) -> Result<GcsBearerCredential, String>;
 }
 
@@ -143,7 +143,7 @@ pub enum AzureCredentials {
 pub struct ObjectStorage {
     backend: Arc<dyn ObjectStoreBackend>,
     #[serde(skip)]
-    /// We need to use OnceCell to allow async initialization, because serde
+    /// We need to use `OnceCell` to allow async initialization, because serde
     /// does not support async cfunction calls from deserialization. This gives
     /// us a way to lazily initialize the client.
     client: OnceCell<Arc<dyn ObjectStore>>,
@@ -225,7 +225,7 @@ impl ObjectStorage {
 
     #[cfg(feature = "object-store-http")]
     pub fn new_http(
-        url: Url,
+        url: &Url,
         config: Option<HashMap<ClientConfigKey, String>>,
     ) -> Result<ObjectStorage, StorageError> {
         let backend = Arc::new(HttpObjectStoreBackend { url: url.to_string(), config });
@@ -241,7 +241,7 @@ impl ObjectStorage {
         self.client
             .get_or_init(|| async {
                 // TODO: handle error better?
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 self.backend
                     .mk_object_store(settings)
                     .expect("failed to create object store")
@@ -249,7 +249,7 @@ impl ObjectStorage {
             .await
     }
 
-    /// We need this because object_store's local file implementation doesn't sort refs. Since this
+    /// We need this because `object_store`'s local file implementation doesn't sort refs. Since this
     /// implementation is used only for tests, it's OK to sort in memory.
     pub fn artificially_sort_refs_in_mem(&self) -> bool {
         self.backend.artificially_sort_refs_in_mem()
@@ -317,7 +317,7 @@ impl ObjectStorage {
     }
 }
 
-impl fmt::Display for ObjectStorage {
+impl Display for ObjectStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ObjectStorage(backend={})", self.backend)
     }
@@ -531,7 +531,7 @@ impl Storage for ObjectStorage {
             // If we got a result, then we can unwrap safely here:
             // Errors would be in the other branch, and None is only expected
             // if previous_version was passed in function call, but we set it to None
-            #[allow(clippy::expect_used)]
+            #[expect(clippy::expect_used)]
             v.expect("Logic bug in get_object_range_conditional, should not get None")
         })
     }
@@ -593,7 +593,7 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
     /// The prefix for the object store.
     fn prefix(&self) -> String;
 
-    /// We need this because object_store's local file implementation doesn't sort refs. Since this
+    /// We need this because `object_store`'s local file implementation doesn't sort refs. Since this
     /// implementation is used only for tests, it's OK to sort in memory.
     fn artificially_sort_refs_in_mem(&self) -> bool {
         false
@@ -609,7 +609,7 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InMemoryObjectStoreBackend;
 
-impl fmt::Display for InMemoryObjectStoreBackend {
+impl Display for InMemoryObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "InMemoryObjectStoreBackend")
     }
@@ -657,7 +657,7 @@ pub struct LocalFileSystemObjectStoreBackend {
 }
 
 #[cfg(feature = "object-store-fs")]
-impl fmt::Display for LocalFileSystemObjectStoreBackend {
+impl Display for LocalFileSystemObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "LocalFileSystemObjectStoreBackend(path={})", self.path.display())
     }
@@ -718,7 +718,7 @@ pub struct HttpObjectStoreBackend {
 }
 
 #[cfg(feature = "object-store-http")]
-impl fmt::Display for HttpObjectStoreBackend {
+impl Display for HttpObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -758,7 +758,7 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
         if !config.contains_key(&ClientConfigKey::AllowHttp)
             && self.url.starts_with("http:")
         {
-            builder = builder.with_config(ClientConfigKey::AllowHttp, "true")
+            builder = builder.with_config(ClientConfigKey::AllowHttp, "true");
         }
 
         let builder = builder.with_retry(RetryConfig {
@@ -804,7 +804,7 @@ pub struct S3ObjectStoreBackend {
 }
 
 #[cfg(feature = "object-store-s3")]
-impl fmt::Display for S3ObjectStoreBackend {
+impl Display for S3ObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -844,13 +844,13 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
 
         let builder = if let Some(config) = self.config.as_ref() {
             let builder = if let Some(region) = config.region.as_ref() {
-                builder.with_region(region.to_string())
+                builder.with_region(region.clone())
             } else {
                 builder
             };
 
             let builder = if let Some(endpoint) = config.endpoint_url.as_ref() {
-                builder.with_endpoint(endpoint.to_string())
+                builder.with_endpoint(endpoint.clone())
             } else {
                 builder
             };
@@ -910,7 +910,7 @@ pub struct AzureObjectStoreBackend {
 }
 
 #[cfg(feature = "object-store-azure")]
-impl fmt::Display for AzureObjectStoreBackend {
+impl Display for AzureObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -999,7 +999,7 @@ pub struct GcsObjectStoreBackend {
 }
 
 #[cfg(feature = "object-store-gcs")]
-impl fmt::Display for GcsObjectStoreBackend {
+impl Display for GcsObjectStoreBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -1123,11 +1123,8 @@ impl GcsRefreshableCredentialProvider {
         let mut last_credential = self.last_credential.write().await;
 
         // Otherwise, refresh the credential and cache it
-        let creds = self
-            .refresher
-            .get()
-            .await
-            .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
+        let creds =
+            self.refresher.get().await.map_err(|e| StorageErrorKind::Other(e.clone()))?;
         *last_credential = Some(creds.clone());
         Ok(creds)
     }
@@ -1161,7 +1158,6 @@ fn object_to_list_info(
 }
 
 #[cfg(all(test, feature = "object-store-fs"))]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use std::path::PathBuf;
 
@@ -1186,9 +1182,9 @@ mod tests {
 
     struct TestLocalPath(String);
 
-    impl From<&TestLocalPath> for std::path::PathBuf {
+    impl From<&TestLocalPath> for PathBuf {
         fn from(path: &TestLocalPath) -> Self {
-            std::path::PathBuf::from(&path.0)
+            PathBuf::from(&path.0)
         }
     }
 

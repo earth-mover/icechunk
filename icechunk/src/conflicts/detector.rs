@@ -2,12 +2,12 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    ops::DerefMut,
+    ops::DerefMut as _,
     sync::Mutex,
 };
 
 use async_trait::async_trait;
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{StreamExt as _, TryStreamExt as _, stream};
 
 use crate::{
     change_set::ChangeSet,

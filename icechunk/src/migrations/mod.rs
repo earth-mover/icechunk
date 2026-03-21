@@ -276,20 +276,17 @@ async fn do_migrate(
     info!(version=?new_version_info, "Written repository info file");
 
     info!("Opening migrated repo");
-    let migrated = match Repository::open(
+    let Ok(migrated) = Repository::open(
         Some(repo.config().clone()),
-        repo.storage().clone(),
+        Arc::clone(repo.storage()),
         Default::default(),
     )
     .await
-    {
-        Ok(repo) => repo,
-        Err(_) => {
-            error!("Unknown error during migration. Repository doesn't open");
-            delete_repo_info(repo).await?;
-            error!("Migration failed");
-            return Err(MigrationErrorKind::Unknown.into());
-        }
+    else {
+        error!("Unknown error during migration. Repository doesn't open");
+        delete_repo_info(repo).await?;
+        error!("Migration failed");
+        return Err(MigrationErrorKind::Unknown.into());
     };
 
     let new_spec_version = migrated.spec_version();
@@ -306,20 +303,17 @@ async fn do_migrate(
             return Err(err);
         }
         info!("Opening migrated repo");
-        let migrated = match Repository::open(
+        let Ok(migrated) = Repository::open(
             Some(repo.config().clone()),
-            repo.storage().clone(),
+            Arc::clone(repo.storage()),
             Default::default(),
         )
         .await
-        {
-            Ok(repo) => repo,
-            Err(_) => {
-                error!("Unknown error during migration. Repository doesn't open");
-                delete_repo_info(repo).await?;
-                error!("Migration failed");
-                return Err(MigrationErrorKind::Unknown.into());
-            }
+        else {
+            error!("Unknown error during migration. Repository doesn't open");
+            delete_repo_info(repo).await?;
+            error!("Migration failed");
+            return Err(MigrationErrorKind::Unknown.into());
         };
 
         let new_spec_version = migrated.spec_version();
@@ -683,7 +677,7 @@ async fn pointed_snapshots<'a>(
 }
 
 #[cfg(all(test, feature = "object-store-fs"))]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::expect_used)]
 mod tests {
     use std::{collections::HashMap, path::Path};
 
@@ -704,7 +698,8 @@ mod tests {
         let storage =
             new_local_filesystem_storage(dir.path().join("test-repo-v1").as_path())
                 .await?;
-        let repo = Repository::open(None, storage.clone(), Default::default()).await?;
+        let repo =
+            Repository::open(None, Arc::clone(&storage), Default::default()).await?;
         Ok((repo, dir))
     }
 
@@ -712,7 +707,7 @@ mod tests {
     /// Copy the source tree 1.0 repository to a temp dir, then migrate it
     async fn test_1_to_2_migration() -> Result<(), Box<dyn std::error::Error>> {
         let (repo, _tmp) = prepare_v1_repo().await?;
-        let storage = repo.storage().clone();
+        let storage = Arc::clone(repo.storage());
 
         let mut tag_ancestries_before = HashMap::new();
         for tag in repo.list_tags().await? {
@@ -869,11 +864,11 @@ mod tests {
     }
 
     #[tokio_test]
-    /// Migrating an already-V2 repo should return InvalidRepositoryMigration (issue #1524)
+    /// Migrating an already-V2 repo should return `InvalidRepositoryMigration` (issue #1524)
     async fn test_1_to_2_migration_already_v2() -> Result<(), Box<dyn std::error::Error>>
     {
         let (repo, _tmp) = prepare_v1_repo().await?;
-        let storage = repo.storage().clone();
+        let storage = Arc::clone(repo.storage());
 
         migrate_1_to_2(repo, false, true, None).await.unwrap();
 
@@ -889,7 +884,7 @@ mod tests {
     /// Copy the source tree 1.0 repository to a temp dir, then migrate it in dry-run mode
     async fn test_1_to_2_migration_dry_run() -> Result<(), Box<dyn std::error::Error>> {
         let (repo, _tmp) = prepare_v1_repo().await?;
-        let storage = repo.storage().clone();
+        let storage = Arc::clone(repo.storage());
 
         migrate_1_to_2(repo, true, true, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
@@ -903,7 +898,7 @@ mod tests {
     async fn test_1_to_2_migration_without_delete()
     -> Result<(), Box<dyn std::error::Error>> {
         let (repo, _tmp) = prepare_v1_repo().await?;
-        let storage = repo.storage().clone();
+        let storage = Arc::clone(repo.storage());
 
         migrate_1_to_2(repo, false, false, None).await.unwrap();
         let repo = Repository::open(None, storage, Default::default()).await?;
@@ -919,11 +914,11 @@ mod tests {
 
     #[tokio_test]
     /// Verify the ops log chain isn't broken when post-migration writes overflow
-    /// synthetic (backup_path=None) entries.
+    /// synthetic (`backup_path=None`) entries.
     async fn test_ops_log_chain_after_migration() -> Result<(), Box<dyn std::error::Error>>
     {
         let (repo, _tmp) = prepare_v1_repo().await?;
-        let storage = repo.storage().clone();
+        let storage = Arc::clone(repo.storage());
 
         migrate_1_to_2(repo, false, true, None).await.unwrap();
 
@@ -934,7 +929,8 @@ mod tests {
             ..Default::default()
         };
         let repo =
-            Repository::open(Some(config), storage.clone(), Default::default()).await?;
+            Repository::open(Some(config), Arc::clone(&storage), Default::default())
+                .await?;
 
         // Record initial ops log length after migration
         let (stream, _, _) = repo.ops_log().await?;

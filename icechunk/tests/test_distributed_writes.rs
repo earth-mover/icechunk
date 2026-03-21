@@ -196,7 +196,7 @@ where
     let repo4 = mk_repo(storage4, false, spec_version).await?;
 
     let mut set = JoinSet::new();
-    #[allow(clippy::erasing_op, clippy::identity_op)]
+    #[expect(clippy::erasing_op, clippy::identity_op)]
     {
         let size2 = SIZE as u32;
         let size24 = size2 / 4;
@@ -217,7 +217,7 @@ where
     assert!(write_results.iter().all(|r| {
         r.as_ref()
             .inspect_err(
-                #[allow(clippy::dbg_macro)]
+                #[expect(clippy::dbg_macro)]
                 |e| {
                     dbg!(e);
                 },
@@ -236,7 +236,7 @@ where
     let raw_sessions: Vec<Vec<u8>> =
         vec![ds2.as_bytes().unwrap(), ds3.as_bytes().unwrap(), ds4.as_bytes().unwrap()];
     let sessions =
-        raw_sessions.into_iter().map(|bytes| Session::from_bytes(bytes).unwrap());
+        raw_sessions.into_iter().map(|bytes| Session::from_bytes(&bytes).unwrap());
 
     // Merge the changesets into the first repo
     for session in sessions {

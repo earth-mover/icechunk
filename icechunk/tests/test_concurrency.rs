@@ -11,7 +11,7 @@ use icechunk::{
 };
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
-use rand::{RngExt, rng};
+use rand::{RngExt as _, rng};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -23,7 +23,7 @@ use tokio::{
     time::sleep,
 };
 
-use futures::TryStreamExt;
+use futures::TryStreamExt as _;
 
 use crate::common;
 
@@ -65,7 +65,7 @@ async fn test_concurrency_in_tigris() -> Result<(), Box<dyn std::error::Error>> 
 /// This test starts concurrent tasks to read, write and list a repository.
 ///
 /// It writes an `NxN` array,  with individual tasks for each 1x1 chunk. Concurrently with that it
-/// starts NxN tasks to read each chunk, these tasks only finish when the chunk was successfully
+/// starts `NxN` tasks to read each chunk, these tasks only finish when the chunk was successfully
 /// read. While that happens, another Task lists the chunk contents and only finishes when it finds
 /// all chunks written.
 async fn do_test_concurrency(
@@ -112,7 +112,7 @@ async fn do_test_concurrency(
         for y in 0..N {
             let ds = Arc::clone(&ds);
             set.spawn(async move {
-                write_task(ds, x as u32, y as u32).await.expect("Error in write task")
+                write_task(ds, x as u32, y as u32).await.expect("Error in write task");
             });
         }
     }
