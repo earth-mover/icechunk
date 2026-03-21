@@ -3,7 +3,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{StreamExt as _, TryStreamExt as _, stream};
 use tokio::pin;
 use tracing::instrument;
 
@@ -51,7 +51,6 @@ pub async fn expire_ref(
     reference: &Ref,
     older_than: DateTime<Utc>,
 ) -> GCResult<ExpireRefResult> {
-    #[allow(deprecated)]
     let snap_id = reference
         .fetch(asset_manager.storage().as_ref(), asset_manager.storage_settings())
         .await
@@ -68,7 +67,7 @@ pub async fn expire_ref(
 
     // here we'll populate the results of every expired snapshot
     let mut released = HashSet::new();
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     let ancestry =
         Arc::clone(&asset_manager).snapshot_ancestry_v1(&snap_id).await?.peekable();
 
@@ -101,7 +100,7 @@ pub async fn expire_ref(
 
     let editable_snap = asset_manager.fetch_snapshot(&editable_snap).await?;
 
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     let old_parent_id = editable_snap.parent_id();
     if editable_snap.id() == root    // only root can be expired
         || Some(&root) == old_parent_id.as_ref()
@@ -117,12 +116,12 @@ pub async fn expire_ref(
     let root = asset_manager.fetch_snapshot(&root).await?;
     // we don't want to create loops, so:
     // we never edit the root of a tree
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     {
         assert!(editable_snap.parent_id().is_some());
     }
     // and, we only set a root as parent
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     {
         assert!(root.parent_id().is_none());
     }
@@ -130,7 +129,7 @@ pub async fn expire_ref(
     tracing::info!(root = %root.id(), editable_snap=%editable_snap.id(), "Expiration needed for this ref");
 
     // TODO: add properties to the snapshot that tell us it was history edited
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     let new_snapshot = Arc::new(root.adopt(&editable_snap)?);
     asset_manager.write_snapshot(new_snapshot).await?;
     tracing::info!("Snapshot overwritten");
@@ -167,17 +166,15 @@ pub async fn expire(
     expired_branches: ExpiredRefAction,
     expired_tags: ExpiredRefAction,
 ) -> GCResult<ExpireResult> {
-    #[allow(deprecated)]
     let storage = asset_manager.storage().as_ref();
-    #[allow(deprecated)]
     let storage_settings = asset_manager.storage_settings();
 
     let all_refs = stream::iter(list_refs(storage, storage_settings).await?);
-    let asset_manager = Arc::clone(&asset_manager.clone());
+    let asset_manager = Arc::clone(&asset_manager);
 
     all_refs
         .then(move |r| {
-            let asset_manager = asset_manager.clone();
+            let asset_manager = Arc::clone(&asset_manager);
             async move {
                 let ref_result = expire_ref(asset_manager, &r, older_than).await?;
                 Ok::<(Ref, ExpireRefResult), GCError>((r, ref_result))

@@ -118,7 +118,7 @@ impl TransactionLog {
 
     /// Low level method that creates a tx log from its parts
     /// Intended to be used only by library creators
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new_from_parts(
         id: &SnapshotId,
         sorted_new_groups: impl ExactSizeIterator<Item = NodeId> + DoubleEndedIterator,
@@ -216,7 +216,7 @@ impl TransactionLog {
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<Self> {
-        let _ = flatbuffers::root_with_opts::<generated::TransactionLog>(
+        let _ = flatbuffers::root_with_opts::<generated::TransactionLog<'_>>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;
@@ -338,10 +338,14 @@ impl TransactionLog {
             .is_some()
     }
 
+    #[expect(unsafe_code)]
     fn root(&self) -> generated::TransactionLog<'_> {
-        // without the unsafe version this is too slow
-        // if we try to keep the root in the TransactionLog struct, we would need a lifetime
-        unsafe { flatbuffers::root_unchecked::<generated::TransactionLog>(&self.buffer) }
+        // SAFETY: self.buffer was serialized by our own flatbuffers serialization code.
+        // We skip validation for performance; a corrupt buffer here indicates
+        // file corruption or a bad Icechunk implementation, not a caller error.
+        unsafe {
+            flatbuffers::root_unchecked::<generated::TransactionLog<'_>>(&self.buffer)
+        }
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -541,7 +545,7 @@ impl DiffBuilder {
             .chain(to.list_nodes(&Path::root()).await?)
             .map_ok(|n| (n.id, n.path))
             .try_collect()?;
-        Ok(Diff::from_diff_builder(self, nodes))
+        Ok(Diff::from_diff_builder(self, &nodes))
     }
 }
 
@@ -558,7 +562,7 @@ pub struct Diff {
 }
 
 impl Diff {
-    fn from_diff_builder(builder: DiffBuilder, nodes: HashMap<NodeId, Path>) -> Self {
+    fn from_diff_builder(builder: DiffBuilder, nodes: &HashMap<NodeId, Path>) -> Self {
         let new_groups = builder
             .new_groups
             .iter()
@@ -629,12 +633,11 @@ impl Diff {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::collections::HashSet;
 
     use bytes::Bytes;
-    use itertools::Itertools;
+    use itertools::Itertools as _;
 
     use crate::{
         change_set::{ArrayData, ChangeSet},

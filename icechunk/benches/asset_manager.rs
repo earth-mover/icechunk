@@ -45,7 +45,7 @@ fn make_snapshot(num_nodes: usize) -> Arc<Snapshot> {
             None,
             None,
             SpecVersionBin::current(),
-            "bench snapshot".to_string(),
+            "bench snapshot",
             None,
             vec![],
             None,
@@ -83,10 +83,10 @@ fn benchmark_write_new_snapshot(c: &mut Criterion) {
                     |snapshot| {
                         rt.block_on(async {
                             asset_manager.write_snapshot(snapshot).await.unwrap();
-                        })
+                        });
                     },
                     BatchSize::SmallInput,
-                )
+                );
             },
         );
     }
@@ -130,10 +130,10 @@ fn benchmark_write_new_manifest(c: &mut Criterion) {
             |manifest| {
                 rt.block_on(async {
                     asset_manager.write_manifest(manifest).await.unwrap();
-                })
+                });
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     group.finish();
 }

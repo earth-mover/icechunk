@@ -5,7 +5,7 @@
 /// Rust structs bound to python are not able to automatically pickle and unpickle
 /// because pyo3 does not implement the `__getstate__` and `__setstate__` methods
 /// for them. This macro implements those methods for the given struct.
-/// See https://github.com/PyO3/pyo3/issues/100 for more information.
+/// See <https://github.com/PyO3/pyo3/issues/100> for more information.
 ///
 /// For this struct to be applied to a struct, the struct must implement the
 /// `Serialize` and `Deserialize` traits from serde. The format is an internal

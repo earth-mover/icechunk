@@ -9,7 +9,7 @@ use std::{
     collections::HashSet,
     fmt::Display,
     iter,
-    ops::{Deref, DerefMut},
+    ops::{Deref as _, DerefMut as _},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -18,8 +18,8 @@ use std::{
 
 use async_stream::try_stream;
 use bytes::Bytes;
-use futures::{Stream, StreamExt, TryStreamExt};
-use itertools::{Either, Itertools, izip, repeat_n};
+use futures::{Stream, StreamExt as _, TryStreamExt as _};
+use itertools::{Either, Itertools as _, izip, repeat_n};
 use serde::{Deserialize, Serialize, de};
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -153,7 +153,7 @@ pub enum SetVirtualRefsResult {
 }
 
 /// Zarr-compatible key-value interface backed by a [`Session`].
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Store {
     session: Arc<RwLock<Session>>,
     get_partial_values_concurrency: u16,
@@ -173,9 +173,9 @@ impl Store {
     }
 
     #[instrument(skip_all)]
-    pub fn from_bytes(bytes: Bytes) -> StoreResult<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> StoreResult<Self> {
         let session: Session =
-            rmp_serde::from_slice(&bytes).map_err(Box::new).map_err(StoreError::from)?;
+            rmp_serde::from_slice(bytes).map_err(Box::new).map_err(StoreError::from)?;
         let conc = session.config().get_partial_values_concurrency();
         Ok(Self::from_session_and_config(Arc::new(RwLock::new(session)), conc))
     }
@@ -343,7 +343,7 @@ impl Store {
                     Some(session) => {
                         let writer = session.get_chunk_writer()?;
                         let payload = writer(value).await?;
-                        session.set_chunk_ref(node_path, coords, Some(payload)).await?
+                        session.set_chunk_ref(node_path, coords, Some(payload)).await?;
                     }
                     None => {
                         // we only lock the repository to get the writer
@@ -355,7 +355,7 @@ impl Store {
                             .write()
                             .await
                             .set_chunk_ref(node_path, coords, Some(payload))
-                            .await?
+                            .await?;
                     }
                 }
                 Ok(())
@@ -910,7 +910,7 @@ async fn get_metadata(
         }
         e => StoreErrorKind::SessionError(e.kind),
     })?;
-    Ok(range.slice(node.user_data))
+    Ok(range.slice(&node.user_data))
 }
 
 async fn get_chunk_bytes(
@@ -1143,14 +1143,11 @@ impl ArrayMetadata {
     }
 
     fn num_chunks(&self) -> StoreResult<Vec<u32>> {
-        let kvs = match &self.chunk_grid.configuration {
-            serde_json::Value::Object(kvs) => kvs,
-            _ => {
-                return Err(StoreErrorKind::BadChunkGridMetadata(
-                    "Unsupported chunk grid".into(),
-                )
-                .into());
-            }
+        let serde_json::Value::Object(kvs) = &self.chunk_grid.configuration else {
+            return Err(StoreErrorKind::BadChunkGridMetadata(
+                "Unsupported chunk grid".into(),
+            )
+            .into());
         };
         match self.chunk_grid.name.as_str() {
             "regular" => {
@@ -1203,27 +1200,22 @@ impl ArrayMetadata {
             }
             _other => {
                 Err(StoreErrorKind::BadChunkGridMetadata(format!(
-                    "Unsupported chunk grid {}. Only 'regular' and 'rectilinear' chunk grids are supported."
-                                                                 , _other))
+                    "Unsupported chunk grid {_other}. Only 'regular' and 'rectilinear' chunk grids are supported."))
                     .into())
             }
         }
     }
 
     /// Look up chunk size along each axis for a given chunk coordinate
-    #[allow(unused)]
     pub fn get_chunk_shapes<'a>(
         &self,
         coords: impl Iterator<Item = &'a ChunkIndices> + 'a,
     ) -> StoreResult<Box<dyn Iterator<Item = StoreResult<Vec<u32>>> + 'a>> {
-        let kvs = match &self.chunk_grid.configuration {
-            serde_json::Value::Object(kvs) => kvs,
-            _ => {
-                return Err(StoreErrorKind::BadChunkGridMetadata(
-                    "Unsupported chunk grid".into(),
-                )
-                .into());
-            }
+        let serde_json::Value::Object(kvs) = &self.chunk_grid.configuration else {
+            return Err(StoreErrorKind::BadChunkGridMetadata(
+                "Unsupported chunk grid".into(),
+            )
+            .into());
         };
         match self.chunk_grid.name.as_str() {
             "regular" => {
@@ -1332,8 +1324,7 @@ impl ArrayMetadata {
             }
             _other => {
                 Err(StoreErrorKind::BadChunkGridMetadata(format!(
-                    "Unsupported chunk grid {}. Only 'regular' and 'rectilinear' chunk grids are supported."
-                        , _other))
+                    "Unsupported chunk grid {_other}. Only 'regular' and 'rectilinear' chunk grids are supported."))
                     .into())
             }
         }
@@ -1423,7 +1414,6 @@ impl From<Vec<u64>> for ChunkGridSerializer {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
     use std::collections::HashMap;
@@ -1726,7 +1716,7 @@ mod tests {
         let repo = create_memory_store_repository().await;
         let session = repo.writable_session("main").await?;
         let session = Arc::new(RwLock::new(session));
-        let store = Store::from_session(session.clone()).await;
+        let store = Store::from_session(Arc::clone(&session)).await;
 
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","shape":[],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0.0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}]}"#);
         store.set("scalar/zarr.json", zarr_meta.clone()).await?;
@@ -1760,7 +1750,7 @@ mod tests {
         let repo = create_memory_store_repository().await;
         let session = repo.writable_session("main").await?;
         let session = Arc::new(RwLock::new(session));
-        let store = Store::from_session(session.clone()).await;
+        let store = Store::from_session(Arc::clone(&session)).await;
 
         // the first six of these are valid ways of specifying chunk sizes for
         // a dimension of size 6
@@ -1798,7 +1788,7 @@ mod tests {
             assert_eq!(
                 shape.num_chunks().collect::<Vec<_>>(),
                 vec![3, 3, 6, 3, 4, 1, 1, 3]
-            )
+            );
         } else {
             unreachable!();
         }
@@ -2889,7 +2879,7 @@ mod tests {
         ds.write().await.commit("first").max_concurrent_nodes(8).execute().await.unwrap();
 
         let store_bytes = store.as_bytes().await.unwrap();
-        let store2: Store = Store::from_bytes(store_bytes).unwrap();
+        let store2: Store = Store::from_bytes(&store_bytes).unwrap();
 
         let zarr_json = store2.get("zarr.json", &ByteRange::ALL).await.unwrap();
         assert_eq!(

@@ -36,7 +36,7 @@ impl<E> ICError<E> {
     }
 }
 
-impl<E: Display> std::fmt::Display for ICError<E> {
+impl<E: Display> Display for ICError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.kind.fmt(f)?;
         write!(f, "\n\ncontext:\n{}\n", self.context)?;

@@ -4,15 +4,15 @@
 //! and handles committing them.
 //!
 //! Sessions come in three modes:
-//! - **Read-only**: Can read data, ChangeSet is unused
+//! - **Read-only**: Can read data, `ChangeSet` is unused
 //! - **Writable**: Can read and write chunks/metadata
 //! - **Rearrange**: Can move/rename nodes (no chunk writes)
 
 use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use err_into::ErrorInto;
-use futures::{Stream, StreamExt, TryStreamExt, future::Either, stream};
+use err_into::ErrorInto as _;
+use futures::{Stream, StreamExt as _, TryStreamExt as _, future::Either, stream};
 use itertools::{Itertools as _, enumerate, repeat_n};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::task::JoinError;
-use tracing::{Instrument, Span, debug, info, instrument, trace, warn};
+use tracing::{Instrument as _, Span, debug, info, instrument, trace, warn};
 
 use crate::{
     RepositoryConfig, Storage, StorageError,
@@ -185,6 +185,15 @@ pub enum ReindexMapping<'a> {
     },
 }
 
+impl std::fmt::Debug for ReindexMapping<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ForwardOnly(_) => f.debug_tuple("ForwardOnly").finish(),
+            Self::ForwardBackward { .. } => f.debug_struct("ForwardBackward").finish(),
+        }
+    }
+}
+
 pub type SessionError = ICError<SessionErrorKind>;
 
 // it would be great to define this impl in error.rs, but it conflicts with the blanket
@@ -235,7 +244,7 @@ pub type SessionResult<T> = Result<T, SessionError>;
 
 // Returns the index of split_range that includes ChunkIndices using _linear search_.
 // This is used at read time to choose which manifest to query for chunk payload
-/// It is useful to have this act on an iterator (e.g. get_chunk_ref)
+/// It is useful to have this act on an iterator (e.g. `get_chunk_ref`)
 #[inline(always)]
 pub fn find_coord<'a, I>(
     iter: I,
@@ -258,7 +267,7 @@ where
 }
 
 impl ManifestSplits {
-    /// Binary search to locate ManifestExtents for a given chunk coordinate.
+    /// Binary search to locate `ManifestExtents` for a given chunk coordinate.
     #[inline(always)]
     pub fn find<'a>(&'a self, coord: &'a ChunkIndices) -> Option<ManifestExtents> {
         debug_assert_eq!(coord.0.len(), self.0.len());
@@ -280,6 +289,7 @@ impl ManifestSplits {
 pub type RebaseHook =
     Box<dyn Fn(u16) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
+#[derive(Debug, Clone, Copy)]
 enum CommitKind {
     NewCommit,
     Flush,
@@ -298,6 +308,15 @@ pub struct CommitBuilder<'a> {
     rebase_attempts: u16,
     before_rebase: Option<RebaseHook>,
     after_rebase: Option<RebaseHook>,
+}
+
+impl std::fmt::Debug for CommitBuilder<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommitBuilder")
+            .field("message", &self.message)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> CommitBuilder<'a> {
@@ -458,7 +477,7 @@ pub type ReindexOperationResult = Result<Option<ChunkIndices>, SessionError>;
 /// and handle committing them.
 ///
 /// Three modes:
-/// - **Read-only**: Can read data, ChangeSet is unused
+/// - **Read-only**: Can read data, `ChangeSet` is unused
 /// - **Writable**: Can read and write chunks/metadata
 /// - **Rearrange**: Can move/rename nodes (no chunk writes)
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -509,7 +528,7 @@ impl Session {
     /// Such sessions can accept all modifications (other than move) but cannot be committed.
     /// They should be merged back with a base writable Session (show `branch_name` is `Some`)
     /// using [`Session::merge`], which can then be committed.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn create_writable_session(
         config: RepositoryConfig,
         storage_settings: storage::Settings,
@@ -537,7 +556,7 @@ impl Session {
     /// Create a session for rearranging nodes (moves/renames).
     ///
     /// A branch name is required and modifications other than move are disallowed..
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn create_rearrange_session(
         config: RepositoryConfig,
         storage_settings: storage::Settings,
@@ -563,8 +582,8 @@ impl Session {
     }
 
     #[instrument(skip(bytes))]
-    pub fn from_bytes(bytes: Vec<u8>) -> SessionResult<Self> {
-        rmp_serde::from_slice(&bytes).map_err(Box::new).err_into()
+    pub fn from_bytes(bytes: &[u8]) -> SessionResult<Self> {
+        rmp_serde::from_slice(bytes).map_err(Box::new).err_into()
     }
 
     #[instrument(skip(self))]
@@ -632,9 +651,9 @@ impl Session {
         Ok(Session::create_writable_session(
             self.config.clone(),
             (*self.storage_settings).clone(),
-            self.storage.clone(),
+            Arc::clone(&self.storage),
             Arc::clone(&self.asset_manager),
-            self.virtual_resolver.clone(),
+            Arc::clone(&self.virtual_resolver),
             None,
             snap.clone(),
             self.default_commit_metadata.clone(),
@@ -714,10 +733,10 @@ impl Session {
                 for node in nodes_iter {
                     match node.node_type() {
                         NodeType::Group => {
-                            change_set.delete_group(node.path, &node.id)?
+                            change_set.delete_group(node.path, &node.id)?;
                         }
                         NodeType::Array => {
-                            change_set.delete_array(node.path, &node.id)?
+                            change_set.delete_array(node.path, &node.id)?;
                         }
                     }
                 }
@@ -854,10 +873,8 @@ impl Session {
         calculate_new_index: ReindexMapping<'a>,
     ) -> SessionResult<()> {
         let node = self.get_array(array_path).await?;
-        #[allow(clippy::panic)]
-        let shape = if let NodeData::Array { shape, .. } = node.node_data {
-            shape
-        } else {
+        #[expect(clippy::panic)]
+        let NodeData::Array { shape, .. } = node.node_data else {
             // we know it's an array because get_array succeeded
             panic!("bug in reindex")
         };
@@ -907,7 +924,7 @@ impl Session {
                     } // empty source chunk or not?
                 };
                 if should_delete {
-                    change_set.set_chunk_ref(node.id.clone(), old_chunk_index, None)?
+                    change_set.set_chunk_ref(node.id.clone(), old_chunk_index, None)?;
                 }
             }
         }
@@ -983,7 +1000,7 @@ impl Session {
     ) -> SessionResult<()> {
         let node = self.get_array(node_path).await?;
         for coord in coords {
-            self.set_node_chunk_ref(node.clone(), coord, None).await?
+            self.set_node_chunk_ref(node.clone(), coord, None).await?;
         }
         Ok(())
     }
@@ -1236,7 +1253,6 @@ impl Session {
     /// ```
     ///
     /// As shown, the result of the returned function must be awaited to finish the upload.
-    #[allow(clippy::type_complexity)] // impl alias are unstable
     #[instrument(skip(self))]
     pub fn get_chunk_writer(
         &self,
@@ -1292,13 +1308,13 @@ impl Session {
             return Ok(None);
         }
 
-        let index = match find_coord(manifests.iter().map(|m| &m.extents), coords) {
-            Some((index, _)) => index,
-            // for an invalid coordinate, we bail.
-            // This happens for two cases:
-            // (1) the "coords" is out-of-range for the array shape
-            // (2) the "coords" belongs to a shard that hasn't been written yet.
-            None => return Ok(None),
+        // for an invalid coordinate, we bail.
+        // This happens for two cases:
+        // (1) the "coords" is out-of-range for the array shape
+        // (2) the "coords" belongs to a shard that hasn't been written yet.
+        let Some((index, _)) = find_coord(manifests.iter().map(|m| &m.extents), coords)
+        else {
+            return Ok(None);
         };
 
         let manifest = self.fetch_manifest(&manifests[index].object_id).await?;
@@ -1651,7 +1667,7 @@ impl Session {
         Ok(id)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[instrument(skip(self, solver, properties, before_rebase, after_rebase))]
     async fn do_commit_rebasing(
         &mut self,
@@ -1797,7 +1813,7 @@ impl Session {
         // we need to reverse the iterator to process them in order of oldest first
         let mut logs = stream::iter(new_commits.into_iter().rev())
             .map(move |snap_id| {
-                let am = am.clone();
+                let am = Arc::clone(&am);
                 async move {
                     let tx_log = am.fetch_transaction_log(&snap_id).await?;
                     Ok::<_, SessionError>((snap_id, tx_log))
@@ -1874,7 +1890,7 @@ impl Session {
         } else {
             let current_snapshot =
                 self.asset_manager.fetch_snapshot(&ref_data.snapshot).await?;
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             let ancestry = Arc::clone(&self.asset_manager)
                 .snapshot_ancestry_v1(&current_snapshot.id())
                 .await?
@@ -1942,7 +1958,7 @@ async fn updated_chunk_iterator<'a>(
     snapshot_id: &'a SnapshotId,
 ) -> SessionResult<impl Stream<Item = SessionResult<(Path, ChunkInfo)>> + use<'a>> {
     let snapshot = asset_manager.fetch_snapshot(snapshot_id).await?;
-    let nodes = futures::stream::iter(snapshot.iter_arc(parent_group));
+    let nodes = stream::iter(snapshot.iter_arc(parent_group));
     let res = nodes.and_then(move |node| async move {
         // Note: Confusingly, these NodeSnapshot instances have the metadata stored in the snapshot.
         // We have not applied any changeset updates. At the moment, the downstream code only
@@ -1984,11 +2000,11 @@ async fn node_chunk_iterator<'a>(
     path: &Path,
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a + use<'a> {
     match get_node(asset_manager, change_set, snapshot_id, path).await {
-        Ok(node) => futures::future::Either::Left(
+        Ok(node) => Either::Left(
             verified_node_chunk_iterator(asset_manager, snapshot_id, change_set, node)
                 .await,
         ),
-        Err(_) => futures::future::Either::Right(futures::stream::empty()),
+        Err(_) => Either::Right(stream::empty()),
     }
 }
 
@@ -2000,7 +2016,7 @@ async fn verified_node_chunk_iterator<'a>(
     node: NodeSnapshot,
 ) -> impl Stream<Item = SessionResult<ChunkInfo>> + 'a {
     match node.node_data {
-        NodeData::Group => futures::future::Either::Left(futures::stream::empty()),
+        NodeData::Group => Either::Left(stream::empty()),
         NodeData::Array { manifests, .. } => {
             let new_chunk_indices: Box<HashSet<&ChunkIndices>> = Box::new(
                 change_set
@@ -2025,9 +2041,9 @@ async fn verified_node_chunk_iterator<'a>(
                     })
                 });
 
-            futures::future::Either::Right(
-                futures::stream::iter(new_chunks).chain(
-                    futures::stream::iter(manifests)
+            Either::Right(
+                stream::iter(new_chunks).chain(
+                    stream::iter(manifests)
                         .then(move |manifest_ref| {
                             let new_chunk_indices = new_chunk_indices.clone();
                             let node_id_c = node.id.clone();
@@ -2058,16 +2074,16 @@ async fn verified_node_chunk_iterator<'a>(
                                             .update_existing_chunks(
                                                 node_id_c3, old_chunks,
                                             );
-                                        futures::future::Either::Left(
-                                            futures::stream::iter(old_chunks)
+                                        Either::Left(
+                                            stream::iter(old_chunks)
                                                 .map_err(|e| e.into()),
                                         )
                                     }
                                     // if we cannot even fetch the manifest, we generate a
                                     // single error value.
-                                    Err(err) => futures::future::Either::Right(
-                                        futures::stream::once(ready(Err(err))),
-                                    ),
+                                    Err(err) => {
+                                        Either::Right(stream::once(ready(Err(err))))
+                                    }
                                 }
                             }
                         })
@@ -2267,8 +2283,7 @@ async fn all_chunks<'a>(
     let existing_array_chunks =
         updated_chunk_iterator(&Path::root(), asset_manager, change_set, snapshot_id)
             .await?;
-    let new_array_chunks =
-        futures::stream::iter(change_set.new_arrays_chunk_iterator().map(Ok));
+    let new_array_chunks = stream::iter(change_set.new_arrays_chunk_iterator().map(Ok));
     Ok(existing_array_chunks.chain(new_array_chunks))
 }
 
@@ -2284,7 +2299,7 @@ pub fn construct_valid_byte_range(
             .into()
     };
     match request {
-        ByteRange::Bounded(std::ops::Range { start: req_start, end: req_end }) => {
+        ByteRange::Bounded(Range { start: req_start, end: req_end }) => {
             let new_start = chunk_offset + req_start;
             let new_end = chunk_offset + req_end;
             if new_start >= chunk_offset + chunk_length
@@ -2444,7 +2459,7 @@ async fn write_manifest_with_changes(
 ///
 /// Returns `None` if the node was deleted or is not an array.
 /// Otherwise returns the manifest refs and files for this node.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn flush_existing_node(
     asset_manager: &AssetManager,
     manifest_config: &ManifestConfig,
@@ -2535,7 +2550,7 @@ async fn flush_existing_node(
                     for (mref, overlap) in intersecting_manifests {
                         if overlap == Overlap::Complete {
                             result.manifest_refs.push(mref.clone());
-                            #[allow(clippy::expect_used)]
+                            #[expect(clippy::expect_used)]
                             result.manifest_files.push(
                                 old_snapshot.manifest_info(&mref.object_id).expect("logic bug. creating manifest file info for an existing manifest failed."),
                             );
@@ -2572,7 +2587,7 @@ async fn flush_existing_node(
                     manifest_files: Vec::new(),
                 };
                 result.manifest_files.extend(array_refs.iter().map(|mr| {
-                    #[allow(clippy::expect_used)]
+                    #[expect(clippy::expect_used)]
                     old_snapshot.get_manifest_file(&mr.object_id).expect(
                         "Bug in flush function, no manifest file found in snapshot",
                     )
@@ -2676,7 +2691,7 @@ impl ManifestSplittingConfig {
         //     - y : 2
         let mut already_matched: HashSet<usize> = HashSet::new();
 
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         let split_sizes = self
             .split_sizes
             .clone()
@@ -2688,7 +2703,7 @@ impl ManifestSplittingConfig {
                 let dimension_names = dimension_names
                     .clone()
                     .unwrap_or(repeat_n(DimensionName::NotSpecified, ndim).collect());
-                for (axis, dimname) in itertools::enumerate(dimension_names) {
+                for (axis, dimname) in enumerate(dimension_names) {
                     if already_matched.contains(&axis) {
                         continue;
                     }
@@ -2895,7 +2910,7 @@ async fn do_flush(
         None,
         parent_id,
         flush_data.asset_manager.spec_version(),
-        message.to_string(),
+        message,
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
         None,
@@ -2981,7 +2996,7 @@ async fn do_flush(
     Ok(new_snapshot)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn do_commit(
     asset_manager: Arc<AssetManager>,
     branch_name: &str,
@@ -3029,9 +3044,7 @@ async fn do_commit(
     let new_snapshot_id = new_snapshot.id();
 
     let res = match asset_manager.spec_version() {
-        SpecVersionBin::V1 =>
-        {
-            #[allow(deprecated)]
+        SpecVersionBin::V1 => {
             do_commit_v1(
                 asset_manager.storage().as_ref(),
                 asset_manager.storage_settings(),
@@ -3110,7 +3123,7 @@ async fn do_commit_v1(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn do_commit_v2(
     asset_manager: Arc<AssetManager>,
     branch_name: &str,
@@ -3239,12 +3252,12 @@ fn aggregate_extents<'a, T: std::fmt::Debug, E>(
                 if let Some(from_current) = from.get_mut(coord_idx)
                     && value < from_current
                 {
-                    *from_current = *value
+                    *from_current = *value;
                 }
                 if let Some(to_current) = to.get_mut(coord_idx) {
                     let range_value = value + 1;
                     if range_value > *to_current {
-                        *to_current = range_value
+                        *to_current = range_value;
                     }
                 }
             }
@@ -3254,7 +3267,6 @@ fn aggregate_extents<'a, T: std::fmt::Debug, E>(
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::{
         collections::HashMap,
@@ -3284,7 +3296,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use icechunk_macros::tokio_test;
-    use itertools::{Itertools, assert_equal};
+    use itertools::assert_equal;
     use rstest::rstest;
     use rstest_reuse::{self, *};
 
@@ -3729,8 +3741,7 @@ mod tests {
 
     #[tokio_test]
     async fn test_repository_with_updates() -> Result<(), Box<dyn Error>> {
-        let storage: Arc<dyn Storage + Send + Sync> =
-            crate::new_in_memory_storage().await?;
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let storage_settings = storage.default_settings().await?;
         let asset_manager = AssetManager::new_no_cache(
             Arc::clone(&storage),
@@ -3806,7 +3817,7 @@ mod tests {
             None,
             None,
             SpecVersionBin::current(),
-            "message".to_string(),
+            "message",
             None,
             manifests,
             None,
@@ -3823,7 +3834,7 @@ mod tests {
         // )
         // .await?;
         Repository::store_config(
-            storage.clone(),
+            Arc::clone(&storage),
             &RepositoryConfig::default(),
             &storage::VersionInfo::for_creation(),
         )
@@ -4032,7 +4043,8 @@ mod tests {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let storage = Arc::clone(&logging_c);
 
         let config = RepositoryConfig {
@@ -4584,7 +4596,8 @@ mod tests {
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let in_mem_storage = Arc::new(ObjectStorage::new_in_memory().await?);
-        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let storage = Arc::clone(&in_mem_storage);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
             None,
             Arc::clone(&storage),
@@ -4865,7 +4878,7 @@ mod tests {
         assert_eq!(parents[1].message, "first commit");
         assert_eq!(parents[2].message, Snapshot::INITIAL_COMMIT_MESSAGE);
         assert_eq!(parents[2].id, Snapshot::INITIAL_SNAPSHOT_ID);
-        itertools::assert_equal(
+        assert_equal(
             parents.iter().sorted_by_key(|m| m.flushed_at).rev(),
             parents.iter(),
         );
@@ -5129,7 +5142,7 @@ mod tests {
         Ok(())
     }
 
-    /// Integration test that fetch_snapshot_info correctly identifies initial vs non-initial.
+    /// Integration test that `fetch_snapshot_info` correctly identifies initial vs non-initial.
     #[tokio_test]
     #[apply(spec_version_cases)]
     async fn test_fetch_snapshot_info_is_initial(
@@ -5331,7 +5344,8 @@ mod tests {
     #[tokio_test]
     async fn test_basic_move() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
-        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let storage = Arc::clone(&in_mem_storage);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
             None,
             Arc::clone(&storage),
@@ -5397,7 +5411,8 @@ mod tests {
     #[tokio_test]
     async fn test_move_errors() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
-        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let storage = Arc::clone(&in_mem_storage);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
             None,
             Arc::clone(&storage),
@@ -5437,7 +5452,8 @@ mod tests {
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
-        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let storage = Arc::clone(&in_mem_storage);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
             None,
             Arc::clone(&storage),
@@ -5508,7 +5524,8 @@ mod tests {
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
-        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let storage = Arc::clone(&in_mem_storage);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
             None,
             Arc::clone(&storage),
@@ -5547,7 +5564,7 @@ mod tests {
             assert_eq!(
                 new_payload,
                 Some(ChunkPayload::Inline((chunk_index + 1).to_string().into()))
-            )
+            );
         }
 
         assert_eq!(session.get_chunk_ref(&apath, &ChunkIndices(vec![9])).await?, None);
@@ -6886,7 +6903,7 @@ mod tests {
             fn init_test(
                 _ref_state: &<Self::Reference as ReferenceStateMachine>::State,
             ) -> Self::SystemUnderTest {
-                let session = tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let session = Runtime::new().unwrap().block_on(async {
                     let repo =
                         create_memory_store_repository(SpecVersionBin::current()).await;
                     repo.writable_session("main").await.unwrap()
@@ -6903,19 +6920,19 @@ mod tests {
                 let repository = &mut state.session;
                 match transition {
                     RepositoryTransition::AddArray(path, shape, dims, ud) => {
-                        runtime.unwrap(repository.add_array(path, shape, dims, ud))
+                        runtime.unwrap(repository.add_array(path, shape, dims, ud));
                     }
                     RepositoryTransition::UpdateArray(path, shape, dims, ud) => {
-                        runtime.unwrap(repository.update_array(&path, shape, dims, ud))
+                        runtime.unwrap(repository.update_array(&path, shape, dims, ud));
                     }
                     RepositoryTransition::DeleteArray(Some(path)) => {
-                        runtime.unwrap(repository.delete_array(path))
+                        runtime.unwrap(repository.delete_array(path));
                     }
                     RepositoryTransition::AddGroup(path, ud) => {
-                        runtime.unwrap(repository.add_group(path, ud))
+                        runtime.unwrap(repository.add_group(path, ud));
                     }
                     RepositoryTransition::DeleteGroup(Some(path)) => {
-                        runtime.unwrap(repository.delete_group(path))
+                        runtime.unwrap(repository.delete_group(path));
                     }
                     _ => panic!(),
                 }
@@ -6948,7 +6965,7 @@ mod tests {
                         _ => Err("foo"),
                     }
                     .unwrap();
-                    assert_eq!(&node.user_data, ud)
+                    assert_eq!(&node.user_data, ud);
                 }
             }
         }
