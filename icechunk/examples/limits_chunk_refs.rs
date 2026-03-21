@@ -15,12 +15,14 @@ use icechunk::{
 };
 
 use bytes::Bytes;
-use itertools::Itertools;
+use itertools::Itertools as _;
 use tokio::sync::RwLock;
 
 use clap::Parser;
 use test_log::tracing_subscriber;
-use test_log::tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use test_log::tracing_subscriber::{
+    layer::SubscriberExt as _, util::SubscriberInitExt as _,
+};
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -30,11 +32,11 @@ struct Args {
     #[arg(default_value = "test_repo")]
     repo_dir: PathBuf,
 
-    /// Number of chunk_refs to set
+    /// Number of `chunk_refs` to set
     #[arg(default_value_t = 1_000_000)]
     count: u32,
 
-    /// Number of chunk_refs per manifest
+    /// Number of `chunk_refs` per manifest
     #[arg(default_value_t = 50_000_000)]
     num_chunks: u32,
 }

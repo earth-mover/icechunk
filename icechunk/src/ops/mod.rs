@@ -89,7 +89,7 @@ pub async fn pointed_snapshots_v1<'a>(
 
         while let Some(pointed_snap_id) = roots.try_next().await? {
             if ! seen.contains(&pointed_snap_id) {
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 let parents = Arc::clone(&asset_manager).snapshot_ancestry_v1(&pointed_snap_id).await?;
                 for await parent in parents {
                     let parent = parent?;
@@ -114,15 +114,13 @@ pub async fn all_roots_v1<'a>(
     asset_manager: Arc<AssetManager>,
     extra_roots: &'a HashSet<SnapshotId>,
 ) -> RefResult<impl Stream<Item = RefResult<SnapshotId>> + 'a> {
-    #[allow(deprecated)]
     let all_refs =
         list_refs(asset_manager.storage().as_ref(), asset_manager.storage_settings())
             .await?;
     let roots = stream::iter(all_refs)
         .then(move |r| {
-            let asset_manager = asset_manager.clone();
+            let asset_manager = Arc::clone(&asset_manager);
             async move {
-                #[allow(deprecated)]
                 r.fetch(
                     asset_manager.storage().as_ref(),
                     asset_manager.storage_settings(),
@@ -151,10 +149,12 @@ pub async fn pointed_snapshots<'a>(
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use futures::TryStreamExt as _;
-    use std::collections::{HashMap, HashSet};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    };
 
     use bytes::Bytes;
 
@@ -167,7 +167,8 @@ mod tests {
     {
         let storage = new_in_memory_storage().await?;
         let repo =
-            Repository::create(None, storage.clone(), HashMap::new(), None, true).await?;
+            Repository::create(None, Arc::clone(&storage), HashMap::new(), None, true)
+                .await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::new()).await?;
         let snap = session.commit("commit").max_concurrent_nodes(8).execute().await?;
@@ -177,10 +178,11 @@ mod tests {
         let snap = session.commit("commit").max_concurrent_nodes(8).execute().await?;
         repo.create_tag("tag2", &snap).await?;
 
-        let all_snaps = pointed_snapshots(repo.asset_manager().clone(), &HashSet::new())
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?;
+        let all_snaps =
+            pointed_snapshots(Arc::clone(repo.asset_manager()), &HashSet::new())
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
 
         assert_eq!(all_snaps.len(), 3);
         Ok(())

@@ -13,10 +13,10 @@ use ::object_store::gcp::GoogleConfigKey;
 use chrono::{DateTime, Utc};
 use core::fmt;
 use futures::{
-    Stream, StreamExt, TryStreamExt,
+    Stream, StreamExt as _, TryStreamExt as _,
     stream::{self, BoxStream, FuturesOrdered},
 };
-use itertools::Itertools;
+use itertools::Itertools as _;
 #[cfg(feature = "s3")]
 use s3::S3Storage;
 pub use s3_config::{
@@ -184,7 +184,7 @@ impl Display for VersionInfo {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
 pub struct RetriesSettings {
     pub max_tries: Option<NonZeroU16>,
     pub initial_backoff_ms: Option<u32>,
@@ -213,7 +213,7 @@ impl RetriesSettings {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
 pub struct TimeoutSettings {
     pub connect_timeout_ms: Option<u32>,
     pub read_timeout_ms: Option<u32>,
@@ -236,7 +236,7 @@ impl TimeoutSettings {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
 pub struct ConcurrencySettings {
     pub max_concurrent_requests_for_object: Option<NonZeroU16>,
     pub ideal_concurrent_request_size: Option<NonZeroU64>,
@@ -358,19 +358,19 @@ impl Settings {
             concurrency: match (&self.concurrency, other.concurrency) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
             retries: match (&self.retries, other.retries) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
             timeouts: match (&self.timeouts, other.timeouts) {
                 (None, None) => None,
                 (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
+                (Some(c), None) => Some(*c),
                 (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
             },
             unsafe_use_conditional_create: match (
@@ -472,13 +472,24 @@ pub enum GetModifiedResult {
     OnLatestVersion,
 }
 
+impl fmt::Debug for GetModifiedResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Modified { new_version, .. } => {
+                f.debug_struct("Modified").field("new_version", new_version).finish()
+            }
+            Self::OnLatestVersion => write!(f, "OnLatestVersion"),
+        }
+    }
+}
+
 /// Fetch and write the parquet files that represent the repository in object store
 ///
 /// Different implementation can cache the files differently, or not at all.
 /// Implementations are free to assume files are never overwritten.
 #[async_trait]
 #[typetag::serde(tag = "type")]
-pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
+pub trait Storage: fmt::Debug + Display + private::Sealed + Sync + Send {
     async fn default_settings(&self) -> StorageResult<Settings> {
         Ok(Default::default())
     }
@@ -591,12 +602,12 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
                             warn!("ignoring error in Storage::delete_batch");
                             Default::default()
                         });
-                    #[allow(clippy::expect_used)]
+                    #[expect(clippy::expect_used)]
                     res.lock().expect("Bug in delete objects").merge(&new_deletes);
                 }
             })
             .await;
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         let res = res.lock().expect("Bug in delete objects");
         Ok(res.clone())
     }
@@ -678,9 +689,9 @@ pub trait Storage: fmt::Debug + fmt::Display + private::Sealed + Sync + Send {
 /// It generates requests that are as similar as possible in size, this means no more than 1 byte
 /// difference between the requests.
 ///
-/// It tries to generate ceil(size/ideal_req_size) requests, but never exceeds max_requests.
+/// It tries to generate `ceil(size/ideal_req_size)` requests, but never exceeds `max_requests`.
 ///
-/// ideal_req_size and max_requests must be > 0
+/// `ideal_req_size` and `max_requests` must be > 0
 pub fn split_in_multiple_requests(
     range: &Range<u64>,
     ideal_req_size: u64,
@@ -712,9 +723,9 @@ pub fn split_in_multiple_requests(
 ///
 /// Returns tuples of Range for each request.
 ///
-/// It tries to generate ceil(size/ideal_req_size) requests, but never exceeds max_requests.
+/// It tries to generate `ceil(size/ideal_req_size)` requests, but never exceeds `max_requests`.
 ///
-/// ideal_req_size and max_requests must be > 0
+/// `ideal_req_size` and `max_requests` must be > 0
 pub fn split_in_multiple_equal_requests(
     range: &Range<u64>,
     ideal_req_size: u64,
@@ -864,7 +875,7 @@ pub fn new_tigris_storage(
     Ok(Arc::new(st))
 }
 
-pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage>> {
+pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     let st = ObjectStorage::new_in_memory().await?;
     Ok(Arc::new(st))
 }
@@ -892,7 +903,7 @@ pub fn new_http_storage(
             ClientConfigKey::from_str(k).ok().map(|key| (key, v.clone()))
         })
         .collect();
-    let st = ObjectStorage::new_http(base_url, Some(config))?;
+    let st = ObjectStorage::new_http(&base_url, Some(config))?;
     Ok(Arc::new(st))
 }
 
@@ -967,7 +978,7 @@ pub fn strip_quotes(s: &str) -> &str {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[expect(clippy::unwrap_used, clippy::panic)]
 mod tests {
 
     use std::collections::HashSet;
@@ -978,7 +989,7 @@ mod tests {
     #[cfg(feature = "object-store-fs")]
     #[icechunk_macros::tokio_test]
     async fn test_is_clean() {
-        use std::{fs::File, io::Write, path::PathBuf};
+        use std::{fs::File, io::Write as _, path::PathBuf};
         use tempfile::TempDir;
 
         let repo_dir = TempDir::new().unwrap();
@@ -1015,7 +1026,7 @@ mod tests {
         .unwrap();
         let bytes = rmp_serde::to_vec(&storage).unwrap();
         let dese: Result<Arc<dyn Storage>, _> = rmp_serde::from_slice(&bytes);
-        assert!(dese.is_ok())
+        assert!(dese.is_ok());
     }
 
     proptest! {

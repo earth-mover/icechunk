@@ -7,13 +7,46 @@ resolver = "2"
 rust-version = "1.91.1"
 edition = "2024"
 
+[workspace.lints.rust]
+# Safety
+unsafe_code = "warn"
+# Correctness
+unreachable_pub = "warn"
+# Clarity
+elided_lifetimes_in_paths = "warn"
+missing_debug_implementations = "warn"
+trivial_numeric_casts = "warn"
+unused_qualifications = "warn"
+
 [workspace.lints.clippy]
+# Safety & correctness
+exit = "warn"
 expect_used = "warn"
-unwrap_used = "warn"
 panic = "warn"
 todo = "warn"
+undocumented_unsafe_blocks = "warn"
 unimplemented = "warn"
+unwrap_used = "warn"
+# Clarity & style
+allow_attributes = "warn"
+clone_on_ref_ptr = "warn"
 dbg_macro = "warn"
+doc_markdown = "warn"
+implicit_clone = "warn"
+manual_let_else = "warn"
+semicolon_if_nothing_returned = "warn"
+uninlined_format_args = "warn"
+unused_result_ok = "warn"
+unused_trait_names = "warn"
+# Performance
+inefficient_to_string = "warn"
+large_types_passed_by_value = "warn"
+needless_pass_by_value = "warn"
+# Cargo
+cargo_common_metadata = "warn"
+create_dir = "warn"
+wildcard_dependencies = "warn"
+
 
 [workspace.metadata.release]
 allow-branch = ["main", "release-*", "support/v*"]

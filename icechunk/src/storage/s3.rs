@@ -31,11 +31,13 @@ use aws_sdk_s3::{
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
 };
 use aws_smithy_runtime::client::retries::classifiers::HttpStatusCodeClassifier;
-use aws_smithy_types_convert::{date_time::DateTimeExt, stream::PaginationStreamExt};
+use aws_smithy_types_convert::{
+    date_time::DateTimeExt as _, stream::PaginationStreamExt as _,
+};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{
-    Stream, StreamExt, TryStreamExt,
+    Stream, StreamExt as _, TryStreamExt as _,
     stream::{self, BoxStream, FuturesOrdered},
 };
 use serde::{Deserialize, Serialize};
@@ -92,7 +94,7 @@ fn s3_delete_err(err: impl std::error::Error + Send + Sync + 'static) -> Storage
     StorageErrorKind::S3DeleteObjectError(Box::new(err)).into()
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 fn s3_stream_err(err: impl std::error::Error + Send + Sync + 'static) -> StorageError {
     StorageErrorKind::S3StreamError(Box::new(err)).into()
 }
@@ -108,7 +110,7 @@ pub struct S3Storage {
     extra_read_headers: Vec<(String, String)>,
     extra_write_headers: Vec<(String, String)>,
     #[serde(skip)]
-    /// We need to use OnceCell to allow async initialization, because serde
+    /// We need to use `OnceCell` to allow async initialization, because serde
     /// does not support async cfunction calls from deserialization. This gives
     /// us a way to lazily initialize the client.
     client: OnceCell<Arc<Client>>,
@@ -182,14 +184,14 @@ pub async fn mk_client(
         region
     };
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     let app_name = AppName::new(crate::user_agent()).unwrap();
     let mut aws_config = aws_config::defaults(BehaviorVersion::v2026_01_12())
         .region(region)
         .app_name(app_name);
 
     if let Some(endpoint) = endpoint {
-        aws_config = aws_config.endpoint_url(endpoint)
+        aws_config = aws_config.endpoint_url(endpoint);
     }
 
     let stalled_stream = if config.network_stream_timeout_seconds == Some(0) {
@@ -284,7 +286,7 @@ pub async fn mk_client(
         s3_builder = s3_builder.interceptor(ExtraHeadersInterceptor {
             extra_read_headers,
             extra_write_headers,
-        })
+        });
     }
 
     let config = s3_builder.build();
@@ -381,7 +383,7 @@ impl S3Storage {
 
         if settings.unsafe_use_metadata() {
             if let Some(ct) = content_type {
-                req = req.content_type(ct)
+                req = req.content_type(ct);
             };
 
             for (k, v) in metadata {
@@ -467,7 +469,7 @@ impl S3Storage {
 
         if settings.unsafe_use_metadata() {
             if let Some(ct) = content_type {
-                multi = multi.content_type(ct)
+                multi = multi.content_type(ct);
             };
             for (k, v) in metadata {
                 multi = multi.metadata(k, v);
@@ -867,7 +869,7 @@ impl Storage for S3Storage {
             // If we got a result, then we can unwrap safely here:
             // Errors would be in the other branch, and None is only expected
             // if previous_version was passed in function call, but we set it to None
-            #[allow(clippy::expect_used)]
+            #[expect(clippy::expect_used)]
             v.expect("Logic bug in get_object_range_conditional, should not get None")
         })
     }
@@ -1011,7 +1013,7 @@ impl ProvideRefreshableCredentials {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use icechunk_macros::tokio_test;
 

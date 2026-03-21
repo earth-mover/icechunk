@@ -18,7 +18,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::{StreamExt, stream::FuturesUnordered};
+use futures::{StreamExt as _, stream::FuturesUnordered};
 use icechunk::{
     Repository, RepositoryConfig,
     config::CompressionConfig,

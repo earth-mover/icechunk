@@ -20,7 +20,7 @@ use chrono::{DateTime, Utc};
 use flatbuffers::generated;
 use format_constants::FileTypeBin;
 use manifest::{VirtualReferenceError, VirtualReferenceErrorKind};
-use rand::{RngExt, rng};
+use rand::{RngExt as _, rng};
 use serde::{Deserialize, Serialize};
 use serde_with::{TryFromInto, serde_as};
 use thiserror::Error;
@@ -34,18 +34,8 @@ pub mod attributes;
 pub mod manifest;
 
 /// Generated Flatbuffer types for binary serialization.
-#[allow(
-    dead_code,
-    unused_imports,
-    unsafe_op_in_unsafe_fn,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::needless_lifetimes,
-    clippy::extra_unused_lifetimes,
-    clippy::missing_safety_doc,
-    clippy::derivable_impls
-)]
 #[path = "./flatbuffers/all_generated.rs"]
+#[allow(clippy::all, warnings)]
 pub mod flatbuffers;
 
 /// Repository metadata (version, properties).
@@ -72,7 +62,6 @@ pub const V1_REFS_FILE_PATH: &str = "refs";
 pub struct Path(#[serde_as(as = "TryFromInto<String>")] Utf8UnixPathBuf);
 
 /// Marker trait for object ID type tags (sealed).
-#[allow(dead_code)]
 pub trait FileTypeTag: private::Sealed {}
 
 /// The id of a file in object store
@@ -83,23 +72,23 @@ pub struct ObjectId<const SIZE: usize, T: FileTypeTag>(
 );
 
 /// Type tag for [`SnapshotId`].
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SnapshotTag;
 
 /// Type tag for [`ManifestId`].
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ManifestTag;
 
 /// Type tag for [`ChunkId`].
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkTag;
 
 /// Type tag for [`AttributesId`].
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AttributesTag;
 
 /// Type tag for [`NodeId`].
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NodeTag;
 
 impl private::Sealed for SnapshotTag {}
@@ -143,7 +132,7 @@ impl<const SIZE: usize, T: FileTypeTag> ObjectId<SIZE, T> {
     pub const FAKE: Self = Self([0; SIZE], PhantomData);
 }
 
-impl<const SIZE: usize, T: FileTypeTag> fmt::Debug for ObjectId<SIZE, T> {
+impl<const SIZE: usize, T: FileTypeTag> Debug for ObjectId<SIZE, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", String::from(self))
     }
@@ -256,7 +245,7 @@ impl ByteRange {
 
     pub const ALL: Self = Self::From(0);
 
-    pub fn slice(&self, bytes: Bytes) -> Bytes {
+    pub fn slice(&self, bytes: &Bytes) -> Bytes {
         match self {
             ByteRange::Bounded(range) => {
                 bytes.slice(range.start as usize..range.end as usize)
@@ -522,9 +511,9 @@ pub mod format_constants {
 
 // The impl of Debug for Utf8UnixPathBuf is expensive and triggered often by tracing Spans
 // This implemnetation is much cheaper, and removes formatting from our samply profiles.
-impl fmt::Debug for Path {
+impl Debug for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
+        Display::fmt(self, f)
     }
 }
 
@@ -608,6 +597,7 @@ impl TryFrom<String> for Path {
 }
 
 #[inline(always)]
+#[expect(clippy::needless_pass_by_value)]
 pub fn lookup_index_by_key<'a, T: ::flatbuffers::Follow<'a> + 'a, K: Ord>(
     v: ::flatbuffers::Vector<'a, T>,
     key: K,
@@ -639,7 +629,6 @@ pub fn lookup_index_by_key<'a, T: ::flatbuffers::Follow<'a> + 'a, K: Ord>(
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::roundtrip_serialization_tests;

@@ -2,7 +2,7 @@ use std::{collections::HashMap, env, future::Future, pin::Pin, sync::Arc};
 
 use bytes::Bytes;
 use chrono::Utc;
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{StreamExt as _, TryStreamExt as _, stream};
 use icechunk::{
     ObjectStorage, Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,
@@ -34,8 +34,8 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt as _},
     sync::oneshot,
 };
-use warp::Filter;
-use zstd::zstd_safe::WriteBuf;
+use warp::Filter as _;
+use zstd::zstd_safe::WriteBuf as _;
 
 use crate::common;
 use crate::common::Permission;
@@ -46,7 +46,7 @@ use crate::common::Permission;
 #[case::v2(SpecVersionBin::V2)]
 fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
 
-#[allow(clippy::expect_used)]
+#[expect(clippy::expect_used)]
 async fn mk_s3_storage(
     prefix: &str,
     permission: &Permission,
@@ -77,7 +77,7 @@ async fn mk_s3_storage(
     Ok(storage)
 }
 
-#[allow(clippy::expect_used)]
+#[expect(clippy::expect_used)]
 async fn mk_s3_object_store_storage(
     prefix: &str,
     permission: &Permission,
@@ -127,7 +127,7 @@ async fn mk_azure_blob_storage(
     Ok(storage)
 }
 
-#[allow(clippy::expect_used)]
+#[expect(clippy::expect_used)]
 async fn with_storage<F, Fut>(
     permission: Permission,
     f: F,
@@ -145,7 +145,7 @@ where
     )
     .await?;
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     let s2 = new_in_memory_storage().await.unwrap();
     let s3 = mk_s3_object_store_storage(
         format!("{}_object_store", common::get_random_prefix("with_storage")).as_str(),
@@ -605,7 +605,7 @@ pub async fn test_fetch_non_existing_branch(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-#[allow(clippy::panic)]
+#[expect(clippy::panic)]
 pub async fn test_write_config_on_empty(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -644,7 +644,7 @@ pub async fn test_write_config_on_empty(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-#[allow(clippy::panic, clippy::unwrap_used)]
+#[expect(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_on_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -689,7 +689,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // FIXME: this test fails in MinIO but seems to work on S3
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     let storage = new_in_memory_storage().await.unwrap();
     let storage_settings = storage.default_settings().await?;
     let am = Arc::new(AssetManager::new_no_cache(
@@ -719,7 +719,7 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-#[allow(clippy::panic, clippy::unwrap_used)]
+#[expect(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_fails_on_bad_version_when_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -776,7 +776,7 @@ pub async fn test_write_config_fails_on_bad_version_when_existing(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-#[allow(clippy::panic, clippy::unwrap_used)]
+#[expect(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_can_overwrite_with_unsafe_config(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -820,7 +820,7 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config(
 }
 
 #[tokio_test]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
     if env::var("AWS_BUCKET").is_err() {
         return Ok(());
@@ -997,12 +997,12 @@ pub async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Err
 }
 
 #[tokio::test]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 /// Start an HTTP server serving static files from icechunk-python/tests/data/test-repo-v2
 /// Create an HTTP storage that hits that server, and call some methods on it
 async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
     let repo_path =
-        std::env::current_dir()?.join("../icechunk-python/tests/data/test-repo-v2");
+        env::current_dir()?.join("../icechunk-python/tests/data/test-repo-v2");
     let route = warp::fs::dir(repo_path.clone());
     let (stop, wait) = oneshot::channel();
     let port = port_check::free_local_ipv4_port_in_range(8000..65000).unwrap();
@@ -1061,7 +1061,7 @@ async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 /// Start a server that after a few redirects returns a redirect to a S3 public repo
 /// Build a redirect storage and verify the S3 repo is accessible
 async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {

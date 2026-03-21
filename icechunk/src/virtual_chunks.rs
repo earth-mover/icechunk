@@ -1,14 +1,14 @@
 //! References to external data sources.
 //!
 //! Virtual chunks allow arrays to reference data stored outside the Icechunk
-//! repository (e.g., existing Parquet, NetCDF, or other files). Instead of
+//! repository (e.g., existing Parquet, `NetCDF`, or other files). Instead of
 //! copying data, chunks store references to byte ranges in external files.
 
 use std::{
     collections::HashMap,
     num::{NonZeroU16, NonZeroU64},
     ops::Range,
-    str::FromStr,
+    str::FromStr as _,
     sync::Arc,
 };
 
@@ -16,7 +16,7 @@ use async_trait::async_trait;
 #[cfg(feature = "s3")]
 use aws_sdk_s3::{Client, error::SdkError, operation::get_object::GetObjectError};
 use bytes::{Buf, Bytes};
-use futures::{TryStreamExt, stream::FuturesOrdered};
+use futures::{TryStreamExt as _, stream::FuturesOrdered};
 #[cfg(any(
     feature = "object-store-s3",
     feature = "object-store-gcs",
@@ -351,7 +351,7 @@ impl VirtualChunkResolver {
                     .inspect_err(|err| {
                         tracing::warn!(
                             "Invalid virtual chunk container, ignoring it: {err}"
-                        )
+                        );
                     })
                     .ok()
             })
@@ -387,7 +387,7 @@ impl VirtualChunkResolver {
     }
 
     /// Expand a chunk location to an absolute URL. For `vcc://name/path` locations,
-    /// resolves the name to a container's url_prefix. For absolute URLs, returns as-is.
+    /// resolves the name to a container's `url_prefix`. For absolute URLs, returns as-is.
     pub fn expand_location(
         &self,
         location: &str,
@@ -454,7 +454,7 @@ impl VirtualChunkResolver {
         cont: &VirtualChunkContainer,
         chunk_location: &Url,
     ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
-        #[allow(clippy::unimplemented)]
+        #[expect(clippy::unimplemented)]
         match &cont.store {
             #[cfg(feature = "s3")]
             ObjectStoreConfig::S3(opts) | ObjectStoreConfig::S3Compatible(opts) => {
@@ -778,7 +778,7 @@ impl ChunkFetcher for S3Fetcher {
             Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
                 b = b.if_unmodified_since(aws_sdk_s3::primitives::DateTime::from_secs(
                     *seconds as i64,
-                ))
+                ));
             }
             Some(Checksum::ETag(etag)) => {
                 b = b.if_match(strip_quotes(&etag.0));
@@ -1002,13 +1002,13 @@ impl ChunkFetcher for ObjectStoreFetcher {
         match checksum {
             Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
                 // We can unwrap here because u32 values can always construct a DateTime
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 let d = chrono::DateTime::from_timestamp(*seconds as i64, 0)
                     .expect("Bad last modified field in virtual chunk reference");
                 options.if_unmodified_since = Some(d);
             }
             Some(Checksum::ETag(etag)) => {
-                options.if_match = Some(strip_quotes(&etag.0).to_string())
+                options.if_match = Some(strip_quotes(&etag.0).to_string());
             }
             None => {}
         }
@@ -1035,7 +1035,7 @@ impl ChunkFetcher for ObjectStoreFetcher {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
     use crate::{

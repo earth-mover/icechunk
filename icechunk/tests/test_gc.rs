@@ -6,7 +6,7 @@ use std::{
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Repository, RepositoryConfig, Storage,
     asset_manager::AssetManager,

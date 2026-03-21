@@ -60,7 +60,7 @@ impl RedirectStorage {
     }
 
     async fn mk_backend(&self) -> StorageResult<Arc<dyn Storage>> {
-        let redirect = |attempt: rw::redirect::Attempt| {
+        let redirect = |attempt: rw::redirect::Attempt<'_>| {
             // TODO: make configurable
             if attempt.previous().len() > 10 {
                 attempt.error("too many redirects")
@@ -205,14 +205,14 @@ impl RedirectStorage {
             "http+icechunk" | "http+ic" | "https+icechunk" | "https+ic" => {
                 let mut base_url = url.clone();
                 // we can expect here because the scheme is already matched as http[s]
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 let new_scheme = base_url
                     .scheme()
                     .split_once('+')
                     .map(|(x, _)| x)
                     .expect("Internal error, bad url scheme")
                     .to_string();
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 base_url
                     .set_scheme(new_scheme.as_str())
                     .expect("Internal error, cannot set url scheme");

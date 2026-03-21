@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use itertools::Itertools;
+use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -418,11 +418,11 @@ pub async fn manifest_json(
 }
 
 #[cfg(all(test, feature = "object-store-fs"))]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::{ObjectStorage, Repository, repository::VersionInfo};
-    use futures::{StreamExt, TryStreamExt};
+    use futures::{StreamExt as _, TryStreamExt as _};
     use std::{path::PathBuf, sync::Arc};
 
     #[icechunk_macros::tokio_test]

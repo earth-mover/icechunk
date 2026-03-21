@@ -130,7 +130,7 @@ pub(crate) static FEATURE_FLAGS: LazyLock<HashMap<&str, (u16, bool)>> =
     });
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
     use std::sync::Arc;

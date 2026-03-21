@@ -12,22 +12,22 @@ use async_stream::try_stream;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     future::ready,
-    ops::RangeBounds,
+    ops::RangeBounds as _,
     sync::Arc,
 };
 
 use chrono::{DateTime, Utc};
 use err_into::ErrorInto as _;
 use futures::{
-    Stream, StreamExt, TryStreamExt,
+    Stream, StreamExt as _, TryStreamExt as _,
     stream::{self, FuturesOrdered, FuturesUnordered},
 };
-use itertools::Itertools;
+use itertools::Itertools as _;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{join, sync::AcquireError, task::JoinError, try_join};
-use tracing::{Instrument, debug, error, instrument, trace};
+use tracing::{Instrument as _, debug, error, instrument, trace};
 
 use crate::{
     Storage, StorageError,
@@ -603,8 +603,8 @@ impl Repository {
     }
 
     #[instrument(skip(bytes))]
-    pub fn from_bytes(bytes: Vec<u8>) -> RepositoryResult<Self> {
-        rmp_serde::from_slice(&bytes).map_err(Box::new).err_into()
+    pub fn from_bytes(bytes: &[u8]) -> RepositoryResult<Self> {
+        rmp_serde::from_slice(bytes).map_err(Box::new).err_into()
     }
 
     #[instrument(skip(self))]
@@ -663,7 +663,7 @@ impl Repository {
         } else {
             // V1 repos: write config.yaml only (no repo info)
             Repository::store_config(
-                self.storage().clone(),
+                Arc::clone(self.storage()),
                 self.config(),
                 &self.config_version,
             )
@@ -756,6 +756,7 @@ impl Repository {
         Ok(repo.status()?)
     }
 
+    #[expect(unsafe_code)]
     #[instrument(skip(self))]
     pub async fn set_status(&self, status: &RepoStatus) -> RepositoryResult<()> {
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
@@ -776,9 +777,9 @@ impl Repository {
             )?))
         };
 
-        // This is the only place where this method should be called,
-        // because otherwise we wouldn't be able to change the repo
-        // status.
+        // SAFETY: this is the only call site for update_repo_info_unchecked.
+        // We need it here to bypass the repo status check when changing the
+        // status itself — normal callers go through update_repo_info.
         unsafe {
             let _ = self
                 .asset_manager
@@ -834,9 +835,9 @@ impl Repository {
     }
 
     #[instrument(skip(self))]
-    /// set_to = Some(true) will enable it
-    /// set_to = Some(false) will disable it
-    /// set_to = None will set it to default state by deleting from repo info object
+    /// `set_to` = Some(true) will enable it
+    /// `set_to` = Some(false) will disable it
+    /// `set_to` = None will set it to default state by deleting from repo info object
     pub async fn set_feature_flag(
         &self,
         feature_flag: &str,
@@ -923,7 +924,7 @@ impl Repository {
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
-    /// Output stream includes snapshot_id argument
+    /// Output stream includes `snapshot_id` argument
     #[instrument(skip(self))]
     async fn snapshot_info_ancestry_v1(
         &self,
@@ -939,7 +940,7 @@ impl Repository {
     }
 
     /// Returns the sequence of parents of the current session, in order of latest first.
-    /// Output stream includes snapshot_id argument
+    /// Output stream includes `snapshot_id` argument
     #[instrument(skip(self))]
     async fn snapshot_ancestry_v1(
         &self,
@@ -947,7 +948,7 @@ impl Repository {
     ) -> RepositoryResult<impl Stream<Item = RepositoryResult<Arc<Snapshot>>> + use<>>
     {
         let am = Arc::clone(&self.asset_manager);
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         am.snapshot_ancestry_v1(snapshot_id).await
     }
 
@@ -1808,9 +1809,9 @@ impl Repository {
         let session = Session::create_readonly_session(
             self.config.clone(),
             self.storage_settings.clone(),
-            self.storage.clone(),
+            Arc::clone(&self.storage),
             Arc::clone(&self.asset_manager),
-            self.virtual_resolver.clone(),
+            Arc::clone(&self.virtual_resolver),
             snapshot_id.clone(),
         );
         self.preload_manifests(snapshot_id);
@@ -1848,9 +1849,9 @@ impl Repository {
         let session = Session::create_writable_session(
             self.config.clone(),
             self.storage_settings.clone(),
-            self.storage.clone(),
+            Arc::clone(&self.storage),
             Arc::clone(&self.asset_manager),
-            self.virtual_resolver.clone(),
+            Arc::clone(&self.virtual_resolver),
             Some(branch.to_string()),
             snapshot_id.clone(),
             self.default_commit_metadata.clone(),
@@ -1887,9 +1888,9 @@ impl Repository {
         let session = Session::create_rearrange_session(
             self.config.clone(),
             self.storage_settings.clone(),
-            self.storage.clone(),
+            Arc::clone(&self.storage),
             Arc::clone(&self.asset_manager),
-            self.virtual_resolver.clone(),
+            Arc::clone(&self.virtual_resolver),
             branch.to_string(),
             snapshot_id.clone(),
             self.default_commit_metadata.clone(),
@@ -1992,7 +1993,12 @@ impl Iterator for AncestryIteratorV2 {
 }
 
 impl AncestryIteratorV2 {
+    #[expect(unsafe_code)]
     fn new(repo_info: Arc<RepoInfo>, snapshot_id: &SnapshotId) -> RepositoryResult<Self> {
+        // SAFETY: we create a reference from the Arc's raw pointer to build an iterator
+        // that borrows from repo_info. The Arc is moved into _repo_info, keeping the
+        // data alive for the lifetime of the iterator. The struct must not be reordered
+        // (drop order is declaration order, so _repo_info outlives it).
         let it = unsafe {
             let repo_info_ref = &*Arc::as_ptr(&repo_info);
             Box::new(repo_info_ref.ancestry(snapshot_id)?.map(|e| e.err_into()))
@@ -2068,9 +2074,9 @@ fn raise_if_invalid_snapshot_id_v2(
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use futures::TryStreamExt;
+    use futures::TryStreamExt as _;
     use std::{
         collections::HashMap, error::Error, iter::zip, num::NonZeroU16, path::PathBuf,
         sync::Arc,
@@ -2555,7 +2561,7 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
         verify_data(&session, 0).await;
 
@@ -2578,7 +2584,7 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{0}", i + 10).into())),
                 )
-                .await?
+                .await?;
         }
         verify_data(&session, 10).await;
 
@@ -2620,7 +2626,7 @@ mod tests {
                     ChunkIndices(vec![i]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
         session.commit("first split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 4;
@@ -2772,7 +2778,7 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
         session.commit("first split").max_concurrent_nodes(8).execute().await?;
         total_manifests += 1;
@@ -2856,7 +2862,7 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
         session.commit("wrote all splits").max_concurrent_nodes(8).execute().await?;
         assert_manifest_count(repository.asset_manager(), total_manifests).await;
@@ -2869,7 +2875,7 @@ mod tests {
                     ChunkIndices(vec![i, 0, 0]),
                     Some(ChunkPayload::Inline(format!("{i}").into())),
                 )
-                .await?
+                .await?;
         }
         // We are counting total manifests in the `assert_manifest_count` helper function
         // So we keep a running count of the total and update that at each step.
@@ -3121,7 +3127,7 @@ mod tests {
                         ChunkIndices(index),
                         Some(ChunkPayload::Inline(format!("{value}").into())),
                     )
-                    .await?
+                    .await?;
             }
 
             total_manifests +=
@@ -3705,7 +3711,7 @@ mod tests {
                 .any(|(_, key)| key.starts_with("manifests"))
         {
             tokio::time::sleep(std::time::Duration::from_secs_f32(0.1)).await;
-            retries += 1
+            retries += 1;
         }
         let ops =
             Vec::from_iter(logging.fetch_operations().into_iter().filter(|(_, key)| {
@@ -4113,7 +4119,7 @@ mod tests {
     #[cfg(feature = "object-store-fs")]
     #[tokio_test]
     async fn test_concurrent_distributer_writers_with_base_state()
-    -> Result<(), Box<dyn std::error::Error>> {
+    -> Result<(), Box<dyn Error>> {
         use crate::new_local_filesystem_storage;
 
         let repo_dir = TempDir::new()?;
@@ -4146,7 +4152,7 @@ mod tests {
         async fn do_distributed_writes(
             session: &mut Session,
             array_path: &Path,
-        ) -> Result<(), Box<dyn std::error::Error>> {
+        ) -> Result<(), Box<dyn Error>> {
             // create a _clean_ writable session from that snapshot
             let clean = session.fork().await?;
 
@@ -4155,8 +4161,8 @@ mod tests {
             // we could just send out a SnapshotId and call `create_writable_session`
             // on the distributed worker instead
             let clean_bytes = clean.as_bytes()?;
-            let mut s1 = Session::from_bytes(clean_bytes.clone())?;
-            let mut s2 = Session::from_bytes(clean_bytes)?;
+            let mut s1 = Session::from_bytes(&clean_bytes)?;
+            let mut s2 = Session::from_bytes(&clean_bytes)?;
 
             // now both writers make independent changes
             s1.set_chunk_ref(

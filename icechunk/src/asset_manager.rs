@@ -6,10 +6,10 @@
 //! transaction logs, and chunks.
 
 use async_stream::try_stream;
-use backon::{BackoffBuilder, ConstantBuilder, ExponentialBuilder, Retryable};
+use backon::{BackoffBuilder as _, ConstantBuilder, ExponentialBuilder, Retryable as _};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{Stream, StreamExt as _, TryStreamExt, stream::BoxStream};
+use futures::{Stream, StreamExt as _, TryStreamExt as _, stream::BoxStream};
 use quick_cache::{Weighter, sync::Cache};
 use serde::{Deserialize, Serialize};
 use std::sync::{LazyLock, RwLock};
@@ -20,7 +20,7 @@ use std::{
     time::Duration,
 };
 
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 static RETRYABLE_ERROR: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(
         "(?i)StreamingError|DispatchFailure|ConnectorError|IncompleteMessage|connection reset",
@@ -32,7 +32,7 @@ use async_compression::{
     tokio::bufread::{ZstdDecoder, ZstdEncoder},
 };
 use tokio::{
-    io::{AsyncBufRead, AsyncReadExt},
+    io::{AsyncBufRead, AsyncReadExt as _},
     sync::Semaphore,
 };
 use tracing::{debug, instrument, trace, warn};
@@ -144,7 +144,7 @@ impl From<AssetManagerSerializer> for AssetManager {
 }
 
 impl AssetManager {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
@@ -526,7 +526,7 @@ impl AssetManager {
                         .repo_cache
                         .write()
                         .map_err(|_| RepositoryErrorKind::PoisonLock)?;
-                    *repo_cache = Some((repo_info.clone(), version_info.clone()));
+                    *repo_cache = Some((Arc::clone(&repo_info), version_info.clone()));
                 }
 
                 return Ok((repo_info, version_info));
@@ -534,7 +534,7 @@ impl AssetManager {
             Ok(None) => {
                 if self.use_repo_info_cache {
                     trace!("Reusing cached repo info object since it's latest version");
-                    #[allow(clippy::expect_used)]
+                    #[expect(clippy::expect_used)]
                     return Ok(repo_cache.expect(
                         "Logic bug in fetch_repo_info, repo_cache should exist here",
                     ));
@@ -580,7 +580,7 @@ impl AssetManager {
         backup_path: Option<&str>,
     ) -> RepositoryResult<VersionInfo> {
         let new_version = write_repo_info(
-            info.clone(),
+            Arc::clone(&info),
             self.spec_version(),
             version,
             self.compression_level,
@@ -609,7 +609,7 @@ impl AssetManager {
         &self,
         info: Arc<RepoInfo>,
     ) -> RepositoryResult<VersionInfo> {
-        self.write_repo_info(info, &storage::VersionInfo::for_creation(), None).await
+        self.write_repo_info(info, &VersionInfo::for_creation(), None).await
     }
 
     #[instrument(skip(self, retry_settings, update))]
@@ -629,6 +629,7 @@ impl AssetManager {
     ///
     /// This overrides any checks on the repo status, and force
     /// an update.
+    #[expect(unsafe_code)]
     #[instrument(skip(self, retry_settings, update))]
     pub async unsafe fn update_repo_info_unchecked(
         &self,
@@ -664,12 +665,10 @@ impl AssetManager {
             .with_max_times(immediate_retries)
             .build();
         let exp_backoff = ExponentialBuilder::new()
-            .with_min_delay(std::time::Duration::from_millis(
-                retry_settings.initial_backoff_ms() as u64,
+            .with_min_delay(Duration::from_millis(
+                retry_settings.initial_backoff_ms() as u64
             ))
-            .with_max_delay(std::time::Duration::from_millis(
-                retry_settings.max_backoff_ms() as u64,
-            ))
+            .with_max_delay(Duration::from_millis(retry_settings.max_backoff_ms() as u64))
             .with_max_times(max_attempts.saturating_sub(immediate_retries))
             .with_jitter()
             .build();
@@ -805,7 +804,7 @@ impl AssetManager {
                         debug!(
                             ?err,
                             "retrying on streaming/connection error after {duration:?}"
-                        )
+                        );
                     })
                     .await?;
                 let _fail_is_ok = guard.insert(chunk.clone());
@@ -987,7 +986,7 @@ impl AssetManager {
         let mut this = self.fetch_snapshot(snapshot_id).await?;
         let stream = try_stream! {
             yield Arc::clone(&this);
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             while let Some(parent) = this.parent_id() {
                 let snap = self.fetch_snapshot(&parent).await?;
                 yield Arc::clone(&snap);
@@ -1337,7 +1336,7 @@ async fn fetch_transaction_log(
         .map_err(RepositoryError::from)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub async fn write_repo_info(
     info: Arc<RepoInfo>,
     spec_version: SpecVersionBin,
@@ -1412,8 +1411,8 @@ pub async fn write_repo_info(
         )
         .await?
     {
-        storage::VersionedUpdateResult::Updated { new_version } => Ok(new_version),
-        storage::VersionedUpdateResult::NotOnLatestVersion => {
+        VersionedUpdateResult::Updated { new_version } => Ok(new_version),
+        VersionedUpdateResult::NotOnLatestVersion => {
             Err(RepositoryErrorKind::RepoInfoUpdated.into())
         }
     }
@@ -1428,7 +1427,7 @@ pub async fn fetch_repo_info(
         .await
         .map(|repo| {
             // Since we didn't give a previous version, there must be a result here
-            #[allow(clippy::expect_used)]
+            #[expect(clippy::expect_used)]
             repo.expect("Logic bug, must have a repo_info here")
         })
 }
@@ -1448,7 +1447,7 @@ async fn fetch_repo_info_backup(
     .await
     .map(|repo| {
         // Since we didn't give a previous version, there must be a result here
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         repo.expect("Logic bug, must have a repo_info here")
     })
 }
@@ -1504,7 +1503,7 @@ impl Weighter<SnapshotId, Arc<TransactionLog>> for FileWeighter {
     }
 }
 
-fn convert_list_item<Id>(item: ListInfo<String>) -> Option<ListInfo<Id>>
+fn convert_list_item<Id>(item: &ListInfo<String>) -> Option<ListInfo<Id>>
 where
     Id: for<'b> TryFrom<&'b str>,
 {
@@ -1520,7 +1519,7 @@ where
     Id: for<'b> TryFrom<&'b str> + Send + std::fmt::Debug + 'a,
 {
     s.try_filter_map(|info| async move {
-        let info = convert_list_item(info);
+        let info = convert_list_item(&info);
         if info.is_none() {
             tracing::error!(list_info=?info, "Error processing list item metadata");
         }
@@ -1548,11 +1547,10 @@ fn backup_destination(source_path: &str) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod test {
 
     use icechunk_macros::tokio_test;
-    use itertools::{Itertools, assert_equal};
+    use itertools::{Itertools as _, assert_equal};
 
     use super::*;
     use crate::{

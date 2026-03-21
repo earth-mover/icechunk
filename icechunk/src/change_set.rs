@@ -121,7 +121,7 @@ pub static EMPTY_MOVE_TRACKER: LazyLock<MoveTracker> = LazyLock::new(Default::de
 
 impl MoveTracker {
     pub fn record(&mut self, from: Path, to: Path) {
-        self.0.push(Move { from, to })
+        self.0.push(Move { from, to });
     }
 
     pub fn is_empty(&self) -> bool {
@@ -138,7 +138,7 @@ impl MoveTracker {
         for Move { from, to } in self.0.iter() {
             if let Ok(rest) = res.as_ref().buf().strip_prefix(from.buf()) {
                 // it's safe to join segments that already belonged to a Path
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 let new_path = Path::new(to.buf().join(rest).to_string().as_str())
                     .expect("Bug in moved_to, cannot create path");
                 res = Cow::Owned(new_path);
@@ -158,7 +158,7 @@ impl MoveTracker {
         for Move { from, to } in self.0.iter().rev() {
             if let Ok(rest) = res.as_ref().buf().strip_prefix(to.buf()) {
                 // it's safe to join segments that already belonged to a Path
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 let old_path = Path::new(from.buf().join(rest).to_string().as_str())
                     .expect("Bug in moved_from, cannot create path");
                 res = Cow::Owned(old_path);
@@ -180,7 +180,7 @@ impl MoveTracker {
 /// - [`Rearrange`](ChangeSet::Rearrange) - Move/rename operations
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 // we only keep one of this, their size difference doesn't affect us
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum ChangeSet {
     Edit(EditChanges),
     Rearrange(MoveTracker),
@@ -545,7 +545,7 @@ impl ChangeSet {
             .map(|(path, (node_id, node_data))| (path, node_id, node_data))
     }
 
-    /// Merge this ChangeSet with `other`.
+    /// Merge this `ChangeSet` with `other`.
     ///
     /// Results of the merge are applied to `self`. Changes present in `other` take precedence over
     /// `self` changes.
@@ -559,14 +559,14 @@ impl ChangeSet {
         }
     }
 
-    /// Serialize this ChangeSet
+    /// Serialize this `ChangeSet`
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
     pub fn export_to_bytes(&self) -> SessionResult<Vec<u8>> {
         Ok(rmp_serde::to_vec(self).map_err(Box::new)?)
     }
 
-    /// Deserialize a ChangeSet
+    /// Deserialize a `ChangeSet`
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
     pub fn import_from_bytes(bytes: &[u8]) -> SessionResult<Self> {
@@ -627,7 +627,7 @@ impl ChangeSet {
             }
             // we should be able to create the full node because we
             // know it's a new node
-            #[allow(clippy::expect_used)]
+            #[expect(clippy::expect_used)]
             let node = self.get_new_node(path).expect("Bug in new_nodes implementation");
             Some(node)
         })
@@ -679,10 +679,10 @@ impl ChangeSet {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use bytes::Bytes;
-    use itertools::Itertools;
+    use itertools::Itertools as _;
 
     use super::ChangeSet;
 

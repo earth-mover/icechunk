@@ -7,10 +7,10 @@ use std::{collections::BTreeSet, future::ready, pin::Pin};
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use futures::{
-    FutureExt, StreamExt, TryStreamExt as _,
+    FutureExt as _, StreamExt as _, TryStreamExt as _,
     stream::{FuturesOrdered, FuturesUnordered},
 };
-use itertools::Itertools;
+use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use serde_with::{TryFromInto, serde_as};
 use thiserror::Error;
@@ -253,7 +253,7 @@ pub async fn update_branch(
     }
 }
 
-fn ref_name_from_object_name(key: String) -> Option<String> {
+fn ref_name_from_object_name(key: &str) -> Option<String> {
     let ref_name = key.split('/').next()?;
     Some(ref_name.to_string())
 }
@@ -266,7 +266,7 @@ pub async fn list_refs(
     let all = storage
         .list_objects(storage_settings, format!("{V1_REFS_FILE_PATH}/").as_str())
         .await?
-        .map_ok(|li| ref_name_from_object_name(li.id));
+        .map_ok(|li| ref_name_from_object_name(&li.id));
     //let all = storage.ref_names(storage_settings).await?;
     let candidate_refs: BTreeSet<_> = all
         .err_into()
@@ -492,7 +492,7 @@ pub async fn fetch_branch_tip_v1(
 }
 
 #[cfg(all(test, feature = "object-store-fs"))]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::sync::Arc;
 
@@ -510,7 +510,7 @@ mod tests {
 
     /// Execute the passed block with all test implementations of Storage.
     ///
-    /// Currently this function executes against the in-memory and local filesystem object_store
+    /// Currently this function executes against the in-memory and local filesystem `object_store`
     /// implementations.
     async fn with_test_storages<
         R,

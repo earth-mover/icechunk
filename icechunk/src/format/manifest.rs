@@ -12,9 +12,9 @@ use std::{
 use crate::{format::flatbuffers::generated, virtual_chunks::VirtualChunkContainer};
 use bytes::Bytes;
 use flatbuffers::VerifierOptions;
-use futures::{Stream, TryStreamExt};
-use itertools::{Itertools, any, multiunzip};
-use rand::{RngExt, rngs::SmallRng};
+use futures::{Stream, TryStreamExt as _};
+use itertools::{Itertools as _, any, multiunzip};
+use rand::{RngExt as _, rngs::SmallRng};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -116,7 +116,7 @@ impl ManifestExtents {
             if (a.end <= b.start) || (a.start >= b.end) {
                 return Overlap::None;
             } else if !((a.start <= b.start) && (a.end >= b.end)) {
-                overlap = Overlap::Partial
+                overlap = Overlap::Partial;
             }
         }
         overlap
@@ -424,7 +424,7 @@ impl Manifest {
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> Result<Manifest, IcechunkFormatError> {
-        let _ = flatbuffers::root_with_opts::<generated::Manifest>(
+        let _ = flatbuffers::root_with_opts::<generated::Manifest<'_>>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;
@@ -569,10 +569,12 @@ impl Manifest {
         self.len() == 0
     }
 
+    #[expect(unsafe_code)]
     fn root(&self) -> generated::Manifest<'_> {
-        // without the unsafe version this is too slow
-        // if we try to keep the root in the Manifest struct, we would need a lifetime
-        unsafe { flatbuffers::root_unchecked::<generated::Manifest>(&self.buffer) }
+        // SAFETY: self.buffer was serialized by our own flatbuffers serialization code.
+        // We skip validation for performance; a corrupt buffer here indicates
+        // file corruption or a bad Icechunk implementation, not a caller error.
+        unsafe { flatbuffers::root_unchecked::<generated::Manifest<'_>>(&self.buffer) }
     }
 
     pub fn arrays(&self) -> impl Iterator<Item = NodeId> {
@@ -659,6 +661,15 @@ pub struct PayloadIterator {
     node_id: NodeId,
     last_ref_index: usize,
     decompressor: Option<zstd::bulk::Decompressor<'static>>,
+}
+
+impl std::fmt::Debug for PayloadIterator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PayloadIterator")
+            .field("node_id", &self.node_id)
+            .field("last_ref_index", &self.last_ref_index)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PayloadIterator {
@@ -758,7 +769,7 @@ fn checksum(payload: &generated::ChunkRef<'_>) -> Option<Checksum> {
 ///
 /// Uses reservoir sampling (Algorithm R) to collect a uniform random sample in a single
 /// pass without knowing the total virtual chunk count in advance.
-/// See: https://en.wikipedia.org/wiki/Reservoir_sampling#Simple:_Algorithm_R
+/// See: <https://en.wikipedia.org/wiki/Reservoir_sampling#Simple>:_`Algorithm_R`
 ///
 /// Returns `Some(dict_bytes)` if compression is enabled and there are enough virtual
 /// chunks, `None` if compression is disabled or cannot be executed.
@@ -768,9 +779,8 @@ fn train_location_dictionary(
         &ManifestVirtualChunkLocationCompressionConfig,
     >,
 ) -> IcechunkResult<Option<Vec<u8>>> {
-    let config = match virtual_chunks_compression_config {
-        Some(c) => c,
-        None => return Ok(None),
+    let Some(config) = virtual_chunks_compression_config else {
+        return Ok(None);
     };
     let max_samples = config.dictionary_max_training_samples() as usize;
     let min_chunks = config.min_num_chunks() as usize;
@@ -871,7 +881,7 @@ fn compress_locations(
             })
             .collect();
 
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         handles
             .into_iter()
             .flat_map(|h| {
@@ -953,7 +963,7 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 };
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[allow(unused_qualifications)] // proptest macros generate fully qualified paths
 mod tests {
     use super::*;
     use crate::config::ManifestVirtualChunkLocationCompressionConfig;
@@ -1190,11 +1200,10 @@ mod tests {
 
         // when using from_edges, extents must not exactly overlap
         for edges in splits.iter().combinations(2) {
-            let is_equal = std::iter::zip(edges[0].iter(), edges[1].iter()).all(
-                |(range1, range2)| {
+            let is_equal =
+                zip(edges[0].iter(), edges[1].iter()).all(|(range1, range2)| {
                     (range1.start == range2.start) && (range1.end == range2.end)
-                },
-            );
+                });
             prop_assert!(!is_equal);
         }
     }

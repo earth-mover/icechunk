@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, convert::Infallible, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use err_into::ErrorInto;
+use err_into::ErrorInto as _;
 use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, VerifierOptions,
     WIPOffset,
@@ -256,7 +256,7 @@ impl<'a> TryFrom<generated::NodeSnapshot<'a>> for NodeSnapshot {
     type Error = IcechunkFormatError;
 
     fn try_from(value: generated::NodeSnapshot<'a>) -> Result<Self, Self::Error> {
-        #[allow(clippy::expect_used, clippy::panic)]
+        #[expect(clippy::expect_used, clippy::panic)]
         let node_data: NodeData = match value.node_data_type() {
             generated::NodeData::Array => value
                 .node_data_as_array()
@@ -344,7 +344,7 @@ impl std::fmt::Debug for Snapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let nodes =
             self.iter().map(|n| n.map(|n| n.path.to_string())).collect::<Vec<_>>();
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         f.debug_struct("Snapshot")
             .field("id", &self.id())
             .field("parent_id", &self.parent_id())
@@ -361,7 +361,7 @@ impl std::fmt::Debug for Snapshot {
 pub struct SnapshotInfo {
     pub id: SnapshotId,
     pub parent_id: Option<SnapshotId>,
-    pub flushed_at: DateTime<chrono::Utc>,
+    pub flushed_at: DateTime<Utc>,
     pub message: String,
     pub metadata: SnapshotProperties,
 }
@@ -370,12 +370,12 @@ impl TryFrom<&Snapshot> for SnapshotInfo {
     type Error = IcechunkFormatError;
 
     fn try_from(value: &Snapshot) -> Result<Self, Self::Error> {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Ok(Self {
             id: value.id().clone(),
             parent_id: value.parent_id().clone(),
             flushed_at: value.flushed_at()?,
-            message: value.message().to_string(),
+            message: value.message().clone(),
             metadata: value.metadata()?.clone(),
         })
     }
@@ -411,7 +411,7 @@ impl Snapshot {
         spec_version: SpecVersionBin,
         buffer: Vec<u8>,
     ) -> IcechunkResult<Snapshot> {
-        let _ = flatbuffers::root_with_opts::<generated::Snapshot>(
+        let _ = flatbuffers::root_with_opts::<generated::Snapshot<'_>>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;
@@ -427,12 +427,12 @@ impl Snapshot {
         self.buffer.as_slice()
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn from_iter<E, I>(
         id: Option<SnapshotId>,
         parent_id: Option<SnapshotId>,
         spec_version: SpecVersionBin,
-        message: String,
+        message: &str,
         properties: Option<SnapshotProperties>,
         mut manifest_files: Vec<ManifestFileInfo>,
         flushed_at: Option<DateTime<Utc>>,
@@ -443,7 +443,7 @@ impl Snapshot {
         I: IntoIterator<Item = Result<NodeSnapshot, E>>,
     {
         // TODO: what's a good capacity?
-        let mut builder = flatbuffers::FlatBufferBuilder::with_capacity(4_096);
+        let mut builder = FlatBufferBuilder::with_capacity(4_096);
 
         manifest_files.sort_by(|a, b| a.id.cmp(&b.id));
         let manifest_files = manifest_files
@@ -475,7 +475,7 @@ impl Snapshot {
             .try_collect()?;
         let metadata_items = builder.create_vector(metadata_items.as_slice());
 
-        let message = builder.create_string(&message);
+        let message = builder.create_string(message);
         // Icechunk 2.0 no longer uses this field
         let parent_id = parent_id.map(|oid| generated::ObjectId12::new(&oid.0));
         let flushed_at = flushed_at.unwrap_or_else(Utc::now).timestamp_micros() as u64;
@@ -518,17 +518,13 @@ impl Snapshot {
 
     pub fn initial(spec_version: SpecVersionBin) -> IcechunkResult<Self> {
         let mut properties = SnapshotProperties::default();
-        inject_icechunk_metadata(
-            &mut properties,
-            "is_root",
-            serde_json::Value::from(true),
-        );
+        inject_icechunk_metadata(&mut properties, "is_root", Value::from(true));
         let nodes: Vec<Result<NodeSnapshot, Infallible>> = Vec::new();
         Self::from_iter(
             Some(Self::INITIAL_SNAPSHOT_ID),
             None,
             spec_version,
-            Self::INITIAL_COMMIT_MESSAGE.to_string(),
+            Self::INITIAL_COMMIT_MESSAGE,
             Some(properties),
             Default::default(),
             None,
@@ -536,10 +532,12 @@ impl Snapshot {
         )
     }
 
+    #[expect(unsafe_code)]
     fn root(&self) -> generated::Snapshot<'_> {
-        // without the unsafe version this is too slow
-        // if we try to keep the root in the Manifest struct, we would need a lifetime
-        unsafe { flatbuffers::root_unchecked::<generated::Snapshot>(&self.buffer) }
+        // SAFETY: self.buffer was serialized by our own flatbuffers serialization code.
+        // We skip validation for performance; a corrupt buffer here indicates
+        // file corruption or a bad Icechunk implementation, not a caller error.
+        unsafe { flatbuffers::root_unchecked::<generated::Snapshot<'_>>(&self.buffer) }
     }
 
     pub fn id(&self) -> SnapshotId {
@@ -610,7 +608,7 @@ impl Snapshot {
             Some(new_child.id()),
             Some(self.id()),
             SpecVersionBin::V1, // 2.0 doesn't use adopt
-            new_child.message().clone(),
+            &new_child.message(),
             Some(new_child.metadata()?.clone()),
             new_child.manifest_files().collect(),
             Some(new_child.flushed_at()?),
@@ -740,7 +738,7 @@ impl Iterator for NodeIterator {
 }
 
 fn mk_node<'bldr>(
-    builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
+    builder: &mut FlatBufferBuilder<'bldr>,
     node: &NodeSnapshot,
     spec_version: SpecVersionBin,
 ) -> IcechunkResult<WIPOffset<generated::NodeSnapshot<'bldr>>> {
@@ -892,7 +890,7 @@ fn mk_node_data(
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+#[allow(unused_qualifications)] // proptest macros generate fully qualified paths
 mod tests {
     use crate::format::{IcechunkFormatError, ObjectId};
 
@@ -1008,7 +1006,7 @@ mod tests {
             None,
             None,
             SpecVersionBin::current(),
-            String::default(),
+            "",
             Default::default(),
             manifests,
             None,

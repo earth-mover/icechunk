@@ -1,6 +1,6 @@
 //! Version info, branches, and tags for a repository.
 
-use err_into::ErrorInto;
+use err_into::ErrorInto as _;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,7 +18,7 @@ use super::{
 };
 
 use chrono::{DateTime, Utc};
-use flatbuffers::{VerifierOptions, WIPOffset};
+use flatbuffers::{UnionWIPOffset, VerifierOptions, WIPOffset};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RepoAvailability {
@@ -186,7 +186,7 @@ pub struct UpdateInfo<I> {
 type UpdateTuple<'a> = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>;
 
 impl RepoInfo {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new<
         'a,
         I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
@@ -232,7 +232,7 @@ impl RepoInfo {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn from_parts<
         'a,
         I: IntoIterator<Item = IcechunkResult<(UpdateType, DateTime<Utc>, Option<&'a str>)>>,
@@ -425,7 +425,7 @@ impl RepoInfo {
         Ok(Self { buffer })
     }
 
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     fn mk_latest_updates<
         'bldr,
         'a,
@@ -536,11 +536,11 @@ impl RepoInfo {
         config: Option<&RepositoryConfig>,
         update_time: Option<DateTime<Utc>>,
     ) -> Self {
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         let config_bytes =
             config.map(|c| flexbuffers::to_vec(c).expect("Cannot serialize config"));
         // This method is basically constant, so it's OK to unwrap in it
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         Self::from_parts(
             spec_version,
             [],
@@ -568,7 +568,7 @@ impl RepoInfo {
         .expect("Cannot generate initial snapshot")
     }
 
-    /// Read the raw config bytes from the FlatBuffer (for pass-through in mutations).
+    /// Read the raw config bytes from the `FlatBuffer` (for pass-through in mutations).
     pub(crate) fn config_bytes_raw(&self) -> IcechunkResult<Option<Vec<u8>>> {
         Ok(self.root()?.config().map(|v| v.bytes().to_vec()))
     }
@@ -662,7 +662,7 @@ impl RepoInfo {
         Ok(root.snapshots().iter().map(move |snap| mk_snapshot_info(&root, &snap)))
     }
 
-    /// Doesn't check the validity of flag_id
+    /// Doesn't check the validity of `flag_id`
     pub fn update_feature_flag(
         &self,
         spec_version: SpecVersionBin,
@@ -735,7 +735,7 @@ impl RepoInfo {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn add_snapshot(
         &self,
         spec_version: SpecVersionBin,
@@ -1079,7 +1079,7 @@ impl RepoInfo {
         )
     }
 
-    /// Update the embedded configuration and record a ConfigChangedUpdate in the op log.
+    /// Update the embedded configuration and record a `ConfigChangedUpdate` in the op log.
     pub fn set_config(
         &self,
         spec_version: SpecVersionBin,
@@ -1144,7 +1144,7 @@ impl RepoInfo {
     }
 
     pub fn from_buffer(buffer: Vec<u8>) -> IcechunkResult<RepoInfo> {
-        let _ = flatbuffers::root_with_opts::<generated::Repo>(
+        let _ = flatbuffers::root_with_opts::<generated::Repo<'_>>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
         )?;
@@ -1156,7 +1156,7 @@ impl RepoInfo {
     }
 
     fn root(&self) -> IcechunkResult<generated::Repo<'_>> {
-        Ok(flatbuffers::root::<generated::Repo>(&self.buffer)?)
+        Ok(flatbuffers::root::<generated::Repo<'_>>(&self.buffer)?)
     }
 
     pub fn tag_names(&self) -> IcechunkResult<impl Iterator<Item = &str>> {
@@ -1248,7 +1248,7 @@ impl RepoInfo {
         &self,
         update: &generated::Update<'_>,
     ) -> IcechunkResult<UpdateType> {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         match update.update_type_type() {
             generated::UpdateType::RepoInitializedUpdate => {
                 Ok(UpdateType::RepoInitializedUpdate)
@@ -1399,7 +1399,7 @@ impl RepoInfo {
 
     pub fn find_snapshot(&self, id: &SnapshotId) -> IcechunkResult<SnapshotInfo> {
         let mut anc = self.ancestry(id)?;
-        #[allow(clippy::panic)]
+        #[expect(clippy::panic)]
         match anc.next() {
             Some(snap) => snap,
             // It's OK to panic here because ancestry already found the snapshot, and
@@ -1451,7 +1451,7 @@ fn timestamp_to_timestamp(ts: u64) -> IcechunkResult<DateTime<Utc>> {
 }
 
 fn mk_snapshot_info(
-    repo: &generated::Repo,
+    repo: &generated::Repo<'_>,
     snap: &generated::SnapshotInfo<'_>,
 ) -> IcechunkResult<SnapshotInfo> {
     let flushed_at = timestamp_to_timestamp(snap.flushed_at())?;
@@ -1490,10 +1490,7 @@ fn mk_snapshot_info(
 fn update_type_to_fb<'bldr>(
     builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
     update: &UpdateType,
-) -> IcechunkResult<(
-    generated::UpdateType,
-    flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>,
-)> {
+) -> IcechunkResult<(generated::UpdateType, WIPOffset<UnionWIPOffset>)> {
     match update {
         UpdateType::RepoInitializedUpdate => Ok((
             generated::UpdateType::RepoInitializedUpdate,
@@ -1687,7 +1684,7 @@ fn update_type_to_fb<'bldr>(
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
     use super::*;
@@ -1958,7 +1955,7 @@ mod tests {
                 &id1,
                 (i - 1).to_string().as_str(),
                 num_updates_per_file,
-            )?
+            )?;
         }
 
         assert_eq!(repo.latest_updates()?.count(), n);
@@ -1976,7 +1973,7 @@ mod tests {
                     UpdateType::BranchCreatedUpdate { name: (n - 1 - idx).to_string() }
                 );
                 if idx == 0 {
-                    assert!(file.is_none())
+                    assert!(file.is_none());
                 } else {
                     assert_eq!(file, Some((n - 1 - idx).to_string().as_str()));
                 }

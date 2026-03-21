@@ -1,4 +1,4 @@
-use futures::TryStreamExt;
+use futures::TryStreamExt as _;
 use icechunk::{
     ObjectStoreConfig, Repository, RepositoryConfig, Storage, Store,
     config::{
@@ -428,7 +428,7 @@ async fn test_repository_with_local_virtual_refs(
             )
             .await
             .unwrap(),
-            Some(range.slice(bytes1.clone()))
+            Some(range.slice(&bytes1))
         );
     }
     Ok(())
@@ -528,7 +528,7 @@ async fn test_repository_with_minio_virtual_refs(
             )
             .await
             .unwrap(),
-            Some(range.slice(bytes1.clone()))
+            Some(range.slice(&bytes1))
         );
     }
 
@@ -581,7 +581,7 @@ async fn test_repository_with_minio_virtual_refs(
 #[apply(spec_version_cases)]
 async fn test_zarr_store_virtual_refs_minio_set_and_get(
     #[case] spec_version: SpecVersionBin,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     let bytes1 = Bytes::copy_from_slice(b"first");
     let bytes2 = Bytes::copy_from_slice(b"second0000");
     let chunks = [
@@ -654,7 +654,7 @@ async fn test_zarr_store_virtual_refs_minio_set_and_get(
 #[apply(spec_version_cases)]
 async fn test_zarr_store_virtual_refs_azure_set_and_get(
     #[case] spec_version: SpecVersionBin,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     let bytes1 = Bytes::copy_from_slice(b"first");
     let bytes2 = Bytes::copy_from_slice(b"second0000");
     let chunks =
@@ -710,7 +710,7 @@ async fn test_zarr_store_virtual_refs_azure_set_and_get(
 #[apply(spec_version_cases)]
 async fn test_zarr_store_virtual_refs_from_public_s3(
     #[case] spec_version: SpecVersionBin,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     let repo_dir = TempDir::new()?;
     let repo = create_local_repository(repo_dir.path(), None, spec_version).await;
     let ds = repo.writable_session("main").await.unwrap();
@@ -754,7 +754,7 @@ async fn test_zarr_store_virtual_refs_from_public_s3(
 #[apply(spec_version_cases)]
 async fn test_zarr_store_virtual_refs_from_public_gcs(
     #[case] spec_version: SpecVersionBin,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     let repo_dir = TempDir::new()?;
     let repo = create_local_repository(repo_dir.path(), None, spec_version).await;
     let ds = repo.writable_session("main").await.unwrap();
@@ -838,7 +838,7 @@ async fn test_zarr_store_virtual_refs_from_public_gcs(
 #[apply(spec_version_cases)]
 async fn test_zarr_store_with_multiple_virtual_chunk_containers(
     #[case] spec_version: SpecVersionBin,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     // we create a repository with 3 virtual chunk containers: one for minio chunks, one for
     // local filesystem chunks and one for chunks in a public S3 bucket.
 
@@ -1219,7 +1219,7 @@ async fn test_virtual_refs_with_vcc_relative_urls(
             )
             .await
             .unwrap(),
-            Some(range.slice(bytes1.clone()))
+            Some(range.slice(&bytes1))
         );
     }
 
