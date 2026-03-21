@@ -441,7 +441,6 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use std::fs::read_dir;
 

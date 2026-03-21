@@ -714,7 +714,6 @@ macro_rules! roundtrip_serialization_tests {
     }
 
 #[cfg(test)]
-#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use crate::{
         ObjectStoreConfig, RepositoryConfig,

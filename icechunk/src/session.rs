@@ -3834,7 +3834,7 @@ mod tests {
         // )
         // .await?;
         Repository::store_config(
-            storage.clone(),
+            Arc::clone(&storage),
             &RepositoryConfig::default(),
             &storage::VersionInfo::for_creation(),
         )
@@ -4043,7 +4043,8 @@ mod tests {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let storage = Arc::clone(&logging_c);
 
         let config = RepositoryConfig {
@@ -4595,7 +4596,8 @@ mod tests {
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let in_mem_storage = Arc::new(ObjectStorage::new_in_memory().await?);
-        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let storage = Arc::clone(&in_mem_storage);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
             None,
             Arc::clone(&storage),
@@ -5342,7 +5344,8 @@ mod tests {
     #[tokio_test]
     async fn test_basic_move() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
-        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let storage = Arc::clone(&in_mem_storage);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
             None,
             Arc::clone(&storage),
@@ -5408,7 +5411,8 @@ mod tests {
     #[tokio_test]
     async fn test_move_errors() -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
-        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let storage = Arc::clone(&in_mem_storage);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
             None,
             Arc::clone(&storage),
@@ -5448,7 +5452,8 @@ mod tests {
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
-        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let storage = Arc::clone(&in_mem_storage);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
             None,
             Arc::clone(&storage),
@@ -5519,7 +5524,8 @@ mod tests {
         #[case] spec_version: SpecVersionBin,
     ) -> Result<(), Box<dyn Error>> {
         let in_mem_storage = new_in_memory_storage().await?;
-        let storage: Arc<dyn Storage + Send + Sync> = in_mem_storage.clone();
+        let storage = Arc::clone(&in_mem_storage);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repo = Repository::create(
             None,
             Arc::clone(&storage),

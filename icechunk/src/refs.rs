@@ -492,7 +492,7 @@ pub async fn fetch_branch_tip_v1(
 }
 
 #[cfg(all(test, feature = "object-store-fs"))]
-#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::sync::Arc;
 

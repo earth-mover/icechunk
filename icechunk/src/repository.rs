@@ -2074,7 +2074,6 @@ fn raise_if_invalid_snapshot_id_v2(
 }
 
 #[cfg(test)]
-#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use futures::TryStreamExt as _;
     use std::{
@@ -2521,7 +2520,8 @@ mod tests {
 
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let storage: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let storage = Arc::clone(&logging);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repository = create_repo_with_split_manifest_config(
             &array_path,
             &shape,
@@ -2751,7 +2751,8 @@ mod tests {
 
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let storage: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let storage = Arc::clone(&logging);
+        let storage: Arc<dyn Storage + Send + Sync> = storage;
         let repository = create_repo_with_split_manifest_config(
             &temp_path,
             &shape,
@@ -2800,7 +2801,8 @@ mod tests {
 
         // check that reads are optimized; we should only fetch the last split for this query
         let logging2 = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let storage2: Arc<dyn Storage + Send + Sync> = logging2.clone();
+        let storage2 = Arc::clone(&logging2);
+        let storage2: Arc<dyn Storage + Send + Sync> = storage2;
         let config = RepositoryConfig {
             manifest: Some(ManifestConfig::empty()),
             storage: Some(storage::Settings {
@@ -3051,7 +3053,8 @@ mod tests {
         let split_config = ManifestSplittingConfig { split_sizes: Some(split_sizes) };
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let repository = create_repo_with_split_manifest_config(
             &temp_path,
             &shape,
@@ -3668,7 +3671,8 @@ mod tests {
         session.commit("create arrays").max_concurrent_nodes(8).execute().await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let storage = Arc::clone(&logging_c);
 
         let man_config = ManifestConfig {

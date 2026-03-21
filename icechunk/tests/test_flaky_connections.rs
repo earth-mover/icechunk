@@ -80,7 +80,7 @@ async fn setup_toxiproxy(
     for (name, proxy) in proxies {
         if proxy.config.listen.ends_with(&port_suffix) {
             println!("Deleting stale proxy on :{port}: {name}");
-            proxy.delete().await.ok();
+            let _ = proxy.delete().await;
         }
     }
 
@@ -181,7 +181,6 @@ async fn remove_toxic_via_api(
 /// these, so we add our own retry in `AssetManager::fetch_chunk`.
 
 #[icechunk_macros::tokio_test]
-#[expect(clippy::unwrap_used, clippy::expect_used)]
 async fn test_stalled_stream() -> Result<(), Box<dyn std::error::Error>> {
     let (client, name) = setup_toxiproxy("stalled_stream", 9002).await?;
 
@@ -239,7 +238,6 @@ async fn test_stalled_stream() -> Result<(), Box<dyn std::error::Error>> {
 // ── Connection reset test ───────────────────────────────────────────────────
 
 #[icechunk_macros::tokio_test]
-#[expect(clippy::unwrap_used, clippy::expect_used)]
 async fn test_connection_reset() -> Result<(), Box<dyn std::error::Error>> {
     let (client, proxy_name) = setup_toxiproxy("connection_reset", 9003).await?;
 

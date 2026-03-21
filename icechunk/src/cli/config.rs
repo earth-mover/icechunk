@@ -82,7 +82,6 @@ pub struct CliConfig {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use std::env::temp_dir;
     use std::fs::File;

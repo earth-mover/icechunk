@@ -75,7 +75,7 @@ async fn do_writes(path: &std::path::Path) -> Result<(), Box<dyn std::error::Err
     let futures: FuturesUnordered<_> = iproduct!(0..MAX_I, 0..MAX_J, 0..MAX_L, 0..MAX_K)
         .map(|(i, j, k, l)| {
             let path = path.clone();
-            let session = session.clone();
+            let session = Arc::clone(&session);
             async move {
                 let mut session = session.write().await;
                 let payload = ChunkPayload::Ref(ChunkRef {
@@ -119,10 +119,10 @@ async fn do_reads(path: &std::path::Path) -> Result<(), Box<dyn std::error::Erro
     let path: Path = "/array".try_into().unwrap();
     println!("Doing {} reads, wait...", 4 * (READS / 4));
     let before = Instant::now();
-    let join1 = tokio::spawn(thread_reads(session.clone(), path.clone(), READS / 4));
-    let join2 = tokio::spawn(thread_reads(session.clone(), path.clone(), READS / 4));
-    let join3 = tokio::spawn(thread_reads(session.clone(), path.clone(), READS / 4));
-    let join4 = tokio::spawn(thread_reads(session.clone(), path.clone(), READS / 4));
+    let join1 = tokio::spawn(thread_reads(Arc::clone(&session), path.clone(), READS / 4));
+    let join2 = tokio::spawn(thread_reads(Arc::clone(&session), path.clone(), READS / 4));
+    let join3 = tokio::spawn(thread_reads(Arc::clone(&session), path.clone(), READS / 4));
+    let join4 = tokio::spawn(thread_reads(Arc::clone(&session), path.clone(), READS / 4));
 
     let total = join1.await? + join2.await? + join3.await? + join4.await?;
     assert_eq!(total, 4 * (READS / 4));
@@ -164,7 +164,7 @@ async fn thread_reads(session: Arc<RwLock<Session>>, path: Path, reads: u64) -> 
             let k = random_range(0..MAX_K);
             let l = random_range(0..MAX_L);
             let path = path.clone();
-            let session = session.clone();
+            let session = Arc::clone(&session);
             async move {
                 let session = session.read().await;
                 let the_ref = session

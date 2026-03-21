@@ -540,13 +540,13 @@ fn file_path_components() -> impl Strategy<Value = Vec<String>> {
 
 // Given a collection of directory names, an absolute Unix style path
 // using the directory names in order is generated
-fn to_abs_unix_path(path_components: Vec<String>) -> String {
+fn to_abs_unix_path(path_components: &[String]) -> String {
     format!("/{}", path_components.join("/"))
 }
 
 // Generates Unix style absolute file paths
 fn absolute_path() -> impl Strategy<Value = String> {
-    file_path_components().prop_map(to_abs_unix_path)
+    file_path_components().prop_map(|c| to_abs_unix_path(&c))
 }
 
 pub fn path() -> impl Strategy<Value = Path> {

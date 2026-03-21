@@ -890,7 +890,7 @@ fn mk_node_data(
 }
 
 #[cfg(test)]
-#[allow(unused_qualifications)] // proptest macros generate fully qualified paths
+#[expect(unused_qualifications)] // proptest macros generate fully qualified paths
 mod tests {
     use crate::format::{IcechunkFormatError, ObjectId};
 

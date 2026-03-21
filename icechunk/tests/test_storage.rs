@@ -77,7 +77,6 @@ async fn mk_s3_storage(
     Ok(storage)
 }
 
-#[expect(clippy::expect_used)]
 async fn mk_s3_object_store_storage(
     prefix: &str,
     permission: &Permission,
@@ -350,15 +349,25 @@ pub async fn test_create_existing_tag(
 #[tokio_test]
 pub async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let _repo =
-            Repository::create(None, storage.clone(), Default::default(), None, true)
-                .await?;
+        let _repo = Repository::create(
+            None,
+            Arc::clone(&storage),
+            Default::default(),
+            None,
+            true,
+        )
+        .await?;
 
         // creating repo with check_clean_repo = true
         // should fail because we wrote data above
-        let res =
-            Repository::create(None, storage.clone(), Default::default(), None, true)
-                .await;
+        let res = Repository::create(
+            None,
+            Arc::clone(&storage),
+            Default::default(),
+            None,
+            true,
+        )
+        .await;
         assert!(res.is_err());
         assert!(matches!(
             res,
@@ -605,7 +614,6 @@ pub async fn test_fetch_non_existing_branch(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-#[expect(clippy::panic)]
 pub async fn test_write_config_on_empty(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -620,12 +628,10 @@ pub async fn test_write_config_on_empty(
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));
         let config = RepositoryConfig::default();
-        let version = match am
-            .try_update_config(&config, &VersionInfo::for_creation(), None)
-            .await?
-        {
-            Some(new_version) => new_version,
-            None => panic!(),
+        let Some(version) =
+            am.try_update_config(&config, &VersionInfo::for_creation(), None).await?
+        else {
+            panic!()
         };
         assert_ne!(version, VersionInfo::for_creation());
         let res = am.fetch_config().await?;
@@ -644,7 +650,6 @@ pub async fn test_write_config_on_empty(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-#[expect(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_on_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -657,21 +662,17 @@ pub async fn test_write_config_on_existing(
             DEFAULT_MAX_CONCURRENT_REQUESTS,
         ));
         let config1 = RepositoryConfig::default();
-        let first_version = match am
-            .try_update_config(&config1, &VersionInfo::for_creation(), None)
-            .await?
-        {
-            Some(new_version) => new_version,
-            None => panic!(),
+        let Some(first_version) =
+            am.try_update_config(&config1, &VersionInfo::for_creation(), None).await?
+        else {
+            panic!()
         };
         let config2 =
             RepositoryConfig { inline_chunk_threshold_bytes: Some(42), ..config1 };
-        let second_version = match am
-            .try_update_config(&config2, &first_version, Some("foo/baz"))
-            .await?
-        {
-            Some(new_version) => new_version,
-            None => panic!(),
+        let Some(second_version) =
+            am.try_update_config(&config2, &first_version, Some("foo/baz")).await?
+        else {
+            panic!()
         };
         assert_ne!(second_version, first_version);
         let (fetched_config, fetched_version) = am.fetch_config().await?.unwrap();
@@ -689,7 +690,6 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // FIXME: this test fails in MinIO but seems to work on S3
-    #[expect(clippy::unwrap_used)]
     let storage = new_in_memory_storage().await.unwrap();
     let storage_settings = storage.default_settings().await?;
     let am = Arc::new(AssetManager::new_no_cache(
@@ -719,7 +719,6 @@ pub async fn test_write_config_fails_on_bad_version_when_non_existing(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-#[expect(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_fails_on_bad_version_when_existing(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -734,12 +733,10 @@ pub async fn test_write_config_fails_on_bad_version_when_existing(
         ));
 
         let config1 = RepositoryConfig::default();
-        let version = match am
-            .try_update_config(&config1, &VersionInfo::for_creation(), None)
-            .await?
-        {
-            Some(new_version) => new_version,
-            None => panic!(),
+        let Some(version) =
+            am.try_update_config(&config1, &VersionInfo::for_creation(), None).await?
+        else {
+            panic!()
         };
         let update_res = am
             .try_update_config(
@@ -776,7 +773,6 @@ pub async fn test_write_config_fails_on_bad_version_when_existing(
 
 #[tokio_test]
 #[apply(spec_version_cases)]
-#[expect(clippy::panic, clippy::unwrap_used)]
 pub async fn test_write_config_can_overwrite_with_unsafe_config(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -820,7 +816,6 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config(
 }
 
 #[tokio_test]
-#[expect(clippy::unwrap_used)]
 pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
     if env::var("AWS_BUCKET").is_err() {
         return Ok(());
@@ -997,7 +992,6 @@ pub async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Err
 }
 
 #[tokio::test]
-#[expect(clippy::unwrap_used)]
 /// Start an HTTP server serving static files from icechunk-python/tests/data/test-repo-v2
 /// Create an HTTP storage that hits that server, and call some methods on it
 async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
@@ -1007,7 +1001,7 @@ async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
     let (stop, wait) = oneshot::channel();
     let port = port_check::free_local_ipv4_port_in_range(8000..65000).unwrap();
     let server = warp::serve(route).bind(([127, 0, 0, 1], port)).await.graceful(async {
-        wait.await.ok();
+        let _ = wait.await;
     });
 
     let join = tokio::task::spawn(server.run());
@@ -1061,7 +1055,6 @@ async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-#[expect(clippy::unwrap_used)]
 /// Start a server that after a few redirects returns a redirect to a S3 public repo
 /// Build a redirect storage and verify the S3 repo is accessible
 async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
@@ -1080,7 +1073,7 @@ async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
 
     let (stop, wait) = oneshot::channel();
     let server = warp::serve(route).bind(([127, 0, 0, 1], port)).await.graceful(async {
-        wait.await.ok();
+        let _ = wait.await;
     });
 
     let join = tokio::task::spawn(server.run());

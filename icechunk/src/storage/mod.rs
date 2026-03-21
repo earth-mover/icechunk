@@ -756,7 +756,7 @@ pub fn new_s3_storage(
     bucket: String,
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
-) -> StorageResult<Arc<dyn Storage>> {
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     if let Some(endpoint) = &config.endpoint_url
         && (endpoint.contains("fly.storage.tigris.dev")
             || endpoint.contains("t3.storage.dev"))
@@ -786,7 +786,7 @@ pub fn new_r2_storage(
     prefix: Option<String>,
     account_id: Option<String>,
     credentials: Option<S3Credentials>,
-) -> StorageResult<Arc<dyn Storage>> {
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     let (bucket, prefix) = match (bucket, prefix) {
         (Some(bucket), Some(prefix)) => (bucket, Some(prefix)),
         (None, Some(prefix)) => match prefix.split_once("/") {
@@ -836,7 +836,7 @@ pub fn new_tigris_storage(
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
     use_weak_consistency: bool,
-) -> StorageResult<Arc<dyn Storage>> {
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     let config = S3Options {
         endpoint_url: Some(
             config.endpoint_url.unwrap_or("https://t3.storage.dev".to_string()),
@@ -883,7 +883,7 @@ pub async fn new_in_memory_storage() -> StorageResult<Arc<dyn Storage + Send + S
 #[cfg(feature = "object-store-fs")]
 pub async fn new_local_filesystem_storage(
     path: &Path,
-) -> StorageResult<Arc<dyn Storage>> {
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     let st = ObjectStorage::new_local_filesystem(path).await?;
     Ok(Arc::new(st))
 }
@@ -892,7 +892,7 @@ pub async fn new_local_filesystem_storage(
 pub fn new_http_storage(
     base_url: &str,
     config: Option<HashMap<String, String>>,
-) -> StorageResult<Arc<dyn Storage>> {
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     let base_url = Url::parse(base_url).map_err(|e| {
         StorageErrorKind::CannotParseUrl { cause: e, url: base_url.to_string() }
     })?;
@@ -908,7 +908,9 @@ pub fn new_http_storage(
 }
 
 #[cfg(feature = "redirect")]
-pub fn new_redirect_storage(base_url: &str) -> StorageResult<Arc<dyn Storage>> {
+pub fn new_redirect_storage(
+    base_url: &str,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     let base_url = Url::parse(base_url).map_err(|e| {
         StorageErrorKind::CannotParseUrl { cause: e, url: base_url.to_string() }
     })?;
@@ -921,7 +923,7 @@ pub async fn new_s3_object_store_storage(
     bucket: String,
     prefix: Option<String>,
     credentials: Option<S3Credentials>,
-) -> StorageResult<Arc<dyn Storage>> {
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     if let Some(endpoint) = &config.endpoint_url
         && (endpoint.contains("fly.storage.tigris.dev")
             || endpoint.contains("t3.storage.dev"))
@@ -943,7 +945,7 @@ pub async fn new_azure_blob_storage(
     prefix: Option<String>,
     credentials: Option<AzureCredentials>,
     config: Option<HashMap<String, String>>,
-) -> StorageResult<Arc<dyn Storage>> {
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     let config = config
         .unwrap_or_default()
         .into_iter()
@@ -961,7 +963,7 @@ pub fn new_gcs_storage(
     prefix: Option<String>,
     credentials: Option<GcsCredentials>,
     config: Option<HashMap<String, String>>,
-) -> StorageResult<Arc<dyn Storage>> {
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
     let config = config
         .unwrap_or_default()
         .into_iter()
@@ -978,7 +980,6 @@ pub fn strip_quotes(s: &str) -> &str {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::panic)]
 mod tests {
 
     use std::collections::HashSet;

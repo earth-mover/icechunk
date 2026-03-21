@@ -963,7 +963,7 @@ static ROOT_OPTIONS: VerifierOptions = VerifierOptions {
 };
 
 #[cfg(test)]
-#[allow(unused_qualifications)] // proptest macros generate fully qualified paths
+#[expect(unused_qualifications)] // proptest macros generate fully qualified paths
 mod tests {
     use super::*;
     use crate::config::ManifestVirtualChunkLocationCompressionConfig;

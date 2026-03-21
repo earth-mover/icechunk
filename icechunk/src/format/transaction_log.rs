@@ -633,7 +633,6 @@ impl Diff {
 }
 
 #[cfg(test)]
-#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::collections::HashSet;
 

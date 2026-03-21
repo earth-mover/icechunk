@@ -1684,7 +1684,6 @@ fn update_type_to_fb<'bldr>(
 }
 
 #[cfg(test)]
-#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
     use super::*;

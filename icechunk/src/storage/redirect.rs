@@ -35,7 +35,7 @@ pub struct RedirectStorage {
     url: Url,
 
     #[serde(skip)]
-    backend: OnceCell<Arc<dyn Storage>>,
+    backend: OnceCell<Arc<dyn Storage + Send + Sync>>,
 }
 
 const HANDLED_SCHEMES: [&str; 9] = [
@@ -55,11 +55,11 @@ impl RedirectStorage {
         Self { url, backend: OnceCell::new() }
     }
 
-    async fn backend(&self) -> StorageResult<&dyn Storage> {
+    async fn backend(&self) -> StorageResult<&(dyn Storage + Send + Sync)> {
         self.backend.get_or_try_init(|| self.mk_backend()).await.map(|arc| arc.as_ref())
     }
 
-    async fn mk_backend(&self) -> StorageResult<Arc<dyn Storage>> {
+    async fn mk_backend(&self) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
         let redirect = |attempt: rw::redirect::Attempt<'_>| {
             // TODO: make configurable
             if attempt.previous().len() > 10 {
@@ -107,7 +107,10 @@ impl RedirectStorage {
         self.mk_storage(storage_url).await
     }
 
-    async fn mk_storage(&self, url: &str) -> StorageResult<Arc<dyn Storage>> {
+    async fn mk_storage(
+        &self,
+        url: &str,
+    ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
         let url = Url::parse(url).map_err(|e| {
             StorageError::from(StorageErrorKind::BadRedirect(format!(
                 "Storage url cannot be parsed ({url}): {e}"

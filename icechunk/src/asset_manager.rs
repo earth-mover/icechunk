@@ -1567,7 +1567,7 @@ mod test {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = AssetManager::new_no_cache(
-            backend.clone(),
+            Arc::clone(&backend),
             settings.clone(),
             SpecVersionBin::default(),
             1,
@@ -1595,7 +1595,8 @@ mod test {
         let pre_size = manager.write_manifest(Arc::clone(&pre_existing_manifest)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let caching = AssetManager::new_with_config(
             Arc::clone(&logging_c),
             settings,
@@ -1678,7 +1679,7 @@ mod test {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = AssetManager::new_no_cache(
-            backend.clone(),
+            Arc::clone(&backend),
             settings.clone(),
             SpecVersionBin::default(),
             1,
@@ -1726,7 +1727,8 @@ mod test {
         let size3 = manager.write_manifest(Arc::clone(&manifest3)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&backend)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let caching = AssetManager::new_with_config(
             logging_c,
             settings,
@@ -1762,7 +1764,7 @@ mod test {
         let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = Arc::new(AssetManager::new_no_cache(
-            storage.clone(),
+            Arc::clone(&storage),
             settings.clone(),
             SpecVersionBin::default(),
             1,
@@ -1786,9 +1788,10 @@ mod test {
         let size = manager.write_manifest(Arc::new(manifest)).await?;
 
         let logging = Arc::new(LoggingStorage::new(Arc::clone(&storage)));
-        let logging_c: Arc<dyn Storage + Send + Sync> = logging.clone();
+        let logging_c = Arc::clone(&logging);
+        let logging_c: Arc<dyn Storage + Send + Sync> = logging_c;
         let manager = Arc::new(AssetManager::new_with_config(
-            logging_c.clone(),
+            Arc::clone(&logging_c),
             settings,
             SpecVersionBin::default(),
             &CachingConfig::default(),
@@ -1818,7 +1821,7 @@ mod test {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = AssetManager::new_no_cache(
-            backend.clone(),
+            Arc::clone(&backend),
             settings.clone(),
             SpecVersionBin::default(),
             1,
@@ -1832,7 +1835,7 @@ mod test {
             None,
             None,
         ));
-        manager.create_repo_info(repo_info.clone()).await?;
+        manager.create_repo_info(Arc::clone(&repo_info)).await?;
 
         assert!(!manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), None);
@@ -1842,7 +1845,7 @@ mod test {
         assert!(!manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), None);
 
-        assert_eq!(repo_info.clone(), fetched_repo_info);
+        assert_eq!(Arc::clone(&repo_info), fetched_repo_info);
 
         Ok(())
     }
@@ -1853,7 +1856,7 @@ mod test {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let settings = storage::Settings::default();
         let manager = AssetManager::new_with_config(
-            backend.clone(),
+            Arc::clone(&backend),
             settings.clone(),
             SpecVersionBin::default(),
             &CachingConfig::default(),
@@ -1868,9 +1871,9 @@ mod test {
             None,
             None,
         ));
-        let new_version = manager.create_repo_info(repo_info.clone()).await?;
+        let new_version = manager.create_repo_info(Arc::clone(&repo_info)).await?;
 
-        let cached = Some((repo_info.clone(), new_version.clone()));
+        let cached = Some((Arc::clone(&repo_info), new_version.clone()));
 
         assert!(manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), cached);
@@ -1880,7 +1883,7 @@ mod test {
         assert!(manager.use_repo_info_cache);
         assert_eq!(*manager.repo_cache.read().unwrap(), cached);
 
-        assert_eq!(repo_info.clone(), fetched_repo_info);
+        assert_eq!(Arc::clone(&repo_info), fetched_repo_info);
         assert_eq!(new_version, version);
 
         Ok(())

@@ -1414,7 +1414,6 @@ impl From<Vec<u64>> for ChunkGridSerializer {
 }
 
 #[cfg(test)]
-#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
     use std::collections::HashMap;
@@ -1717,7 +1716,7 @@ mod tests {
         let repo = create_memory_store_repository().await;
         let session = repo.writable_session("main").await?;
         let session = Arc::new(RwLock::new(session));
-        let store = Store::from_session(session.clone()).await;
+        let store = Store::from_session(Arc::clone(&session)).await;
 
         let zarr_meta = Bytes::copy_from_slice(br#"{"zarr_format":3,"node_type":"array","shape":[],"data_type":"float64","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[]}},"chunk_key_encoding":{"name":"default","configuration":{"separator":"/"}},"fill_value":0.0,"codecs":[{"name":"bytes","configuration":{"endian":"little"}}]}"#);
         store.set("scalar/zarr.json", zarr_meta.clone()).await?;
@@ -1751,7 +1750,7 @@ mod tests {
         let repo = create_memory_store_repository().await;
         let session = repo.writable_session("main").await?;
         let session = Arc::new(RwLock::new(session));
-        let store = Store::from_session(session.clone()).await;
+        let store = Store::from_session(Arc::clone(&session)).await;
 
         // the first six of these are valid ways of specifying chunk sizes for
         // a dimension of size 6

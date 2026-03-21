@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for idx in chnk {
             let new_array_path = new_array_path.clone();
             let payload = payload.clone();
-            let ds = ds.clone();
+            let ds = Arc::clone(&ds);
 
             set.spawn(async move {
                 ds.write()

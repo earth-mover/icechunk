@@ -153,7 +153,6 @@ impl StreamLimiter {
 }
 
 #[cfg(test)]
-#[expect(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::{convert::Infallible, error::Error, future::ready, sync::Arc};
 

@@ -679,7 +679,6 @@ impl ChangeSet {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use bytes::Bytes;
     use itertools::Itertools as _;

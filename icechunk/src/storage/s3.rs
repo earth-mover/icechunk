@@ -1013,7 +1013,6 @@ impl ProvideRefreshableCredentials {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use icechunk_macros::tokio_test;
 
