@@ -17,7 +17,7 @@ use super::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
     StorageResult, VersionInfo, VersionedUpdateResult,
 };
-use crate::private;
+use icechunk_storage::sealed;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoggingStorage {
@@ -46,7 +46,7 @@ impl fmt::Display for LoggingStorage {
     }
 }
 
-impl private::Sealed for LoggingStorage {}
+impl sealed::Sealed for LoggingStorage {}
 
 #[async_trait]
 #[typetag::serde]

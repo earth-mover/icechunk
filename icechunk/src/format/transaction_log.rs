@@ -17,6 +17,7 @@ use super::{
     ChunkIndices, IcechunkResult, NodeId, Path, SnapshotId,
     flatbuffers::generated::{self, MoveOperation, MoveOperationArgs},
 };
+use icechunk_types::ICResultExt as _;
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TransactionLog {
@@ -219,7 +220,8 @@ impl TransactionLog {
         let _ = flatbuffers::root_with_opts::<generated::TransactionLog<'_>>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
-        )?;
+        )
+        .ic_err()?;
         Ok(Self { buffer })
     }
 

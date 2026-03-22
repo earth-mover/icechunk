@@ -31,6 +31,7 @@ use crate::{
     storage::{self, DeleteObjectsResult, ListInfo},
     stream_utils::{StreamLimiter, try_unique_stream},
 };
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -199,10 +200,9 @@ async fn snapshot_retained(
     keep_snapshots
         .lock()
         .map_err(|_| {
-            RepositoryError::from(RepositoryErrorKind::Other(
-                "can't lock retained snapshots mutex".to_string(),
-            ))
-        })?
+            RepositoryErrorKind::Other("can't lock retained snapshots mutex".to_string())
+        })
+        .ic_err()?
         .insert(snap.id());
     Ok(stream::iter(
         snap.manifest_files().map(Ok::<_, RepositoryError>).collect::<Vec<_>>(),
@@ -217,10 +217,9 @@ async fn manifest_retained(
     keep_manifests
         .lock()
         .map_err(|_| {
-            RepositoryError::from(RepositoryErrorKind::Other(
-                "can't lock retained manifests mutex".to_string(),
-            ))
-        })?
+            RepositoryErrorKind::Other("can't lock retained manifests mutex".to_string())
+        })
+        .ic_err()?
         .insert(minfo.id.clone());
     let manifest = asset_manager.fetch_manifest(&minfo.id, minfo.size_bytes).await?;
     Ok((manifest, minfo))
@@ -232,28 +231,29 @@ async fn chunks_retained(
     minfo: ManifestFileInfo,
 ) -> RepositoryResult<ManifestFileInfo> {
     task::spawn_blocking(move || {
-        let chunk_ids = manifest.chunk_payloads()?.filter_map(|payload| match payload {
-            Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
-            Ok(_) => None,
-            Err(err) => {
-                tracing::error!(
-                    error = %err,
-                    "Error in chunk payload iterator"
-                );
-                None
-            }
-        });
+        let chunk_ids =
+            manifest.chunk_payloads().inject()?.filter_map(|payload| match payload {
+                Ok(ChunkPayload::Ref(chunk_ref)) => Some(chunk_ref.id.clone()),
+                Ok(_) => None,
+                Err(err) => {
+                    tracing::error!(
+                        error = %err,
+                        "Error in chunk payload iterator"
+                    );
+                    None
+                }
+            });
         keep_chunks
             .lock()
             .map_err(|_| {
-                RepositoryError::from(RepositoryErrorKind::Other(
-                    "can't lock retained chunks mutex".to_string(),
-                ))
-            })?
+                RepositoryErrorKind::Other("can't lock retained chunks mutex".to_string())
+            })
+            .ic_err()?
             .extend(chunk_ids);
         Ok::<_, RepositoryError>(())
     })
-    .await??;
+    .await
+    .ic_err()??;
     Ok(minfo)
 }
 
@@ -326,22 +326,22 @@ pub async fn garbage_collect(
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
     if !asset_manager.can_write_to_storage().await? {
-        return Err(GCError::Repository(
-            RepositoryErrorKind::ReadonlyStorage("Cannot garbage collect".to_string())
-                .into(),
-        ));
+        return Err(RepositoryErrorKind::ReadonlyStorage(
+            "Cannot garbage collect".to_string(),
+        ))
+        .ic_err()
+        .map_err(GCError::Repository)?;
     }
 
     // Check repo status (only available on IC2+)
     if asset_manager.spec_version() >= SpecVersionBin::V2 {
         let (repo_info, _) = asset_manager.fetch_repo_info().await?;
         if repo_info.status()?.availability != RepoAvailability::Online {
-            return Err(GCError::Repository(
-                RepositoryErrorKind::ReadonlyRepository(
-                    "Cannot garbage collect".to_string(),
-                )
-                .into(),
-            ));
+            return Err(RepositoryErrorKind::ReadonlyRepository(
+                "Cannot garbage collect".to_string(),
+            ))
+            .ic_err()
+            .map_err(GCError::Repository)?;
         }
     }
 
@@ -523,8 +523,8 @@ async fn delete_snapshots_from_repo_info(
     trace!("deleting snapshots from repo info");
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
         let mut final_snaps = HashSet::with_capacity(2 * keep_snapshots.len());
-        for si in repo_info.all_snapshots()? {
-            let si = si?;
+        for si in repo_info.all_snapshots().inject()? {
+            let si = si.inject()?;
 
             #[expect(clippy::panic)]
             match (keep_snapshots.contains(&si.id), drop_snapshots.contains(&si.id)) {
@@ -564,7 +564,7 @@ async fn delete_snapshots_from_repo_info(
                     {
                         // this is a new snapshot created since we started GC
                         // but we are trying to drop its parent. Case 2b
-                        return Err(RepositoryErrorKind::RepoInfoUpdated.into());
+                        return Err(RepositoryErrorKind::RepoInfoUpdated).ic_err();
                     } else {
                         // a new snapshot with the root as parent or with a parent we don't want to drop
                         // root is always retained
@@ -580,33 +580,36 @@ async fn delete_snapshots_from_repo_info(
 
         // TODO: quite inefficient
         let final_snap_ids: HashSet<_> = final_snaps.iter().map(|si| &si.id).collect();
-        for (_, pointed_snap) in repo_info.tags()?.chain(repo_info.branches()?) {
+        for (_, pointed_snap) in
+            repo_info.tags().inject()?.chain(repo_info.branches().inject()?)
+        {
             if !final_snap_ids.contains(&pointed_snap) {
-                return Err(RepositoryErrorKind::RepoInfoUpdated.into());
+                return Err(RepositoryErrorKind::RepoInfoUpdated).ic_err();
             }
         }
 
-        let config_bytes = repo_info.config_bytes_raw()?;
+        let config_bytes = repo_info.config_bytes_raw().inject()?;
         let new_repo_info = RepoInfo::new(
             asset_manager.spec_version(),
-            repo_info.tags()?,
-            repo_info.branches()?,
-            repo_info.deleted_tags()?,
+            repo_info.tags().inject()?,
+            repo_info.branches().inject()?,
+            repo_info.deleted_tags().inject()?,
             final_snaps,
-            &repo_info.metadata()?,
+            &repo_info.metadata().inject()?,
             UpdateInfo {
                 update_type: UpdateType::GCRanUpdate,
                 update_time: Utc::now(),
-                previous_updates: repo_info.latest_updates()?,
+                previous_updates: repo_info.latest_updates().inject()?,
             },
             Some(backup_path),
             num_updates_per_repo_info_file,
-            repo_info.repo_before_updates()?,
+            repo_info.repo_before_updates().inject()?,
             config_bytes.as_deref(),
-            repo_info.enabled_feature_flags()?,
-            repo_info.disabled_feature_flags()?,
-            &repo_info.status()?,
-        )?;
+            repo_info.enabled_feature_flags().inject()?,
+            repo_info.disabled_feature_flags().inject()?,
+            &repo_info.status().inject()?,
+        )
+        .inject()?;
 
         Ok(Arc::new(new_repo_info))
     };
@@ -792,21 +795,20 @@ pub async fn expire(
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<ExpireResult> {
     if !asset_manager.can_write_to_storage().await? {
-        return Err(GCError::Repository(
-            RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()).into(),
-        ));
+        return Err(RepositoryErrorKind::ReadonlyStorage("Cannot expire".to_string()))
+            .ic_err()
+            .map_err(GCError::Repository)?;
     }
 
     // Check repo status (only available on IC2+)
     if asset_manager.spec_version() >= SpecVersionBin::V2 {
         let (repo_info, _) = asset_manager.fetch_repo_info().await?;
         if repo_info.status()?.availability != RepoAvailability::Online {
-            return Err(GCError::Repository(
-                RepositoryErrorKind::ReadonlyRepository(
-                    "Cannot garbage collect".to_string(),
-                )
-                .into(),
-            ));
+            return Err(RepositoryErrorKind::ReadonlyRepository(
+                "Cannot garbage collect".to_string(),
+            ))
+            .ic_err()
+            .map_err(GCError::Repository)?;
         }
     }
 
@@ -1046,44 +1048,46 @@ async fn expire_v2_one_attempt(
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, version| {
         // we retry if the repo info object was modified since we started
         if version != repo_info_version_at_start {
-            return Err(RepositoryErrorKind::RepoInfoUpdated.into());
+            return Err(RepositoryErrorKind::RepoInfoUpdated).ic_err();
         }
 
         let tags = repo_info
-            .tags()?
+            .tags()
+            .inject()?
             .filter(|(name, _)| !deleted_tags.contains(&Ref::Tag(name.to_string())));
 
-        let branches = repo_info.branches()?.filter(|(name, _)| {
+        let branches = repo_info.branches().inject()?.filter(|(name, _)| {
             !deleted_branches.contains(&Ref::Branch(name.to_string()))
         });
 
-        let deleted_tag_names = repo_info.deleted_tags()?.chain(
+        let deleted_tag_names = repo_info.deleted_tags().inject()?.chain(
             deleted_tags.iter().filter_map(|r| match r {
                 Ref::Tag(name) => Some(name.as_str()),
                 Ref::Branch(_) => None,
             }),
         );
-        let config_bytes = repo_info.config_bytes_raw()?;
+        let config_bytes = repo_info.config_bytes_raw().inject()?;
         let new_repo_info = RepoInfo::new(
             asset_manager.spec_version(),
             tags,
             branches,
             deleted_tag_names,
             retained.clone(),
-            &repo_info.metadata()?,
+            &repo_info.metadata().inject()?,
             UpdateInfo {
                 update_type: UpdateType::ExpirationRanUpdate,
                 update_time: Utc::now(),
-                previous_updates: repo_info.latest_updates()?,
+                previous_updates: repo_info.latest_updates().inject()?,
             },
             Some(backup_path),
             num_updates_per_repo_info_file,
-            repo_info.repo_before_updates()?,
+            repo_info.repo_before_updates().inject()?,
             config_bytes.as_deref(),
-            repo_info.enabled_feature_flags()?,
-            repo_info.disabled_feature_flags()?,
-            &repo_info.status()?,
-        )?;
+            repo_info.enabled_feature_flags().inject()?,
+            repo_info.disabled_feature_flags().inject()?,
+            &repo_info.status().inject()?,
+        )
+        .inject()?;
 
         Ok(Arc::new(new_repo_info))
     };

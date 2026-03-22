@@ -44,6 +44,8 @@
 //!   spec version number and use the right (de)-serializer to do the job.
 use std::io::Write;
 
+use icechunk_types::ICResultExt as _;
+
 use super::{
     IcechunkFormatError, IcechunkFormatErrorKind, format_constants::SpecVersionBin,
     manifest::Manifest, repo_info::RepoInfo, snapshot::Snapshot,
@@ -132,8 +134,8 @@ pub fn deserialize_repo_info(
         SpecVersionBin::V1 => {
             Err(IcechunkFormatErrorKind::UnsupportedOperationForVersion {
                 version: SpecVersionBin::V1 as u8,
-            }
-            .into())
+            })
+            .ic_err()
         }
     }
 }

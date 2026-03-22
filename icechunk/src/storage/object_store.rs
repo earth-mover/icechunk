@@ -2,7 +2,6 @@
 //!
 //! Supports local filesystem, in-memory, Azure Blob, and Google Cloud Storage.
 
-use crate::private;
 #[cfg(feature = "object-store-s3")]
 use crate::storage::s3_config::{S3Credentials, S3Options};
 use crate::storage::strip_quotes;
@@ -13,6 +12,10 @@ use futures::{
     Stream, StreamExt as _, TryStreamExt as _,
     stream::{self, BoxStream},
 };
+use icechunk_storage::{
+    obj_not_found_res, obj_store_error, obj_store_error_res, other_error, sealed,
+};
+use icechunk_types::ICResultExt as _;
 #[cfg(any(
     feature = "object-store-s3",
     feature = "object-store-gcs",
@@ -259,14 +262,13 @@ impl ObjectStorage {
     ///
     /// Intended for testing and debugging purposes only.
     pub async fn all_keys(&self) -> StorageResult<Vec<String>> {
-        Ok(self
-            .get_client(&self.backend.default_settings())
+        self.get_client(&self.backend.default_settings())
             .await
             .list(None)
             .map_ok(|obj| obj.location.to_string())
             .try_collect()
             .await
-            .map_err(Box::new)?)
+            .ic_err_box()
     }
 
     fn prefixed_path(&self, path: &str) -> ObjectPath {
@@ -323,7 +325,7 @@ impl Display for ObjectStorage {
     }
 }
 
-impl private::Sealed for ObjectStorage {}
+impl sealed::Sealed for ObjectStorage {}
 
 #[async_trait]
 #[typetag::serde]
@@ -377,7 +379,9 @@ impl Storage for ObjectStorage {
             | Err(object_store::Error::AlreadyExists { .. }) => {
                 Ok(VersionedUpdateResult::NotOnLatestVersion)
             }
-            Err(err) => Err(Box::new(err).into()),
+            Err(err) => Err(StorageError::no_context(StorageErrorKind::ObjectStore(
+                Box::new(err),
+            ))),
         }
     }
 
@@ -405,31 +409,29 @@ impl Storage for ObjectStorage {
                     let bytes = result
                         .bytes()
                         .await
-                        .map_err(|e| -> StorageError { Box::new(e).into() })?;
+                        .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
+                        .ic_err()?;
                     self.get_client(settings)
                         .await
                         .put(&to, bytes.into())
                         .await
-                        .map_err(|e| -> StorageError { Box::new(e).into() })?;
+                        .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
+                        .ic_err()?;
                     Ok(VersionedUpdateResult::Updated { new_version: version.clone() })
                 }
                 Err(object_store::Error::Precondition { .. }) => {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 }
-                Err(object_store::Error::NotFound { .. }) => {
-                    Err(StorageErrorKind::ObjectNotFound.into())
-                }
-                Err(err) => Err(Box::new(err).into()),
+                Err(object_store::Error::NotFound { .. }) => obj_not_found_res(),
+                Err(err) => Err(obj_store_error(err)),
             }
         } else {
             match self.get_client(settings).await.copy(&from, &to).await {
                 Ok(_) => {
                     Ok(VersionedUpdateResult::Updated { new_version: version.clone() })
                 }
-                Err(object_store::Error::NotFound { .. }) => {
-                    Err(StorageErrorKind::ObjectNotFound.into())
-                }
-                Err(err) => Err(Box::new(err).into()),
+                Err(object_store::Error::NotFound { .. }) => obj_not_found_res(),
+                Err(err) => Err(obj_store_error(err)),
             }
         }
     }
@@ -445,7 +447,7 @@ impl Storage for ObjectStorage {
             self.get_client(settings).await.list(Some(&prefix)).map(move |object| {
                 let prefix = prefix.clone();
                 object
-                    .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)).into())
+                    .map_err(obj_store_error)
                     .and_then(|object| object_to_list_info(&prefix, &object))
             });
         Ok(stream.boxed())
@@ -493,7 +495,13 @@ impl Storage for ObjectStorage {
         settings: &Settings,
     ) -> StorageResult<DateTime<Utc>> {
         let path = self.prefixed_path(path);
-        let res = self.get_client(settings).await.head(&path).await.map_err(Box::new)?;
+        let res = self
+            .get_client(settings)
+            .await
+            .head(&path)
+            .await
+            .map_err(Box::new)
+            .ic_err_box()?;
         Ok(res.last_modified)
     }
 
@@ -570,15 +578,12 @@ impl ObjectStorage {
                     etag: result.meta.e_tag.as_ref().cloned().map(ETag),
                     generation: result.meta.version.as_ref().cloned().map(Generation),
                 };
-                let stream =
-                    Box::pin(result.into_stream().map_err(|e| Box::new(e).into()));
+                let stream = Box::pin(result.into_stream().map_err(obj_store_error));
                 Ok(Some((stream, version)))
             }
-            Err(object_store::Error::NotFound { .. }) => {
-                Err(StorageErrorKind::ObjectNotFound.into())
-            }
+            Err(object_store::Error::NotFound { .. }) => obj_not_found_res(),
             Err(object_store::Error::NotModified { .. }) => Ok(None),
-            Err(err) => Err(Box::new(err).into()),
+            Err(err) => obj_store_error_res(err),
         }
     }
 }
@@ -670,14 +675,10 @@ impl ObjectStoreBackend for LocalFileSystemObjectStoreBackend {
         &self,
         _settings: &Settings,
     ) -> Result<Arc<dyn ObjectStore>, StorageError> {
-        create_dir_all(&self.path).map_err(|e| StorageErrorKind::Other(e.to_string()))?;
-
-        let path = std::fs::canonicalize(&self.path)
-            .map_err(|e| StorageErrorKind::Other(e.to_string()))?;
-        Ok(Arc::new(
-            LocalFileSystem::new_with_prefix(path)
-                .map_err(|e| StorageErrorKind::Other(e.to_string()))?,
-        ))
+        create_dir_all(&self.path).ic_err()?;
+        let path = std::fs::canonicalize(&self.path).ic_err()?;
+        let fs = LocalFileSystem::new_with_prefix(path).ic_err_box()?;
+        Ok(Arc::new(fs))
     }
 
     fn prefix(&self) -> String {
@@ -775,8 +776,7 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
 
-        let store =
-            builder.build().map_err(|e| StorageErrorKind::Other(e.to_string()))?;
+        let store = builder.build().ic_err_box()?;
 
         Ok(Arc::new(store))
     }
@@ -885,8 +885,7 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
 
-        let store =
-            builder.build().map_err(|e| StorageErrorKind::Other(e.to_string()))?;
+        let store = builder.build().ic_err_box()?;
         Ok(Arc::new(store))
     }
 
@@ -975,8 +974,7 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
 
-        let store =
-            builder.build().map_err(|e| StorageErrorKind::Other(e.to_string()))?;
+        let store = builder.build().ic_err_box()?;
         Ok(Arc::new(store))
     }
 
@@ -1022,7 +1020,7 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
         let builder = match self.credentials.as_ref() {
             Some(GcsCredentials::Static(GcsStaticCredentials::ServiceAccount(path))) => {
                 let path = path.clone().into_os_string().into_string().map_err(|_| {
-                    StorageErrorKind::Other("invalid service account path".to_string())
+                    other_error("invalid service account path".to_string())
                 })?;
                 builder.with_service_account_path(path)
             }
@@ -1033,9 +1031,7 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
                 GcsStaticCredentials::ApplicationCredentials(path),
             )) => {
                 let path = path.clone().into_os_string().into_string().map_err(|_| {
-                    StorageErrorKind::Other(
-                        "invalid application credentials path".to_string(),
-                    )
+                    other_error("invalid application credentials path".to_string())
                 })?;
                 builder.with_application_credentials(path)
             }
@@ -1078,8 +1074,7 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
             max_retries: settings.retries().max_tries().get() as usize - 1,
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
-        let store =
-            builder.build().map_err(|e| StorageErrorKind::Other(e.to_string()))?;
+        let store = builder.build().ic_err_box()?;
         Ok(Arc::new(store))
     }
 
@@ -1123,8 +1118,7 @@ impl GcsRefreshableCredentialProvider {
         let mut last_credential = self.last_credential.write().await;
 
         // Otherwise, refresh the credential and cache it
-        let creds =
-            self.refresher.get().await.map_err(|e| StorageErrorKind::Other(e.clone()))?;
+        let creds = self.refresher.get().await.map_err(other_error)?;
         *last_credential = Some(creds.clone());
         Ok(creds)
     }
@@ -1150,7 +1144,9 @@ fn object_to_list_info(
     let created_at = object.last_modified;
     let id =
         ObjectPath::from_iter(object.location.prefix_match(prefix).ok_or_else(|| {
-            StorageErrorKind::BadPrefix(object.location.to_string().into())
+            StorageError::no_context(StorageErrorKind::BadPrefix(
+                object.location.to_string().into(),
+            ))
         })?)
         .to_string();
     let size_bytes = object.size;

@@ -24,6 +24,7 @@ use crate::{
     },
     session::{SessionErrorKind, SessionResult},
 };
+use icechunk_types::ICResultExt as _;
 
 // We have limitations on how many chunks we can save on a single commit.
 // Mostly due to flatbuffers not supporting 64-bit offsets,
@@ -205,7 +206,9 @@ impl ChangeSet {
     fn edits_mut(&mut self) -> SessionResult<&mut EditChanges> {
         match self {
             ChangeSet::Edit(edit_changes) => Ok(edit_changes),
-            ChangeSet::Rearrange(_) => Err(SessionErrorKind::RearrangeSessionOnly.into()),
+            ChangeSet::Rearrange(_) => {
+                Err(SessionErrorKind::RearrangeSessionOnly).ic_err()
+            }
         }
     }
 
@@ -218,7 +221,7 @@ impl ChangeSet {
 
     fn move_tracker_mut(&mut self) -> SessionResult<&mut MoveTracker> {
         match self {
-            ChangeSet::Edit(_) => Err(SessionErrorKind::NonRearrangeSession.into()),
+            ChangeSet::Edit(_) => Err(SessionErrorKind::NonRearrangeSession).ic_err(),
             ChangeSet::Rearrange(move_tracker) => Ok(move_tracker),
         }
     }
@@ -555,7 +558,7 @@ impl ChangeSet {
                 my_edit_changes.merge(other_changes);
                 Ok(())
             }
-            _ => Err(SessionErrorKind::RearrangeSessionOnly.into()),
+            _ => Err(SessionErrorKind::RearrangeSessionOnly).ic_err(),
         }
     }
 
@@ -563,14 +566,14 @@ impl ChangeSet {
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
     pub fn export_to_bytes(&self) -> SessionResult<Vec<u8>> {
-        Ok(rmp_serde::to_vec(self).map_err(Box::new)?)
+        rmp_serde::to_vec(self).map_err(Box::new).ic_err()
     }
 
     /// Deserialize a `ChangeSet`
     ///
     /// This is intended to help with marshalling distributed writers back to the coordinator
     pub fn import_from_bytes(bytes: &[u8]) -> SessionResult<Self> {
-        Ok(rmp_serde::from_slice(bytes).map_err(Box::new)?)
+        rmp_serde::from_slice(bytes).map_err(Box::new).ic_err()
     }
 
     pub fn update_existing_chunks<'a, E>(

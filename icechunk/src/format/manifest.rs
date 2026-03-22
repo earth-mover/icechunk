@@ -28,6 +28,7 @@ use crate::{
 use super::{
     ChunkId, ChunkIndices, ChunkLength, ChunkOffset, IcechunkResult, ManifestId, NodeId,
 };
+use icechunk_types::ICResultExt as _;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Overlap {
@@ -244,17 +245,6 @@ pub enum VirtualReferenceErrorKind {
 
 pub type VirtualReferenceError = ICError<VirtualReferenceErrorKind>;
 
-// it would be great to define this impl in error.rs, but it conflicts with the blanket
-// `impl From<T> for T`
-impl<E> From<E> for VirtualReferenceError
-where
-    E: Into<VirtualReferenceErrorKind>,
-{
-    fn from(value: E) -> Self {
-        Self::new(value.into())
-    }
-}
-
 pub const VCC_RELATIVE_URL_SCHEME: &str = "vcc://";
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -288,10 +278,9 @@ impl VirtualChunkLocation {
         relative_path: &str,
     ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
         if container_name.is_empty() || container_name.contains('/') {
-            return Err(VirtualReferenceErrorKind::NoContainerForName(
-                container_name.to_string(),
-            )
-            .into());
+            return Err(ICError::no_context(
+                VirtualReferenceErrorKind::NoContainerForName(container_name.to_string()),
+            ));
         }
         let mut result = String::with_capacity(
             VCC_RELATIVE_URL_SCHEME.len()
@@ -320,24 +309,30 @@ impl VirtualChunkLocation {
     ) -> Result<VirtualChunkLocation, VirtualReferenceError> {
         // make sure we can parse the provided URL before creating the enum
         // TODO: consider other validation here.
-        let url = url::Url::parse(path).map_err(|e| {
-            VirtualReferenceErrorKind::CannotParseUrl { cause: e, url: path.to_string() }
-        })?;
+        let url = url::Url::parse(path)
+            .map_err(|e| VirtualReferenceErrorKind::CannotParseUrl {
+                cause: e,
+                url: path.to_string(),
+            })
+            .ic_err()?;
         let scheme = url.scheme();
         let segments = url
             .path_segments()
-            .ok_or(VirtualReferenceErrorKind::NoPathSegments(path.into()))?;
+            .ok_or_else(|| VirtualReferenceErrorKind::NoPathSegments(path.into()))
+            .ic_err()?;
 
         let host = if let Some(host) = url.host_str() {
             host
         } else if scheme == "file" {
             ""
         } else if scheme == "vcc" {
-            return Err(VirtualReferenceErrorKind::NoContainerForName(path.into()).into());
+            return Err(ICError::no_context(
+                VirtualReferenceErrorKind::NoContainerForName(path.into()),
+            ));
         } else {
-            return Err(
-                VirtualReferenceErrorKind::CannotParseBucketName(path.into()).into()
-            );
+            return Err(ICError::no_context(
+                VirtualReferenceErrorKind::CannotParseBucketName(path.into()),
+            ));
         };
 
         let mut result = String::with_capacity(path.len());
@@ -427,7 +422,8 @@ impl Manifest {
         let _ = flatbuffers::root_with_opts::<generated::Manifest<'_>>(
             &ROOT_OPTIONS,
             buffer.as_slice(),
-        )?;
+        )
+        .ic_err()?;
         Ok(Manifest { buffer })
     }
 
@@ -443,7 +439,7 @@ impl Manifest {
             Some(dict_bytes) => {
                 let decompressor =
                     zstd::bulk::Decompressor::with_dictionary(dict_bytes.bytes())
-                        .map_err(IcechunkFormatErrorKind::IO)?;
+                        .ic_err()?;
                 Ok(Some(decompressor))
             }
             None => Ok(None),
@@ -607,13 +603,10 @@ impl Manifest {
         let manifest = self.root();
         let chunk_ref = lookup_node(manifest, node)
             .and_then(|array_manifest| lookup_ref(array_manifest, coord))
-            .ok_or_else(|| {
-                IcechunkFormatError::from(
-                    IcechunkFormatErrorKind::ChunkCoordinatesNotFound {
-                        coords: coord.clone(),
-                    },
-                )
-            })?;
+            .ok_or_else(|| IcechunkFormatErrorKind::ChunkCoordinatesNotFound {
+                coords: coord.clone(),
+            })
+            .ic_err()?;
         ref_to_payload(chunk_ref, decompressor.as_mut())
     }
 
@@ -716,16 +709,19 @@ fn ref_to_payload(
         }))
     } else if let Some(compressed) = chunk_ref.compressed_location() {
         let decompressor = decompressor
-            .ok_or(IcechunkFormatErrorKind::MissingLocationCompressionDictionary)?;
+            .ok_or(IcechunkFormatErrorKind::MissingLocationCompressionDictionary)
+            .ic_err()?;
         let decompressed = decompressor
             .decompress(compressed.bytes(), MAX_DECOMPRESSED_LOCATION_SIZE)
-            .map_err(IcechunkFormatErrorKind::IO)?;
-        let location_string = String::from_utf8(decompressed).map_err(|e| {
-            IcechunkFormatErrorKind::IO(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                e,
-            ))
-        })?;
+            .ic_err()?;
+        let location_string = String::from_utf8(decompressed)
+            .map_err(|e| {
+                IcechunkFormatErrorKind::IO(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e,
+                ))
+            })
+            .ic_err()?;
         let location = VirtualChunkLocation::from_trusted(location_string);
         Ok(ChunkPayload::Virtual(VirtualChunkRef {
             location,
@@ -750,8 +746,8 @@ fn ref_to_payload(
                 field_type: Cow::Borrowed("invalid"),
                 error_trace: Default::default(),
             },
-        )
-        .into())
+        ))
+        .ic_err()
     }
 }
 
@@ -843,7 +839,10 @@ fn train_location_dictionary(
         }
     }
 
-    Ok(Some(zstd::dict::from_continuous(&sample_data, &sample_sizes, max_dict_size)?))
+    Ok(Some(
+        zstd::dict::from_continuous(&sample_data, &sample_sizes, max_dict_size)
+            .ic_err()?,
+    ))
 }
 
 /// Compress virtual chunk locations in parallel using a pre-trained zstd dictionary.

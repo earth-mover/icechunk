@@ -2148,6 +2148,8 @@ dependencies = [
  "fs_extra",
  "futures",
  "icechunk-macros",
+ "icechunk-storage",
+ "icechunk-types",
  "itertools 0.14.0",
  "noxious-client",
  "object_store",
@@ -2218,6 +2220,32 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "typetag",
+]
+
+[[package]]
+name = "icechunk-storage"
+version = "2.0.0-alpha.4"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "icechunk-types",
+ "itertools 0.14.0",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util 0.7.18",
+ "tracing",
+ "typetag",
+ "url",
+]
+
+[[package]]
+name = "icechunk-types"
+version = "2.0.0-alpha.4"
+dependencies = [
+ "tracing-error",
 ]
 
 [[package]]

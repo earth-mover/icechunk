@@ -10,40 +10,27 @@ use ::object_store::ClientConfigKey;
 use ::object_store::azure::AzureConfigKey;
 #[cfg(feature = "object-store-gcs")]
 use ::object_store::gcp::GoogleConfigKey;
-use chrono::{DateTime, Utc};
-use core::fmt;
-use futures::{
-    Stream, StreamExt as _, TryStreamExt as _,
-    stream::{self, BoxStream, FuturesOrdered},
-};
-use itertools::Itertools as _;
-#[cfg(feature = "s3")]
-use s3::S3Storage;
-pub use s3_config::{
-    S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials,
-};
-use serde::{Deserialize, Serialize};
-use std::{
-    cmp::{max, min},
-    collections::HashMap,
-    ffi::OsString,
-    fmt::Display,
-    iter,
-    num::{NonZeroU16, NonZeroU64},
-    ops::Range,
-    path::Path,
-    pin::Pin,
-    str::FromStr as _,
-    sync::{Arc, Mutex, OnceLock},
-};
-use tokio::io::AsyncBufRead;
-use tokio_util::io::StreamReader;
-use tracing::{instrument, warn};
+use icechunk_types::ICResultExt as _;
+use std::{collections::HashMap, path::Path, str::FromStr as _, sync::Arc};
 use url::Url;
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use thiserror::Error;
+#[cfg(feature = "redirect")]
+use crate::storage::redirect::RedirectStorage;
+#[cfg(feature = "object-store-azure")]
+use object_store::AzureCredentials;
+#[cfg(feature = "object-store-gcs")]
+use object_store::GcsCredentials;
+#[cfg(feature = "s3")]
+use s3::S3Storage;
+
+// Re-export everything from icechunk-storage
+pub use icechunk_storage::{
+    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
+    ICError, ListInfo, RetriesSettings, Settings, Storage, StorageError,
+    StorageErrorKind, StorageResult, TimeoutSettings, VersionInfo, VersionedUpdateResult,
+    s3_config::{S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials},
+    split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes,
+};
 
 #[cfg(test)]
 pub mod logging;
@@ -64,692 +51,6 @@ pub mod s3_config;
 
 pub use object_store::ObjectStorage;
 
-#[cfg(feature = "redirect")]
-use crate::storage::redirect::RedirectStorage;
-use crate::{error::ICError, private};
-#[cfg(feature = "object-store-azure")]
-use object_store::AzureCredentials;
-#[cfg(feature = "object-store-gcs")]
-use object_store::GcsCredentials;
-
-/// Storage operation error types.
-#[derive(Debug, Error)]
-pub enum StorageErrorKind {
-    #[error("object not found")]
-    ObjectNotFound,
-    #[error("object store error {0}")]
-    ObjectStore(#[from] Box<::object_store::Error>),
-    #[error("bad object store prefix {0:?}")]
-    BadPrefix(OsString),
-    #[error("error getting object from object store {0}")]
-    S3GetObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("error writing object to object store {0}")]
-    S3PutObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("error creating multipart upload {0}")]
-    S3CreateMultipartUploadError(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("error uploading multipart part {0}")]
-    S3UploadPartError(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("error completing multipart upload {0}")]
-    S3CompleteMultipartUploadError(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("error copying object in object store {0}")]
-    S3CopyObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("error getting object metadata from object store {0}")]
-    S3HeadObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("error listing objects in object store {0}")]
-    S3ListObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("error deleting objects in object store {0}")]
-    S3DeleteObjectError(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("error streaming bytes from object store {0}")]
-    S3StreamError(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("I/O error: {0}")]
-    IOError(#[from] std::io::Error),
-    #[error("storage configuration error: {0}")]
-    R2ConfigurationError(String),
-    #[error("error parsing URL: {url:?}")]
-    CannotParseUrl {
-        #[source]
-        cause: url::ParseError,
-        url: String,
-    },
-    #[error("Redirect Storage error: {0}")]
-    BadRedirect(String),
-    #[error("storage error: {0}")]
-    Other(String),
-}
-pub type StorageError = ICError<StorageErrorKind>;
-
-// it would be great to define this impl in error.rs, but it conflicts with the blanket
-// `impl From<T> for T`
-impl<E> From<E> for StorageError
-where
-    E: Into<StorageErrorKind>,
-{
-    fn from(value: E) -> Self {
-        Self::new(value.into())
-    }
-}
-
-pub type StorageResult<A> = Result<A, StorageError>;
-
-#[derive(Debug)]
-pub struct ListInfo<A> {
-    pub id: A,
-    pub created_at: DateTime<Utc>,
-    pub size_bytes: u64,
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash, PartialOrd, Ord)]
-pub struct ETag(pub String);
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
-pub struct Generation(pub String);
-
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
-pub struct VersionInfo {
-    pub etag: Option<ETag>,
-    pub generation: Option<Generation>,
-}
-
-impl VersionInfo {
-    pub fn for_creation() -> Self {
-        Self { etag: None, generation: None }
-    }
-
-    pub fn from_etag_only(etag: String) -> Self {
-        Self { etag: Some(ETag(etag)), generation: None }
-    }
-
-    pub fn is_create(&self) -> bool {
-        self.etag.is_none() && self.generation.is_none()
-    }
-
-    pub fn etag(&self) -> Option<&String> {
-        self.etag.as_ref().map(|e| &e.0)
-    }
-
-    pub fn generation(&self) -> Option<&String> {
-        self.generation.as_ref().map(|e| &e.0)
-    }
-}
-
-impl Display for VersionInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match (&self.etag, &self.generation) {
-            (Some(etag), Some(generation)) => {
-                write!(f, "etag={}, generation={}", etag.0, generation.0)
-            }
-            (Some(etag), None) => write!(f, "etag={}", etag.0),
-            (None, Some(generation)) => write!(f, "generation={}", generation.0),
-            (None, None) => write!(f, "new"),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
-pub struct RetriesSettings {
-    pub max_tries: Option<NonZeroU16>,
-    pub initial_backoff_ms: Option<u32>,
-    pub max_backoff_ms: Option<u32>,
-}
-
-impl RetriesSettings {
-    pub fn max_tries(&self) -> NonZeroU16 {
-        self.max_tries.unwrap_or_else(|| NonZeroU16::new(10).unwrap_or(NonZeroU16::MIN))
-    }
-
-    pub fn initial_backoff_ms(&self) -> u32 {
-        self.initial_backoff_ms.unwrap_or(100)
-    }
-
-    pub fn max_backoff_ms(&self) -> u32 {
-        self.max_backoff_ms.unwrap_or(3 * 60 * 1000)
-    }
-
-    pub fn merge(&self, other: Self) -> Self {
-        Self {
-            max_tries: other.max_tries.or(self.max_tries),
-            initial_backoff_ms: other.initial_backoff_ms.or(self.initial_backoff_ms),
-            max_backoff_ms: other.max_backoff_ms.or(self.max_backoff_ms),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
-pub struct TimeoutSettings {
-    pub connect_timeout_ms: Option<u32>,
-    pub read_timeout_ms: Option<u32>,
-    pub operation_timeout_ms: Option<u32>,
-    pub operation_attempt_timeout_ms: Option<u32>,
-}
-
-impl TimeoutSettings {
-    pub fn merge(&self, other: Self) -> Self {
-        Self {
-            connect_timeout_ms: other.connect_timeout_ms.or(self.connect_timeout_ms),
-            read_timeout_ms: other.read_timeout_ms.or(self.read_timeout_ms),
-            operation_timeout_ms: other
-                .operation_timeout_ms
-                .or(self.operation_timeout_ms),
-            operation_attempt_timeout_ms: other
-                .operation_attempt_timeout_ms
-                .or(self.operation_attempt_timeout_ms),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
-pub struct ConcurrencySettings {
-    pub max_concurrent_requests_for_object: Option<NonZeroU16>,
-    pub ideal_concurrent_request_size: Option<NonZeroU64>,
-}
-
-impl ConcurrencySettings {
-    // AWS recommendations: https://docs.aws.amazon.com/whitepapers/latest/s3-optimizing-performance-best-practices/horizontal-scaling-and-request-parallelization-for-high-throughput.html
-    // 8-16 MB requests
-    // 85-90 MB/s per request
-    // these numbers would saturate a 12.5 Gbps network
-
-    pub fn max_concurrent_requests_for_object(&self) -> NonZeroU16 {
-        self.max_concurrent_requests_for_object
-            .unwrap_or_else(|| NonZeroU16::new(18).unwrap_or(NonZeroU16::MIN))
-    }
-    pub fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
-        self.ideal_concurrent_request_size.unwrap_or_else(|| {
-            NonZeroU64::new(12 * 1024 * 1024).unwrap_or(NonZeroU64::MIN)
-        })
-    }
-
-    pub fn merge(&self, other: Self) -> Self {
-        Self {
-            max_concurrent_requests_for_object: other
-                .max_concurrent_requests_for_object
-                .or(self.max_concurrent_requests_for_object),
-            ideal_concurrent_request_size: other
-                .ideal_concurrent_request_size
-                .or(self.ideal_concurrent_request_size),
-        }
-    }
-}
-
-/// Configuration for storage operations (retries, concurrency, storage classes).
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Default)]
-pub struct Settings {
-    #[serde(default)]
-    pub concurrency: Option<ConcurrencySettings>,
-
-    #[serde(default)]
-    pub retries: Option<RetriesSettings>,
-
-    #[serde(default)]
-    pub timeouts: Option<TimeoutSettings>,
-
-    #[serde(default)]
-    pub unsafe_use_conditional_update: Option<bool>,
-
-    #[serde(default)]
-    pub unsafe_use_conditional_create: Option<bool>,
-
-    #[serde(default)]
-    pub unsafe_use_metadata: Option<bool>,
-
-    #[serde(default)]
-    pub storage_class: Option<String>,
-
-    #[serde(default)]
-    pub metadata_storage_class: Option<String>,
-
-    #[serde(default)]
-    pub chunks_storage_class: Option<String>,
-
-    #[serde(default)]
-    pub minimum_size_for_multipart_upload: Option<u64>,
-}
-
-static DEFAULT_CONCURRENCY: OnceLock<ConcurrencySettings> = OnceLock::new();
-static DEFAULT_RETRIES: OnceLock<RetriesSettings> = OnceLock::new();
-
-impl Settings {
-    pub fn concurrency(&self) -> &ConcurrencySettings {
-        self.concurrency
-            .as_ref()
-            .unwrap_or_else(|| DEFAULT_CONCURRENCY.get_or_init(Default::default))
-    }
-
-    pub fn retries(&self) -> &RetriesSettings {
-        self.retries
-            .as_ref()
-            .unwrap_or_else(|| DEFAULT_RETRIES.get_or_init(Default::default))
-    }
-
-    pub fn timeouts(&self) -> Option<&TimeoutSettings> {
-        self.timeouts.as_ref()
-    }
-
-    pub fn unsafe_use_conditional_create(&self) -> bool {
-        self.unsafe_use_conditional_create.unwrap_or(true)
-    }
-
-    pub fn unsafe_use_conditional_update(&self) -> bool {
-        self.unsafe_use_conditional_update.unwrap_or(true)
-    }
-
-    pub fn unsafe_use_metadata(&self) -> bool {
-        self.unsafe_use_metadata.unwrap_or(true)
-    }
-
-    pub fn metadata_storage_class(&self) -> Option<&String> {
-        self.metadata_storage_class.as_ref().or(self.storage_class.as_ref())
-    }
-
-    pub fn storage_class(&self) -> Option<&String> {
-        self.storage_class.as_ref()
-    }
-
-    pub fn chunks_storage_class(&self) -> Option<&String> {
-        self.chunks_storage_class.as_ref().or(self.storage_class.as_ref())
-    }
-
-    pub fn minimum_size_for_multipart_upload(&self) -> u64 {
-        // per AWS  recommendation: 100 MB
-        self.minimum_size_for_multipart_upload.unwrap_or(100 * 1024 * 1024)
-    }
-
-    pub fn merge(&self, other: Self) -> Self {
-        Self {
-            concurrency: match (&self.concurrency, other.concurrency) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(*c),
-                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
-            },
-            retries: match (&self.retries, other.retries) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(*c),
-                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
-            },
-            timeouts: match (&self.timeouts, other.timeouts) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(*c),
-                (Some(mine), Some(theirs)) => Some(mine.merge(theirs)),
-            },
-            unsafe_use_conditional_create: match (
-                &self.unsafe_use_conditional_create,
-                other.unsafe_use_conditional_create,
-            ) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(*c),
-                (Some(_), Some(theirs)) => Some(theirs),
-            },
-            unsafe_use_conditional_update: match (
-                &self.unsafe_use_conditional_update,
-                other.unsafe_use_conditional_update,
-            ) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(*c),
-                (Some(_), Some(theirs)) => Some(theirs),
-            },
-            unsafe_use_metadata: match (
-                &self.unsafe_use_metadata,
-                other.unsafe_use_metadata,
-            ) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(*c),
-                (Some(_), Some(theirs)) => Some(theirs),
-            },
-            storage_class: match (&self.storage_class, other.storage_class) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
-                (Some(_), Some(theirs)) => Some(theirs),
-            },
-            metadata_storage_class: match (
-                &self.metadata_storage_class,
-                other.metadata_storage_class,
-            ) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
-                (Some(_), Some(theirs)) => Some(theirs),
-            },
-            chunks_storage_class: match (
-                &self.chunks_storage_class,
-                other.chunks_storage_class,
-            ) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(c.clone()),
-                (Some(_), Some(theirs)) => Some(theirs),
-            },
-            minimum_size_for_multipart_upload: match (
-                &self.minimum_size_for_multipart_upload,
-                other.minimum_size_for_multipart_upload,
-            ) {
-                (None, None) => None,
-                (None, Some(c)) => Some(c),
-                (Some(c), None) => Some(*c),
-                (Some(_), Some(theirs)) => Some(theirs),
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VersionedUpdateResult {
-    Updated { new_version: VersionInfo },
-    NotOnLatestVersion,
-}
-
-impl VersionedUpdateResult {
-    pub fn must_write(self) -> StorageResult<VersionInfo> {
-        match self {
-            VersionedUpdateResult::Updated { new_version } => Ok(new_version),
-            VersionedUpdateResult::NotOnLatestVersion => {
-                Err(StorageErrorKind::ObjectNotFound.into())
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct DeleteObjectsResult {
-    pub deleted_objects: u64,
-    pub deleted_bytes: u64,
-}
-
-impl DeleteObjectsResult {
-    pub fn merge(&mut self, other: &Self) {
-        self.deleted_objects += other.deleted_objects;
-        self.deleted_bytes += other.deleted_bytes;
-    }
-}
-
-pub enum GetModifiedResult {
-    Modified { data: Pin<Box<dyn AsyncBufRead + Send>>, new_version: VersionInfo },
-    OnLatestVersion,
-}
-
-impl fmt::Debug for GetModifiedResult {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Modified { new_version, .. } => {
-                f.debug_struct("Modified").field("new_version", new_version).finish()
-            }
-            Self::OnLatestVersion => write!(f, "OnLatestVersion"),
-        }
-    }
-}
-
-/// Fetch and write the parquet files that represent the repository in object store
-///
-/// Different implementation can cache the files differently, or not at all.
-/// Implementations are free to assume files are never overwritten.
-#[async_trait]
-#[typetag::serde(tag = "type")]
-pub trait Storage: fmt::Debug + Display + private::Sealed + Sync + Send {
-    async fn default_settings(&self) -> StorageResult<Settings> {
-        Ok(Default::default())
-    }
-
-    async fn can_write(&self) -> StorageResult<bool>;
-
-    async fn get_object(
-        &self,
-        settings: &Settings,
-        path: &str,
-        range: Option<&Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
-        if let Some(range) = range {
-            self.get_object_concurrently(settings, path, range).await
-        } else {
-            self.get_object_range_read(settings, path, range).await
-        }
-    }
-
-    async fn get_object_range_read(
-        &self,
-        settings: &Settings,
-        path: &str,
-        range: Option<&Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
-        let (stream, version) = self.get_object_range(settings, path, range).await?;
-        let reader = StreamReader::new(stream.map_err(std::io::Error::other));
-        Ok((Box::pin(reader), version))
-    }
-
-    async fn get_object_range(
-        &self,
-        settings: &Settings,
-        path: &str,
-        range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )>;
-
-    async fn put_object(
-        &self,
-        settings: &Settings,
-        path: &str,
-        bytes: Bytes,
-        content_type: Option<&str>,
-        metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
-    ) -> StorageResult<VersionedUpdateResult>;
-
-    async fn copy_object(
-        &self,
-        settings: &Settings,
-        from: &str,
-        to: &str,
-        content_type: Option<&str>,
-        version: &VersionInfo,
-    ) -> StorageResult<VersionedUpdateResult>;
-
-    /// List objects in storage whose keys start with the given prefix.
-    ///
-    /// Returns a stream of [`ListInfo`] entries, each containing the object's key and size in bytes.
-    /// Pass an empty prefix to list all objects in the repository's storage root.
-    async fn list_objects<'a>(
-        &'a self,
-        settings: &Settings,
-        prefix: &str,
-    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
-
-    async fn delete_batch(
-        &self,
-        settings: &Settings,
-        prefix: &str,
-        batch: Vec<(String, u64)>,
-    ) -> StorageResult<DeleteObjectsResult>;
-
-    async fn get_object_last_modified(
-        &self,
-        path: &str,
-        settings: &Settings,
-    ) -> StorageResult<DateTime<Utc>>;
-
-    async fn get_object_conditional(
-        &self,
-        settings: &Settings,
-        path: &str,
-        previous_version: Option<&VersionInfo>,
-    ) -> StorageResult<GetModifiedResult>;
-
-    /// Delete a stream of objects, by their id string representations
-    /// Input stream includes sizes to get as result the total number of bytes deleted
-    #[instrument(skip(self, settings, ids))]
-    async fn delete_objects(
-        &self,
-        settings: &Settings,
-        prefix: &str,
-        ids: BoxStream<'_, (String, u64)>,
-    ) -> StorageResult<DeleteObjectsResult> {
-        let res = Arc::new(Mutex::new(DeleteObjectsResult::default()));
-        ids.chunks(1_000)
-            // FIXME: configurable concurrency
-            .for_each_concurrent(10, |batch| {
-                let res = Arc::clone(&res);
-                async move {
-                    let new_deletes = self
-                        .delete_batch(settings, prefix, batch)
-                        .await
-                        .unwrap_or_else(|_| {
-                            // FIXME: handle error instead of skipping
-                            warn!("ignoring error in Storage::delete_batch");
-                            Default::default()
-                        });
-                    #[expect(clippy::expect_used)]
-                    res.lock().expect("Bug in delete objects").merge(&new_deletes);
-                }
-            })
-            .await;
-        #[expect(clippy::expect_used)]
-        let res = res.lock().expect("Bug in delete objects");
-        Ok(res.clone())
-    }
-
-    async fn root_is_clean(&self, settings: &Settings) -> StorageResult<bool> {
-        match self.list_objects(settings, "").await?.next().await {
-            None => Ok(true),
-            Some(Ok(_)) => Ok(false),
-            Some(Err(err)) => Err(err),
-        }
-    }
-
-    async fn get_object_concurrently_multiple(
-        &self,
-        settings: &Settings,
-        key: &str,
-        parts: Vec<Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
-        let settings2 = settings.clone();
-        let key2 = key.to_string();
-        let results = parts
-            .into_iter()
-            .map(move |range| {
-                let key = key2.clone();
-                let settings = settings2.clone();
-                async move {
-                    let (stream, version) = self
-                        .get_object_range(&settings, key.as_ref(), Some(&range))
-                        .await?;
-                    let all_bytes: Vec<_> = stream.try_collect().await?;
-                    Ok::<_, StorageError>((all_bytes, version))
-                }
-            })
-            .collect::<FuturesOrdered<_>>();
-
-        let results = results.peekable();
-        tokio::pin!(results);
-        let version = match results.as_mut().peek().await {
-            Some(Ok((_, version))) => version.clone(),
-            _ => VersionInfo::for_creation(),
-        };
-        let all_bytes = results
-            .map_ok(|(all_bytes, _)| stream::iter(all_bytes).map(Ok::<_, StorageError>))
-            .try_flatten()
-            .map_err(std::io::Error::other)
-            .try_collect::<Vec<_>>()
-            .await?;
-
-        let res = StreamReader::new(stream::iter(all_bytes).map(Ok::<_, std::io::Error>));
-        Ok((Box::pin(res), version))
-    }
-
-    async fn get_object_concurrently(
-        &self,
-        settings: &Settings,
-        key: &str,
-        range: &Range<u64>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
-        let parts = split_in_multiple_requests(
-            range,
-            settings.concurrency().ideal_concurrent_request_size().get(),
-            settings.concurrency().max_concurrent_requests_for_object().get(),
-        )
-        .collect::<Vec<_>>();
-
-        let res: (Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo) = match parts.len() {
-            0 => (Box::pin(tokio::io::empty()), VersionInfo::for_creation()),
-            1 => self.get_object_range_read(settings, key, Some(range)).await?,
-            _ => self.get_object_concurrently_multiple(settings, key, parts).await?,
-        };
-        Ok(res)
-    }
-}
-
-/// Split an object request into multiple byte range requests
-///
-/// Returns tuples of Range for each request.
-///
-/// It generates requests that are as similar as possible in size, this means no more than 1 byte
-/// difference between the requests.
-///
-/// It tries to generate `ceil(size/ideal_req_size)` requests, but never exceeds `max_requests`.
-///
-/// `ideal_req_size` and `max_requests` must be > 0
-pub fn split_in_multiple_requests(
-    range: &Range<u64>,
-    ideal_req_size: u64,
-    max_requests: u16,
-) -> impl Iterator<Item = Range<u64>> + use<> {
-    let size = max(0, range.end - range.start);
-    // we do a ceiling division, rounding always up
-    let num_parts = size.div_ceil(ideal_req_size);
-    // no more than max_parts, so we limit
-    let num_parts = max(1, min(num_parts, max_requests as u64));
-
-    // we split the total size into request that are as similar as possible in size
-    // this means, we are going to have a few requests that are 1 byte larger
-    let big_parts = size % num_parts;
-    let small_parts_size = size / num_parts;
-    let big_parts_size = small_parts_size + 1;
-
-    iter::successors(Some((1, range.start..range.start)), move |(index, prev_range)| {
-        let size = if *index <= big_parts { big_parts_size } else { small_parts_size };
-        Some((index + 1, prev_range.end..prev_range.end + size))
-    })
-    .dropping(1)
-    .take(num_parts as usize)
-    .map(|(_, range)| range)
-}
-
-/// Split an object request into multiple byte range requests ensuring only the last request is
-/// smaller
-///
-/// Returns tuples of Range for each request.
-///
-/// It tries to generate `ceil(size/ideal_req_size)` requests, but never exceeds `max_requests`.
-///
-/// `ideal_req_size` and `max_requests` must be > 0
-pub fn split_in_multiple_equal_requests(
-    range: &Range<u64>,
-    ideal_req_size: u64,
-    max_requests: u16,
-) -> impl Iterator<Item = Range<u64>> + use<> {
-    let size = max(0, range.end - range.start);
-    // we do a ceiling division, rounding always up
-    let num_parts = size.div_ceil(ideal_req_size);
-    // no more than max_parts, so we limit
-    let num_parts = max(1, min(num_parts, max_requests as u64));
-
-    let big_parts = num_parts - 1;
-    let big_parts_size = size / max(1, big_parts);
-    let small_part_size = size - big_parts_size * big_parts;
-
-    iter::successors(Some((1, range.start..range.start)), move |(index, prev_range)| {
-        let size = if *index <= big_parts { big_parts_size } else { small_part_size };
-        Some((index + 1, prev_range.end..prev_range.end + size))
-    })
-    .dropping(1)
-    .take(num_parts as usize)
-    .map(|(_, range)| range)
-}
-
 #[cfg(feature = "s3")]
 pub fn new_s3_storage(
     config: S3Options,
@@ -761,10 +62,12 @@ pub fn new_s3_storage(
         && (endpoint.contains("fly.storage.tigris.dev")
             || endpoint.contains("t3.storage.dev"))
     {
-        return Err(StorageError::from(StorageErrorKind::Other(
+        use icechunk_storage::other_error;
+
+        return Err(other_error(
             "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead"
                 .to_string(),
-        )));
+        ));
     }
 
     let st = S3Storage::new(
@@ -795,18 +98,22 @@ pub fn new_r2_storage(
         },
         (Some(bucket), None) => (bucket, None),
         (None, None) => {
+            use icechunk_types::ICResultExt as _;
+
             return Err(StorageErrorKind::R2ConfigurationError(
                 "Either bucket or prefix must be provided.".to_string(),
-            )
-            .into());
+            ))
+            .ic_err();
         }
     };
 
     if config.endpoint_url.is_none() && account_id.is_none() {
+        use icechunk_types::ICResultExt as _;
+
         return Err(StorageErrorKind::R2ConfigurationError(
             "Either endpoint_url or account_id must be provided.".to_string(),
-        )
-        .into());
+        ))
+        .ic_err();
     }
 
     let config = S3Options {
@@ -860,7 +167,9 @@ pub fn new_tigris_storage(
             extra_read_headers
                 .push(("X-Tigris-Consistent".to_string(), "true".to_string()));
         } else {
-            return Err(StorageErrorKind::Other("Tigris storage requires a region to provide full consistency. Either set the region for the bucket or use the read-only, eventually consistent storage by passing `use_weak_consistency=True` (experts only)".to_string()).into());
+            use icechunk_storage::other_error;
+
+            return Err(other_error("Tigris storage requires a region to provide full consistency. Either set the region for the bucket or use the read-only, eventually consistent storage by passing `use_weak_consistency=True` (experts only)".to_string()));
         }
     }
     let st = S3Storage::new(
@@ -893,9 +202,12 @@ pub fn new_http_storage(
     base_url: &str,
     config: Option<HashMap<String, String>>,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let base_url = Url::parse(base_url).map_err(|e| {
-        StorageErrorKind::CannotParseUrl { cause: e, url: base_url.to_string() }
-    })?;
+    let base_url = Url::parse(base_url)
+        .map_err(|e| StorageErrorKind::CannotParseUrl {
+            cause: e,
+            url: base_url.to_string(),
+        })
+        .ic_err()?;
     let config = config
         .unwrap_or_default()
         .iter()
@@ -911,9 +223,12 @@ pub fn new_http_storage(
 pub fn new_redirect_storage(
     base_url: &str,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let base_url = Url::parse(base_url).map_err(|e| {
-        StorageErrorKind::CannotParseUrl { cause: e, url: base_url.to_string() }
-    })?;
+    let base_url = Url::parse(base_url)
+        .map_err(|e| StorageErrorKind::CannotParseUrl {
+            cause: e,
+            url: base_url.to_string(),
+        })
+        .ic_err()?;
     Ok(Arc::new(RedirectStorage::new(base_url)))
 }
 
@@ -928,7 +243,9 @@ pub async fn new_s3_object_store_storage(
         && (endpoint.contains("fly.storage.tigris.dev")
             || endpoint.contains("t3.storage.dev"))
     {
-        return Err(StorageError::from(StorageErrorKind::Other(
+        use icechunk_storage::other_error;
+
+        return Err(StorageError::from(other_error(
             "Tigris Storage is not S3 compatible, use the Tigris specific constructor instead"
                 .to_string(),
         )));
@@ -975,16 +292,13 @@ pub fn new_gcs_storage(
     Ok(Arc::new(storage))
 }
 
-pub fn strip_quotes(s: &str) -> &str {
-    s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
-}
-
 #[cfg(test)]
 mod tests {
 
-    use std::collections::HashSet;
+    use std::{cmp::min, collections::HashSet};
 
     use super::*;
+    use itertools::Itertools as _;
     use proptest::prelude::*;
 
     #[cfg(feature = "object-store-fs")]

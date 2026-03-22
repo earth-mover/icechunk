@@ -3,9 +3,9 @@ use std::{
     sync::LazyLock,
 };
 
-use crate::format::{
-    IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, repo_info::RepoInfo,
-};
+use icechunk_types::ICResultExt as _;
+
+use crate::format::{IcechunkFormatErrorKind, IcechunkResult, repo_info::RepoInfo};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct FeatureFlag {
@@ -86,19 +86,22 @@ pub fn raise_if_feature_flag_disabled(
         Ok(())
     } else {
         let (name, _) = find_flag_by_id(flag_id)?;
-        Err(IcechunkFormatError::from(IcechunkFormatErrorKind::FeatureFlagDisabled {
+        Err(IcechunkFormatErrorKind::FeatureFlagDisabled {
             feature_description: feature_description.to_string(),
             feature_flag: name.to_string(),
-        }))
+        })
+        .ic_err()
     }
 }
 
 pub fn find_feature_flag_id(flag: &str) -> IcechunkResult<u16> {
-    FEATURE_FLAGS.get(flag).map(|(id, _)| *id).ok_or_else(|| {
-        IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidFeatureFlagName {
+    FEATURE_FLAGS
+        .get(flag)
+        .map(|(id, _)| *id)
+        .ok_or_else(|| IcechunkFormatErrorKind::InvalidFeatureFlagName {
             name: flag.to_string(),
         })
-    })
+        .ic_err()
 }
 
 fn find_flag_by_id(flag_id: u16) -> IcechunkResult<(&'static str, bool)> {
@@ -106,11 +109,8 @@ fn find_flag_by_id(flag_id: u16) -> IcechunkResult<(&'static str, bool)> {
         .iter()
         .find(|(_, (id, _))| *id == flag_id)
         .map(|(name, (_, default))| (*name, *default))
-        .ok_or_else(|| {
-            IcechunkFormatError::from(IcechunkFormatErrorKind::InvalidFeatureFlagId {
-                id: flag_id,
-            })
-        })
+        .ok_or(IcechunkFormatErrorKind::InvalidFeatureFlagId { id: flag_id })
+        .ic_err()
 }
 
 pub(crate) static FEATURE_FLAGS: LazyLock<HashMap<&str, (u16, bool)>> =
@@ -140,7 +140,8 @@ mod tests {
     use crate::{
         Repository, Storage,
         format::{
-            format_constants::SpecVersionBin, repo_info::UpdateType, snapshot::Snapshot,
+            IcechunkFormatError, format_constants::SpecVersionBin, repo_info::UpdateType,
+            snapshot::Snapshot,
         },
         new_in_memory_storage,
         repository::{RepositoryError, RepositoryErrorKind},

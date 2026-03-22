@@ -19,7 +19,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use flatbuffers::generated;
 use format_constants::FileTypeBin;
-use manifest::{VirtualReferenceError, VirtualReferenceErrorKind};
+use manifest::VirtualReferenceErrorKind;
 use rand::{RngExt as _, rng};
 use serde::{Deserialize, Serialize};
 use serde_with::{TryFromInto, serde_as};
@@ -277,7 +277,7 @@ pub type TableOffset = u32;
 #[non_exhaustive]
 pub enum IcechunkFormatErrorKind {
     #[error(transparent)]
-    VirtualReferenceError(VirtualReferenceErrorKind),
+    VirtualReferenceError(#[from] VirtualReferenceErrorKind),
     #[error("node not found at `{path:?}`")]
     NodeNotFound { path: Path },
     #[error("chunk coordinates not found `{coords:?}`")]
@@ -345,26 +345,6 @@ pub enum IcechunkFormatErrorKind {
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
-
-// it would be great to define this impl in error.rs, but it conflicts with the blanket
-// `impl From<T> for T`
-impl<E> From<E> for IcechunkFormatError
-where
-    E: Into<IcechunkFormatErrorKind>,
-{
-    fn from(value: E) -> Self {
-        Self::new(value.into())
-    }
-}
-
-impl From<VirtualReferenceError> for IcechunkFormatError {
-    fn from(value: VirtualReferenceError) -> Self {
-        Self::with_context(
-            IcechunkFormatErrorKind::VirtualReferenceError(value.kind),
-            value.context,
-        )
-    }
-}
 
 impl From<Infallible> for IcechunkFormatErrorKind {
     fn from(value: Infallible) -> Self {

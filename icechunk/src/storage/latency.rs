@@ -21,7 +21,7 @@ use super::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, Settings, Storage, StorageError,
     StorageResult, VersionInfo, VersionedUpdateResult,
 };
-use crate::private;
+use icechunk_storage::sealed;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LatencyStorage {
@@ -74,7 +74,7 @@ impl fmt::Display for LatencyStorage {
     }
 }
 
-impl private::Sealed for LatencyStorage {}
+impl sealed::Sealed for LatencyStorage {}
 
 #[async_trait]
 #[typetag::serde]

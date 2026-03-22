@@ -21,6 +21,7 @@ use crate::{
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
     stream_utils::{StreamLimiter, try_unique_stream},
 };
+use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 /// Statistics about chunk storage across different chunk types
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -77,7 +78,8 @@ fn insert_and_increment_size_if_new<T: Eq + std::hash::Hash>(
             RepositoryErrorKind::Other(format!(
                 "Thread panic during manifest_chunk_storage: {e}"
             ))
-        })?
+        })
+        .ic_err()?
         .insert(key)
     {
         *size_counter += size_increment;
@@ -103,7 +105,7 @@ fn calculate_manifest_storage(
     let mut native_bytes: u64 = 0;
     let mut virtual_bytes: u64 = 0;
     let mut inlined_bytes: u64 = 0;
-    for payload in manifest.chunk_payloads()? {
+    for payload in manifest.chunk_payloads().inject()? {
         match payload {
             Ok(ChunkPayload::Ref(chunk_ref)) => {
                 // Deduplicate native chunks by ChunkId
@@ -223,7 +225,8 @@ pub async fn repo_chunks_storage(
                     &seen_virtual_chunks,
                 )
             })
-            .await??;
+            .await
+            .ic_err()??;
             Ok((stats, minfo))
         });
     let (_, res) = limiter

@@ -13,6 +13,7 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use icechunk::{
     Repository,
     config::Credentials,
+    error::ICError,
     feature_flags::FeatureFlag,
     format::{
         ManifestId, SnapshotId,
@@ -28,7 +29,7 @@ use icechunk::{
         manifests::rewrite_manifests,
         stats::repo_chunks_storage,
     },
-    repository::{RepositoryError, RepositoryErrorKind, VersionInfo},
+    repository::{RepositoryErrorKind, VersionInfo},
 };
 use pyo3::{
     Borrowed, IntoPyObjectExt as _,
@@ -1814,9 +1815,9 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-                PyIcechunkStoreError::RepositoryError(
-                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-                )
+                PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+                ))
             })?;
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -1840,9 +1841,9 @@ impl PyRepository {
         let repository = Arc::clone(&self.0);
         let branch_name = branch_name.to_owned();
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+            ))
         })?;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -1934,9 +1935,9 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-                PyIcechunkStoreError::RepositoryError(
-                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-                )
+                PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+                ))
             })?;
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 let res = self
@@ -1957,9 +1958,9 @@ impl PyRepository {
         snapshot_id: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+            ))
         })?;
         let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, PySnapshotInfo>(py, async move {
@@ -1977,9 +1978,9 @@ impl PyRepository {
         snapshot_id: &str,
     ) -> PyResult<Vec<PyManifestFileInfo>> {
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+            ))
         })?;
         pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
             let res = self
@@ -2001,9 +2002,9 @@ impl PyRepository {
         snapshot_id: &str,
     ) -> PyResult<Bound<'py, PyAny>> {
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+            ))
         })?;
         let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, Vec<PyManifestFileInfo>>(
@@ -2031,18 +2032,17 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let to_snapshot_id = SnapshotId::try_from(to_snapshot_id).map_err(|_| {
-                PyIcechunkStoreError::RepositoryError(
-                    RepositoryErrorKind::InvalidSnapshotId(to_snapshot_id.to_owned())
-                        .into(),
-                )
+                PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                    RepositoryErrorKind::InvalidSnapshotId(to_snapshot_id.to_owned()),
+                ))
             })?;
 
             let from_snapshot_id = from_snapshot_id
                 .map(|sid| {
                     SnapshotId::try_from(sid).map_err(|_| {
-                        PyIcechunkStoreError::RepositoryError(
-                            RepositoryErrorKind::InvalidSnapshotId(sid.to_owned()).into(),
-                        )
+                        PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                            RepositoryErrorKind::InvalidSnapshotId(sid.to_owned()),
+                        ))
                     })
                 })
                 .transpose()?;
@@ -2069,17 +2069,17 @@ impl PyRepository {
         let repository = Arc::clone(&self.0);
         let branch_name = branch_name.to_owned();
         let to_snapshot_id = SnapshotId::try_from(to_snapshot_id).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(to_snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                RepositoryErrorKind::InvalidSnapshotId(to_snapshot_id.to_owned()),
+            ))
         })?;
 
         let from_snapshot_id = from_snapshot_id
             .map(|sid| {
                 SnapshotId::try_from(sid).map_err(|_| {
-                    PyIcechunkStoreError::RepositoryError(
-                        RepositoryErrorKind::InvalidSnapshotId(sid.to_owned()).into(),
-                    )
+                    PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                        RepositoryErrorKind::InvalidSnapshotId(sid.to_owned()),
+                    ))
                 })
             })
             .transpose()?;
@@ -2167,9 +2167,9 @@ impl PyRepository {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
             let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-                PyIcechunkStoreError::RepositoryError(
-                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-                )
+                PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                    RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+                ))
             })?;
 
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
@@ -2193,9 +2193,9 @@ impl PyRepository {
         let repository = Arc::clone(&self.0);
         let tag_name = tag_name.to_owned();
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
+            ))
         })?;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -2727,8 +2727,9 @@ impl PyRepository {
         let result = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let lock = self.0.read().await;
-                let snap = SnapshotId::try_from(snapshot_id.as_str())
-                    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+                let snap = SnapshotId::try_from(snapshot_id.as_str()).map_err(|e| {
+                    ICError::no_context(RepositoryErrorKind::Other(e.to_string()))
+                })?;
                 let res = snapshot_json(lock.asset_manager(), &snap, pretty).await?;
                 Ok(res)
             })
@@ -2748,7 +2749,7 @@ impl PyRepository {
             let lock = repository.read().await;
             let snap = SnapshotId::try_from(snapshot_id.as_str())
                 .map_err(|e| {
-                    RepositoryError::from(RepositoryErrorKind::Other(e.to_string()))
+                    ICError::no_context(RepositoryErrorKind::Other(e.to_string()))
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             let res = snapshot_json(lock.asset_manager(), &snap, pretty)
@@ -2791,8 +2792,9 @@ impl PyRepository {
         let result = pyo3_async_runtimes::tokio::get_runtime()
             .block_on(async move {
                 let lock = self.0.read().await;
-                let id = ManifestId::try_from(manifest_id.as_str())
-                    .map_err(|e| RepositoryErrorKind::Other(e.to_string()))?;
+                let id = ManifestId::try_from(manifest_id.as_str()).map_err(|e| {
+                    ICError::no_context(RepositoryErrorKind::Other(e.to_string()))
+                })?;
                 let res = manifest_json(lock.asset_manager(), &id, pretty).await?;
                 Ok(res)
             })
@@ -2812,7 +2814,7 @@ impl PyRepository {
             let lock = repository.read().await;
             let id = ManifestId::try_from(manifest_id.as_str())
                 .map_err(|e| {
-                    RepositoryError::from(RepositoryErrorKind::Other(e.to_string()))
+                    ICError::no_context(RepositoryErrorKind::Other(e.to_string()))
                 })
                 .map_err(PyIcechunkStoreError::RepositoryError)?;
             let res = manifest_json(lock.asset_manager(), &id, pretty)
@@ -2869,9 +2871,9 @@ fn args_to_version_info(
         Ok(VersionInfo::TagRef(tag_name))
     } else if let Some(snapshot_id) = snapshot {
         let snapshot_id = SnapshotId::try_from(snapshot_id.as_str()).map_err(|_| {
-            PyIcechunkStoreError::RepositoryError(
-                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.clone()).into(),
-            )
+            PyIcechunkStoreError::RepositoryError(ICError::no_context(
+                RepositoryErrorKind::InvalidSnapshotId(snapshot_id.clone()),
+            ))
         })?;
 
         Ok(VersionInfo::SnapshotId(snapshot_id))
